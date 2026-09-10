@@ -27,10 +27,7 @@ import {
   CreateRepositoryProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
 } from "./CreateRepositoryProjectFields";
-import {
-  ProjectSourceSegmentedPicker,
-  type ProjectSource,
-} from "./ProjectSourceSegmentedPicker";
+import { ProjectSourceSegmentedPicker, type ProjectSource } from "./ProjectSourceSegmentedPicker";
 import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";

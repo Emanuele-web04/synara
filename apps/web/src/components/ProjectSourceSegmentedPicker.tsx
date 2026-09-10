@@ -73,7 +73,9 @@ export function ProjectSourceSegmentedPicker(props: {
               aria-checked={active}
               disabled={props.disabled || sourceUnavailable}
               title={
-                sourceUnavailable ? "Update the Synara server to add repository projects." : undefined
+                sourceUnavailable
+                  ? "Update the Synara server to add repository projects."
+                  : undefined
               }
               className={cn(
                 "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors duration-200 disabled:opacity-50",

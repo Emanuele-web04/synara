@@ -143,9 +143,7 @@ const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 // GitHub publishes PR heads under `refs/pull/<n>/head`; GitLab publishes MR heads under
 // `refs/merge-requests/<n>/head`. Both are fetchable read-only refs on the primary remote.
 function pullRequestHeadRef(host: GitHostKind, prNumber: number): string {
-  return host === "gitlab"
-    ? `refs/merge-requests/${prNumber}/head`
-    : `refs/pull/${prNumber}/head`;
+  return host === "gitlab" ? `refs/merge-requests/${prNumber}/head` : `refs/pull/${prNumber}/head`;
 }
 
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({

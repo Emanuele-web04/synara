@@ -64,10 +64,7 @@ import {
   ThreadDeviceState,
 } from "./device";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
-import {
-  ProjectProvisionInput,
-  ProjectProvisionProgressEvent,
-} from "./projectProvisioning";
+import { ProjectProvisionInput, ProjectProvisionProgressEvent } from "./projectProvisioning";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -521,12 +518,15 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
   },
 );
 
-export const WsProjectsProvisionFromRepositoryRpc = Rpc.make(WS_METHODS.projectsProvisionFromRepository, {
-  payload: ProjectProvisionInput,
-  success: ProjectProvisionProgressEvent,
-  error: WsRpcError,
-  stream: true,
-});
+export const WsProjectsProvisionFromRepositoryRpc = Rpc.make(
+  WS_METHODS.projectsProvisionFromRepository,
+  {
+    payload: ProjectProvisionInput,
+    success: ProjectProvisionProgressEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
 
 export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThreadOutputs, {
   payload: StudioListThreadOutputsInput,

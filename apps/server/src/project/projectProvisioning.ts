@@ -12,7 +12,10 @@ import {
   type GitHostKind,
 } from "@synara/shared/gitHostRepository";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
-import { parseGitLabRepositoryInput, parseGitLabRepositoryReference } from "@synara/shared/gitlabRepository";
+import {
+  parseGitLabRepositoryInput,
+  parseGitLabRepositoryReference,
+} from "@synara/shared/gitlabRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { Effect, FileSystem, Path, PlatformError, Schema, Semaphore } from "effect";
 

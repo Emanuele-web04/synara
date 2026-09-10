@@ -11,7 +11,11 @@ import {
 } from "@synara/shared/gitHostRepository";
 
 import { GitHostCliError } from "../Errors.ts";
-import type { GitHostCliRouterShape, GitHostCliShape, GitHostSelection } from "../Services/GitHostCli.ts";
+import type {
+  GitHostCliRouterShape,
+  GitHostCliShape,
+  GitHostSelection,
+} from "../Services/GitHostCli.ts";
 
 export interface FakeGitHostCliRouterInput {
   readonly github: GitHostCliShape;

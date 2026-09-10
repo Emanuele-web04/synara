@@ -73,9 +73,9 @@ describe("parseGitLabRepositoryInput", () => {
     expect(parseGitLabRepositoryInput("gitlab.dotblocks.fr/acme/app")).toBe(
       "gitlab.dotblocks.fr/acme/app",
     );
-    expect(parseGitLabRepositoryInput("https://gitlab.dotblocks.fr/dotblocks/platform/app.git")).toBe(
-      "gitlab.dotblocks.fr/dotblocks/platform/app",
-    );
+    expect(
+      parseGitLabRepositoryInput("https://gitlab.dotblocks.fr/dotblocks/platform/app.git"),
+    ).toBe("gitlab.dotblocks.fr/dotblocks/platform/app");
     expect(parseGitLabRepositoryInput("https://gitlab.com/acme/app/")).toBe("gitlab.com/acme/app");
   });
 

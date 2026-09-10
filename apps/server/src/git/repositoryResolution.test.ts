@@ -64,9 +64,9 @@ describe("resolveRepositories", () => {
       calls,
     });
 
-    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
-      "not a git repository",
-    );
+    await expect(
+      Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS)),
+    ).rejects.toThrow("not a git repository");
     expect(calls).toHaveLength(1);
   });
 
@@ -76,9 +76,9 @@ describe("resolveRepositories", () => {
       configStderr: "fatal: not a git repository",
     });
 
-    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
-      "not a git repository",
-    );
+    await expect(
+      Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS)),
+    ).rejects.toThrow("not a git repository");
   });
 
   it("returns an authoritative inventory for every configured GitHub remote", async () => {
@@ -97,8 +97,18 @@ describe("resolveRepositories", () => {
     ).resolves.toEqual({
       authoritative: true,
       repositories: [
-        { kind: "github", reference: "acme/widgets", nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
-        { kind: "github", reference: "acme/other", nameWithOwner: "acme/other", url: "https://github.com/acme/other" },
+        {
+          kind: "github",
+          reference: "acme/widgets",
+          nameWithOwner: "acme/widgets",
+          url: "https://github.com/acme/widgets",
+        },
+        {
+          kind: "github",
+          reference: "acme/other",
+          nameWithOwner: "acme/other",
+          url: "https://github.com/acme/other",
+        },
       ],
     });
     expect(calls).toHaveLength(2);
@@ -127,8 +137,18 @@ describe("resolveRepositories", () => {
     ).resolves.toEqual({
       authoritative: true,
       repositories: [
-        { kind: "github", reference: "acme/widgets", nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
-        { kind: "github", reference: "acme/platform", nameWithOwner: "acme/platform", url: "https://github.com/acme/platform" },
+        {
+          kind: "github",
+          reference: "acme/widgets",
+          nameWithOwner: "acme/widgets",
+          url: "https://github.com/acme/widgets",
+        },
+        {
+          kind: "github",
+          reference: "acme/platform",
+          nameWithOwner: "acme/platform",
+          url: "https://github.com/acme/platform",
+        },
       ],
     });
     expect(calls).toEqual([
@@ -145,8 +165,8 @@ describe("resolveRepositories", () => {
       remoteStderr: "error: No such remote 'origin'",
     });
 
-    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
-      "No such remote",
-    );
+    await expect(
+      Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS)),
+    ).rejects.toThrow("No such remote");
   });
 });

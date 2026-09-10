@@ -134,8 +134,7 @@ const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycle
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
-const projectProvisionProgressListeners =
-  createListenerRegistry<ProjectProvisionProgressEvent>();
+const projectProvisionProgressListeners = createListenerRegistry<ProjectProvisionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],

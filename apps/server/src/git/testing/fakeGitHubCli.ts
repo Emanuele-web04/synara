@@ -22,7 +22,12 @@ import {
   PULL_REQUEST_LIST_JSON_FIELDS,
 } from "../Layers/GitHubCli.ts";
 import { PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
-import { type GitHostCliShape, type GitHostPullRequestDetailData, type GitHostPullRequestListItem, type GitHostPullRequestSummary } from "../Services/GitHostCli.ts";
+import {
+  type GitHostCliShape,
+  type GitHostPullRequestDetailData,
+  type GitHostPullRequestListItem,
+  type GitHostPullRequestSummary,
+} from "../Services/GitHostCli.ts";
 
 export interface FakeGhScenario {
   prListSequence?: string[];
@@ -199,7 +204,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           isGitHubCliError(error)
             ? error
             : new GitHostCliError({
-              host: "github",
+                host: "github",
                 operation: "execute",
                 detail:
                   error instanceof Error

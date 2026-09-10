@@ -11,10 +11,7 @@ import type {
   PullRequestDetailInput,
   PullRequestMergeMethod,
 } from "@synara/contracts";
-import {
-  gitHostDisplayName,
-  gitHostKindForRepository,
-} from "@synara/shared/gitHostRepository";
+import { gitHostDisplayName, gitHostKindForRepository } from "@synara/shared/gitHostRepository";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useRef, useState } from "react";
 

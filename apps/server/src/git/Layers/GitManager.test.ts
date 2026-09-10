@@ -2263,9 +2263,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
       );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
-      expect(ghCalls).toContain(
-        "api graphql reviewThreads example-org/sample-repo#42",
-      );
+      expect(ghCalls).toContain("api graphql reviewThreads example-org/sample-repo#42");
     }),
   );
 
@@ -3097,9 +3095,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.pr.status).toBe("created");
         expect(result.pr.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");
         // GitLab has no `owner:branch` head selectors: the source branch is passed bare.
-        expect(createCalls).toEqual([
-          { headSelector: "feature/gitlab-mr", baseBranch: "main" },
-        ]);
+        expect(createCalls).toEqual([{ headSelector: "feature/gitlab-mr", baseBranch: "main" }]);
 
         const status = yield* manager.status({ cwd: repoDir });
         expect(status.pr?.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");

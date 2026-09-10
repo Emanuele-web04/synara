@@ -2013,14 +2013,16 @@ export class WsTransport {
   ): Promise<ProjectProvisionResult> {
     let result: ProjectProvisionResult | null = null;
     await this.getClientRuntime(client).runPromise(
-      Stream.runForEach(client[WS_METHODS.projectsProvisionFromRepository](params as never), (event) =>
-        Effect.sync(() => {
-          const progressEvent = event as ProjectProvisionProgressEvent;
-          this.emit(WS_CHANNELS.projectProvisionProgress, progressEvent);
-          if (progressEvent.kind === "completed") {
-            result = progressEvent.result;
-          }
-        }),
+      Stream.runForEach(
+        client[WS_METHODS.projectsProvisionFromRepository](params as never),
+        (event) =>
+          Effect.sync(() => {
+            const progressEvent = event as ProjectProvisionProgressEvent;
+            this.emit(WS_CHANNELS.projectProvisionProgress, progressEvent);
+            if (progressEvent.kind === "completed") {
+              result = progressEvent.result;
+            }
+          }),
       ),
       signal ? { signal } : undefined,
     );

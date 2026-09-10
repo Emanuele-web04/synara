@@ -9,10 +9,7 @@
 // Exports: PullRequestCommentComposer
 
 import type { PullRequestDetail } from "@synara/contracts";
-import {
-  gitHostDisplayName,
-  gitHostKindForRepository,
-} from "@synara/shared/gitHostRepository";
+import { gitHostDisplayName, gitHostKindForRepository } from "@synara/shared/gitHostRepository";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 

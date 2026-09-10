@@ -70,14 +70,8 @@ it.effect("routes by repository reference", () =>
     const github = yield* router.forRepository("acme/app");
     const gitlab = yield* router.forRepository("gitlab.dotblocks.fr/dotblocks/platform/app");
 
-    assert.deepStrictEqual(
-      [github.kind, github.host],
-      ["github", "github.com"],
-    );
-    assert.deepStrictEqual(
-      [gitlab.kind, gitlab.host],
-      ["gitlab", "gitlab.dotblocks.fr"],
-    );
+    assert.deepStrictEqual([github.kind, github.host], ["github", "github.com"]);
+    assert.deepStrictEqual([gitlab.kind, gitlab.host], ["gitlab", "gitlab.dotblocks.fr"]);
   }).pipe(run),
 );
 
@@ -108,9 +102,7 @@ it.effect("falls back to the workspace remote for a non-URL reference", () =>
     const selection = yield* (yield* GitHostCli).forReference("/repo", "42");
 
     assert.equal(selection.kind, "gitlab");
-  }).pipe((effect) =>
-    run(effect, { remoteUrls: { origin: "git@gitlab.com:acme/app.git" } }),
-  ),
+  }).pipe((effect) => run(effect, { remoteUrls: { origin: "git@gitlab.com:acme/app.git" } })),
 );
 
 it.effect("selects GitLab for a gitlab.com remote without consulting glab", () =>
@@ -118,9 +110,7 @@ it.effect("selects GitLab for a gitlab.com remote without consulting glab", () =
     const selection = yield* (yield* GitHostCli).forWorkspace("/repo");
 
     assert.deepStrictEqual([selection.kind, selection.host], ["gitlab", "gitlab.com"]);
-  }).pipe((effect) =>
-    run(effect, { remoteUrls: { origin: "https://gitlab.com/acme/app.git" } }),
-  ),
+  }).pipe((effect) => run(effect, { remoteUrls: { origin: "https://gitlab.com/acme/app.git" } })),
 );
 
 it.effect("selects GitLab for a self-hosted remote only when glab knows the host", () =>
@@ -141,9 +131,7 @@ it.effect("keeps an unknown forge on the GitHub path so its behaviour is unchang
     const selection = yield* (yield* GitHostCli).forWorkspace("/repo");
 
     assert.equal(selection.kind, "github");
-  }).pipe((effect) =>
-    run(effect, { remoteUrls: { origin: "git@bitbucket.org:acme/app.git" } }),
-  ),
+  }).pipe((effect) => run(effect, { remoteUrls: { origin: "git@bitbucket.org:acme/app.git" } })),
 );
 
 it.effect("selects GitHub when the workspace has no remotes", () =>

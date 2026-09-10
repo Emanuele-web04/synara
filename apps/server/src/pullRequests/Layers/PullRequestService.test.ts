@@ -3,13 +3,14 @@ import type { OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
-import {
-  parseRepositoryReference,
-  repositoryWebUrl,
-} from "@synara/shared/gitHostRepository";
+import { parseRepositoryReference, repositoryWebUrl } from "@synara/shared/gitHostRepository";
 
 import { GitHostCliError } from "../../git/Errors";
-import type { GitHostCliShape, GitHostPullRequestListBatch, GitHostPullRequestListItem } from "../../git/Services/GitHostCli";
+import type {
+  GitHostCliShape,
+  GitHostPullRequestListBatch,
+  GitHostPullRequestListItem,
+} from "../../git/Services/GitHostCli";
 import { createGitHostCliRouterForTests } from "../../git/testing/fakeGitHostCli";
 import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../../persistence/Services/ProjectPullRequestPins";
@@ -979,7 +980,12 @@ describe("isDefinitivePullRequestNotFound", () => {
     ]) {
       expect(
         isDefinitivePullRequestNotFound(
-          new GitHostCliError({ host: "github", operation: "getPullRequestListItem", detail, reason: "other" }),
+          new GitHostCliError({
+            host: "github",
+            operation: "getPullRequestListItem",
+            detail,
+            reason: "other",
+          }),
         ),
       ).toBe(false);
     }

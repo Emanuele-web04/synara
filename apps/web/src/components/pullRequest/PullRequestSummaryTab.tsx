@@ -7,10 +7,7 @@
 // Exports: PullRequestSummaryTab
 
 import type { PullRequestDetail } from "@synara/contracts";
-import {
-  gitHostDisplayName,
-  gitHostKindForRepository,
-} from "@synara/shared/gitHostRepository";
+import { gitHostDisplayName, gitHostKindForRepository } from "@synara/shared/gitHostRepository";
 import { useState, type ReactNode } from "react";
 
 import {

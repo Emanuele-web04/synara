@@ -62,9 +62,7 @@ describe("isValidGitHubRepositoryNameWithOwner", () => {
     "owner repo/name",
     "-owner/name",
     "owner/--flag value",
-  ])("rejects %s", (repository) =>
-    expect(isValidRepositoryReference(repository)).toBe(false),
-  );
+  ])("rejects %s", (repository) => expect(isValidRepositoryReference(repository)).toBe(false));
 });
 
 describe("pullRequestListCacheKey", () => {

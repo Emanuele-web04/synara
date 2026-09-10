@@ -20,8 +20,18 @@ export type GitHostKind = (typeof GIT_HOST_KINDS)[number];
  * the host-relative display path.
  */
 export type RepositoryIdentity =
-  | { readonly kind: "github"; readonly reference: string; readonly host: "github.com"; readonly path: string }
-  | { readonly kind: "gitlab"; readonly reference: string; readonly host: string; readonly path: string };
+  | {
+      readonly kind: "github";
+      readonly reference: string;
+      readonly host: "github.com";
+      readonly path: string;
+    }
+  | {
+      readonly kind: "gitlab";
+      readonly reference: string;
+      readonly host: string;
+      readonly path: string;
+    };
 
 /**
  * Resolve a canonical reference into its identity. GitHub owners cannot contain dots, so a leading
@@ -88,7 +98,9 @@ export function parseGitRemoteUrl(
  */
 export function isGitLabHost(host: string, knownHosts: ReadonlySet<string>): boolean {
   const normalized = host.trim().toLowerCase();
-  return normalized === "gitlab.com" || normalized.startsWith("gitlab.") || knownHosts.has(normalized);
+  return (
+    normalized === "gitlab.com" || normalized.startsWith("gitlab.") || knownHosts.has(normalized)
+  );
 }
 
 export function parseRepositoryIdentityFromRemoteUrl(

@@ -176,9 +176,7 @@ export function PullRequestsUnavailableState({
                 variant="outline"
                 size="sm"
                 className="flex-1"
-                onClick={() =>
-                  void ensureNativeApi().shell.openExternal(CLI_INSTALL_URLS[host])
-                }
+                onClick={() => void ensureNativeApi().shell.openExternal(CLI_INSTALL_URLS[host])}
               >
                 Install instructions
               </Button>

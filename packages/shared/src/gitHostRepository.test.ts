@@ -169,9 +169,9 @@ describe("parsePullRequestUrl", () => {
 
 describe("presentation helpers", () => {
   it("builds web URLs and host labels", () => {
-    expect(repositoryWebUrl({ kind: "github", reference: "a/b", host: "github.com", path: "a/b" })).toBe(
-      "https://github.com/a/b",
-    );
+    expect(
+      repositoryWebUrl({ kind: "github", reference: "a/b", host: "github.com", path: "a/b" }),
+    ).toBe("https://github.com/a/b");
     expect(
       repositoryWebUrl({
         kind: "gitlab",

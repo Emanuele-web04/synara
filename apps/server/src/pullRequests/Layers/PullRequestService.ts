@@ -38,10 +38,7 @@ import {
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
 import { PullRequestService, type PullRequestServiceShape } from "../Services/PullRequestService";
-import {
-  resolveRepositories,
-  type RepositoryInventory,
-} from "../../git/repositoryResolution";
+import { resolveRepositories, type RepositoryInventory } from "../../git/repositoryResolution";
 import {
   cleanupUnconfiguredPullRequestPins,
   indexProjectRepositoryInventories,
@@ -331,11 +328,13 @@ export const makePullRequestService = (
     const loadMergeCapabilities = (cwd: string, repository: string) =>
       mergeCapabilitiesCache.get(
         repository.toLowerCase(),
-        dependencies.gitHost.forRepository(repository).pipe(
-          Effect.flatMap((selection) =>
-            withHostRead(selection.cli.getRepositoryMergeCapabilities({ cwd, repository })),
+        dependencies.gitHost
+          .forRepository(repository)
+          .pipe(
+            Effect.flatMap((selection) =>
+              withHostRead(selection.cli.getRepositoryMergeCapabilities({ cwd, repository })),
+            ),
           ),
-        ),
       );
 
     const list: PullRequestServiceShape["list"] = (input) =>
@@ -597,16 +596,16 @@ export const makePullRequestService = (
                 ),
               )
               .pipe(
-              Effect.map((matches) => ({
-                count: matches.numbers.size,
-                incomplete: matches.incomplete,
-              })),
-              Effect.catch((error) =>
-                isGlobalGitHostCliError(error)
-                  ? Effect.fail(error)
-                  : Effect.succeed({ count: 0, incomplete: true }),
+                Effect.map((matches) => ({
+                  count: matches.numbers.size,
+                  incomplete: matches.incomplete,
+                })),
+                Effect.catch((error) =>
+                  isGlobalGitHostCliError(error)
+                    ? Effect.fail(error)
+                    : Effect.succeed({ count: 0, incomplete: true }),
+                ),
               ),
-            ),
           { concurrency: 6 },
         );
 

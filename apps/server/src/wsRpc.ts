@@ -159,10 +159,7 @@ import {
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveRepository, type RepositoryLink } from "./git/repositoryResolution";
-import {
-  ProjectProvisioningError,
-  makeProjectProvisioner,
-} from "./project/projectProvisioning";
+import { ProjectProvisioningError, makeProjectProvisioner } from "./project/projectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";

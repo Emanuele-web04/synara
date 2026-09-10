@@ -70,9 +70,7 @@ export function indexProjectRepositoryInventories(
   for (const item of resolved) {
     repositoryKeysByProject.set(
       item.project.id,
-      new Set(
-        item.inventory.repositories.map((repository) => repository.reference.toLowerCase()),
-      ),
+      new Set(item.inventory.repositories.map((repository) => repository.reference.toLowerCase())),
     );
     for (const repository of item.inventory.repositories) {
       const key = repository.reference.toLowerCase();

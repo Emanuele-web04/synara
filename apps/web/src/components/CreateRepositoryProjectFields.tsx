@@ -1,8 +1,4 @@
-import {
-  gitHostCliName,
-  gitHostDisplayName,
-  type GitHostKind,
-} from "@synara/shared/gitHostRepository";
+import { gitHostCliName, type GitHostKind } from "@synara/shared/gitHostRepository";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { gitHostIcon } from "~/lib/icons";
@@ -65,8 +61,8 @@ export function CreateRepositoryProjectFields(props: {
           </ProjectRequirement>
           <ProjectRequirement index={3} title="Private access">
             Public repositories work immediately. For private repositories, run{" "}
-            <code className="font-mono text-foreground">{cliName} auth login</code> or configure
-            Git credentials.
+            <code className="font-mono text-foreground">{cliName} auth login</code> or configure Git
+            credentials.
           </ProjectRequirement>
         </ol>
       </div>
@@ -91,7 +87,9 @@ export function CreateRepositoryProjectFields(props: {
             value={props.repositoryInput}
             aria-invalid={props.formError ? true : undefined}
             {...(props.formError ? { "aria-describedby": props.errorId } : {})}
-            placeholder={isGitLab ? "group/project or GitLab URL" : "owner/repository or GitHub URL"}
+            placeholder={
+              isGitLab ? "group/project or GitLab URL" : "owner/repository or GitHub URL"
+            }
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"

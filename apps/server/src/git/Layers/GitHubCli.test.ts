@@ -1676,9 +1676,15 @@ layer("GitHubCliLive", (it) => {
         .mockRejectedValueOnce(new Error("not logged in; run gh auth login"))
         .mockRejectedValueOnce(new Error("gh: Bad credentials (HTTP 401)"));
       const gh = yield* GitHubCli;
-      const missing = yield* gh.getViewerLogin({ cwd: "/repo", host: "github.com" }).pipe(Effect.flip);
-      const unauthenticated = yield* gh.getViewerLogin({ cwd: "/repo", host: "github.com" }).pipe(Effect.flip);
-      const badCredentials = yield* gh.getViewerLogin({ cwd: "/repo", host: "github.com" }).pipe(Effect.flip);
+      const missing = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
+      const unauthenticated = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
+      const badCredentials = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
       assert.equal(missing.reason, "not-installed");
       assert.equal(unauthenticated.reason, "not-authenticated");
       assert.equal(badCredentials.reason, "not-authenticated");

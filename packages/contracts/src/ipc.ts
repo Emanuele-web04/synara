@@ -723,9 +723,7 @@ export interface NativeApi {
       input: ProjectProvisionInput,
       options?: { readonly signal?: AbortSignal },
     ) => Promise<ProjectProvisionResult>;
-    onProvisionProgress: (
-      callback: (event: ProjectProvisionProgressEvent) => void,
-    ) => () => void;
+    onProvisionProgress: (callback: (event: ProjectProvisionProgressEvent) => void) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;

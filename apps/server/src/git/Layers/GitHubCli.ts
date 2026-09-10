@@ -23,7 +23,14 @@ import {
 import { runProcess } from "../../processRunner";
 import { GitHostCliError } from "../Errors.ts";
 import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
-import { type GitHostRepositoryCloneUrls, type GitHostCliShape, type GitHostPullRequestDetailData, type GitHostPullRequestListBatch, type GitHostPullRequestListItem, type GitHostPullRequestSummary } from "../Services/GitHostCli.ts";
+import {
+  type GitHostRepositoryCloneUrls,
+  type GitHostCliShape,
+  type GitHostPullRequestDetailData,
+  type GitHostPullRequestListBatch,
+  type GitHostPullRequestListItem,
+  type GitHostPullRequestSummary,
+} from "../Services/GitHostCli.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;

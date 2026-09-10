@@ -819,9 +819,7 @@ export function EnvironmentPullRequestSection({
               />
             )
           }
-          label={
-            settledState === "merged" ? `Merged on ${hostName}` : `Closed on ${hostName}`
-          }
+          label={settledState === "merged" ? `Merged on ${hostName}` : `Closed on ${hostName}`}
           onClick={() => {
             openPullRequest();
           }}

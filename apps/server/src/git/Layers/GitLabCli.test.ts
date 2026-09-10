@@ -78,7 +78,9 @@ afterEach(() => {
 layer("GitLabCliLive", (it) => {
   it.effect("reads the viewer login through the selected host", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce(processResult(JSON.stringify({ username: "nouchetm" })));
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(JSON.stringify({ username: "nouchetm" })),
+      );
 
       const login = yield* (yield* GitLabCli).getViewerLogin({ cwd: "/repo", host: HOST });
 
@@ -402,12 +404,7 @@ layer("GitLabCliLive", (it) => {
         rebase: true,
         deleteBranchOnMerge: true,
       });
-      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
-        "api",
-        "--hostname",
-        HOST,
-        PROJECT_API,
-      ]);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(["api", "--hostname", HOST, PROJECT_API]);
     }),
   );
 
@@ -441,7 +438,11 @@ layer("GitLabCliLive", (it) => {
         .mockResolvedValueOnce(processResult(JSON.stringify(REST_MERGE_REQUEST)))
         .mockResolvedValueOnce(
           processResult(
-            JSON.stringify({ ...REST_MERGE_REQUEST, state: "merged", merged_at: "2026-09-01T11:00:00Z" }),
+            JSON.stringify({
+              ...REST_MERGE_REQUEST,
+              state: "merged",
+              merged_at: "2026-09-01T11:00:00Z",
+            }),
           ),
         );
 
@@ -508,7 +509,10 @@ layer("GitLabCliLive", (it) => {
         .mockResolvedValueOnce(processResult(JSON.stringify(REST_MERGE_REQUEST)))
         .mockResolvedValueOnce(
           processResult(
-            JSON.stringify({ ...REST_MERGE_REQUEST, detailed_merge_status: "discussions_not_resolved" }),
+            JSON.stringify({
+              ...REST_MERGE_REQUEST,
+              detailed_merge_status: "discussions_not_resolved",
+            }),
           ),
         );
 
@@ -699,7 +703,12 @@ layer("GitLabCliLive", (it) => {
         .mockResolvedValueOnce(
           processResult(
             JSON.stringify([
-              { name: "lint", status: "success", allow_failure: false, web_url: `${PROJECT_URL}/-/jobs/1` },
+              {
+                name: "lint",
+                status: "success",
+                allow_failure: false,
+                web_url: `${PROJECT_URL}/-/jobs/1`,
+              },
               { name: "flaky", status: "failed", allow_failure: true, web_url: null },
             ]),
           ),
@@ -830,9 +839,7 @@ layer("GitLabCliLive", (it) => {
         "--no-editor",
         "--draft",
       ]);
-      expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ stdin: "" }),
-      );
+      expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ stdin: "" }));
     }),
   );
 
@@ -880,12 +887,13 @@ layer("GitLabCliLive", (it) => {
   it.effect("classifies missing binary, auth, and not-found failures", () =>
     Effect.gen(function* () {
       const glab = yield* GitLabCli;
-      const read = () =>
-        glab.getViewerLogin({ cwd: "/repo", host: HOST }).pipe(Effect.flip);
+      const read = () => glab.getViewerLogin({ cwd: "/repo", host: HOST }).pipe(Effect.flip);
 
       mockedRunProcess.mockRejectedValueOnce(new Error("Command not found: glab"));
       const missing = yield* read();
-      mockedRunProcess.mockRejectedValueOnce(new Error("GET /user: 401 {message: 401 Unauthorized}"));
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error("GET /user: 401 {message: 401 Unauthorized}"),
+      );
       const unauthenticated = yield* read();
       mockedRunProcess.mockRejectedValueOnce(new Error("404 Not Found"));
       const notFound = yield* read();

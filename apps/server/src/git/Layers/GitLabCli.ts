@@ -31,7 +31,6 @@ import {
 import { runProcess } from "../../processRunner";
 import { GitHostCliError } from "../Errors.ts";
 import type {
-  GitHostCliShape,
   GitHostPullRequestDetailData,
   GitHostPullRequestListBatch,
   GitHostPullRequestListItem,
@@ -142,6 +141,13 @@ function normalizeGitLabCliError(
   });
 }
 
+// Head selectors may still carry a GitHub-style `owner:`/`remote:` prefix when a workspace's
+// host was misdetected; GitLab only ever accepts the bare branch name.
+function stripSelectorPrefix(headSelector: string): string {
+  const separator = headSelector.lastIndexOf(":");
+  return separator >= 0 ? headSelector.slice(separator + 1) : headSelector;
+}
+
 function hostnameFlagValue(args: ReadonlyArray<string>): string | undefined {
   const index = args.indexOf("--hostname");
   return index >= 0 ? args[index + 1] : undefined;
@@ -175,7 +181,12 @@ function normalizeMergeability(input: {
     return "conflicting";
   }
   // GitLab computes merge status lazily; `UNCHECKED`/`CHECKING` mean "ask again later".
-  if (status === null || status === "UNCHECKED" || status === "CHECKING" || status === "PREPARING") {
+  if (
+    status === null ||
+    status === "UNCHECKED" ||
+    status === "CHECKING" ||
+    status === "PREPARING"
+  ) {
     return "unknown";
   }
   return "mergeable";
@@ -483,7 +494,10 @@ type GraphQlListNode = Schema.Schema.Type<typeof RawGraphQlMergeRequestListNodeS
 type GraphQlDetailNode = Schema.Schema.Type<typeof RawGraphQlMergeRequestDetailNodeSchema>;
 type RestMergeRequest = Schema.Schema.Type<typeof RawRestMergeRequestSchema>;
 
-function normalizeActor(host: string, raw: GraphQlActor | null | undefined): PullRequestActor | null {
+function normalizeActor(
+  host: string,
+  raw: GraphQlActor | null | undefined,
+): PullRequestActor | null {
   const login = raw?.username?.trim() ?? "";
   if (login.length === 0) return null;
   return {
@@ -494,9 +508,7 @@ function normalizeActor(host: string, raw: GraphQlActor | null | undefined): Pul
   };
 }
 
-function normalizeLabels(
-  raw: GraphQlListNode["labels"],
-): ReadonlyArray<PullRequestLabel> {
+function normalizeLabels(raw: GraphQlListNode["labels"]): ReadonlyArray<PullRequestLabel> {
   return (raw?.nodes ?? []).map((label) => ({
     name: label.title,
     color: label.color?.trim() || null,
@@ -805,9 +817,7 @@ export const makeGitLabCli = Effect.sync(() => {
         ...(input.stdin !== undefined ? ["--input", "-"] : []),
       ],
       ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-      ...(input.allowNonZeroExit !== undefined
-        ? { allowNonZeroExit: input.allowNonZeroExit }
-        : {}),
+      ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
     }).pipe(
       Effect.flatMap((result) =>
         decodeJson(result.stdout.trim(), input.schema, input.operation, input.invalidDetail),
@@ -1263,8 +1273,7 @@ export const makeGitLabCli = Effect.sync(() => {
         ],
       }).pipe(Effect.flatMap((result) => decodeMergeRequestList(result.stdout))),
 
-    getPullRequest: (input) =>
-      resolveMergeRequest(input).pipe(Effect.map(normalizeRestSummary)),
+    getPullRequest: (input) => resolveMergeRequest(input).pipe(Effect.map(normalizeRestSummary)),
 
     getPullRequestWithChecks: (input) =>
       resolveMergeRequest(input).pipe(
@@ -1436,13 +1445,6 @@ export const makeGitLabCli = Effect.sync(() => {
       }).pipe(Effect.asVoid);
     },
   } satisfies GitLabCliShape;
-
-  // Head selectors may still carry a GitHub-style `owner:`/`remote:` prefix when a workspace's
-  // host was misdetected; GitLab only ever accepts the bare branch name.
-  function stripSelectorPrefix(headSelector: string): string {
-    const separator = headSelector.lastIndexOf(":");
-    return separator >= 0 ? headSelector.slice(separator + 1) : headSelector;
-  }
 
   function decodeMergeRequestList(
     raw: string,
