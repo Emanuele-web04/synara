@@ -9254,34 +9254,37 @@ export default function ChatView({
       setRespondingUserInputRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.user-input.respond",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          requestId,
-          answers: dispatchAnswers,
-          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
-          createdAt: new Date().toISOString(),
+      await Promise.resolve()
+        .then(async () => {
+          await api.orchestration.dispatchCommand({
+            type: "thread.user-input.respond",
+            commandId: newCommandId(),
+            threadId: activeThreadId,
+            requestId,
+            answers: dispatchAnswers,
+            ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+            createdAt: new Date().toISOString(),
+          });
+          // Refresh identities and settlement after command acceptance; acceptance
+          // alone does not mean Claude received the answer.
+          clearThreadDetailResumeCursor(activeThreadId);
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
+        })
+        .catch((err: unknown) => {
+          setStoreThreadError(
+            activeThreadId,
+            describeErrorMessage(
+              err,
+              "Could not submit or refresh the answer. Your answers are saved.",
+            ),
+          );
+        })
+        .finally(() => {
+          userInputSubmissionsRef.current.delete(submissionKey);
+          setRespondingUserInputRequestKeys((existing) =>
+            existing.filter((key) => key !== requestKey),
+          );
         });
-        // Refresh identities and settlement after command acceptance; acceptance
-        // alone does not mean Claude received the answer.
-        clearThreadDetailResumeCursor(activeThreadId);
-        await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
-      } catch (err) {
-        setStoreThreadError(
-          activeThreadId,
-          describeErrorMessage(
-            err,
-            "Could not submit or refresh the answer. Your answers are saved.",
-          ),
-        );
-      } finally {
-        userInputSubmissionsRef.current.delete(submissionKey);
-        setRespondingUserInputRequestKeys((existing) =>
-          existing.filter((key) => key !== requestKey),
-        );
-      }
     },
     [activeThreadId, setStoreThreadError],
   );
