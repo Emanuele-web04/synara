@@ -30,7 +30,7 @@ it.skipIf(!process.env.SYNARA_COMPUTER_AUTH_PROBE)(
     try {
       await once(fixture.stdout, "data");
       const proxy = await stranger.getProxyObject(COMPUTER_SERVICE, COMPUTER_OBJECT_PATH);
-    const plugin = proxy.getInterface(COMPUTER_INTERFACE) as unknown as {
+      const plugin = proxy.getInterface(COMPUTER_INTERFACE) as unknown as {
         stateJson(): Promise<string>;
         authenticate(token: string): Promise<string>;
       };
