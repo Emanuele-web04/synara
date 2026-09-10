@@ -563,38 +563,70 @@ index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1
      ".": {
        "types": "./types/index.d.ts",
        "import": "./dist/src/index.js",
-diff --git a/node_modules/betterwright/types/capture.d.ts b/types/capture.d.ts
+diff --git a/types/capture.d.ts b/types/capture.d.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c28171ae9d5f84f147750060c2ac339f2dc0d023
+index 0000000..30cb7fe
 --- /dev/null
 +++ b/types/capture.d.ts
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,58 @@
 +export interface CapturePage {
++  readonly closed: boolean;
++  lastAgentActivity: number;
 +  isClosed(): boolean;
-+  once(event: "close", callback: () => void): unknown;
++  close(): void;
 +}
++
++export interface CDPSession {
++  send(method: string, parameters?: unknown): Promise<unknown>;
++  on(event: string, callback: (parameters: unknown) => void): void;
++  detach(): Promise<void>;
++}
++
 +export interface CaptureContext {
 +  pages(): CapturePage[];
-+  on(event: "page", callback: (page: CapturePage) => void): unknown;
-+  off(event: "page", callback: (page: CapturePage) => void): unknown;
-+  newCDPSession(page: CapturePage): Promise<{
-+    send(method: string, params?: Record<string, unknown>): Promise<unknown>;
-+    on(event: string, callback: (event: unknown) => void): unknown;
-+    detach(): Promise<void>;
-+  }>;
++  on(event: "page", listener: (page: CapturePage) => void): void;
++  off(event: "page", listener: (page: CapturePage) => void): void;
++  newCDPSession(page: CapturePage): Promise<CDPSession>;
 +}
-+export function installVaultCapture(context: CaptureContext, deps: {
-+  vaultCallAtOrigin(session: unknown, origin: string, action: string, payload: Record<string, unknown>): Promise<unknown>;
++
++export type VaultAction = "list" | "save";
++
++export interface VaultCaptureDeps {
 +  sessionForPage(page: CapturePage): unknown;
++  vaultCallAtOrigin(
++    session: unknown,
++    origin: string,
++    action: VaultAction,
++    payload: Record<string, unknown>,
++  ): Promise<Record<string, unknown>>;
 +  trackSecret(value: string): void;
 +  isHeaded(): boolean;
 +  lastModelActivity(page: CapturePage, origin: string): number;
-+  shouldCapture?(input: { origin: string; username: string; password: string }): Promise<boolean>;
-+  requestSave?(input: { page: CapturePage; origin: string; username: string; mode: string }): Promise<"save" | "dismiss">;
-+  matchMode?: "exact-origin";
++  shouldCapture(input: { origin: string; username: string; password: string }): boolean | Promise<boolean>;
++  matchMode?: "base-domain" | "host" | "exact-origin";
++  requestSave?(params: {
++    page?: CapturePage;
++    origin: string;
++    username: string;
++    mode: string;
++  }): Promise<string>;
++  prefsPath?: string;
++  gateMs?: number;
++  confirmMs?: number;
++  promptTtlMs?: number;
++  modelWindowMs?: number;
 +  onError?(error: Error): void;
 +  onReady?(): void;
-+}): { dispose(): Promise<void>; isBusy(page: CapturePage): boolean };
++}
++
++export interface VaultCapture {
++  dispose(): Promise<void>;
++}
++
++export function installVaultCapture(
++  context: CaptureContext,
++  deps?: Partial<VaultCaptureDeps>,
++): VaultCapture;
 diff --git a/types/public.d.ts b/types/public.d.ts
 index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
 --- a/types/public.d.ts
