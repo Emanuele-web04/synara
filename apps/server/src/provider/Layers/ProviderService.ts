@@ -1676,10 +1676,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
             } as const;
           }
-          return yield* toValidationError(
-            input.operation,
-            `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
-          );
+          return yield* new ProviderValidationError({
+            operation: input.operation,
+            issue: `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          });
         }
         const adapter = yield* registry.getByProvider(binding.provider);
         if (input.allowRecovery) {
@@ -2573,10 +2574,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             allowRecovery: false,
           });
           if (!routed.isActive) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
-            );
+              issue: `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
+              reason: "runtime-unavailable",
+            });
           }
           const routedGeneration = routed.lifecycleGeneration ?? currentGeneration;
           if (
@@ -2593,10 +2595,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             input.lifecycleGeneration !== undefined &&
             input.lifecycleGeneration !== routedGeneration
           ) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
-            );
+              issue: `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
+              reason: "stale-interaction",
+            });
           }
           if (response.kind === "approval") {
             yield* routed.adapter.respondToRequest(

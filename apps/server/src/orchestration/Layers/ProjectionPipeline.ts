@@ -15,7 +15,7 @@ import {
   setThreadMarkerDone,
   setThreadMarkerLabel,
 } from "@synara/shared/threadMarkers";
-import { isStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -1729,9 +1729,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               // while every actual response hit a dead provider.
               if (
                 existingRow.value.status === "confirmed" ||
-                !isStalePendingRequestFailureDetail(
-                  payloadNonEmptyString(activity.payload, "detail") ?? undefined,
-                )
+                !createStalePendingInteractionMatcher([activity])(existingRow.value)
               ) {
                 return;
               }
