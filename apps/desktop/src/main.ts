@@ -281,6 +281,8 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
+import { COMPUTER_PERMISSIONS } from "@synara/shared/computerPermissions";
+import { DesktopPermissionService, desktopPermissionSettingsUrl } from "./desktopPermissions";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -478,6 +480,7 @@ const browserManager = new DesktopBrowserManager({
 });
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
+let desktopPermissions: DesktopPermissionService | undefined;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
@@ -1842,6 +1845,15 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
+function getDesktopPermissions(): DesktopPermissionService {
+  desktopPermissions ??= new DesktopPermissionService({
+    platform: process.platform,
+    helperPath: resolveAppSnapHelperPath(),
+    openSettings: (permission) => shell.openExternal(desktopPermissionSettingsUrl(permission)),
+  });
+  return desktopPermissions;
+}
+
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
   if (mainWindow?.isDestroyed()) {
     mainWindow = null;
@@ -1877,6 +1889,7 @@ function initializeDesktopAppSnap(): void {
   appSnapManager = new DesktopAppSnapManager({
     platform: process.platform,
     helperPath: resolveAppSnapHelperPath(),
+    permissions: getDesktopPermissions(),
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
     shortcutRegistry: globalShortcut,
@@ -3556,13 +3569,15 @@ async function startCuaHost(): Promise<void> {
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
     bundleId: desktopIdentity.bundleId,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    checkPermissions: async () => {
+      const state = await getDesktopPermissions().check(COMPUTER_PERMISSIONS);
+      return {
+        accessibility: state.accessibility === "granted",
+        screenRecording: state.screenRecording === "granted",
+      };
+    },
     setup: async () => {
-      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
-      await shell.openExternal(
-        trusted
-          ? "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-          : "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-      );
+      await getDesktopPermissions().request(COMPUTER_PERMISSIONS);
     },
     normalizeOverview: (result) => {
       const image = result.content?.find((part) => part.type === "image" && part.data);
@@ -4291,6 +4306,12 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
+      try {
+        await desktopPermissions?.dispose();
+      } catch (error) {
+        safeConsoleError("[desktop] permission helper cleanup failed", error);
+      }
+      desktopPermissions = undefined;
       await shutdownBrowserServices({
         revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
         closePages: () => browserManager.dispose(),

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
 import { ComputerAvailability, ComputerScreenshot } from "@synara/contracts";
 import { Schema } from "effect";
-import { CuaTransportError, type cuaRequest } from "@synara/shared/cuaDriverProtocol";
+import {
+  CuaTransportError,
+  CUA_SETUP_TIMEOUT_MS,
+  type cuaRequest,
+} from "@synara/shared/cuaDriverProtocol";
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
@@ -23,6 +27,9 @@ function fixture() {
   let desktopPaused = false;
   let desktopEpoch = 0;
   let missingPermissions = false;
+  let screenRecordingMissing = false;
+  let permissionWait: Promise<void> | undefined;
+  let overviewFailure = false;
   let captureWindowId = 20;
   let capturePid = 10;
   let visible = true;
@@ -69,8 +76,14 @@ function fixture() {
         },
       };
     let data: unknown = {};
-    if (request.name === "check_permissions")
-      data = { accessibility: !missingPermissions, screen_recording: !missingPermissions };
+    if (request.name === "check_permissions") {
+      data = {
+        accessibility: !missingPermissions,
+        screen_recording: !missingPermissions && !screenRecordingMissing,
+        source: { host_bundle_id: "com.synara.test" },
+      };
+      await permissionWait;
+    }
     if (request.name === "list_windows")
       data = {
         windows: live
@@ -91,6 +104,7 @@ function fixture() {
     if (request.name === "check_input_ready") data = ready;
     if (request.name === "get_screen_size") data = { width: 1000, height: 800, scale_factor: 2 };
     if (request.name === "get_desktop_state") {
+      if (overviewFailure) throw new Error("Capture denied before permission recovery");
       await overviewWait;
       return {
         ok: true,
@@ -164,10 +178,90 @@ function fixture() {
     denyPermissions: () => {
       missingPermissions = true;
     },
+    grantPermissions: () => {
+      missingPermissions = false;
+      screenRecordingMissing = false;
+    },
+    denyScreenRecording: () => {
+      screenRecordingMissing = true;
+    },
+    waitForPermission: (wait: Promise<void>) => {
+      permissionWait = wait;
+    },
+    failOverview: () => {
+      overviewFailure = true;
+    },
   };
 }
 
 describe("Cua native boundary", () => {
+  it("allows the bounded native permission request to finish without extending action deadlines", async () => {
+    const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
+    const request: typeof cuaRequest = async (_endpoint, request, options) => {
+      requests.push({
+        method: (request as { method: string }).method,
+        timeoutMs: options?.timeoutMs,
+      });
+      return {
+        ok: true,
+        result: { structuredContent: { accessibility: false, screen_recording: false } },
+      } as never;
+    };
+    const backend = new CuaComputerBackend({ endpoint: "/fixture-only", request });
+    await backend.provision();
+    expect(requests.find((request) => request.method === "setup")?.timeoutMs).toBe(
+      CUA_SETUP_TIMEOUT_MS,
+    );
+    expect(
+      requests
+        .filter((request) => request.method === "call")
+        .every((request) => request.timeoutMs === 35_000),
+    ).toBe(true);
+  });
+
+  it("reports only the current missing permission and the responsible app", async () => {
+    const f = fixture();
+    f.denyScreenRecording();
+    const availability = await f.backend.availability();
+    expect(availability).toMatchObject({
+      kind: "permission-required",
+      missing: ["screenRecording"],
+      bundleId: "com.synara.test",
+    });
+    expect(availability.kind === "permission-required" && availability.message).not.toContain(
+      "Accessibility",
+    );
+    expect(await f.backend.provision()).toContain("Allow Screen Recording");
+  });
+
+  it("refreshes after a pre-setup check settles and reports granted permissions accurately", async () => {
+    const f = fixture();
+    f.denyPermissions();
+    let release!: () => void;
+    f.waitForPermission(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const previous = f.backend.availability();
+    const provision = f.backend.provision();
+    f.grantPermissions();
+    release();
+    await previous;
+    expect(await provision).toContain("permissions are ready");
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+  });
+
+  it("clears an old capture failure after explicit setup so recovery can be retried", async () => {
+    const f = fixture();
+    f.failOverview();
+    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow("Capture denied");
+    expect(f.backend.health().captureAvailable).toBe(false);
+    await f.backend.provision();
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+    // Readiness recovery does not itself capture the screen to prove pixels.
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+  });
   it("marks only scoped model state reads and keeps inherited preview captures unmarked", async () => {
     const f = fixture();
     try {

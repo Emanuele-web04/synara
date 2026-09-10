@@ -172,4 +172,25 @@ describe("useProvisionComputer", () => {
     await vi.waitFor(() => expect(toastAdd).toHaveBeenCalledTimes(2));
     expect(queryClient.getQueryData(serverQueryKeys.computerStatus())).toBeUndefined();
   });
+
+  it("shares pending setup across surfaces before either component rerenders", async () => {
+    reset();
+    let finish!: (result: ComputerProvisionResult) => void;
+    provisionComputer.mockImplementation(
+      () =>
+        new Promise<ComputerProvisionResult>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const queryClient = createQueryClient();
+    const card = mountProvisionHook(queryClient, { notify: true });
+    const settings = mountProvisionHook(queryClient, { notify: true });
+    card.provision();
+    settings.provision();
+    card.provision();
+    await vi.waitFor(() => expect(provisionComputer).toHaveBeenCalledOnce());
+    expect(toastAdd).toHaveBeenCalledOnce();
+    finish({ summary: "Ready.", status: status() });
+    await vi.waitFor(() => expect(queryClient.isMutating()).toBe(0));
+  });
 });

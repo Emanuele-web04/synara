@@ -30,6 +30,7 @@ import {
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
+import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
@@ -98,6 +99,7 @@ export function ComputerSettingsPanel({
   });
 
   const status = statusQuery.data;
+  useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }), active);
   /**
    * The grants the OS is withholding, named. The availability message already
    * explains what to do; the row below is the checklist — the thing a user can

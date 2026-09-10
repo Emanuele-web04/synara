@@ -280,6 +280,8 @@ export const ComputerAvailability = Schema.Union([
     missing: Schema.Array(ComputerPermission).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
     message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
     buildSignature: ComputerBuildSignature,
+    /** The actual desktop app responsible for these grants, when known. */
+    bundleId: ComputerSetupRequiredPayload.fields.bundleId,
   }),
   Schema.Struct({
     kind: Schema.Literal("backend-unavailable"),

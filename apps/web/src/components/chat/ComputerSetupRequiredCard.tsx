@@ -1,21 +1,20 @@
 // FILE: ComputerSetupRequiredCard.tsx
-// Purpose: Transcript card shown when an agent's desktop tool call needed a permission
-//          the OS has not granted Synara. The server has already asked macOS by the time
-//          this renders, so the card explains the dialog and offers to ask again.
+// Purpose: Shows the current desktop permission state and an explicit setup action.
 // Layer: Chat transcript UI
-//
-// "Set up" is not a second mechanism: it calls the same server-side provision
-// that the agent path's detection calls, which re-arms the per-grant throttle
-// and puts the dialog back on screen for a user who dismissed it.
 
 import { useQuery } from "@tanstack/react-query";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
+import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import {
   computerStatusQueryOptions,
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
 } from "~/lib/serverReactQuery";
-import { computerStatusNeedsSetup } from "../ComputerPanel.logic";
-import type { ComputerBuildSignature, ComputerPermission } from "@synara/contracts";
+import { computerStatusNeedsSetup, resolveComputerAvailabilityView } from "../ComputerPanel.logic";
+import type {
+  ComputerBuildSignature,
+  ComputerPermission,
+  ComputerStatusResult,
+} from "@synara/contracts";
 import {
   computerStaleGrantAdvice,
   listComputerPermissions,
@@ -29,9 +28,13 @@ export function ComputerSetupRequiredCard({
   buildSignature,
   bundleId,
   computerControlReady,
+  status,
+  statusError,
+  isPending = false,
   textFontSizePx,
   metaFontSizePx,
   onSetUp,
+  onRecheck,
 }: {
   /**
    * The grants the OS is withholding. Naming them is most of this card's value:
@@ -60,18 +63,60 @@ export function ComputerSetupRequiredCard({
   // the user simply allows the dialog macOS already showed — the card flips to a
   // confirmation instead of offering a button that would do nothing.
   readonly computerControlReady?: boolean;
+  readonly status?: ComputerStatusResult;
+  readonly statusError?: string;
+  readonly isPending?: boolean;
   readonly textFontSizePx?: number;
   readonly metaFontSizePx?: number;
   readonly onSetUp?: () => void;
+  readonly onRecheck?: () => void;
 }) {
-  const ready = computerControlReady === true;
-  const missingLabels = listComputerPermissions(missing ?? []);
+  const ready =
+    !statusError &&
+    (status
+      ? status.availability.kind === "available" &&
+        status.health.status === "connected" &&
+        !computerStatusNeedsSetup(status)
+      : computerControlReady === true);
+  const availability = status?.availability;
+  const livePermission = availability?.kind === "permission-required" ? availability : undefined;
+  const currentMissing = statusError
+    ? []
+    : status
+      ? (livePermission?.missing ?? [])
+      : (missing ?? []);
+  const missingLabels = listComputerPermissions(currentMissing);
+  const currentSignature = status ? livePermission?.buildSignature : buildSignature;
+  const currentBundleId = status ? livePermission?.bundleId : bundleId;
+  const availabilityView = status
+    ? resolveComputerAvailabilityView(status.availability, status.health)
+    : undefined;
+  const title = statusError
+    ? "Computer status is unavailable"
+    : ready
+      ? "Computer control is ready"
+      : missingLabels
+        ? `Computer control needs ${missingLabels}`
+        : (availabilityView?.title ?? "Computer control needs setup");
+  const description = statusError
+    ? statusError
+    : ready
+      ? "Send a message and the agent will pick up where it left off."
+      : missingLabels
+        ? "Choose Set up to request missing permissions or open System Settings. Allow access for this Synara app, then return here to recheck."
+        : (availabilityView?.description ??
+          "Choose Set up to check permissions and prepare computer control.");
+  const canSetUp =
+    !ready &&
+    !statusError &&
+    availability?.kind !== "unsupported-platform" &&
+    status?.provisionable !== false;
   // Only ever non-null on a locally built copy with a grant outstanding: on a
   // signed build the switch in System Settings means what it says, and the
   // extra paragraph would be a red herring.
   const staleGrantAdvice =
-    !ready && buildSignature
-      ? computerStaleGrantAdvice(missing ?? [], buildSignature, bundleId)
+    !ready && currentSignature
+      ? computerStaleGrantAdvice(currentMissing, currentSignature, currentBundleId)
       : null;
   return (
     <div className="flex items-center gap-3 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3 py-2.5">
@@ -83,21 +128,13 @@ export function ComputerSetupRequiredCard({
           className="truncate font-medium text-[var(--color-text-foreground)]"
           style={textFontSizePx ? { fontSize: `${textFontSizePx}px` } : undefined}
         >
-          {ready
-            ? "Computer control is ready"
-            : missingLabels
-              ? `Computer control needs ${missingLabels}`
-              : "Computer control needs setup"}
+          {title}
         </p>
         <p
           className="text-[var(--color-text-foreground-secondary)]"
           style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
         >
-          {ready
-            ? "Send a message and the agent will pick up where it left off."
-            : missingLabels
-              ? `macOS is asking for ${missingLabels}. If you dismissed the dialog, Set up asks again.`
-              : "macOS is asking for the permission Synara needs to act on the desktop. If you dismissed the dialog, Set up asks again."}
+          {description}
         </p>
         {staleGrantAdvice ? (
           <p
@@ -108,9 +145,20 @@ export function ComputerSetupRequiredCard({
           </p>
         ) : null}
       </div>
-      {onSetUp && !ready ? (
-        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onSetUp}>
-          Set up
+      {onSetUp && canSetUp ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={isPending}
+          onClick={onSetUp}
+        >
+          {isPending ? "Setting up…" : "Set up"}
+        </Button>
+      ) : statusError && onRecheck ? (
+        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onRecheck}>
+          Recheck
         </Button>
       ) : null}
     </div>
@@ -121,21 +169,36 @@ export function ComputerSetupRequiredCard({
 export function ConnectedComputerSetupRequiredCard(
   props: Parameters<typeof ComputerSetupRequiredCard>[0],
 ) {
-  const status = useQuery({
+  const statusQuery = useQuery({
     ...computerStatusQueryOptions(),
     refetchInterval: COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
-  }).data;
+  });
+  const status = statusQuery.data;
+  useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }));
+  const missing = status
+    ? status.availability.kind === "permission-required"
+      ? status.availability.missing
+      : []
+    : props.missing;
   const setup = useProvisionComputer({
-    ...(props.missing ? { missing: props.missing } : {}),
+    ...(missing ? { missing } : {}),
     notify: true,
   });
   return (
     <ComputerSetupRequiredCard
       {...props}
-      computerControlReady={
-        status?.availability.kind === "available" && !computerStatusNeedsSetup(status)
-      }
+      {...(status ? { status } : {})}
+      {...(statusQuery.isError
+        ? {
+            statusError:
+              statusQuery.error instanceof Error && statusQuery.error.message
+                ? statusQuery.error.message
+                : "Could not check computer access. Try again.",
+          }
+        : {})}
+      isPending={setup.isPending}
       onSetUp={setup.provision}
+      onRecheck={() => void statusQuery.refetch()}
     />
   );
 }

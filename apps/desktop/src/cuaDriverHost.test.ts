@@ -14,6 +14,13 @@ const capability = "isolated-fixture-authority-00000000000000";
 const cuaRequest: typeof rawCuaRequest = (path, request, options) =>
   rawCuaRequest(path, { ...(request as object), capability }, options);
 const cleanups: Array<() => Promise<unknown>> = [];
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
@@ -25,6 +32,7 @@ async function fixture(
     failAction?: boolean;
     crash?: boolean;
     delayObservation?: boolean;
+    checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
@@ -80,6 +88,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     bundleId: "fixture",
     capability: authority,
     setup: async () => {},
+    ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -108,6 +117,130 @@ process.stdin.resume(); process.stdin.on('end',retire);
   return { host, endpoint, events };
 }
 describe("Cua GUI host retirement", () => {
+  it.each(["stop", "suspend", "pauseDesktop"] as const)(
+    "%s does not wait for another feature's permission dialog",
+    async (method) => {
+      const entered = deferred<void>();
+      const pending = deferred<{ accessibility: boolean; screenRecording: boolean }>();
+      const f = await fixture(capability, {
+        checkPermissions: () => {
+          entered.resolve();
+          return pending.promise;
+        },
+      });
+      const check = cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+      await entered.promise;
+      await f.host[method]("screen-lock");
+      await expect(check).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      // Releasing this Computer wait does not cancel the shared request.
+      pending.resolve({ accessibility: true, screenRecording: true });
+      await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+    },
+    2_000,
+  );
+
+  it("releases a disconnected permission check without retiring a later native session", async () => {
+    const entered = deferred<void>();
+    const pending = deferred<{ accessibility: boolean; screenRecording: boolean }>();
+    const f = await fixture(capability, {
+      checkPermissions: () => {
+        entered.resolve();
+        return pending.promise;
+      },
+    });
+    const controller = new AbortController();
+    const check = cuaRequest(
+      f.endpoint,
+      { method: "call", name: "check_permissions" },
+      { signal: controller.signal },
+    ).catch((error: unknown) => error);
+    await entered.promise;
+    controller.abort();
+    await check;
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" }, { timeoutMs: 2_000 }),
+    ).resolves.toMatchObject({ ok: true });
+    pending.resolve({ accessibility: true, screenRecording: true });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+  });
+
+  it("checks permissions through the fresh shared helper without starting Cua or requesting grants", async () => {
+    let permissions = { accessibility: false, screenRecording: false };
+    const f = await fixture(capability, { checkPermissions: async () => permissions });
+    const check = () =>
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions", args: { prompt: true } });
+    await expect(check()).resolves.toMatchObject({
+      result: {
+        structuredContent: {
+          accessibility: false,
+          screen_recording: false,
+          source: {
+            attribution: "host",
+            host_bundle_id: "fixture",
+            probe: "appsnap-permission-helper",
+          },
+        },
+      },
+    });
+    permissions = { accessibility: true, screenRecording: true };
+    await expect(check()).resolves.toMatchObject({
+      result: { structuredContent: { accessibility: true, screen_recording: true } },
+    });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retires a cached native process once when grants change, then requires fresh observation", async () => {
+    let granted = true;
+    const f = await fixture(capability, {
+      checkPermissions: async () => ({ accessibility: granted, screenRecording: granted }),
+    });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await check();
+    await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
+    granted = false;
+    await expect(check()).resolves.toMatchObject({
+      desktopEpoch: 1,
+      result: { structuredContent: { accessibility: false } },
+    });
+    expect((await f.events()).filter((event) => event.event === "cleanup-ack")).toHaveLength(1);
+    await check();
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+    granted = true;
+    await check();
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ result: { isError: true } });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "get_window_state",
+      modelObservation: true,
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+
+  it("does not bypass failed cleanup when refreshed permissions change", async () => {
+    let granted = true;
+    const f = await fixture(capability, {
+      cleanup: "incomplete",
+      checkPermissions: async () => ({ accessibility: granted, screenRecording: granted }),
+    });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
+    granted = false;
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "get_window_state", modelObservation: true }),
+    ).resolves.toMatchObject({ ok: false });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+  });
   it("does not start while locked and requires fresh state after all desktop pauses end", async () => {
     const f = await fixture();
     await f.host.pauseDesktop("screen-lock");

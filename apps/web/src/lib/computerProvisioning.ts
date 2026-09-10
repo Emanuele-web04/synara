@@ -23,7 +23,11 @@ export type ComputerProvisionOutcome = "ready" | "incomplete";
 export function computerProvisionOutcome(
   result: ComputerProvisionResult,
 ): ComputerProvisionOutcome {
-  return computerStatusNeedsSetup(result.status) ? "incomplete" : "ready";
+  return result.status.availability.kind === "available" &&
+    result.status.health.status === "connected" &&
+    !computerStatusNeedsSetup(result.status)
+    ? "ready"
+    : "incomplete";
 }
 
 export interface ComputerProvisionToast {
@@ -89,10 +93,14 @@ export function provisionErrorMessage(error: unknown): string {
  */
 export function computerProvisionNote(state: {
   readonly isPending: boolean;
+  readonly missing?: readonly ComputerPermission[];
   readonly error?: unknown;
   readonly result?: ComputerProvisionResult | undefined;
 }): string | undefined {
   if (state.isPending) {
+    if (state.missing?.length) {
+      return `Checking ${listComputerPermissions(state.missing)}. Allow access in the macOS prompt or System Settings, then return to Synara.`;
+    }
     return (
       "Setting up the agent's desktop. This installs or builds whatever this machine still needs, " +
       "and may ask for your password or for desktop permissions. The first run can take a few minutes."

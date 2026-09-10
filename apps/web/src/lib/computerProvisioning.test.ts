@@ -45,6 +45,24 @@ function result(
 }
 
 describe("computerProvisionOutcome", () => {
+  it("never reports unsupported or disconnected desktops as ready", () => {
+    expect(
+      computerProvisionOutcome(
+        result(
+          { availability: { kind: "unsupported-platform", platform: "win32" } },
+          "Unavailable.",
+        ),
+      ),
+    ).toBe("incomplete");
+    expect(
+      computerProvisionOutcome(
+        result(
+          { provisionable: false, health: { ...READY_STATUS.health, status: "unavailable" } },
+          "Unavailable.",
+        ),
+      ),
+    ).toBe("incomplete");
+  });
   it("keeps setup incomplete while a provisionable desktop is disconnected", () => {
     expect(
       computerProvisionOutcome(
@@ -122,6 +140,12 @@ describe("computer provision toasts", () => {
 });
 
 describe("computerProvisionNote", () => {
+  it("uses brief macOS permission guidance when a grant is missing", () => {
+    const note = computerProvisionNote({ isPending: true, missing: ["screenRecording"] });
+    expect(note).toContain("Checking Screen Recording");
+    expect(note).not.toContain("installs or builds");
+    expect(note).not.toContain("password");
+  });
   it("says the same three things the toasts do, for a surface with room", () => {
     expect(computerProvisionNote({ isPending: true })).toContain("Setting up");
     expect(computerProvisionNote({ isPending: false, error: new Error("nope") })).toBe(

@@ -9,6 +9,7 @@ import {
   cuaRequest,
   CUA_DRIVER_VERSION,
   CUA_NATIVE_REVISION,
+  CUA_SETUP_TIMEOUT_MS,
   CUA_READ_TOOLS,
   CUA_ACTION_TOOLS,
   type CuaReply,
@@ -25,6 +26,11 @@ interface Generation {
   cancellationReady: boolean;
   inputInFlight: boolean;
   retirement?: Promise<void>;
+}
+
+interface HostPermissions {
+  accessibility: boolean;
+  screenRecording: boolean;
 }
 
 /** Lives in Electron's main process. Only this GUI process spawns the native
@@ -44,12 +50,15 @@ export class CuaDriverHost {
   private stopping: Promise<void> = Promise.resolve();
   private epoch = 0;
   private readonly connections = new Set<Socket>();
+  private permissions: HostPermissions | undefined;
+  private readonly pendingPermissionChecks = new Set<() => void>();
   constructor(
     private readonly options: {
       binaryPath: string;
       bundleId: string;
       capability: string;
       setup: () => Promise<void>;
+      checkPermissions?: () => Promise<HostPermissions>;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
     },
   ) {}
@@ -140,7 +149,10 @@ export class CuaDriverHost {
       return { ok: true, result: { version: CUA_DRIVER_VERSION, running: !!this.generation } };
     }
     if (request.method === "setup") {
+      connection.setTimeout(CUA_SETUP_TIMEOUT_MS);
       await this.stop();
+      if (connection.destroyed || this.closed || this.suspended)
+        return { ok: false, error: "Cancelled before permission setup.", effect: "not-dispatched" };
       await this.options.setup();
       return { ok: true };
     }
@@ -167,6 +179,51 @@ export class CuaDriverHost {
           effect: "not-dispatched",
         } as const;
       if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+      if (name === "check_permissions" && this.options.checkPermissions) {
+        // AppSnap's short-lived helper avoids the embedded daemon's TCC cache.
+        // This remains an authenticated, read-only host operation: prompt args
+        // from tools never reach the permission request path.
+        const permissions = await this.checkPermissions(connection, this.options.checkPermissions);
+        if (
+          !permissions ||
+          this.closed ||
+          this.suspended ||
+          connection.destroyed ||
+          epoch !== this.epoch
+        )
+          return {
+            ok: false,
+            error: "Cancelled before permission check completed.",
+            effect: "not-dispatched",
+          } as const;
+        if (
+          this.permissions &&
+          (permissions.accessibility !== this.permissions.accessibility ||
+            permissions.screenRecording !== this.permissions.screenRecording)
+        ) {
+          this.epoch += 1;
+          this.desktopEpoch += 1;
+          this.desktopObservationRequired = true;
+          // Already inside the operation queue: stop() would wait for itself.
+          // Retire directly, preserving its native cleanup acknowledgement.
+          if (this.generation) await this.retire(this.generation);
+        }
+        this.permissions = permissions;
+        return {
+          ok: true,
+          result: {
+            structuredContent: {
+              accessibility: permissions.accessibility,
+              screen_recording: permissions.screenRecording,
+              source: {
+                attribution: "host",
+                host_bundle_id: this.options.bundleId,
+                probe: "appsnap-permission-helper",
+              },
+            },
+          },
+        };
+      }
       if (
         this.desktopObservationRequired &&
         (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")
@@ -179,6 +236,39 @@ export class CuaDriverHost {
       () => undefined,
     );
     return operation;
+  }
+
+  private checkPermissions(
+    connection: Socket,
+    check: () => Promise<HostPermissions>,
+  ): Promise<HostPermissions | undefined> {
+    // Stop and disconnected status readers must release native admission even
+    // while a different feature owns a macOS prompt in the shared helper queue.
+    // Abandon only this wait; do not cancel AppSnap's permission request.
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.pendingPermissionChecks.delete(cancel);
+        connection.removeListener("close", cancel);
+      };
+      const cancel = () => {
+        cleanup();
+        resolve(undefined);
+      };
+      this.pendingPermissionChecks.add(cancel);
+      connection.once("close", cancel);
+      void Promise.resolve()
+        .then(check)
+        .then(
+          (permissions) => {
+            cleanup();
+            resolve(permissions);
+          },
+          (error) => {
+            cleanup();
+            reject(error);
+          },
+        );
+    });
   }
 
   private async call(
@@ -407,6 +497,7 @@ export class CuaDriverHost {
 
   stop(): Promise<void> {
     this.epoch += 1;
+    for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
     this.stopping = this.stopping.then(async () => {
       if (this.generation) await this.retire(this.generation);

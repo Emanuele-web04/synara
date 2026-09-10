@@ -39,6 +39,47 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("desktop AppSnap platform state", () => {
+  it("uses the shared permission service while retaining only AppSnap's permission scopes", async () => {
+    const permissions = {
+      check: vi.fn().mockResolvedValue({ inputMonitoring: "denied", screenRecording: "granted" }),
+      request: vi
+        .fn()
+        .mockResolvedValue({ inputMonitoring: "granted", screenRecording: "granted" }),
+      dispose: vi.fn(),
+    };
+    const spawn = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: "/tmp/missing-helper-unused-by-shared-permissions",
+      captureDirectory: "/tmp/synara-appsnap-test",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      permissions,
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+    });
+    expect(await manager.refreshState()).toMatchObject({
+      inputMonitoringPermission: "denied",
+      screenRecordingPermission: "granted",
+    });
+    expect(await manager.requestPermissions()).toMatchObject({
+      inputMonitoringPermission: "granted",
+      screenRecordingPermission: "granted",
+    });
+    expect(permissions.check).toHaveBeenCalledExactlyOnceWith([
+      "inputMonitoring",
+      "screenRecording",
+    ]);
+    expect(permissions.request).toHaveBeenCalledExactlyOnceWith([
+      "inputMonitoring",
+      "screenRecording",
+    ]);
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+    expect(permissions.dispose).not.toHaveBeenCalled();
+  });
+
   it("exposes an explicit unsupported state outside macOS", async () => {
     const onState = vi.fn();
     const manager = new DesktopAppSnapManager({
@@ -243,10 +284,12 @@ describe("AppSnap helper protocol", () => {
   it("serializes permission commands and waits for stdout to drain", async () => {
     const checkChild = createFakeChildProcess();
     const requestChild = createFakeChildProcess();
+    const freshCheckChild = createFakeChildProcess();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(checkChild)
-      .mockReturnValueOnce(requestChild) as unknown as typeof ChildProcess.spawn;
+      .mockReturnValueOnce(requestChild)
+      .mockReturnValueOnce(freshCheckChild) as unknown as typeof ChildProcess.spawn;
     const manager = new DesktopAppSnapManager({
       platform: "darwin",
       helperPath: process.execPath,
@@ -299,6 +342,16 @@ describe("AppSnap helper protocol", () => {
     );
     requestChild.stderr.end();
     requestChild.emit("close", 0, null);
+    await flushPromises();
+    freshCheckChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    freshCheckChild.stderr.end();
+    freshCheckChild.emit("close", 0, null);
 
     await Promise.all([check, request]);
     expect(manager.getState()).toMatchObject({
@@ -311,12 +364,14 @@ describe("AppSnap helper protocol", () => {
     const checkChild = createFakeChildProcess();
     const watchChild = createFakeChildProcess();
     const requestChild = createFakeChildProcess();
+    const freshCheckChild = createFakeChildProcess();
     const restartedWatchChild = createFakeChildProcess();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(checkChild)
       .mockReturnValueOnce(watchChild)
       .mockReturnValueOnce(requestChild)
+      .mockReturnValueOnce(freshCheckChild)
       .mockReturnValueOnce(restartedWatchChild) as unknown as typeof ChildProcess.spawn;
     const register = vi.fn(() => true);
     const unregister = vi.fn();
@@ -375,10 +430,20 @@ describe("AppSnap helper protocol", () => {
     );
     requestChild.stderr.end();
     requestChild.emit("close", 0, null);
+    await flushPromises();
+    freshCheckChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    freshCheckChild.stderr.end();
+    freshCheckChild.emit("close", 0, null);
     await request;
     restartedWatchChild.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 
-    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn).toHaveBeenCalledTimes(5);
     expect(manager.getState().status).toBe("ready");
     expect(register).toHaveBeenCalledTimes(2);
     manager.dispose();
