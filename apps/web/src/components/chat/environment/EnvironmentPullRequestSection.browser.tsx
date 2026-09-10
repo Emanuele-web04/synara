@@ -11,18 +11,31 @@ import {
   type GitPullRequestSnapshotResult,
   type GitResolvedPullRequest,
   type GitStatusResult,
+  type NativeApi,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { render } from "vitest-browser-react";
+import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
+const { getGitStatus, getPullRequestSnapshot } = vi.hoisted(() => ({
+  getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
+  getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+}));
+
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => ({
+    git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
+  }),
+}));
+
 const cwd = "/repo";
 const threadId = ThreadId.makeUnsafe("thread-pr-fix-actions");
+const queryClients = new Set<QueryClient>();
 const pullRequest = {
   number: 321,
   title: "Keep PR context visible",
@@ -40,6 +53,7 @@ const pullRequest = {
 // Seeds both cached queries so the component renders without calling the native API.
 function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comments"]) {
   const queryClient = new QueryClient();
+  queryClients.add(queryClient);
   const gitStatus = {
     branch: pullRequest.headBranch,
     hasWorkingTreeChanges: false,
@@ -90,12 +104,12 @@ function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comm
   return queryClient;
 }
 
-function renderSection(queryClient: QueryClient, onClose = vi.fn()) {
-  return render(
+function section(queryClient: QueryClient, onClose = vi.fn(), enabled = true) {
+  return (
     <QueryClientProvider client={queryClient}>
       <EnvironmentPullRequestSection
         gitCwd={cwd}
-        enabled
+        enabled={enabled}
         activeThreadId={threadId}
         // No project: Merge/Status stay hidden and View PR falls back to the URL handler.
         projectId={null}
@@ -103,8 +117,12 @@ function renderSection(queryClient: QueryClient, onClose = vi.fn()) {
         onOpenUrl={vi.fn()}
         onClose={onClose}
       />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+}
+
+function renderSection(queryClient: QueryClient, onClose = vi.fn()) {
+  return render(section(queryClient, onClose));
 }
 
 async function openRepairSubmenu() {
@@ -119,9 +137,82 @@ function draftCards() {
 }
 
 describe("EnvironmentPullRequestSection", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanup();
+    for (const queryClient of queryClients) {
+      queryClient.clear();
+    }
+    queryClients.clear();
+    vi.resetAllMocks();
     useComposerDraftStore.getState().clearDraftThread(threadId);
-    document.body.innerHTML = "";
+  });
+
+  it("refreshes an old missing PR when the mounted panel opens", async () => {
+    const queryClient = createQueryClient();
+    const status = queryClient.getQueryData<GitStatusResult>(gitQueryKeys.status(cwd))!;
+    getGitStatus.mockResolvedValue(status);
+    const view = await render(section(queryClient, vi.fn(), false));
+    queryClient.setQueryData(
+      gitQueryKeys.status(cwd),
+      { ...status, pr: null },
+      { updatedAt: Date.now() - 60_000 },
+    );
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .not.toBeInTheDocument();
+
+    await view.rerender(section(queryClient));
+
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .toBeVisible();
+    expect(getGitStatus).toHaveBeenCalledExactlyOnceWith({ cwd });
+  });
+
+  it.each(["merged", "closed"] as const)(
+    "shows a branch's %s PR on first open without loading active PR details",
+    async (state) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData<GitStatusResult>(gitQueryKeys.status(cwd), (status) =>
+        status ? { ...status, pr: { ...pullRequest, state } } : status,
+      );
+      queryClient.removeQueries({ queryKey: gitQueryKeys.pullRequest(cwd) });
+      await renderSection(queryClient);
+
+      const stateLabel = state === "merged" ? "Merged" : "Closed";
+      const prRow = page.getByRole("button", { name: `#321 Keep PR context visible ${stateLabel}` });
+      await expect.element(prRow).toBeVisible();
+      await expect.element(page.getByText(`${stateLabel} on GitHub`, { exact: true })).toBeVisible();
+      expect(queryClient.isFetching()).toBe(0);
+      expect(getPullRequestSnapshot).not.toHaveBeenCalled();
+
+      await prRow.click();
+      await expect.element(page.getByText("View PR", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Code changes", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Add to chat", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Open in GitHub", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Repair", { exact: true })).not.toBeInTheDocument();
+      await expect.element(page.getByText("Merge", { exact: true })).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the PR visible when git status settles after an open snapshot was cached", async () => {
+    const queryClient = createQueryClient();
+    await renderSection(queryClient);
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .toBeVisible();
+
+    queryClient.setQueryData<GitStatusResult>(gitQueryKeys.status(cwd), (status) =>
+      status ? { ...status, pr: { ...pullRequest, state: "merged" } } : status,
+    );
+
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .toBeVisible();
+    await expect.element(page.getByText("Merged on GitHub", { exact: true })).toBeVisible();
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    await expect.element(page.getByText("Repair", { exact: true })).not.toBeInTheDocument();
   });
 
   it("attaches one Repair card per scope instead of pasting prompt text", async () => {
