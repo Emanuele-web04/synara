@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { collectErrorMessages, describeErrorMessage } from "./errorMessages";
+import {
+  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+  collectErrorMessages,
+  describeErrorMessage,
+} from "./errorMessages";
 
 describe("errorMessages", () => {
   it("uses Error messages", () => {
@@ -40,6 +44,12 @@ describe("errorMessages", () => {
   it("falls back when no useful message is present", () => {
     expect(describeErrorMessage({ ok: false }, "Failed to open terminal")).toBe(
       "Failed to open terminal",
+    );
+  });
+
+  it("exposes the stable duplicate-approval invariant marker", () => {
+    expect("Approval request 'approval-1' on thread 'thread-1' was already answered.").toContain(
+      APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
     );
   });
 });

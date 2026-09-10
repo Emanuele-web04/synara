@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  ApprovalRequestId,
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
@@ -48,6 +49,7 @@ import {
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
+import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
@@ -2182,6 +2184,96 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("refreshes the full conversation when an approval was already answered", async () => {
+    const requestId = ApprovalRequestId.makeUnsafe("approval-refresh-race");
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("msg-approval-refresh"),
+      targetText: "Run the requested command",
+    });
+    const thread = snapshot.threads[0]!;
+    const pendingThread = {
+      ...thread,
+      activities: [
+        {
+          id: EventId.makeUnsafe("approval-refresh-request"),
+          createdAt: NOW_ISO,
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          tone: "approval" as const,
+          turnId: null,
+          sequence: 1,
+          payload: { requestId, requestKind: "command", detail: "Command: git status" },
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionKind: "approval" as const,
+          requestId,
+          threadId: thread.id,
+          turnId: null,
+          lifecycleGeneration: null,
+          status: "pending" as const,
+          decision: null,
+          responseCommandId: null,
+          responseRequestedAt: null,
+          createdAt: NOW_ISO,
+          resolvedAt: null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [pendingThread] },
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const subscribeThread = vi.fn(api.orchestration.subscribeThread);
+    const dispatchCommand = vi.fn(async () => {
+      // Only the server fixture learns the winner. The client must fetch and
+      // apply this snapshot through its real subscription/EventRouter path.
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: [
+          {
+            ...pendingThread,
+            pendingInteractions: pendingThread.pendingInteractions.map((interaction) => ({
+              ...interaction,
+              status: "confirmed" as const,
+              decision: "accept" as const,
+              resolvedAt: NOW_ISO,
+            })),
+          },
+        ],
+      };
+      throw new Error(`Approval request ${requestId} was already answered.`);
+    });
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand, subscribeThread } },
+    });
+    try {
+      setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
+      await page.getByRole("button", { name: /Approve once/u }).click();
+      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await expect
+        .element(page.getByRole("button", { name: /Approve once/u }))
+        .not.toBeInTheDocument();
+      expect(dispatchCommand).toHaveBeenCalledTimes(1);
+      await expect.element(page.getByText(/was already answered/u)).not.toBeInTheDocument();
+    } finally {
+      if (previousNativeApi) {
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      } else {
+        Reflect.deleteProperty(window, "nativeApi");
+      }
+      await mounted.cleanup();
+    }
   });
 
   it("keeps near-cap composer work bounded while live activities arrive", async () => {

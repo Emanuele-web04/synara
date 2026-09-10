@@ -441,8 +441,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatExpiredAt: null,
           lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
-          hasPendingApprovals: true,
-          hasPendingUserInput: true,
+          // A present empty pending-interaction projection is authoritative;
+          // historical activity rows alone must not resurrect stale prompts.
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
           hasActionableProposedPlan: true,
           latestTurn: {
             turnId: asTurnId("turn-1"),
@@ -1189,6 +1191,78 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         Option.isSome(detail) ? detail.value.pendingInteractions : [],
         expectedPendingInteractions,
       );
+    }),
+  );
+
+  it.effect("uses a settlement row when mixed activity counters replay a stale approval", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-mixed-approval-sequence");
+
+      yield* sql`DELETE FROM projection_pending_interactions`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-mixed-approval-sequence', 'Mixed approval sequence',
+          '/tmp/project-mixed-approval-sequence',
+          '{"provider":"claudeAgent","model":"claude-sonnet-5"}', '[]',
+          '2026-09-09T22:00:00.000Z', '2026-09-09T22:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-mixed-approval-sequence', 'project-mixed-approval-sequence',
+          'Mixed approval sequence',
+          '{"provider":"claudeAgent","model":"claude-sonnet-5"}',
+          NULL, NULL, NULL,
+          '2026-09-09T22:00:00.000Z', '2026-09-09T22:02:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        ) VALUES
+          (
+            'activity-approval-requested-high', 'thread-mixed-approval-sequence', NULL,
+            'approval', 'approval.requested', 'Command approval requested',
+            '{"requestId":"approval-mixed","requestKind":"command"}',
+            1695339, '2026-09-09T22:01:00.000Z'
+          ),
+          (
+            'activity-approval-stale-low', 'thread-mixed-approval-sequence', NULL,
+            'error', 'provider.approval.respond.failed', 'Provider approval response failed',
+            '{"requestId":"approval-mixed","detail":"Stale pending approval request: approval-mixed. Provider callback state does not survive app restarts."}',
+            667085, '2026-09-09T22:02:00.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_pending_interactions (
+          interaction_kind, request_id, thread_id, turn_id, lifecycle_generation, status,
+          decision, response_command_id, response_requested_at, created_at, resolved_at
+        ) VALUES (
+          'approval', 'approval-mixed', 'thread-mixed-approval-sequence', NULL,
+          NULL, 'uncertain', NULL, 'restart-reconcile-command', NULL,
+          '2026-09-09T22:01:00.000Z', '2026-09-09T22:02:00.000Z'
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(threadId);
+
+      assert.isTrue(Option.isSome(detail));
+      if (Option.isSome(detail)) {
+        assert.isFalse(detail.value.hasPendingApprovals ?? true);
+        assert.equal(detail.value.pendingInteractions?.[0]?.status, "uncertain");
+      }
     }),
   );
 
