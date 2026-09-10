@@ -1,9 +1,10 @@
 import { EventId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { Cause, Effect, Exit } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   cleanupSucceededUnlessInterrupted,
+  closeThreadTerminalScopes,
   detachThreadDevice,
   isThreadCurrentlyArchived,
   isThreadLifecycleCleanupEvent,
@@ -11,6 +12,46 @@ import {
 import { DeviceService } from "../../device/Services/DeviceService";
 import { DeviceManager } from "../../device/DeviceManager";
 import { FakeDeviceBackend } from "../../device/FakeDeviceBackend";
+import { TerminalError } from "../../terminal/Services/Manager";
+
+describe("terminal scope cleanup", () => {
+  it("closes dock terminals even when the host terminal close fails", async () => {
+    const close = vi.fn(() => Effect.void as Effect.Effect<void, TerminalError>);
+    close.mockReturnValueOnce(Effect.fail(new TerminalError({ message: "host close failed" })));
+    const result = await Effect.runPromise(
+      closeThreadTerminalScopes(
+        { close, closeSessionsOpenedAtOrBefore: () => Effect.void },
+        ThreadId.makeUnsafe("host"),
+        true,
+      ),
+    );
+    expect(result).toBe(false);
+    expect(close.mock.calls).toEqual([
+      [{ threadId: "host", deleteHistory: true }],
+      [{ threadId: "dock-terminal:host", deleteHistory: true }],
+    ]);
+  });
+
+  it("preserves the archive generation fence for both terminal scopes", async () => {
+    const close = vi.fn(() => Effect.void);
+    const closeSessionsOpenedAtOrBefore = vi.fn(() => Effect.void);
+    const archivedAt = "2026-09-09T12:00:00.000Z";
+    const result = await Effect.runPromise(
+      closeThreadTerminalScopes(
+        { close, closeSessionsOpenedAtOrBefore },
+        ThreadId.makeUnsafe("host"),
+        false,
+        archivedAt,
+      ),
+    );
+    expect(result).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    expect(closeSessionsOpenedAtOrBefore.mock.calls).toEqual([
+      [{ threadId: "host", openedAtOrBefore: archivedAt }],
+      [{ threadId: "dock-terminal:host", openedAtOrBefore: archivedAt }],
+    ]);
+  });
+});
 
 function lifecycleEvent(type: "thread.archived" | "thread.deleted"): OrchestrationEvent {
   const threadId = ThreadId.makeUnsafe(`thread-${type}`);

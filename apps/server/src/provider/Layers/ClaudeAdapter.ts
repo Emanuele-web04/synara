@@ -1985,7 +1985,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       threadId: ThreadId,
       owner: ClaudeProcessOwner,
     ) {
-      yield* teardownClaudeProcess(threadId, owner);
+      yield* teardownClaudeProcess(threadId, owner).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            if (owner.process) failedStartupProcessOwners.set(threadId, owner);
+          }),
+        ),
+      );
       if (failedStartupProcessOwners.get(threadId) === owner) {
         failedStartupProcessOwners.delete(threadId);
       }
@@ -5387,7 +5393,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }).pipe(
           Effect.tapError(() =>
             Effect.all([
-              teardownClaudeProcess(threadId, processOwner).pipe(
+              teardownFailedStartupProcess(threadId, processOwner).pipe(
                 Effect.catch((error) =>
                   Effect.sync(() => {
                     if (processOwner.process) {
@@ -5639,7 +5645,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                     cause: Cause.pretty(closeExit.cause),
                   });
                 }
-                yield* teardownClaudeProcess(threadId, processOwner);
+                yield* teardownFailedStartupProcess(threadId, processOwner);
               });
             }).pipe(Effect.ignore),
           ),
@@ -6237,6 +6243,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       withSessionLifecycleLock(
         threadId,
         Effect.gen(function* () {
+          const failedOwner = failedStartupProcessOwners.get(threadId);
+          if (failedOwner) yield* teardownFailedStartupProcess(threadId, failedOwner);
           const context = sessions.get(threadId);
           if (!context) {
             return;
