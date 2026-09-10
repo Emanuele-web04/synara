@@ -1,4 +1,4 @@
-import { EventId, ThreadId, TurnId } from "@synara/contracts";
+import { ApprovalRequestId, EventId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -118,7 +118,7 @@ describe("planRestartTurnReconciliation", () => {
       pendingInteractions: [
         {
           interactionKind: "approval",
-          requestId: "approval-mixed",
+          requestId: ApprovalRequestId.makeUnsafe("approval-mixed"),
           lifecycleGeneration: null,
           status: "uncertain",
         },
@@ -143,7 +143,7 @@ describe("planRestartTurnReconciliation", () => {
         pendingInteractions: [
           {
             interactionKind: "approval",
-            requestId: `approval-${status}`,
+            requestId: ApprovalRequestId.makeUnsafe(`approval-${status}`),
             lifecycleGeneration: "generation-a",
             status,
           },

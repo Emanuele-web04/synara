@@ -9181,8 +9181,8 @@ export default function ChatView({
       if (durableRuntimeMode) {
         setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
       }
-      try {
-        await api.orchestration.dispatchCommand({
+      await api.orchestration
+        .dispatchCommand({
           type: "thread.approval.respond",
           commandId: newCommandId(),
           threadId: activeThreadId,
@@ -9190,34 +9190,34 @@ export default function ChatView({
           decision,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
           createdAt: new Date().toISOString(),
-        });
-      } catch (err: unknown) {
-        if (
-          collectErrorMessages(err).some((message) =>
-            message.includes(APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER),
-          )
-        ) {
-          // The authoritative response won the race. Force a full detail
-          // snapshot so a stale local card cannot immediately submit again.
-          clearThreadDetailResumeCursor(activeThreadId);
-          try {
-            await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
-          } catch {
-            setStoreThreadError(
-              activeThreadId,
-              "Approval was already recorded, but the conversation could not be refreshed.",
-            );
+        })
+        .catch(async (err: unknown) => {
+          if (
+            collectErrorMessages(err).some((message) =>
+              message.includes(APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER),
+            )
+          ) {
+            // The authoritative response won the race. Force a full detail
+            // snapshot so a stale local card cannot immediately submit again.
+            clearThreadDetailResumeCursor(activeThreadId);
+            await api.orchestration
+              .subscribeThread(buildThreadSubscribeInput(activeThreadId))
+              .catch(() => {
+                setStoreThreadError(
+                  activeThreadId,
+                  "Approval was already recorded, but the conversation could not be refreshed.",
+                );
+              });
+            return;
           }
-          return;
-        }
-        setStoreThreadError(
-          activeThreadId,
-          describeErrorMessage(err, "Failed to submit approval decision."),
-        );
-        throw err;
-      } finally {
-        setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
-      }
+          setStoreThreadError(
+            activeThreadId,
+            describeErrorMessage(err, "Failed to submit approval decision."),
+          );
+          setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
+          throw err;
+        });
+      setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
     [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
   );

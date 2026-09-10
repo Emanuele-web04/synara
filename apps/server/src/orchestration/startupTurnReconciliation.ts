@@ -72,12 +72,14 @@ export interface ReconcilableThread {
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
-  readonly pendingInteractions?: ReadonlyArray<
-    Pick<
-      OrchestrationPendingInteraction,
-      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
-    >
-  >;
+  readonly pendingInteractions?:
+    | ReadonlyArray<
+        Pick<
+          OrchestrationPendingInteraction,
+          "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+        >
+      >
+    | undefined;
 }
 
 /**
