@@ -28,7 +28,13 @@ export const COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME =
 
 export const COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME = `${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} group-hover/project-picker-trigger:bg-[var(--color-background-button-secondary-hover)]`;
 
-export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+/** Primary-text variant of the picker trigger typography for the composer toolbar tray
+ *  (project chip, environment, branch, temporary): these read as the thread's headline
+ *  context, so they sit on the primary foreground rather than the secondary picker tone. */
+export const COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME =
+  "text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal";
+
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME}`;
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
