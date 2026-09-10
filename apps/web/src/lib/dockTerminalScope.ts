@@ -4,12 +4,13 @@
 // Exports: dock terminal scope prefix + id factory shared by the dock pane and cleanup.
 
 import type { ThreadId } from "@synara/contracts";
+import { dockTerminalScopeId } from "@synara/shared/terminalThreads";
 
 // Right-dock terminals run as an independent session set from the bottom drawer.
 // They reuse the per-thread terminal store/runtime keyed by this synthetic scope so
 // xterm instances never collide with the host thread's drawer terminals.
-export const DOCK_TERMINAL_SCOPE_PREFIX = "dock-terminal:";
+export { DOCK_TERMINAL_SCOPE_PREFIX } from "@synara/shared/terminalThreads";
 
 export function dockTerminalThreadId(hostThreadId: ThreadId): ThreadId {
-  return `${DOCK_TERMINAL_SCOPE_PREFIX}${hostThreadId}` as ThreadId;
+  return dockTerminalScopeId(hostThreadId) as ThreadId;
 }

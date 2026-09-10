@@ -5,13 +5,15 @@ import {
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 import {
   approvalRequestKindFromRequestType,
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
-import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { orderedActivities } from "./workLog";
 
 export interface PendingApproval {
@@ -53,7 +55,6 @@ interface PendingInteractionReplay<T extends { requestId: ApprovalRequestId }> {
   interactionKind: PendingInteractionKind;
   requestedActivityKind: string;
   resolvedActivityKind: string;
-  responseFailedActivityKind: string;
   parseRequested: (input: {
     activity: OrchestrationThreadActivity;
     payload: Record<string, unknown> | null;
@@ -133,7 +134,9 @@ function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>
   }
 }
 
-function replayPendingInteractions<T extends { requestId: ApprovalRequestId; createdAt: string }>(
+function replayPendingInteractions<
+  T extends { requestId: ApprovalRequestId; createdAt: string; lifecycleGeneration?: string },
+>(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements: ReadonlyArray<OrchestrationPendingInteraction> | undefined,
   replay: PendingInteractionReplay<T>,
@@ -187,16 +190,19 @@ function replayPendingInteractions<T extends { requestId: ApprovalRequestId; cre
       deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
       continue;
     }
-
-    const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
-    if (
-      activity.kind === replay.responseFailedActivityKind &&
-      isStalePendingRequestFailureDetail(detail)
-    ) {
-      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
-    }
   }
 
+  // Explicit stale-callback failures are terminal for their request instance.
+  // Apply them after replay: their orchestration sequence may be below an older
+  // request's runtime sequence, which must not resurrect an invalid callback.
+  if (openByInstance.size > 0) {
+    const isStale = createStalePendingInteractionMatcher(replayActivities);
+    for (const [key, pending] of openByInstance) {
+      if (isStale({ ...pending, interactionKind: replay.interactionKind })) {
+        openByInstance.delete(key);
+      }
+    }
+  }
   retainActionableSettlements(
     openByInstance,
     settlements,
@@ -295,7 +301,6 @@ export function derivePendingApprovals(
       interactionKind: "approval",
       requestedActivityKind: "approval.requested",
       resolvedActivityKind: "approval.resolved",
-      responseFailedActivityKind: "provider.approval.respond.failed",
       parseRequested: ({ activity, payload, requestId, lifecycleGeneration }) => {
         const requestKind =
           payload?.requestKind === "command" ||
@@ -341,10 +346,7 @@ export function derivePendingApprovals(
       continue;
     }
     retryableAttemptKeys.set(
-      pendingRequestInstanceKey(
-        settlement.requestId,
-        settlement.lifecycleGeneration ?? undefined,
-      ),
+      pendingRequestInstanceKey(settlement.requestId, settlement.lifecycleGeneration ?? undefined),
       JSON.stringify([settlement.responseCommandId, settlement.responseRequestedAt]),
     );
   }
@@ -369,7 +371,6 @@ export function derivePendingUserInputs(
       interactionKind: "userInput",
       requestedActivityKind: "user-input.requested",
       resolvedActivityKind: "user-input.resolved",
-      responseFailedActivityKind: "provider.user-input.respond.failed",
       parseRequested: ({ activity, payload, requestId, lifecycleGeneration }) => {
         const questions = parseUserInputQuestions(payload);
         if (!questions) {

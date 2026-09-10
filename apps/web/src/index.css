@@ -407,8 +407,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 52%, transparent);
+  --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -417,7 +417,7 @@
   --popover-foreground: var(--color-neutral-800);
   --primary: var(--color-neutral-900);
   --primary-foreground: var(--color-white);
-  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary: --alpha(var(--color-black) / 3%);
   --secondary-foreground: var(--color-neutral-800);
   --muted: --alpha(var(--color-black) / 4%);
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
@@ -460,7 +460,7 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--secondary);
   --sidebar-accent-active: var(--secondary);
-  --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
+  --sidebar-selected: var(--secondary);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
@@ -515,12 +515,18 @@
     --sidebar-primary-foreground: var(--primary-foreground);
     --sidebar-accent: var(--secondary);
     --sidebar-accent-active: var(--secondary);
-    --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
+    --sidebar-selected: var(--secondary);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 40%, transparent);
+    --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
+    /* Deepened toward black before thinning: a dense charcoal glass that still lets
+       the desktop bleed through rather than a thin dark tint. */
+    --app-sidebar-surface: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--card) 80%, var(--color-black)) 72%,
+      transparent
+    );
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);

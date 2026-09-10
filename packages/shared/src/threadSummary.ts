@@ -234,7 +234,6 @@ export function derivePendingThreadRequestIds(input: {
   // kind, including an empty array and terminal-but-unconfirmed rows such as
   // `uncertain`. Only snapshots that omit the projection entirely fall back to
   // activity replay for legacy/imported compatibility.
-  const hasProjectedInteractions = input.pendingInteractions !== undefined;
   const projectedOpenApprovals = new Map<string, string>();
   const projectedOpenUserInputs = new Map<string, string>();
   for (const interaction of input.pendingInteractions ?? []) {
@@ -250,6 +249,13 @@ export function derivePendingThreadRequestIds(input: {
       ),
       interaction.requestId,
     );
+  }
+
+  if (input.pendingInteractions !== undefined) {
+    return {
+      approvalRequestIds: [...projectedOpenApprovals.values()],
+      userInputRequestIds: [...projectedOpenUserInputs.values()],
+    };
   }
 
   const openApprovals = new Map<string, string>();
@@ -310,12 +316,8 @@ export function derivePendingThreadRequestIds(input: {
   }
 
   return {
-    approvalRequestIds: [
-      ...(hasProjectedInteractions ? projectedOpenApprovals : openApprovals).values(),
-    ],
-    userInputRequestIds: [
-      ...(hasProjectedInteractions ? projectedOpenUserInputs : openUserInputs).values(),
-    ],
+    approvalRequestIds: [...openApprovals.values()],
+    userInputRequestIds: [...openUserInputs.values()],
   };
 }
 

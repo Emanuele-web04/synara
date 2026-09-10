@@ -281,10 +281,11 @@ describe("derivePendingApprovals", () => {
     expect(derivePendingApprovals(activities)).toEqual([]);
   });
 
-  it("clears stale pending approvals when the backend marks them stale after restart", () => {
+  it("clears restart-stale approvals even when the request has a higher runtime sequence", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "approval-open-stale-restart",
+        sequence: 1_000,
         createdAt: "2026-02-23T00:00:01.000Z",
         kind: "approval.requested",
         summary: "Command approval requested",
@@ -296,6 +297,7 @@ describe("derivePendingApprovals", () => {
       }),
       makeActivity({
         id: "approval-failed-stale-restart",
+        sequence: 100,
         createdAt: "2026-02-23T00:00:02.000Z",
         kind: "provider.approval.respond.failed",
         summary: "Provider approval response failed",
@@ -362,6 +364,92 @@ describe("derivePendingApprovals", () => {
 });
 
 describe("derivePendingUserInputs", () => {
+  it.each([
+    {
+      name: "current generation stale failure",
+      generation: "generation-settlement",
+      failedAt: "2026-02-23T00:00:02.000Z",
+      detail: "Stale pending user-input request: req-settlement.",
+      expected: 0,
+    },
+    {
+      name: "old generation stale failure",
+      generation: "generation-old",
+      failedAt: "2026-02-23T00:00:02.000Z",
+      detail: "Stale pending user-input request: req-settlement.",
+      expected: 1,
+    },
+    {
+      name: "legacy stale failure before request-ID reuse",
+      generation: undefined,
+      failedAt: "2026-02-22T00:00:02.000Z",
+      detail: "Stale pending user-input request: req-settlement.",
+      expected: 1,
+    },
+    {
+      name: "legacy stale failure after this request",
+      generation: undefined,
+      failedAt: "2026-02-23T00:00:02.000Z",
+      detail: "Stale pending user-input request: req-settlement.",
+      expected: 0,
+    },
+    {
+      name: "ambiguous transport failure with a live callback",
+      generation: "generation-settlement",
+      failedAt: "2026-02-23T00:00:02.000Z",
+      detail: "Transport timeout; response outcome unknown.",
+      expected: 1,
+    },
+  ])(
+    "handles $name independently of mixed activity sequence counters",
+    ({ generation, failedAt, detail, expected }) => {
+      const activities = [
+        makeActivity({
+          id: "input-request-high-sequence",
+          sequence: 1_000,
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "user-input.requested",
+          summary: "Question",
+          tone: "info",
+          payload: {
+            requestId: "req-settlement",
+            lifecycleGeneration: "generation-settlement",
+            questions: [
+              {
+                id: "continue",
+                header: "Continue",
+                question: "Continue?",
+                options: [{ label: "Yes", description: "Continue" }],
+              },
+            ],
+          },
+        }),
+        makeActivity({
+          id: "input-response-low-sequence",
+          sequence: 100,
+          createdAt: failedAt,
+          kind: "provider.user-input.respond.failed",
+          summary: "Response failed",
+          tone: "error",
+          payload: {
+            requestId: "req-settlement",
+            ...(generation === undefined ? {} : { lifecycleGeneration: generation }),
+            detail,
+          },
+        }),
+      ];
+      for (const ordered of [activities, activities.toReversed()]) {
+        expect(
+          derivePendingUserInputs(ordered, [makePendingInteraction("userInput", "uncertain")], {
+            authoritativeHasPending: false,
+            latestTurnId: undefined,
+            responseClaimReferenceAt: "2026-02-23T00:01:00.000Z",
+          }),
+        ).toHaveLength(expected);
+      }
+    },
+  );
+
   it("shows only actionable durable user-input settlements", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -8,6 +8,7 @@ import {
   type OrchestrationMessage,
 } from "@synara/contracts";
 import { Schema, Struct } from "effect";
+import { joinMessageTextChunks } from "./messageTextChunks.ts";
 
 import {
   ProjectionThreadMessage,
@@ -17,6 +18,8 @@ import {
 export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
+    textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
+    encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
     mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
@@ -30,6 +33,13 @@ export type ProjectionThreadMessageDbRow = Schema.Schema.Type<
   typeof ProjectionThreadMessageDbRowSchema
 >;
 
+export function orchestrationMessageFromStoredMessage(
+  row: ProjectionThreadMessageRecord,
+): OrchestrationMessage {
+  const { messageId, isStreaming, sequence: _sequence, ...fields } = row;
+  return { ...fields, id: messageId, streaming: isStreaming };
+}
+
 export function projectionThreadMessageFromRow(
   row: ProjectionThreadMessageDbRow,
 ): ProjectionThreadMessageRecord {
@@ -38,7 +48,7 @@ export function projectionThreadMessageFromRow(
     threadId: row.threadId,
     turnId: row.turnId,
     role: row.role,
-    text: row.text,
+    text: joinMessageTextChunks(row),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
     isStreaming: row.isStreaming === 1,
     source: row.source,
@@ -59,7 +69,7 @@ export function orchestrationMessageFromProjectionRow(
   return {
     id: row.messageId,
     role: row.role,
-    text: row.text,
+    text: joinMessageTextChunks(row),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.skills !== null ? { skills: row.skills } : {}),

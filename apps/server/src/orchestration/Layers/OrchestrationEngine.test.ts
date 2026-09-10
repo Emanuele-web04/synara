@@ -141,6 +141,109 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("keeps a second checkpoint revert protected after a failed revert with a higher runtime sequence", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-revert-sequence");
+    const threadId = ThreadId.makeUnsafe("thread-revert-sequence");
+    let commandIndex = 0;
+    const commandId = () => CommandId.makeUnsafe(`revert-sequence-${++commandIndex}`);
+    const appendActivity = (kind: string, sequence?: number) =>
+      system.run(
+        engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId(),
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(`revert-sequence-activity-${commandIndex}`),
+            kind,
+            tone: "info",
+            summary: kind,
+            payload: {},
+            turnId: null,
+            ...(sequence === undefined ? {} : { sequence }),
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+    const revert = () =>
+      system.run(
+        engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: commandId(),
+          threadId,
+          turnCount: 1,
+          createdAt,
+        }),
+      );
+
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: commandId(),
+          projectId,
+          title: "Checkpoint sequence",
+          workspaceRoot: "/tmp/checkpoint-sequence",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: commandId(),
+          threadId,
+          projectId,
+          title: "Checkpoint sequence",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await appendActivity("tool.completed", 1_000);
+      await revert();
+      await appendActivity("checkpoint.revert.failed");
+      await revert();
+
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.delete",
+            commandId: commandId(),
+            threadId,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId(),
+            threadId,
+            message: {
+              messageId: asMessageId("message-during-revert"),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            createdAt,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(revert()).rejects.toThrow("checkpoint revert in progress");
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("preserves large Unicode responses and segment boundaries through completion", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -903,7 +1006,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -1050,7 +1153,7 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
 
@@ -1168,7 +1271,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -1405,7 +1508,7 @@ describe("OrchestrationEngine", () => {
       }),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => {
         deferredCalls += 1;
         if (deferredCalls === 1) {
@@ -1507,7 +1610,7 @@ describe("OrchestrationEngine", () => {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(
@@ -1571,7 +1674,7 @@ describe("OrchestrationEngine", () => {
       ),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(

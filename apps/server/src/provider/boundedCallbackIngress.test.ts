@@ -1,4 +1,4 @@
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, Exit, Queue, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { makeBoundedCallbackIngress } from "./boundedCallbackIngress.ts";
@@ -10,6 +10,36 @@ type TestItem = {
 };
 
 describe("makeBoundedCallbackIngress", () => {
+  it("closes its scope even when downstream consumption has stopped", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const downstream = yield* Queue.bounded<TestItem>(1);
+        yield* Queue.offer(downstream, { id: "full" });
+        const started = yield* Deferred.make<void>();
+        const ingress = yield* makeBoundedCallbackIngress<TestItem, never, never>(
+          (item) =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Queue.offer(downstream, item)),
+              Effect.asVoid,
+            ),
+          {
+            capacity: 4,
+            maxBufferedBytes: 100,
+            terminalReserve: 1,
+            isTerminal: () => false,
+            sizeOf: () => 1,
+          },
+        ).pipe(Effect.provideService(Scope.Scope, scope));
+        ingress.offer({ id: "blocked" });
+        yield* Deferred.await(started);
+        ingress.offer({ id: "queued" });
+        yield* Scope.close(scope, Exit.void).pipe(Effect.timeout("1 second"));
+        expect(ingress.status()).toMatchObject({ accepting: false, queued: 0, queuedBytes: 0 });
+        yield* Queue.shutdown(downstream);
+      }),
+    );
+  });
   it("bounds synchronous callback admission without creating suspended offers", async () => {
     await Effect.runPromise(
       Effect.scoped(

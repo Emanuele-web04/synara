@@ -10,7 +10,12 @@ import type {
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, Stream } from "effect";
-import { ThreadId, type ProviderRuntimeEvent, type TurnId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  ThreadId,
+  type ProviderRuntimeEvent,
+  type TurnId,
+} from "@synara/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   AgentGatewayCredentials,
@@ -201,6 +206,66 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("retains only the latest cumulative tool snapshot while preserving final output", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    const emit = (event: AgentSessionEvent) =>
+      (session as unknown as { _emit(event: AgentSessionEvent): void })._emit(event);
+    emit({
+      type: "tool_execution_start",
+      toolCallId: "memory-tool",
+      toolName: "bash",
+      args: { command: "test" },
+    });
+    for (let update = 1; update <= 64; update++) {
+      emit({
+        type: "tool_execution_update",
+        toolCallId: "memory-tool",
+        toolName: "bash",
+        args: { command: "test" },
+        partialResult: {
+          content: [{ type: "text", text: "x".repeat(update * 1024) }],
+          details: {},
+        },
+      });
+    }
+    const active = await Effect.runPromise(adapter.readThread(threadId));
+    const items = active.turns.find((entry) => entry.id === turn.turnId)!.items as Array<{
+      type: string;
+      output?: string;
+    }>;
+    expect(items.filter((item) => item.type === "tool_call")).toHaveLength(1);
+    expect(items.find((item) => item.type === "tool_call")?.output).toHaveLength(64 * 1024);
+    expect(items.find((item) => item.type === "tool_call")).toMatchObject({
+      callId: "memory-tool",
+      args: { command: "test" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolCallId: "memory-tool",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "final output" }], details: {} },
+      isError: false,
+    });
+    const final = await Effect.runPromise(adapter.readThread(threadId));
+    expect(final.turns.find((entry) => entry.id === turn.turnId)!.items).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        callId: "memory-tool",
+        args: { command: "test" },
+        status: "completed",
+        output: "final output",
+      }),
+    );
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
 async function expectNextTurn(
   adapter: PiAdapterShape,
   events: ProviderRuntimeEvent[],
@@ -214,6 +279,86 @@ async function expectNextTurn(
   );
   expect(completions(events).filter((event) => event.turnId === previous)).toHaveLength(1);
 }
+
+it("does not turn extension footer status into transcript tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠠\u001b[0m caveman level: FULL");
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠔\u001b[0m caveman level: FULL");
+      context.ui.setWorkingMessage("Working...");
+      context.ui.setTitle("Pi terminal");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("keeps extension notifications visible without inventing tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.notify("\u001b[31mEnabled [full] mode\u001b[0m");
+      context.ui.notify("Configuration saved", "info");
+      context.ui.notify("Please reconnect", "warning");
+      context.ui.notify("Tool failed", "error");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const notices = events.filter((event) => event.raw?.method === "extension/ui/notify");
+    expect(notices.map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+      {
+        type: "runtime.warning",
+        payload: { message: "Enabled [full] mode", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Configuration saved", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Please reconnect", detail: { type: "warning" } },
+      },
+      { type: "runtime.warning", payload: { message: "Tool failed", detail: { type: "error" } } },
+    ]);
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("cleans input prompt formatting while preserving the user's answer", async () => {
+  responses("success");
+  const answer = "items[0]; \u001b[31m";
+  let received: string | undefined;
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", async (_event, context) => {
+      received = await context.ui.input("\u001b[31mExpression [code]\u001b[0m");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    const sent = send(adapter);
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "user-input.requested")).toBe(true),
+    );
+    const request = events.find((event) => event.type === "user-input.requested")!;
+    expect(request.payload.questions[0]?.question).toBe("Expression [code]");
+    await Effect.runPromise(
+      adapter.respondToUserInput(threadId, ApprovalRequestId.makeUnsafe(request.requestId!), {
+        input: answer,
+      }),
+    );
+    await sent;
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(received).toBe(answer);
+  });
+});
 
 it("keeps one turn through a real SDK retry and settles text, reasoning and usage once", async () => {
   const calls = responses("error", "success");

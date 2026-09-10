@@ -817,7 +817,10 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       }).catch(() => null),
     );
     if (!previewFile) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+      return HttpServerResponse.text("Not Found", {
+        status: 404,
+        headers: localPreviewCorsHeaders({ config, request, url }),
+      });
     }
 
     // Stream (don't use HttpServerResponse.file, which depends on
