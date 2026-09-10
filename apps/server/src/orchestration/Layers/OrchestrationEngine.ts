@@ -548,18 +548,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return messageRepository
           .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
           .pipe(
-            Effect.map((message) => {
-              const thread = commandReadModel.threads.find(
-                (entry) => entry.id === command.threadId,
-              );
-              if (!thread) return commandReadModel;
-              return overlayThread(commandReadModel, {
-                ...thread,
-                messages: Option.isSome(message)
-                  ? [orchestrationMessageFromStoredMessage(message.value)]
-                  : [],
-              });
-            }),
             Effect.mapError(
               (error) =>
                 new OrchestrationCommandInternalError({
@@ -568,6 +556,23 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   detail: `Failed to load the complete assistant message: ${error.message}`,
                 }),
             ),
+            Effect.flatMap((message) => {
+              const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
+                ? Effect.succeed(commandReadModel)
+                : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+              return model.pipe(
+                Effect.map((readModel) => {
+                  const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+                  // A missing projection row must not discard text still in cache.
+                  // SQL failures stay errors; a present row remains authoritative.
+                  if (!thread || Option.isNone(message)) return readModel;
+                  return overlayThread(readModel, {
+                    ...thread,
+                    messages: [orchestrationMessageFromStoredMessage(message.value)],
+                  });
+                }),
+              );
+            }),
           );
       default:
         return Effect.succeed(commandReadModel);
