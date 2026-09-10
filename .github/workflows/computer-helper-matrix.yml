@@ -105,7 +105,7 @@ jobs:
           SYNARA_COMPUTER_HELPER_OUT: ${{ runner.temp }}/computer-helper
         run: bash apps/server/native/computer-use-macos/build.sh "$SYNARA_COMPUTER_HELPER_OUT"
 
-      - name: Test native geometry and cancellation without desktop input
+      - name: Test native geometry, identity, keys and shutdown without desktop input
         run: |
           set -euo pipefail
           helper_test_dir=$(mktemp -d "${RUNNER_TEMP}/synara-computer-tests.XXXXXX")
@@ -123,6 +123,28 @@ jobs:
             apps/server/native/computer-use-macos/Tests/InputCancellationTests.swift \
             -o "$helper_test_dir/cancellation-tests"
           "$helper_test_dir/cancellation-tests"
+          swiftc -swift-version 5 apps/server/native/computer-use-macos/Sources/JSONRPC.swift \
+            apps/server/native/computer-use-macos/Sources/Cancellation.swift \
+            apps/server/native/computer-use-macos/Sources/KeyMap.swift \
+            apps/server/native/computer-use-macos/Sources/InputReleaseEvent.swift \
+            apps/server/native/computer-use-macos/Sources/InputDeliveryState.swift \
+            apps/server/native/computer-use-macos/Tests/InputDeliveryStateTests.swift \
+            -o "$helper_test_dir/input-delivery-state-tests" -framework CoreGraphics
+          "$helper_test_dir/input-delivery-state-tests"
+          swiftc -swift-version 5 apps/server/native/computer-use-macos/Sources/JSONRPC.swift \
+            apps/server/native/computer-use-macos/Sources/KeyMap.swift \
+            apps/server/native/computer-use-macos/Sources/InputReleaseEvent.swift \
+            apps/server/native/computer-use-macos/Tests/KeyMapTests.swift \
+            -o "$helper_test_dir/key-map-tests" -framework CoreGraphics
+          "$helper_test_dir/key-map-tests"
+          swiftc -swift-version 5 apps/server/native/computer-use-macos/Sources/WindowIdentityMatcher.swift \
+            apps/server/native/computer-use-macos/Tests/WindowIdentityMatcherTests.swift \
+            -o "$helper_test_dir/window-identity-tests"
+          "$helper_test_dir/window-identity-tests"
+          swiftc -swift-version 5 apps/server/native/computer-use-macos/Sources/GeometrySnapshotCache.swift \
+            apps/server/native/computer-use-macos/Tests/GeometrySnapshotCacheTests.swift \
+            -o "$helper_test_dir/geometry-cache-tests"
+          "$helper_test_dir/geometry-cache-tests"
 
       - name: Probe capabilities and assert the SkyLight report
         env:

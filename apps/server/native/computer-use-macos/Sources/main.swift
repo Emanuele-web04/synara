@@ -56,6 +56,8 @@ let spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
 // MARK: - Dispatch
 
 func handle(method: String, params: Params) throws -> Any {
+  // Release before writing either the success or error response to stdout.
+  defer { if Lanes.isAction(method) { input.finishOperation() } }
   switch method {
   case "ping":
     return ["ok": true, "pid": ProcessInfo.processInfo.processIdentifier]
@@ -556,11 +558,11 @@ func raiseWindow(windowId: CGWindowID) throws {
 /// Never leave a button or a modifier latched for the human: whatever the reason
 /// this process is going away, the matching up events go out first.
 func shutdown(_ code: Int32) -> Never {
+  input.unwind()
   // Best effort, and only meaningful when this runs on the main queue (the
   // signal sources do). From the stdin reader the `exit` below takes the window
   // down before the hop could run, which is the same outcome.
   cursor.hide()
-  input.unwind()
   exit(code)
 }
 
