@@ -577,6 +577,7 @@ import {
   COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
+  COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
@@ -11579,7 +11580,12 @@ export default function ChatView({
     !showContainerChatWorkspacePicker &&
     !showEmptyLandingProjectPicker &&
     activeProjectDisplayName ? (
-      <span className="inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-full px-2 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] sm:max-w-64">
+      <span
+        className={cn(
+          "inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-full px-2 py-1 sm:max-w-64",
+          COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+        )}
+      >
         <FolderClosed className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
@@ -11593,11 +11599,13 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // United-but-not-fused tray sitting in normal flow directly above the composer at a
-      // narrower width (w-14/15): tinted, rounded on top only, flush against the input
-      // shell below. No overlap/underlay tricks — in dark mode a slice tucked behind the
-      // composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-14/15 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      // Tray sitting in normal flow directly above the composer, full composer width so
+      // the project / environment / branch chips sit near the shell edges. Light mode is
+      // unfilled (chips float over the page); dark mode keeps a faint tint, rounded on
+      // top only and flush against the input shell below. No overlap/underlay tricks —
+      // in dark mode a slice tucked behind the composer's translucent corners reads as
+      // a visible cut along the seam.
+      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7 dark:bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)]"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -11607,6 +11615,7 @@ export default function ChatView({
           triggerClassName={cn(
             "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
           )}
           showResetToHome={Boolean(
             isStudioContainer ? resolvedThreadWorkingDirectory : resolvedThreadWorktreePath,
@@ -11631,6 +11640,7 @@ export default function ChatView({
           triggerClassName={cn(
             "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
           )}
           selectionMode="project"
           selectedProjectId={activeProject.id}
@@ -11675,11 +11685,11 @@ export default function ChatView({
           }
           aria-label="Temporary chat"
           className={cn(
-            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-2.5",
+            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5",
             COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
-            isThreadTemporary
-              ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]"
-              : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+            isThreadTemporary &&
+              "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]",
           )}
         >
           <TemporaryThreadIcon className="size-3.5" />
