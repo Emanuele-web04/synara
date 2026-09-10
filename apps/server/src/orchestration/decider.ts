@@ -33,6 +33,7 @@ import {
 } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 import {
+  canRespondToAsyncUserInput,
   formatAsyncUserInputResponse,
   isAsyncUserInputActivity,
 } from "@synara/shared/asyncUserInput";
@@ -1781,6 +1782,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         : undefined;
       if (asyncResponse) {
         if (
+          !canRespondToAsyncUserInput(targetThread) ||
           (targetThread.session?.providerName ?? targetThread.modelSelection.provider) !==
             "codex" ||
           (command.modelSelection ?? targetThread.modelSelection).provider !== "codex" ||
@@ -1895,7 +1897,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           dispatchOrigin: command.dispatchOrigin ?? "user",
           turnId: null,
           streaming: false,
-          source: "native",
+          source: asyncResponse ? "async-user-input" : "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

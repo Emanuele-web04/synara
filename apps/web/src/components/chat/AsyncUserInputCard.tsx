@@ -60,7 +60,11 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
     >
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {answered ? <CheckIcon className="size-3.5" /> : null}
-        {answered ? "Answer submitted" : "Reply when you’re ready"}
+        {answered
+          ? "Answer submitted"
+          : onRespond
+            ? "Reply when you’re ready"
+            : "Replies are unavailable in this conversation"}
       </p>
       {questions.map((question, index) => (
         <fieldset key={index} disabled={submitting || !onRespond} className="min-w-0 space-y-2">

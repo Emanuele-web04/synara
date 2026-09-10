@@ -59,6 +59,7 @@ import {
 import {
   CodexSessionStartError,
   CodexTurnNotActiveError,
+  CodexTurnNotSteerableError,
   isNonFatalCodexErrorMessage,
 } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
@@ -1458,6 +1459,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         error.message === "turn/steer failed: no active turn to steer"
       ) {
         throw new CodexTurnNotActiveError(error.message, { cause: error });
+      }
+      if (
+        error instanceof Error &&
+        (error.message === "turn/steer failed: cannot steer a review turn" ||
+          error.message === "turn/steer failed: cannot steer a compact turn")
+      ) {
+        throw new CodexTurnNotSteerableError(error.message, { cause: error });
       }
       throw error;
     }

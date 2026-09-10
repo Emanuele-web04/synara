@@ -23,7 +23,11 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
-import { CodexSessionStartError, CodexTurnNotActiveError } from "../../codexErrorClassification.ts";
+import {
+  CodexSessionStartError,
+  CodexTurnNotActiveError,
+  CodexTurnNotSteerableError,
+} from "../../codexErrorClassification.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -181,6 +185,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       const adapter = yield* CodexAdapter;
       for (const cause of [
         new CodexTurnNotActiveError("No active turn"),
+        new CodexTurnNotSteerableError("cannot steer a compact turn"),
         new Error("Timed out waiting for turn/steer."),
       ]) {
         validationManager.steerTurnImpl.mockRejectedValueOnce(cause);
@@ -194,7 +199,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
         }
         assert.equal(
           result.failure.reason,
-          cause instanceof CodexTurnNotActiveError ? "turn-not-active" : undefined,
+          cause instanceof CodexTurnNotActiveError
+            ? "turn-not-active"
+            : cause instanceof CodexTurnNotSteerableError
+              ? "turn-not-steerable"
+              : undefined,
         );
       }
     }),

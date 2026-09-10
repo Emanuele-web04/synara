@@ -87,7 +87,9 @@ it.each(["ready", "running"] as const)(
       activity: question!,
       createdAt,
     });
-    const respond = (commandId: string): OrchestrationCommand => ({
+    const respond = (
+      commandId: string,
+    ): Extract<OrchestrationCommand, { type: "thread.turn.start" }> => ({
       type: "thread.turn.start",
       commandId: CommandId.makeUnsafe(commandId),
       threadId,
@@ -162,6 +164,48 @@ it.each(["ready", "running"] as const)(
         }),
       );
       await system.run(system.engine.dispatch(appendQuestion("question-arrived")));
+      const childThreadId = ThreadId.makeUnsafe("subagent:async-thread:child");
+      const childQuestionId = EventId.makeUnsafe("child-question");
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("create-child"),
+          threadId: childThreadId,
+          parentThreadId: threadId,
+          projectId,
+          title: "Child",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe("child-question"),
+          threadId: childThreadId,
+          activity: { ...question!, id: childQuestionId },
+          createdAt,
+        }),
+      );
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            ...respond("child-answer"),
+            threadId: childThreadId,
+            asyncUserInputResponse: { activityId: childQuestionId, answers: ["Tabs"] },
+          }),
+        ),
+      ).rejects.toThrow("unavailable");
+      const child = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(childThreadId)),
+      );
+      expect(child.messages).toHaveLength(0);
+      expect(child.activities[0]?.payload).toEqual(question!.payload);
+
       // A long-running agent must not evict the card from the bounded activity window.
       await system.run(system.sql`
       WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 2200)
@@ -171,7 +215,9 @@ it.each(["ready", "running"] as const)(
         '2026-09-10T12:01:00.000Z' FROM numbers
     `);
       const pending = Option.getOrThrow(
-        await system.run(system.query.getThreadDetailById(threadId)),
+        await system.run(
+          system.query.getThreadDetailById(threadId, { includeActivityId: question!.id }),
+        ),
       );
       expect(pending.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(
         question!.payload,
@@ -179,9 +225,11 @@ it.each(["ready", "running"] as const)(
       expect(pending.hasPendingUserInput).toBe(false);
       expect(pending.pendingInteractions).toEqual([]);
       const snapshot = await system.run(system.query.getSnapshot());
-      expect(snapshot.threads[0]?.activities.some((activity) => activity.id === question!.id)).toBe(
-        true,
-      );
+      expect(
+        snapshot.threads
+          .find((thread) => thread.id === threadId)
+          ?.activities.some((activity) => activity.id === question!.id),
+      ).toBe(true);
 
       await system.dispose();
       system = await createSystem(dbPath);
@@ -209,7 +257,9 @@ it.each(["ready", "running"] as const)(
       expect(submissions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       expect(submissions.filter((result) => result.status === "rejected")).toHaveLength(1);
       const answered = Option.getOrThrow(
-        await system.run(system.query.getThreadDetailById(threadId)),
+        await system.run(
+          system.query.getThreadDetailById(threadId, { includeActivityId: question!.id }),
+        ),
       );
       expect(answered.messages).toHaveLength(2);
       const answerMessageId = answered.messages.at(-1)!.id;
@@ -219,6 +269,31 @@ it.each(["ready", "running"] as const)(
       ).toMatchObject({
         response: { answers: ["Switching tabs quickly"], messageId: answerMessageId },
       });
+      const publicDetail = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(publicDetail.activities.some((activity) => activity.id === question!.id)).toBe(false);
+      expect(publicDetail.activities.length).toBeLessThanOrEqual(2000);
+      expect(
+        (await system.run(system.query.getSnapshot())).threads.find(
+          (thread) => thread.id === threadId,
+        )!.activities.length,
+      ).toBeLessThanOrEqual(500);
+      expect(answered.messages.at(-1)?.source).toBe("async-user-input");
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.message.edit-and-resend",
+            commandId: CommandId.makeUnsafe("edit-answer"),
+            threadId,
+            messageId: answerMessageId,
+            text: "Corrected answer",
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt,
+          }),
+        ),
+      ).rejects.toThrow("non-native-message");
       const events = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
       expect(events.filter((event) => event.type === "thread.turn-start-requested")).toHaveLength(
         1,
@@ -235,7 +310,9 @@ it.each(["ready", "running"] as const)(
         system.run(system.engine.dispatch(respond("answer-after-restart"))),
       ).rejects.toThrow("already answered");
       const restarted = Option.getOrThrow(
-        await system.run(system.query.getThreadDetailById(threadId)),
+        await system.run(
+          system.query.getThreadDetailById(threadId, { includeActivityId: question!.id }),
+        ),
       );
       expect(
         restarted.activities.find((activity) => activity.id === question!.id)?.payload,
@@ -263,7 +340,9 @@ it.each(["ready", "running"] as const)(
         ),
       );
       const reopened = Option.getOrThrow(
-        await system.run(system.query.getThreadDetailById(threadId)),
+        await system.run(
+          system.query.getThreadDetailById(threadId, { includeActivityId: question!.id }),
+        ),
       );
       expect(reopened.messages.map((message) => message.id)).toEqual(["original-message"]);
       expect(reopened.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(
@@ -284,13 +363,35 @@ it.each(["ready", "running"] as const)(
       system = await createSystem(dbPath);
       await system.run(system.engine.dispatch(respond("replacement-answer")));
       const replaced = Option.getOrThrow(
-        await system.run(system.query.getThreadDetailById(threadId)),
+        await system.run(
+          system.query.getThreadDetailById(threadId, { includeActivityId: question!.id }),
+        ),
       );
       expect(
         replaced.activities.find((activity) => activity.id === question!.id)?.payload,
       ).toMatchObject({
         response: { messageId: "replacement-answer" },
       });
+      await system.run(system.sql`
+        WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 2200)
+        INSERT INTO projection_thread_activities
+          (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+        SELECT 'settled-' || n, ${threadId}, NULL, 'info', 'user-input.async', 'Answered',
+          ${JSON.stringify({ questions: [{ title: "Which?", options: null }], response: { answers: ["A"], messageId: "replacement-answer" } })},
+          n + 3000, '2026-09-10T12:02:00.000Z' FROM numbers
+      `);
+      const boundedDetail = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(boundedDetail.activities).toHaveLength(2000);
+      const boundedSnapshot = await system.run(system.query.getSnapshot());
+      expect(
+        boundedSnapshot.threads.find((thread) => thread.id === threadId)!.activities,
+      ).toHaveLength(500);
+      await system.run(system.engine.dispatch(appendQuestion("replayed-archived-item")));
+      await expect(
+        system.run(system.engine.dispatch(respond("duplicate-archived-answer"))),
+      ).rejects.toThrow("already answered");
     } finally {
       await system.dispose();
       fs.rmSync(stateDir, { recursive: true, force: true });

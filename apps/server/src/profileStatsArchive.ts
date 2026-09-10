@@ -652,7 +652,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
           AND role = 'user'
-          AND source = 'native'
+          AND source IN ('native', 'async-user-input')
           AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
         ORDER BY created_at ASC, message_id ASC
       `;
@@ -690,7 +690,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           FROM projection_thread_messages
           WHERE thread_id = ${threadId}
             AND role = 'user'
-            AND source = 'native'
+            AND source IN ('native', 'async-user-input')
             AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
         `;
         yield* Effect.forEach(

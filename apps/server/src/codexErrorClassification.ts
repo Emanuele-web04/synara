@@ -12,6 +12,11 @@ export class CodexTurnNotActiveError extends Error {
   override readonly name = "CodexTurnNotActiveError";
 }
 
+/** Review and compaction reject input without submitting it to the model. */
+export class CodexTurnNotSteerableError extends Error {
+  override readonly name = "CodexTurnNotSteerableError";
+}
+
 const NON_FATAL_CODEX_ERROR_SNIPPETS = [
   "write_stdin failed: stdin is closed for this session",
 ] as const;

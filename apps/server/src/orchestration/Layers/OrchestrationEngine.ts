@@ -504,22 +504,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     model: OrchestrationReadModel,
     threadId: ThreadId,
   ): Effect.Effect<OrchestrationReadModel, OrchestrationDispatchError> =>
-    projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
-      Effect.map((threadOption) =>
-        Option.match(threadOption, {
-          onNone: () => model,
-          onSome: (thread) => overlayThread(model, thread),
-        }),
-      ),
-      Effect.mapError(
-        (error) =>
-          new OrchestrationCommandInternalError({
-            commandId: command.commandId,
-            commandType: command.type,
-            detail: `Failed to load thread detail for command validation: ${error.message}`,
+    projectionSnapshotQuery
+      .getThreadDetailById(threadId, {
+        ...(command.type === "thread.activity.append" &&
+        command.activity.kind === "user-input.async"
+          ? { includeActivityId: command.activity.id }
+          : command.type === "thread.turn.start" && command.asyncUserInputResponse
+            ? { includeActivityId: command.asyncUserInputResponse.activityId }
+            : {}),
+      })
+      .pipe(
+        Effect.map((threadOption) =>
+          Option.match(threadOption, {
+            onNone: () => model,
+            onSome: (thread) => overlayThread(model, thread),
           }),
-      ),
-    );
+        ),
+        Effect.mapError(
+          (error) =>
+            new OrchestrationCommandInternalError({
+              commandId: command.commandId,
+              commandType: command.type,
+              detail: `Failed to load thread detail for command validation: ${error.message}`,
+            }),
+        ),
+      );
 
   const buildDeciderReadModel = (
     command: OrchestrationCommand,

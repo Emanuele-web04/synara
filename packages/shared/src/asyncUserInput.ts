@@ -29,6 +29,18 @@ export function isAsyncUserInputActivity(
   return asyncUserInputPayload(activity) !== undefined;
 }
 
+export function isPendingAsyncUserInputActivity(activity: ActivityFields): boolean {
+  const payload = asyncUserInputPayload(activity);
+  return payload !== undefined && payload.response === undefined;
+}
+
+export function canRespondToAsyncUserInput(thread: {
+  readonly id: string;
+  readonly parentThreadId?: string | null | undefined;
+}): boolean {
+  return !thread.parentThreadId && !thread.id.startsWith("subagent:");
+}
+
 export function reopenAsyncUserInputAfterMessageRemoval<T extends ActivityFields>(
   activities: readonly T[],
   removedMessageIds: ReadonlySet<string>,

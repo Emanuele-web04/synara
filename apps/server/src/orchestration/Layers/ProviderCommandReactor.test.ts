@@ -8681,6 +8681,64 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it("queues a definitively rejected Codex steer until the blocking turn settles", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("review-turn");
+    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
+    harness.steerTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/steer",
+          detail: "cannot steer a review turn",
+          reason: "turn-not-steerable",
+        }),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("answer-during-review"),
+        threadId,
+        message: {
+          messageId: asMessageId("async-answer"),
+          role: "user",
+          text: "My answer",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    const model = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      model.threads[0]?.activities.some(
+        (activity) => activity.kind === "provider.turn.start.failed",
+      ),
+    ).toBe(false);
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("review-finished"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt: new Date().toISOString(),
+      payload: { state: "completed" },
+      providerRefs: {},
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({ threadId, input: "My answer" });
+    expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("steers a running claude turn natively without interrupting it", async () => {
     const harness = await createHarness({
       threadModelSelection: {

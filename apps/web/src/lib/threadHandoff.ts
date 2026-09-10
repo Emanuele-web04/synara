@@ -1,3 +1,4 @@
+import { isNativeConversationMessageSource } from "@synara/shared/conversationEdit";
 // FILE: threadHandoff.ts
 // Purpose: Builds client-side handoff commands and imported transcript payloads.
 // Layer: Web handoff utilities
@@ -176,7 +177,8 @@ export function buildThreadHandoffImportedActivities(
 
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
   return thread.messages.some(
-    (message) => isImportableThreadMessage(message) && message.source === "native",
+    (message) =>
+      isImportableThreadMessage(message) && isNativeConversationMessageSource(message.source),
   );
 }
 

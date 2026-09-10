@@ -2,6 +2,7 @@ import {
   type AutomationDefinition,
   type AutomationSchedule,
   type ApprovalRequestId,
+  CommandId,
   DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
@@ -45,6 +46,7 @@ import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractio
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import {
+  isNativeConversationMessageSource,
   resolveLatestTailUserMessageEditTarget,
   resolveTailUserMessageEditTarget,
 } from "@synara/shared/conversationEdit";
@@ -510,7 +512,10 @@ import {
 } from "./chat/threadFind.logic";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
-import { isAsyncUserInputActivity } from "@synara/shared/asyncUserInput";
+import {
+  canRespondToAsyncUserInput,
+  isAsyncUserInputActivity,
+} from "@synara/shared/asyncUserInput";
 import type { RespondToAsyncUserInput } from "./chat/AsyncUserInputCard";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -3488,6 +3493,7 @@ export default function ChatView({
     [activeThread?.activities],
   );
   const asyncResponseThreadId = activeThread?.id;
+  const asyncResponseAllowed = activeThread ? canRespondToAsyncUserInput(activeThread) : false;
   const asyncResponseRuntimeMode = activeThread?.runtimeMode;
   const asyncResponseInteractionMode = activeThread?.interactionMode;
   const onRespondToAsyncUserInput = useCallback<RespondToAsyncUserInput>(
@@ -3495,6 +3501,7 @@ export default function ChatView({
       const api = readNativeApi();
       if (
         !api ||
+        !asyncResponseAllowed ||
         !asyncResponseThreadId ||
         !asyncResponseRuntimeMode ||
         !asyncResponseInteractionMode ||
@@ -3521,6 +3528,7 @@ export default function ChatView({
     },
     [
       asyncResponseThreadId,
+      asyncResponseAllowed,
       asyncResponseRuntimeMode,
       asyncResponseInteractionMode,
       isSidechatExpired,
@@ -4259,7 +4267,7 @@ export default function ChatView({
   const hasNativeUserMessages = useMemo(
     () =>
       activeThread?.messages.some(
-        (message) => message.role === "user" && message.source === "native",
+        (message) => message.role === "user" && isNativeConversationMessageSource(message.source),
       ) ?? false,
     [activeThread?.messages],
   );
@@ -12734,7 +12742,7 @@ export default function ChatView({
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
-                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
+                    {...(asyncResponseAllowed ? { onRespondToAsyncUserInput } : {})}
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}

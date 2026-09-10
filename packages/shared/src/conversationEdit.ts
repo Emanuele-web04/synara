@@ -33,8 +33,12 @@ export type TailUserMessageEditTarget =
         | "spans-multiple-turns";
     };
 
+export function isNativeConversationMessageSource(source: string | undefined): boolean {
+  return source === undefined || source === "native" || source === "async-user-input";
+}
+
 function isNativeEditableSource(source: string | undefined): boolean {
-  return source === undefined || source === "native";
+  return isNativeConversationMessageSource(source) && source !== "async-user-input";
 }
 
 function collectUniqueTurnIds<TTurnId extends string>(
@@ -57,7 +61,7 @@ export function collectTailTurnIds<TTurnId extends string>(input: {
 function findLatestNativeUserMessageIndex(messages: ReadonlyArray<EditableMessageLike>): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "user" && isNativeEditableSource(message.source)) {
+    if (message?.role === "user" && isNativeConversationMessageSource(message.source)) {
       return index;
     }
   }

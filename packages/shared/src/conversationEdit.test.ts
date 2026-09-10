@@ -7,6 +7,21 @@ import {
 } from "./conversationEdit";
 
 describe("conversationEdit", () => {
+  it("does not expose generated async answers or the prompt before them for editing", () => {
+    const messages = [
+      { id: "prompt", role: "user", source: "native", turnId: "turn-1" },
+      { id: "answer", role: "user", source: "async-user-input", turnId: "turn-1" },
+    ];
+    expect(resolveLatestTailUserMessageEditTarget({ messages })).toEqual({
+      editable: false,
+      reason: "non-native-message",
+    });
+    expect(resolveTailUserMessageEditTarget({ messages, messageId: "prompt" })).toEqual({
+      editable: false,
+      reason: "not-latest-native-user-message",
+    });
+  });
+
   it("collects unique turn ids from a target message through the tail", () => {
     expect(
       collectTailTurnIds({

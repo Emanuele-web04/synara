@@ -15,23 +15,38 @@ import {
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
-it("retains pending and submitted async questions beyond the activity cap", () => {
+it("retains only unresolved async questions beyond the activity cap", () => {
+  const questions = [{ title: "Which approach?", options: null }];
   const cards = [
-    makeActivity({ id: "async-pending", kind: "user-input.async", sequence: 1 }),
+    makeActivity({
+      id: "async-pending",
+      kind: "user-input.async",
+      sequence: 1,
+      payload: { questions },
+    }),
     makeActivity({
       id: "async-answered",
       kind: "user-input.async",
       sequence: 2,
-      payload: { response: { answers: ["Tabs"], messageId: "answer" } },
+      payload: { questions, response: { answers: ["Tabs"], messageId: "answer" } },
     }),
   ];
-  const activities = normalizeActivities([
-    ...cards,
-    ...Array.from({ length: 2200 }, (_, index) =>
-      makeActivity({ id: `work-${index}`, sequence: index + 10 }),
-    ),
-  ]);
-  expect(activities.filter((activity) => activity.kind === "user-input.async")).toEqual(cards);
+  const activities = normalizeActivities(
+    [
+      ...cards,
+      ...Array.from({ length: 2200 }, (_, index) =>
+        makeActivity({ id: `work-${index}`, sequence: index + 10 }),
+      ),
+    ],
+    [],
+  );
+  expect(activities.filter((activity) => activity.kind === "user-input.async")).toEqual([cards[0]]);
+  expect(activities.length).toBeLessThanOrEqual(2001);
+  const answered = normalizeActivities(
+    [...activities, { ...cards[0]!, payload: cards[1]!.payload }],
+    activities,
+  );
+  expect(answered.some((activity) => activity.id === "async-pending")).toBe(false);
 });
 
 type ThreadActivity = Thread["activities"][number];

@@ -13,6 +13,7 @@ import {
   ThreadId,
   type TurnId,
 } from "@synara/contracts";
+import { isPendingAsyncUserInputActivity } from "@synara/shared/asyncUserInput";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
@@ -1313,8 +1314,8 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   const retainedIds = new Set(activities.slice(dropCount).map((activity) => activity.id));
   const pendingRequestIds = pendingInteractionRequestIds(activities);
   for (const activity of activities) {
-    // These are durable transcript cards, including submitted answers, not transient work logs.
-    if (activity.kind === "user-input.async") {
+    // Unresolved questions survive the cap; answered cards age out with history.
+    if (isPendingAsyncUserInputActivity(activity)) {
       retainedIds.add(activity.id);
       continue;
     }

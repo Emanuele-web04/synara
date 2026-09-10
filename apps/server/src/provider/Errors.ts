@@ -60,8 +60,8 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
     provider: Schema.String,
     method: Schema.String,
     detail: Schema.String,
-    // Explicit proof that a steer submitted no input and needs a normal turn start.
-    reason: Schema.optional(Schema.Literal("turn-not-active")),
+    // Explicit proof that a steer submitted no input and can safely be retried.
+    reason: Schema.optional(Schema.Literals(["turn-not-active", "turn-not-steerable"])),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

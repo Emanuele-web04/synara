@@ -1,10 +1,12 @@
 import {
-  CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type ThreadId,
 } from "@synara/contracts";
-import { reopenAsyncUserInputAfterMessageRemoval } from "@synara/shared/asyncUserInput";
+import {
+  isPendingAsyncUserInputActivity,
+  reopenAsyncUserInputAfterMessageRemoval,
+} from "@synara/shared/asyncUserInput";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -277,8 +279,7 @@ function capThreadActivities(
   return tailStart <= 0
     ? activities
     : activities.filter(
-        (activity, index) =>
-          index >= tailStart || activity.kind === CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
+        (activity, index) => index >= tailStart || isPendingAsyncUserInputActivity(activity),
       );
 }
 

@@ -24,6 +24,16 @@ const question: AsyncUserInputActivity = {
   },
 };
 
+it("shows unsupported child-task questions without an actionable answer form", async () => {
+  await render(<AsyncUserInputCard activity={question} />);
+  await expect
+    .element(page.getByText("Replies are unavailable in this conversation"))
+    .toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Submit answer" })).toBeDisabled();
+  await expect.element(page.getByRole("button", { name: "Switching tabs" })).toBeDisabled();
+  await expect.element(page.getByLabelText("Your answer", { exact: true })).toBeDisabled();
+});
+
 it("keeps suggested choices unsubmitted and accepts free text while work continues", async () => {
   let finish: () => void = () => {};
   const onRespond = vi.fn(

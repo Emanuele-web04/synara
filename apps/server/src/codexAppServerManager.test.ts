@@ -2156,6 +2156,17 @@ describe("sendTurn", () => {
 });
 
 describe("steerTurn", () => {
+  it.each(["review", "compact"])("returns a definitive rejection for a %s turn", async (kind) => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockRejectedValueOnce(new Error(`turn/steer failed: cannot steer a ${kind} turn`));
+    await expect(
+      manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" }),
+    ).rejects.toMatchObject({ name: "CodexTurnNotSteerableError" });
+    expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["turn/steer"]);
+  });
+
   it("returns control to the reactor when the originating turn already ended", async () => {
     const { manager, sendRequest } = createSendTurnHarness();
     await expect(

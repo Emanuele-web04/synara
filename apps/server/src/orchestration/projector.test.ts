@@ -1714,7 +1714,7 @@ describe("orchestration projector", () => {
     expect(afterReplacement.threads[0]?.activities[1]?.summary).toBe("late updated");
   });
 
-  it("retains and updates async questions outside the normal activity window", async () => {
+  it("retains only unresolved async questions outside the normal activity window", async () => {
     const createdAt = "2026-09-10T00:00:00.000Z";
     let model = await projectThreadWithRunningTurn({ createdAt, startedAt: createdAt });
     let eventSequence = 2;
@@ -1754,28 +1754,20 @@ describe("orchestration projector", () => {
       await appendActivity(`tool-${index}`, index + 10, "tool.updated", {});
     }
     const activities = () => model.threads[0]!.activities;
-    expect(
-      activities()
-        .slice(0, 2)
-        .map((activity) => activity.id),
-    ).toEqual(["pending", "answered"]);
+    expect(activities()[0]?.id).toBe("pending");
+    expect(activities().some((activity) => activity.id === "answered")).toBe(false);
     expect(activities().filter((activity) => activity.kind === "tool.updated")).toHaveLength(500);
-    expect(activities()[2]?.id).toBe("tool-5");
+    expect(activities()[1]?.id).toBe("tool-5");
 
-    // Replacing an old card must preserve both its position and its submitted answer.
+    // Answering an old card releases its exception from the history cap.
     await appendActivity("pending", 3, "user-input.async", { questions, response: answer });
-    expect(activities()[0]?.payload).toEqual({ questions, response: answer });
-    expect(activities()[1]?.payload).toEqual({ questions, response: answer });
-    expect(activities().filter((activity) => activity.id === "pending")).toHaveLength(1);
+    expect(activities().some((activity) => activity.id === "pending")).toBe(false);
+    expect(activities()).toHaveLength(500);
 
-    // Replay can also insert older activities into an already capped snapshot.
+    // Replay can also insert older pending questions into an already capped snapshot.
     await appendActivity("older", 2, "user-input.async", { questions });
-    expect(
-      activities()
-        .slice(0, 3)
-        .map((activity) => activity.id),
-    ).toEqual(["older", "pending", "answered"]);
-    expect(activities()).toHaveLength(503);
+    expect(activities()[0]?.id).toBe("older");
+    expect(activities()).toHaveLength(501);
   });
 
   it("caps message and checkpoint retention for long-lived threads", async () => {

@@ -680,7 +680,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           FROM projection_thread_messages m
           JOIN projection_threads t ON t.thread_id = m.thread_id
           WHERE m.role = 'user'
-            AND m.source = 'native'
+            AND m.source IN ('native', 'async-user-input')
             AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
           UNION ALL
           SELECT d.created_at AS created_at
@@ -983,7 +983,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       FROM projection_thread_messages m
       JOIN projection_threads t ON t.thread_id = m.thread_id
       WHERE m.role = 'user'
-        AND m.source = 'native'
+        AND m.source IN ('native', 'async-user-input')
         AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
         AND (
           (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
@@ -1040,7 +1040,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           FROM projection_thread_messages m
           JOIN projection_threads t ON t.thread_id = m.thread_id
           WHERE m.role = 'user'
-            AND m.source = 'native'
+            AND m.source IN ('native', 'async-user-input')
             AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
           UNION ALL
           SELECT

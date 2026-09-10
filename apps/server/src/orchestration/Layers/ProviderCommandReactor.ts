@@ -51,6 +51,7 @@ import {
   isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
 import {
+  isNativeConversationMessageSource,
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
 } from "@synara/shared/conversationEdit";
@@ -2767,7 +2768,7 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(threadId);
     if (!thread) return null;
     const userMessages = thread.messages.filter(
-      (message) => message.role === "user" && message.source === "native",
+      (message) => message.role === "user" && isNativeConversationMessageSource(message.source),
     );
     return userMessages.length === 1 && userMessages[0]?.id === messageId ? thread : null;
   });
@@ -3154,6 +3155,23 @@ const make = Effect.gen(function* () {
         dispatchMode: immediateDispatchMode,
         createdAt: event.payload.createdAt,
       }).pipe(
+        Effect.catchTag("ProviderAdapterRequestError", (error) =>
+          error.provider === "codex" &&
+          error.method === "turn/steer" &&
+          error.reason === "turn-not-steerable"
+            ? Effect.gen(function* () {
+                // Codex accepted no input. Wait for review/compaction to settle;
+                // do not interrupt it or mark an already accepted answer failed.
+                yield* enqueueQueuedTurnStart({
+                  ...event,
+                  payload: { ...event.payload, dispatchMode: "queue" },
+                });
+                if (liveTurnId !== undefined) {
+                  yield* bindPendingQueuedDispatchToTurn(liveTurnId);
+                }
+              })
+            : Effect.fail(error),
+        ),
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
@@ -3280,7 +3298,7 @@ const make = Effect.gen(function* () {
           ...(nextQueuedTurn.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: nextQueuedTurn.assistantDeliveryMode }
             : {}),
-          dispatchMode: nextQueuedTurn.dispatchMode,
+          dispatchMode: promotion.dispatchMode,
           ...(nextQueuedTurn.dispatchOrigin !== undefined
             ? { dispatchOrigin: nextQueuedTurn.dispatchOrigin }
             : {}),

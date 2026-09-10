@@ -1,3 +1,4 @@
+import { isNativeConversationMessageSource } from "@synara/shared/conversationEdit";
 import type { OrchestrationMessage, OrchestrationThread } from "@synara/contracts";
 import { unicodeSafeEndOffset } from "@synara/shared/text";
 
@@ -62,7 +63,7 @@ export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "mess
   return thread.messages.some(
     (message) =>
       (message.role === "user" || message.role === "assistant") &&
-      message.source === "native" &&
+      isNativeConversationMessageSource(message.source) &&
       message.streaming === false,
   );
 }
@@ -80,7 +81,9 @@ export function hasNativeAssistantMessagesBefore(
   }
   return thread.messages.slice(0, currentIndex).some((message) => {
     return (
-      message.role === "assistant" && message.source === "native" && message.streaming === false
+      message.role === "assistant" &&
+      isNativeConversationMessageSource(message.source) &&
+      message.streaming === false
     );
   });
 }
