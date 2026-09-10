@@ -10568,6 +10568,60 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("denies an already aborted AskUserQuestion without publishing a prompt", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const canUseTool = harness.getLastCreateQueryInput()!.options.canUseTool!;
+      const questions = [
+        {
+          id: "Q",
+          header: "Q",
+          question: "Continue?",
+          options: [{ label: "Yes", description: "Proceed" }],
+        },
+      ];
+      const denied = yield* Effect.promise(() =>
+        canUseTool(
+          "AskUserQuestion",
+          { questions },
+          {
+            signal: AbortSignal.abort(),
+            toolUseID: "aborted-ask",
+            requestId: "aborted-ask",
+          },
+        ),
+      );
+      assert.equal(denied?.behavior, "deny");
+      const next = canUseTool(
+        "AskUserQuestion",
+        { questions },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "live-ask",
+          requestId: "live-ask",
+        },
+      );
+      const event = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(event._tag, "Some");
+      if (event._tag !== "Some" || event.value.type !== "user-input.requested")
+        return assert.fail("Expected live question");
+      assert.equal(event.value.providerRefs?.providerItemId, "live-ask");
+      yield* adapter.respondToUserInput(
+        THREAD_ID,
+        ApprovalRequestId.makeUnsafe(event.value.requestId!),
+        { Q: "Yes" },
+      );
+      assert.equal((yield* Effect.promise(() => next))?.behavior, "allow");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("denies AskUserQuestion when the waiting turn is aborted", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

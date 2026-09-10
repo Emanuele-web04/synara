@@ -1,3 +1,7 @@
+import {
+  buildStalePendingRequestFailureDetail,
+  pendingRequestInstanceKey,
+} from "@synara/shared/threadSummary";
 // Production CSS is part of the behavior under test because row height depends on it.
 import "../index.css";
 
@@ -2275,6 +2279,155 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["manual", "auto-advance", "custom"] as const)(
+    "preserves three answers (%s) on transient failure and restores expired questions without sending a message",
+    async (navigation) => {
+      const requestId = ApprovalRequestId.makeUnsafe("question-recovery");
+      const generation = "question-generation";
+      const requestKey = pendingRequestInstanceKey(requestId, generation);
+      const questions = [1, 2, 3].map((id) => ({
+        id: String(id),
+        header: `Question ${id}`,
+        question: `Choose option ${id}?`,
+        ...(navigation !== "auto-advance" ? { multiSelect: true } : {}),
+        options: [{ label: `Choice ${id}`, description: "Selected answer" }],
+      }));
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-question-recovery"),
+        targetText: "Discuss the design",
+      });
+      const thread = snapshot.threads[0]!;
+      const request = { requestId, lifecycleGeneration: generation, createdAt: NOW_ISO, questions };
+      const pendingThread = {
+        ...thread,
+        activities: [
+          {
+            id: EventId.makeUnsafe("question-request"),
+            createdAt: NOW_ISO,
+            kind: "user-input.requested",
+            summary: "Questions",
+            tone: "info" as const,
+            turnId: null,
+            sequence: 900,
+            payload: { requestId, lifecycleGeneration: generation, questions },
+          },
+        ],
+        pendingInteractions: [
+          {
+            interactionKind: "userInput" as const,
+            requestId,
+            threadId: thread.id,
+            turnId: null,
+            lifecycleGeneration: generation,
+            status: "pending" as const,
+            decision: null,
+            responseCommandId: null,
+            responseRequestedAt: null,
+            createdAt: NOW_ISO,
+            resolvedAt: null,
+          },
+        ],
+      };
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Keep this existing draft.");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [pendingThread] },
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      let expire = false;
+      const dispatchCommand = vi.fn(async () => {
+        if (!expire) throw new Error("Temporary connection failure");
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [
+            {
+              ...pendingThread,
+              pendingInteractions: pendingThread.pendingInteractions.map((row) => ({
+                ...row,
+                status: "uncertain" as const,
+              })),
+              activities: [
+                ...pendingThread.activities,
+                {
+                  id: EventId.makeUnsafe("question-expired"),
+                  createdAt: NOW_ISO,
+                  kind: "provider.user-input.respond.failed",
+                  summary: "Expired",
+                  tone: "error" as const,
+                  turnId: null,
+                  sequence: 2,
+                  payload: {
+                    requestId,
+                    lifecycleGeneration: generation,
+                    detail: buildStalePendingRequestFailureDetail("user-input", requestId),
+                  },
+                },
+              ],
+            },
+          ],
+        };
+      });
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+      });
+      try {
+        for (const id of [1, 2, 3]) {
+          await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
+          if (id < 3)
+            await page.getByRole("button", { name: "Next question", exact: true }).first().click();
+        }
+        if (navigation === "custom") {
+          await userEvent.click(await waitForComposerEditor());
+          await userEvent.keyboard("Custom answer");
+        }
+        const submit = page.getByRole("button", { name: "Submit answers", exact: true });
+        await expect.element(submit).toBeEnabled();
+        const button = submit.element() as HTMLButtonElement;
+        button.click();
+        button.click();
+        await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(dispatchCommand).toHaveBeenCalledTimes(1);
+        await expect.element(submit).toBeEnabled();
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.pendingUserInputDrafts?.[
+            requestKey
+          ],
+        ).toEqual({
+          request,
+          answers: Object.fromEntries(
+            [1, 2, 3].map((id) => [
+              String(id),
+              navigation === "custom" && id === 3
+                ? { customAnswer: "Custom answer" }
+                : { customAnswer: "", selectedOptionLabels: [`Choice ${id}`] },
+            ]),
+          ),
+        });
+        expire = true;
+        await submit.click();
+        await expect.element(page.getByRole("button", { name: "Restore answers" })).toBeVisible();
+        await expect.element(submit).not.toBeInTheDocument();
+        await page.getByRole("button", { name: "Restore answers" }).click();
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          `Keep this existing draft.\n\nChoose option 1?\nChoice 1\n\nChoose option 2?\nChoice 2\n\nChoose option 3?\n${navigation === "custom" ? "Custom answer" : "Choice 3"}`,
+        );
+        expect(dispatchCommand).toHaveBeenCalledTimes(2);
+      } finally {
+        if (previousNativeApi)
+          Object.defineProperty(window, "nativeApi", {
+            configurable: true,
+            value: previousNativeApi,
+          });
+        else Reflect.deleteProperty(window, "nativeApi");
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("keeps near-cap composer work bounded while live activities arrive", async () => {
     const percentile = (samples: readonly number[], fraction: number): number => {

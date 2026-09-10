@@ -522,6 +522,16 @@ function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
     : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
 }
 
+function isUnavailableInteractionRuntime(cause: Cause.Cause<ProviderServiceError>): boolean {
+  return Option.match(Cause.findErrorOption(cause), {
+    onNone: () => false,
+    onSome: (error) =>
+      (error._tag === "ProviderValidationError" && error.reason !== undefined) ||
+      error._tag === "ProviderAdapterSessionNotFoundError" ||
+      error._tag === "ProviderAdapterSessionClosedError",
+  });
+}
+
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
   const error = Cause.squash(cause);
   if (Schema.is(ProviderAdapterRequestError)(error)) {
@@ -3890,6 +3900,20 @@ const make = Effect.gen(function* () {
         // outcome and needs no user-visible settlement.
         return null;
       }
+      if (
+        pendingRow?.lifecycleGeneration != null &&
+        event.payload.lifecycleGeneration === undefined
+      ) {
+        // An old client must refresh the request identity. A generation-less stale
+        // marker would also invalidate the replacement callback it never addressed.
+        yield* appendInteractionResponseFailure(event, {
+          interactionKind: input.interactionKind,
+          detail:
+            "Refresh this thread before answering: the provider lifecycle generation is missing.",
+          settlementStatus: "retryable",
+        });
+        return null;
+      }
       // No durable row, or a row this command can never claim (e.g. a lifecycle
       // generation mismatch). Silence here permanently stranded the prompt: the
       // client saw neither a resolution nor a failure, so every retry was
@@ -3919,16 +3943,22 @@ const make = Effect.gen(function* () {
       // settlement would orphan it and silently swallow every future response.
       yield* appendInteractionResponseFailure(event, {
         interactionKind: input.interactionKind,
-        detail: "No provider session thread is bound to this thread.",
-        settlementStatus: "retryable",
+        detail: buildStalePendingRequestFailureDetail(
+          input.interactionKind === "approval" ? "approval" : "user-input",
+          event.payload.requestId,
+        ),
+        settlementStatus: "uncertain",
       });
       return null;
     }
     if (providerThread.session?.status !== "stopped") return providerThread.id;
     yield* appendInteractionResponseFailure(event, {
       interactionKind: input.interactionKind,
-      detail: "No active provider session is bound to this thread.",
-      settlementStatus: "retryable",
+      detail: buildStalePendingRequestFailureDetail(
+        input.interactionKind === "approval" ? "approval" : "user-input",
+        event.payload.requestId,
+      ),
+      settlementStatus: "uncertain",
     });
     return null;
   });
@@ -3955,7 +3985,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingApprovalRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingApprovalRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "approval",
             detail: unknownPendingRequest
@@ -3989,7 +4020,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingUserInputRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingUserInputRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "userInput",
             detail: unknownPendingRequest

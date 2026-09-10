@@ -1,8 +1,13 @@
+import { Effect, Option } from "effect";
+import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ApprovalRequestId, EventId, ThreadId, TurnId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   planRestartTurnReconciliation,
+  reconcileRestartStuckTurns,
   type ReconcilableThread,
 } from "./startupTurnReconciliation.ts";
 
@@ -644,4 +649,58 @@ describe("planRestartTurnReconciliation", () => {
     expect(first[0]?.commandId).toBe(second[0]?.commandId);
     expect(first[0]?.commandId).toBe(`restart-reconcile:stuck:${NOW}`);
   });
+});
+
+describe("reconcileRestartStuckTurns selection", () => {
+  it.each(["uncertain", "responding"] as const)(
+    "finds %s callbacks on completed threads even with false summary flags",
+    async (status) => {
+      const thread = {
+        ...makeThread("orphan", {
+          session: makeSession("orphan", { status: "ready", activeTurnId: null }),
+          latestTurn: { state: "completed" },
+        }),
+        activities: [],
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      };
+      const row = {
+        interactionKind: "userInput" as const,
+        requestId: ApprovalRequestId.makeUnsafe("orphaned-question"),
+        threadId: thread.id,
+        lifecycleGeneration: "lost-runtime",
+        status,
+        createdAt: NOW,
+      };
+      const dispatch = vi.fn(() => Effect.void);
+      const getThreadDetailById = vi.fn(() =>
+        Effect.succeed(Option.some({ ...thread, pendingInteractions: [row] })),
+      );
+      await Effect.runPromise(
+        reconcileRestartStuckTurns.pipe(
+          Effect.provideService(OrchestrationEngineService, {
+            getReadModel: () =>
+              Effect.succeed({ threads: [thread, makeThread("untouched", { activities: [] })] }),
+            dispatch,
+          } as never),
+          Effect.provideService(ProjectionSnapshotQuery, { getThreadDetailById } as never),
+          Effect.provideService(ProjectionPendingInteractionRepository, {
+            listUnsettled: () => Effect.succeed([row]),
+          } as never),
+        ),
+      );
+      expect(getThreadDetailById).toHaveBeenCalledExactlyOnceWith(thread.id);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "thread.activity.append",
+          activity: expect.objectContaining({
+            payload: expect.objectContaining({
+              requestId: row.requestId,
+              lifecycleGeneration: "lost-runtime",
+            }),
+          }),
+        }),
+      );
+    },
+  );
 });

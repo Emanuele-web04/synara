@@ -16,6 +16,7 @@ import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
+  submissionVersion: number;
   isResponding: boolean;
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
@@ -31,6 +32,7 @@ const NAV_BUTTON_CLASS_NAME =
 // Keep pending-input choices neutral so they read like Codex list controls instead of accent buttons.
 export function ComposerPendingUserInputPanel({
   pendingUserInputs,
+  submissionVersion,
   isResponding,
   answers,
   questionIndex,
@@ -47,6 +49,7 @@ export function ComposerPendingUserInputPanel({
     <ComposerPendingUserInputCard
       key={`${activePrompt.requestId}:${activePrompt.lifecycleGeneration ?? "legacy"}`}
       prompt={activePrompt}
+      submissionVersion={submissionVersion}
       isResponding={isResponding}
       answers={answers}
       questionIndex={questionIndex}
@@ -60,6 +63,7 @@ export function ComposerPendingUserInputPanel({
 
 function ComposerPendingUserInputCard({
   prompt,
+  submissionVersion,
   isResponding,
   answers,
   questionIndex,
@@ -69,6 +73,7 @@ function ComposerPendingUserInputCard({
   onCancel,
 }: {
   prompt: PendingUserInput;
+  submissionVersion: number;
   isResponding: boolean;
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
@@ -87,8 +92,8 @@ function ComposerPendingUserInputCard({
   }, [onAdvance]);
 
   // Cancel a pending auto-advance on unmount, and whenever the active question
-  // changes or a response goes in flight — otherwise a manual Next/Submit landing
-  // inside the 200ms window leaves a stale timer that advances or submits again.
+  // changes or a response is attempted. The version also catches immediate
+  // failures whose true/false loading state React batches into a single render.
   useEffect(() => {
     return () => {
       if (autoAdvanceTimerRef.current !== null) {
@@ -96,7 +101,7 @@ function ComposerPendingUserInputCard({
         autoAdvanceTimerRef.current = null;
       }
     };
-  }, [activeQuestion?.id, isResponding]);
+  }, [activeQuestion?.id, isResponding, submissionVersion]);
 
   const handleOptionSelection = (questionId: string, optionLabel: string) => {
     const nextDraftAnswer = onToggleOption(questionId, optionLabel);

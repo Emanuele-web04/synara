@@ -4919,6 +4919,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           callbackOptions: Parameters<CanUseTool>[2],
         ) =>
           Effect.gen(function* () {
+            if (
+              callbackOptions.signal.aborted ||
+              context.stopped ||
+              (callbackOptions.agentID !== undefined &&
+                context.terminalTaskIds.has(callbackOptions.agentID))
+            ) {
+              return {
+                behavior: "deny",
+                message: "User cancelled tool execution.",
+              } satisfies PermissionResult;
+            }
             const requestId = ApprovalRequestId.makeUnsafe(yield* Random.nextUUIDv4);
             const interactionTurnId =
               context.turnState?.turnId ??
@@ -4955,8 +4966,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               settlementStarted: false,
             };
 
-            // Emit user-input.requested so the UI can present the questions.
+            // Stamp before registering ownership so terminal settlement cannot
+            // publish a resolution before its request while the clock yields.
             const requestedStamp = yield* makeEventStamp();
+            pendingUserInputs.set(requestId, pendingInput);
+            // Emit user-input.requested so the UI can present the questions.
             yield* offerRuntimeEvent(context, {
               type: "user-input.requested",
               eventId: requestedStamp.eventId,
@@ -4978,7 +4992,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
 
-            pendingUserInputs.set(requestId, pendingInput);
             if (
               callbackOptions.agentID !== undefined &&
               context.terminalTaskIds.has(callbackOptions.agentID)
@@ -4999,6 +5012,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               );
             };
             callbackOptions.signal.addEventListener("abort", onAbort, { once: true });
+            // Abort may have happened during event publication, before registration.
+            if (callbackOptions.signal.aborted) onAbort();
 
             // Block until the user provides answers.
             const result = yield* Deferred.await(resultDeferred).pipe(
