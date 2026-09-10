@@ -2193,12 +2193,7 @@ export default function Sidebar() {
 
       return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [
-      appSettings.sidebarThreadSortOrder,
-      handleNewThread,
-      manualThreadIds,
-      navigate,
-    ],
+    [appSettings.sidebarThreadSortOrder, handleNewThread, manualThreadIds, navigate],
   );
 
   const openExistingProjectFromSnapshot = useCallback(
