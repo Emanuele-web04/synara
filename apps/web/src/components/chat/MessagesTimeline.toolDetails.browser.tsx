@@ -306,7 +306,7 @@ describe("MessagesTimeline tool details", () => {
       expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
       expect(document.body.textContent ?? "").toContain("Agent task");
-      expect(document.body.textContent ?? "").toContain("Active");
+      expect(document.body.textContent ?? "").toContain("Subagent working");
     } finally {
       await screen.unmount();
       host.remove();
