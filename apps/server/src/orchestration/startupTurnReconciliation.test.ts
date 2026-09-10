@@ -84,6 +84,106 @@ describe("planRestartTurnReconciliation", () => {
     expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
   });
 
+  it("does not reconcile an approval again when its settlement row is non-actionable", () => {
+    const thread = makeThread("settled-mixed-sequence", {
+      session: makeSession("settled-mixed-sequence", {
+        status: "ready",
+        activeTurnId: null,
+      }),
+      latestTurn: { state: "completed" },
+      activities: [
+        {
+          ...makeActivity(
+            "approval-requested-high-sequence",
+            "approval.requested",
+            { requestId: "approval-mixed", requestKind: "command" },
+            1_695_339,
+          ),
+          createdAt: "2026-06-13T09:00:01.000Z",
+        },
+        {
+          ...makeActivity(
+            "approval-stale-low-sequence",
+            "provider.approval.respond.failed",
+            {
+              requestId: "approval-mixed",
+              detail:
+                "Stale pending approval request: approval-mixed. Provider callback state does not survive app restarts.",
+            },
+            667_085,
+          ),
+          createdAt: "2026-06-13T09:00:02.000Z",
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionKind: "approval",
+          requestId: "approval-mixed",
+          lifecycleGeneration: null,
+          status: "uncertain",
+        },
+      ],
+    });
+
+    expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
+  });
+
+  it.each([
+    ["pending", true],
+    ["responding", true],
+    ["retryable", true],
+    ["confirmed", false],
+    ["uncertain", false],
+  ] as const)("treats a %s projected approval according to restart callback state", (status, stale) => {
+    const thread = makeThread(`projected-${status}`, {
+      session: makeSession(`projected-${status}`, { status: "ready", activeTurnId: null }),
+      latestTurn: { state: "completed" },
+      pendingInteractions: [
+        {
+          interactionKind: "approval",
+          requestId: `approval-${status}`,
+          lifecycleGeneration: "generation-a",
+          status,
+        },
+      ],
+    });
+
+    const commands = planRestartTurnReconciliation({ threads: [thread], now: NOW });
+    if (!stale) {
+      expect(commands).toEqual([]);
+      return;
+    }
+    expect(commands).toEqual([
+      expect.objectContaining({
+        type: "thread.activity.append",
+        activity: expect.objectContaining({
+          payload: expect.objectContaining({
+            requestId: `approval-${status}`,
+            lifecycleGeneration: "generation-a",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("does not replay stale activities when a present projection is empty", () => {
+    const thread = makeThread("projected-empty", {
+      session: makeSession("projected-empty", { status: "ready", activeTurnId: null }),
+      latestTurn: { state: "completed" },
+      activities: [
+        makeActivity(
+          "legacy-looking-approval",
+          "approval.requested",
+          { requestId: "approval-absent-from-projection", requestKind: "command" },
+          1,
+        ),
+      ],
+      pendingInteractions: [],
+    });
+
+    expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
+  });
+
   it("clears a dangling active turn id while preserving the terminal error session", () => {
     const threads = [
       makeThread("errored", {

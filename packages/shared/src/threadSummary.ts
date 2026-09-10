@@ -1,6 +1,7 @@
 import type {
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationPendingInteraction,
   OrchestrationProposedPlan,
   OrchestrationThreadActivity,
 } from "@synara/contracts";
@@ -222,7 +223,35 @@ export function derivePendingThreadRequestIds(input: {
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
+  >;
 }): PendingThreadRequestIds {
+  // A present settlement projection is authoritative for every interaction
+  // kind, including an empty array and terminal-but-unconfirmed rows such as
+  // `uncertain`. Only snapshots that omit the projection entirely fall back to
+  // activity replay for legacy/imported compatibility.
+  const hasProjectedInteractions = input.pendingInteractions !== undefined;
+  const projectedOpenApprovals = new Map<string, string>();
+  const projectedOpenUserInputs = new Map<string, string>();
+  for (const interaction of input.pendingInteractions ?? []) {
+    const isApproval = interaction.interactionKind === "approval";
+    if (interaction.status !== "pending" && interaction.status !== "retryable") {
+      continue;
+    }
+    const openRequests = isApproval ? projectedOpenApprovals : projectedOpenUserInputs;
+    openRequests.set(
+      pendingRequestInstanceKey(
+        interaction.requestId,
+        interaction.lifecycleGeneration ?? undefined,
+      ),
+      interaction.requestId,
+    );
+  }
+
   const openApprovals = new Map<string, string>();
   const openUserInputs = new Map<string, string>();
   for (const activity of orderedActivities(input.activities)) {
@@ -281,8 +310,12 @@ export function derivePendingThreadRequestIds(input: {
   }
 
   return {
-    approvalRequestIds: [...openApprovals.values()],
-    userInputRequestIds: [...openUserInputs.values()],
+    approvalRequestIds: [
+      ...(hasProjectedInteractions ? projectedOpenApprovals : openApprovals).values(),
+    ],
+    userInputRequestIds: [
+      ...(hasProjectedInteractions ? projectedOpenUserInputs : openUserInputs).values(),
+    ],
   };
 }
 
@@ -290,6 +323,12 @@ export function deriveThreadSummaryState(input: {
   readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
   >;
   readonly proposedPlans: ReadonlyArray<
     Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
@@ -303,7 +342,12 @@ export function deriveThreadSummaryState(input: {
     }
   }
 
-  const pendingRequestIds = derivePendingThreadRequestIds({ activities: input.activities });
+  const pendingRequestIds = derivePendingThreadRequestIds({
+    activities: input.activities,
+    ...(input.pendingInteractions !== undefined
+      ? { pendingInteractions: input.pendingInteractions }
+      : {}),
+  });
 
   const latestProposedPlan = resolveLatestProposedPlan({
     proposedPlans: input.proposedPlans,
@@ -324,6 +368,12 @@ export function deriveThreadSummaryMetadata(input: {
   readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly pendingInteractions?: ReadonlyArray<
+    Pick<
+      OrchestrationPendingInteraction,
+      "interactionKind" | "requestId" | "lifecycleGeneration" | "status"
+    >
   >;
   readonly proposedPlans: ReadonlyArray<
     Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
