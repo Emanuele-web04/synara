@@ -18,7 +18,8 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { withProvisioningFileLock } from "./provisioning/fileLock.ts";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -164,6 +165,7 @@ export function selectHyprlandPrebuilt(
 }
 
 export interface HyprlandProvisionDependencies {
+  readonly signal?: AbortSignal;
   readonly pluginDirectory: string;
   /** Files already in the plugin directory, for the version suffix. */
   readonly listInstalled: () => Promise<readonly string[]>;
@@ -195,6 +197,16 @@ export interface HyprlandProvisionDependencies {
 export async function provisionHyprlandPlugin(
   deps: HyprlandProvisionDependencies,
 ): Promise<ProvisionResult> {
+  return withProvisioningFileLock(
+    join(deps.pluginDirectory, ".synara-provision.lock"),
+    (signal) => provisionHyprlandPluginLocked({ ...deps, signal }),
+    deps.signal,
+  );
+}
+
+async function provisionHyprlandPluginLocked(
+  deps: HyprlandProvisionDependencies,
+): Promise<ProvisionResult> {
   const version = await deps.hyprlandVersion();
   const manifest = deps.prebuiltRoot
     ? await readHyprlandPrebuiltManifest(join(deps.prebuiltRoot, "manifest.json"))
@@ -219,7 +231,11 @@ export async function provisionHyprlandPlugin(
     action = "installed-from-source";
   }
 
-  const pluginId = nextPluginId(await deps.listInstalled());
+  const pluginId = nextPluginId([
+    ...(await deps.listInstalled()),
+    ...(await readdir(deps.pluginDirectory)),
+  ]);
+  deps.signal?.throwIfAborted();
   const pluginPath = await installPluginBinary(source, deps.pluginDirectory, pluginId);
   await pruneSupersededPlugins(deps.pluginDirectory, pluginId);
   await (deps.writeStamp ?? writeHyprlandInstallStamp)(deps.stampPath, {

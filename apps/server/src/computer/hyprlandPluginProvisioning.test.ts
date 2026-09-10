@@ -261,7 +261,22 @@ describe("provisioning", () => {
     expect(result.pluginId).toBe("SynaraComputerUsePluginV5");
     const remaining = await readdir(deps.pluginDirectory);
     expect(remaining.toSorted()).toEqual(
-      ["SynaraComputerUsePluginV5.so", "keep-me.txt"].toSorted(),
+      [".synara-provision.lock", "SynaraComputerUsePluginV5.so", "keep-me.txt"].toSorted(),
+    );
+  });
+
+  it("allocates different on-disk generations for competing installers with stale discovery", async () => {
+    const deps = await baseDeps({ listInstalled: async () => [] });
+    const results = await Promise.all([
+      provisionHyprlandPlugin(deps),
+      provisionHyprlandPlugin(deps),
+    ]);
+    expect(results.map((result) => result.pluginId).toSorted()).toEqual([
+      "SynaraComputerUsePluginV1",
+      "SynaraComputerUsePluginV2",
+    ]);
+    expect(await readFile(join(deps.pluginDirectory, "SynaraComputerUsePluginV2.so"), "utf8")).toBe(
+      "from source",
     );
   });
 });

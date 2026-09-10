@@ -15,7 +15,7 @@
  * cannot tell the server which installed `.so` is the one answering the bus.
  */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createConnection } from "node:net";
 import { join } from "node:path";
 
 /** Set by Hyprland in every process of the session; names the instance. */
@@ -35,15 +35,29 @@ const HYPRCTL_TIMEOUT_MS = 10_000;
  * `$XDG_RUNTIME_DIR/hypr/<signature>/` at startup and its `.socket.sock` is how
  * `hyprctl` itself reaches the compositor.
  */
-export function hyprlandSessionPresent(
+export async function hyprlandSessionPresent(
   env: NodeJS.ProcessEnv = process.env,
-  exists: (path: string) => boolean = existsSync,
-): boolean {
+  connects: (path: string) => boolean | Promise<boolean> = socketAcceptsConnections,
+): Promise<boolean> {
   const signature = env[HYPRLAND_SIGNATURE_ENV]?.trim();
-  if (!signature) return false;
+  if (!signature || signature.includes("/") || signature === "." || signature === "..")
+    return false;
   const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
   if (!runtimeDir) return false;
-  return exists(join(runtimeDir, "hypr", signature, ".socket.sock"));
+  return connects(join(runtimeDir, "hypr", signature, ".socket.sock"));
+}
+
+export function socketAcceptsConnections(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ path });
+    const finish = (connected: boolean) => {
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.setTimeout(500, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
 }
 
 /** Runs `hyprctl` with the given arguments and resolves its stdout. */

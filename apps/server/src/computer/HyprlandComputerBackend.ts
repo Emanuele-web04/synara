@@ -66,7 +66,7 @@ export interface HyprlandComputerBackendOptions {
   readonly signature?: string;
   readonly runHyprctl?: HyprctlRunner;
   /** Live-session check, replaced in tests to avoid touching the host. */
-  readonly sessionPresent?: () => boolean;
+  readonly sessionPresent?: () => boolean | Promise<boolean>;
   readonly pluginDirectory?: string;
   readonly installStampPath?: string;
   readonly buildToolingPresent?: () => boolean;
@@ -86,7 +86,7 @@ interface HyprlandDbusRef {
 export class HyprlandComputerBackend extends KWinComputerBackend {
   private readonly ref: HyprlandDbusRef;
   private readonly hyprlandPlatform: string;
-  private readonly sessionPresent: () => boolean;
+  private readonly sessionPresent: () => boolean | Promise<boolean>;
   private readonly hyprlandBusNameHasOwner: (name: string) => Promise<boolean>;
   private readonly pluginDirectory: string;
   private readonly hyprlandPrebuiltRootFn: () => string | undefined;
@@ -139,8 +139,9 @@ export class HyprlandComputerBackend extends KWinComputerBackend {
       },
       provisionPlugin:
         options.provisionPlugin ??
-        (({ allowPrebuilt }) =>
+        (({ allowPrebuilt, signal }) =>
           provisionHyprlandPlugin({
+            ...(signal ? { signal } : {}),
             pluginDirectory,
             listInstalled: () => readdir(pluginDirectory).catch(() => [] as string[]),
             hyprlandVersion,
@@ -171,7 +172,7 @@ export class HyprlandComputerBackend extends KWinComputerBackend {
     if (this.hyprlandPlatform !== "linux") {
       return { kind: "unsupported-platform", platform: this.hyprlandPlatform };
     }
-    if (!this.sessionPresent()) {
+    if (!(await this.sessionPresent())) {
       return { kind: "backend-unavailable", message: NO_HYPRLAND_MESSAGE };
     }
     if (await this.hyprlandBusNameHasOwner(COMPUTER_SERVICE).catch(() => false)) {
@@ -189,7 +190,7 @@ export class HyprlandComputerBackend extends KWinComputerBackend {
 
   /** The establishing read, with the backend named as what it actually is. */
   override async availability(): Promise<ComputerAvailability> {
-    if (this.hyprlandPlatform === "linux" && !this.sessionPresent()) {
+    if (this.hyprlandPlatform === "linux" && !(await this.sessionPresent())) {
       return { kind: "backend-unavailable", message: NO_HYPRLAND_MESSAGE };
     }
     const availability = await super.availability();

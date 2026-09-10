@@ -30,6 +30,7 @@ struct {
     bool directPointerNeedsEnter = true;
     std::weak_ptr<Window> pointerWindow, targetWindow, keyboardWindow;
     std::set<uint32_t> pressedButtons;
+    std::set<uint32_t> humanHeldButtons;
     std::vector<uint32_t> pressedKeys;
     bool targetRequested = false;
     double axisRemainderH = 0, axisRemainderV = 0;
@@ -81,6 +82,8 @@ void restoreSeatKeyboardEnter(wl_client* client) {
 }
 void releasePressedButtons() { g.pressedButtons.clear(); }
 bool requireRunning() { return true; }
+struct InputManagerFixture { bool held = false; bool hasHeldButtons() { return held; } } inputManager;
+auto* g_pInputManager = &inputManager;
 void requireReachableClient(PHLWINDOW, const char*) { if (!reachable) throw std::runtime_error("unreachable"); }
 void refuseIfHumanActive(PHLWINDOW) { if (refuse) throw std::runtime_error("human active"); }
 SP<CWLSurfaceResource> windowMainSurface(PHLWINDOW) { return hitSurface; }
@@ -111,6 +114,15 @@ int main() {
     seat.m_state.keyboardFocus = human;
     pointerEntered = keyboardEntered = human.get();
     check(movePointer(100, 100), "standalone move refused");
+    g.humanHeldButtons.insert(272);
+    const auto beforeDrag = pointerEntered;
+    check(!movePointer(250, 250), "agent moved during human drag");
+    check(pointerEntered == beforeDrag, "human drag target was changed");
+    g.humanHeldButtons.clear();
+    inputManager.held = true;
+    check(!movePointer(250, 250), "agent ignored a button held before plugin load");
+    inputManager.held = false;
+    check(movePointer(100, 100), "agent move stayed blocked after release");
     check(pointerEntered == human.get(), "motion did not return pointer");
     check(injectButton(272, true), "sibling click refused");
     check(pointerEntered == agent.get(), "held button lost pointer");

@@ -289,6 +289,7 @@ export interface KWinComputerBackendOptions {
    * `force` set, because the install stamp now calls the refused build current.
    */
   readonly provisionPlugin?: (options: {
+    readonly signal?: AbortSignal;
     readonly allowPrebuilt: boolean;
     readonly force: boolean;
   }) => Promise<ProvisionResult>;
@@ -341,6 +342,7 @@ export class KWinComputerBackend implements ComputerBackend {
   private readonly runningKwinVersion: () => Promise<string | undefined>;
   private runningKwinVersionPromise: Promise<string | undefined> | undefined;
   private readonly provisionPlugin: (options: {
+    readonly signal?: AbortSignal;
     readonly allowPrebuilt: boolean;
     readonly force: boolean;
   }) => Promise<ProvisionResult>;
@@ -1410,7 +1412,11 @@ export class KWinComputerBackend implements ComputerBackend {
     const key = `${allowPrebuilt ? "any" : "source"}:${force ? "forced" : "current"}`;
     const existing = this.provisionPromises.get(key);
     if (existing) return await existing;
-    const pending = this.provisionPlugin({ allowPrebuilt, force }).then((result) => {
+    const pending = this.provisionPlugin({
+      allowPrebuilt,
+      force,
+      signal: this.provisionAbort.signal,
+    }).then((result) => {
       if (result.action !== "already-current") this.lastInstallAction = result.action;
       return result;
     });

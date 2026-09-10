@@ -52,6 +52,8 @@
 #include <hyprland/src/protocols/core/Compositor.hpp>
 
 #include <cairo/cairo.h>
+#include "capturetransform.h"
+#include "sessionauth.h"
 #include <sdbus-c++/sdbus-c++.h>
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
@@ -330,6 +332,7 @@ struct SState {
     // Physical keycodes currently held on the human's keyboard, kept only to
     // recognize the release chord.
     std::set<uint32_t> humanHeldKeys;
+    std::set<uint32_t> humanHeldButtons;
 
     // Ghost cursor render state. Textures are (re)built inside the render hook
     // where a GL context is current, whenever `cursorArtDirty` or the output
@@ -347,6 +350,7 @@ struct SState {
     // D-Bus plumbing, driven from the compositor's event loop.
     std::unique_ptr<sdbus::IConnection> dbus;
     std::unique_ptr<sdbus::IObject>     dbusObject;
+    std::unique_ptr<SynaraSessionAuth>  authentication;
     wl_event_source*                    dbusFdSource    = nullptr;
     wl_event_source*                    dbusEvtFdSource = nullptr;
     wl_event_source*                    idleTimerSource = nullptr;
@@ -943,6 +947,7 @@ void clearPointerDelivery() {
 // whatever covers it, because the caller can recover from a refusal and cannot
 // recover from a click it never made.
 bool updatePointerFocus() {
+    if (!g.humanHeldButtons.empty() || (g_pInputManager && g_pInputManager->hasHeldButtons())) return false;
     PHLWINDOW window;
     if (g.targetRequested) {
         const auto target = g.targetWindow.lock();
@@ -1534,6 +1539,7 @@ struct InputFocusHandback {
 bool movePointer(double x, double y) {
     if (!requireRunning())
         return false;
+    if (!g.humanHeldButtons.empty() || (g_pInputManager && g_pInputManager->hasHeldButtons())) return false;
     const InputFocusHandback handback;
     const CBox geo = workspaceGeometry();
     Vector2D   next{x, y};
@@ -1554,6 +1560,11 @@ bool injectButton(uint32_t button, bool pressed) {
     if (!requireRunning())
         return false;
     const InputFocusHandback handback;
+    if (!pressed && g.pressedButtons.contains(button) && (!g.humanHeldButtons.empty() || (g_pInputManager && g_pInputManager->hasHeldButtons()))) {
+        if (const auto surface = g.directPointerSurface.lock()) directPointerButtonEvent(surface, button, false);
+        g.pressedButtons.erase(button);
+        return true;
+    }
     // The reachability refusal outranks the plain focus failure: a pointer-less
     // client leaves updatePointerFocus without a surface too, and the caller
     // deserves the loud error, not a silent false.
@@ -1954,7 +1965,8 @@ std::vector<uint8_t> captureWindow(const std::string& windowId, uint32_t maxDime
     const auto fb = g_pHyprRenderer->makeSnapshotFB(window);
     if (!fb)
         captureFailed("window is not visible for capture");
-    const SCapturePixels pixels     = readFramebufferPixels(fb);
+    SCapturePixels pixels = readFramebufferPixels(fb);
+    transformCapturePixels(pixels.rgba, pixels.w, pixels.h, unsigned(monitor->m_transform));
     cairo_surface_t*     windowSurf = pixelsToCairo(pixels);
 
     const CBox monitorBox = monitor->logicalBox();
@@ -2007,6 +2019,7 @@ std::vector<uint8_t> captureRegion(int32_t x, int32_t y, uint32_t width, uint32_
         SCapturePixels   pixels;
         try {
             pixels = renderMonitorPixels(mon);
+            transformCapturePixels(pixels.rgba, pixels.w, pixels.h, unsigned(mon->m_transform));
         } catch (...) {
             cairo_destroy(cr);
             cairo_surface_destroy(target);
@@ -2016,8 +2029,7 @@ std::vector<uint8_t> captureRegion(int32_t x, int32_t y, uint32_t width, uint32_
         const CBox       monitorBox = mon->logicalBox();
         cairo_save(cr);
         cairo_translate(cr, (monitorBox.x - region->x) * scale, (monitorBox.y - region->y) * scale);
-        // Monitor pixels to target pixels; only exact on untransformed
-        // outputs — a rotated monitor's capture is not yet unrotated.
+        // Pixels now have the output's logical orientation, including reflections.
         cairo_scale(cr, scale / mon->m_scale, scale / mon->m_scale);
         cairo_set_source_surface(cr, monSurf, 0, 0);
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
@@ -2057,28 +2069,34 @@ int onIdleTimer(void* /*data*/) {
 void setupDbus() {
     g.dbus       = sdbus::createSessionBusConnection(sdbus::ServiceName{SERVICE_NAME});
     g.dbusObject = sdbus::createObject(*g.dbus, sdbus::ObjectPath{OBJECT_PATH});
+    g.authentication = std::make_unique<SynaraSessionAuth>(*g.dbus, *g.dbusObject, [] { stopSession(StopReason::Request); });
 
     g.dbusObject
-        ->addVTable(sdbus::registerMethod("healthJson").implementedAs([]() { return healthJson(); }),
-                    sdbus::registerMethod("stateJson").implementedAs([]() { return stateJson(); }),
-                    sdbus::registerMethod("windowsJson").implementedAs([]() { return windowsJson(); }),
-                    sdbus::registerMethod("start").implementedAs([]() { return startSession(); }),
-                    sdbus::registerMethod("stop").implementedAs([]() {
+        ->addVTable(sdbus::registerMethod("authenticate").implementedAs([](const std::string& token) {
+                        const auto instance = g.authentication->authenticate(token);
+                        if (!instance.empty()) stopSession(StopReason::Request);
+                        return instance;
+                    }),
+                    sdbus::registerMethod("healthJson").implementedAs([]() { return healthJson(); }),
+                    sdbus::registerMethod("stateJson").implementedAs([]() { g.authentication->require(); return stateJson(); }),
+                    sdbus::registerMethod("windowsJson").implementedAs([]() { g.authentication->require(); return windowsJson(); }),
+                    sdbus::registerMethod("start").implementedAs([]() { g.authentication->require(); return startSession(); }),
+                    sdbus::registerMethod("stop").implementedAs([]() { g.authentication->require();
                         stopSession(StopReason::Request);
                         return true;
                     }),
-                    sdbus::registerMethod("setIdleTimeout").implementedAs([](uint32_t ms) { return setIdleTimeout(ms); }),
-                    sdbus::registerMethod("setHumanActiveGuardMs").implementedAs([](uint32_t ms) { return setHumanActiveGuardMs(ms); }),
-                    sdbus::registerMethod("setAgentName").implementedAs([](const std::string& name) { return setAgentName(name); }),
-                    sdbus::registerMethod("focusWindow").implementedAs([](const std::string& id) { return focusWindow(id); }),
-                    sdbus::registerMethod("raiseWindow").implementedAs([](const std::string& id) { return raiseWindow(id); }),
-                    sdbus::registerMethod("clearFocusWindow").implementedAs([]() { return clearFocusWindow(); }),
-                    sdbus::registerMethod("movePointer").implementedAs([](double x, double y) { return movePointer(x, y); }),
-                    sdbus::registerMethod("button").implementedAs([](uint32_t button, bool pressed) { return injectButton(button, pressed); }),
-                    sdbus::registerMethod("axis").implementedAs([](double horizontal, double vertical) { return injectAxis(horizontal, vertical); }),
-                    sdbus::registerMethod("key").implementedAs([](uint32_t keyCode, bool pressed) { return injectKey(keyCode, pressed); }),
-                    sdbus::registerMethod("captureWindow").implementedAs([](const std::string& id, uint32_t maxDimension) { return captureWindow(id, maxDimension); }),
-                    sdbus::registerMethod("captureRegion").implementedAs([](int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t maxDimension) {
+                    sdbus::registerMethod("setIdleTimeout").implementedAs([](uint32_t ms) { g.authentication->require(); return setIdleTimeout(ms); }),
+                    sdbus::registerMethod("setHumanActiveGuardMs").implementedAs([](uint32_t ms) { g.authentication->require(); return setHumanActiveGuardMs(ms); }),
+                    sdbus::registerMethod("setAgentName").implementedAs([](const std::string& name) { g.authentication->require(); return setAgentName(name); }),
+                    sdbus::registerMethod("focusWindow").implementedAs([](const std::string& id) { g.authentication->require(); return focusWindow(id); }),
+                    sdbus::registerMethod("raiseWindow").implementedAs([](const std::string& id) { g.authentication->require(); return raiseWindow(id); }),
+                    sdbus::registerMethod("clearFocusWindow").implementedAs([]() { g.authentication->require(); return clearFocusWindow(); }),
+                    sdbus::registerMethod("movePointer").implementedAs([](double x, double y) { g.authentication->require(); return movePointer(x, y); }),
+                    sdbus::registerMethod("button").implementedAs([](uint32_t button, bool pressed) { g.authentication->require(); return injectButton(button, pressed); }),
+                    sdbus::registerMethod("axis").implementedAs([](double horizontal, double vertical) { g.authentication->require(); return injectAxis(horizontal, vertical); }),
+                    sdbus::registerMethod("key").implementedAs([](uint32_t keyCode, bool pressed) { g.authentication->require(); return injectKey(keyCode, pressed); }),
+                    sdbus::registerMethod("captureWindow").implementedAs([](const std::string& id, uint32_t maxDimension) { g.authentication->require(); return captureWindow(id, maxDimension); }),
+                    sdbus::registerMethod("captureRegion").implementedAs([](int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t maxDimension) { g.authentication->require();
                         return captureRegion(x, y, width, height, maxDimension);
                     }),
                     sdbus::registerSignal("sessionStopped").withParameters<std::string>("reason"))
@@ -2110,7 +2128,11 @@ void setupListeners() {
             onRenderLastMoment();
     });
     g.listeners.mouseMove = Event::bus()->m_events.input.mouse.move.listen([](const Vector2D&, Event::SCallbackInfo&) { noteHumanInput(); });
-    g.listeners.mouseButton = Event::bus()->m_events.input.mouse.button.listen([](const IPointer::SButtonEvent&, Event::SCallbackInfo&) { noteHumanInput(); });
+    g.listeners.mouseButton = Event::bus()->m_events.input.mouse.button.listen([](const IPointer::SButtonEvent& event, Event::SCallbackInfo&) {
+        if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) g.humanHeldButtons.insert(event.button);
+        else g.humanHeldButtons.erase(event.button);
+        noteHumanInput();
+    });
     g.listeners.mouseAxis = Event::bus()->m_events.input.mouse.axis.listen([](const IPointer::SAxisEvent&, Event::SCallbackInfo&) { noteHumanInput(); });
     g.listeners.keyboardKey = Event::bus()->m_events.input.keyboard.key.listen([](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
         noteHumanInput();
@@ -2152,6 +2174,7 @@ void teardown() {
         wl_event_source_remove(g.dbusEvtFdSource);
         g.dbusEvtFdSource = nullptr;
     }
+    g.authentication.reset();
     g.dbusObject.reset();
     g.dbus.reset();
     g.cursorTex.reset();

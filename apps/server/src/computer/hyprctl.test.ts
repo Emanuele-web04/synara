@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   detectRunningHyprlandVersion,
   hyprlandSessionPresent,
+  socketAcceptsConnections,
   listLoadedHyprlandPlugins,
   loadHyprlandPlugin,
   unloadHyprlandPlugin,
@@ -19,15 +25,40 @@ function runner(replies: Record<string, string>): HyprctlRunner {
 }
 
 describe("hyprlandSessionPresent", () => {
-  it("needs the signature, the runtime dir, and the live socket together", () => {
+  it("refuses a stale socket inode left by a crashed compositor", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synara-socket-"));
+    const path = join(directory, "socket");
+    const child = spawn(process.execPath, [
+      "-e",
+      "require('node:net').createServer(s=>s.end()).listen(process.argv[1],()=>process.stdout.write('ready'))",
+      path,
+    ]);
+    try {
+      await once(child.stdout!, "data");
+      expect(await socketAcceptsConnections(path)).toBe(true);
+      const exited = once(child, "close");
+      child.kill("SIGKILL");
+      await exited;
+      expect((await stat(path)).isSocket()).toBe(true);
+      expect(await socketAcceptsConnections(path)).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("needs the signature, the runtime dir, and the live socket together", async () => {
     const env = { HYPRLAND_INSTANCE_SIGNATURE: "sig1", XDG_RUNTIME_DIR: "/run/user/1000" };
     const socket = "/run/user/1000/hypr/sig1/.socket.sock";
 
-    expect(hyprlandSessionPresent(env, (path) => path === socket)).toBe(true);
+    expect(await hyprlandSessionPresent(env, (path) => path === socket)).toBe(true);
     // The signature outlives a crashed compositor; the socket is the liveness check.
-    expect(hyprlandSessionPresent(env, () => false)).toBe(false);
-    expect(hyprlandSessionPresent({ XDG_RUNTIME_DIR: "/run/user/1000" }, () => true)).toBe(false);
-    expect(hyprlandSessionPresent({ HYPRLAND_INSTANCE_SIGNATURE: "sig1" }, () => true)).toBe(false);
+    expect(await hyprlandSessionPresent(env, () => false)).toBe(false);
+    expect(await hyprlandSessionPresent({ XDG_RUNTIME_DIR: "/run/user/1000" }, () => true)).toBe(
+      false,
+    );
+    expect(await hyprlandSessionPresent({ HYPRLAND_INSTANCE_SIGNATURE: "sig1" }, () => true)).toBe(
+      false,
+    );
   });
 });
 

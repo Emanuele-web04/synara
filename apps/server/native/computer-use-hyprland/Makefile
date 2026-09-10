@@ -22,7 +22,7 @@ OUT            := SynaraComputerUseHyprland.so
 
 all: $(OUT)
 
-$(OUT): synarahyprlandplugin.cpp
+$(OUT): synarahyprlandplugin.cpp capturetransform.h sessionauth.h
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 clean:

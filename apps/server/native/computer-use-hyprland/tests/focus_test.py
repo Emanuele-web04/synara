@@ -28,6 +28,12 @@ def definition(source, name, kind="function"):
 
 
 class FocusRegressionTest(unittest.TestCase):
+    def test_capture_transforms(self):
+        with tempfile.TemporaryDirectory(prefix="synara-transform-test-") as directory:
+            binary = Path(directory) / "capture-test"
+            subprocess.run(["g++", "-std=c++20", "-Wall", "-Wextra", str(ROOT / "tests/capturetransform_test.cpp"), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_input_delivery_and_handback(self):
         source = (ROOT / "synarahyprlandplugin.cpp").read_text()
         names = [

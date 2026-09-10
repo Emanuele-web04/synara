@@ -67,6 +67,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 need_command make
+need_command flock
+if [[ "$BUILD_ONLY" -eq 0 ]]; then
+    mkdir -p "$PLUGIN_DIR"
+    exec 9>"$PLUGIN_DIR/.synara-provision.lock"
+    flock -x 9
+fi
+mkdir -p "$CACHE_ROOT"
+exec 8>"$CACHE_ROOT/build.lock"
+flock -x 8
 need_command g++
 need_command pkg-config
 pkg-config --exists hyprland \
@@ -80,7 +89,7 @@ HYPR_VERSION="$(pkg-config --modversion hyprland)"
 # Build out of tree so a source checkout stays clean: the Makefile writes its
 # .so next to the sources it compiles, so give it a copy of them.
 mkdir -p "$BUILD_DIR"
-cp -f "$SOURCE_DIR/Makefile" "$SOURCE_DIR/synarahyprlandplugin.cpp" "$BUILD_DIR/"
+cp -f "$SOURCE_DIR/Makefile" "$SOURCE_DIR/synarahyprlandplugin.cpp" "$SOURCE_DIR/capturetransform.h" "$SOURCE_DIR/sessionauth.h" "$BUILD_DIR/"
 log "Building against Hyprland $HYPR_VERSION ..."
 make -C "$BUILD_DIR" >/dev/null
 BUILT_SO="$BUILD_DIR/SynaraComputerUseHyprland.so"

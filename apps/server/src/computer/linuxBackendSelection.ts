@@ -93,7 +93,7 @@ export interface LinuxBackendSelectionDependencies {
    * signature plus its runtime socket. Injectable because the default reads
    * the filesystem.
    */
-  readonly hyprlandSessionPresent?: (env: NodeJS.ProcessEnv) => boolean;
+  readonly hyprlandSessionPresent?: (env: NodeJS.ProcessEnv) => boolean | Promise<boolean>;
 }
 
 /**
@@ -129,7 +129,7 @@ export async function selectLinuxBackend(
   // the human is actually sitting at, and the Hyprland check is direct
   // evidence of that desktop (this process inherited its instance signature,
   // and the instance's socket is live).
-  if ((dependencies.hyprlandSessionPresent ?? hyprlandSessionPresent)(env)) {
+  if (await (dependencies.hyprlandSessionPresent ?? hyprlandSessionPresent)(env)) {
     return {
       choice: "hyprland",
       forced: false,
