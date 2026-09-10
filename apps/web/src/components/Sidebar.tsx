@@ -84,6 +84,7 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadPullRequest,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
@@ -93,6 +94,7 @@ import {
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -3305,6 +3307,33 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
+  // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
+  // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
+  const openThreadPullRequest = useCallback(
+    (
+      event: MouseEvent<HTMLElement>,
+      thread: SidebarThreadSummary,
+      pr: OrchestrationThreadPullRequest,
+    ) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+      if (event.metaKey || event.ctrlKey || event.button === 1 || !repository) {
+        openPrLink(event, pr.url);
+        return;
+      }
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activateThreadFromSidebarIntent(thread.id);
+      openRightDockPane(thread.id, {
+        kind: "pullRequest",
+        pullRequestProjectId: thread.projectId,
+        pullRequestRepository: repository,
+        pullRequestNumber: pr.number,
+        pullRequestInitialTab: "summary",
+      });
+    },
+    [activateThreadFromSidebarIntent, openPrLink, openRightDockPane],
+  );
 
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
@@ -6099,6 +6128,7 @@ export default function Sidebar() {
                     threadsHydrated={threadsHydrated}
                     resolveThreadStatus={resolveThreadStatusForSidebar}
                     onOpenThread={activateThreadFromSidebarIntent}
+                    onOpenThreadPullRequest={openThreadPullRequest}
                     onSetThreadSettled={setThreadSettledWithToast}
                     onToggleThreadPinned={toggleThreadPinned}
                     onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
