@@ -906,6 +906,67 @@ describe("PullRequestService", () => {
     expect(listCalls).toBe(2);
     expect(itemLookups).toBe(2);
   });
+
+  it("serves each repository from its own host CLI", async () => {
+    const githubProject = makeProject("project-gh", "GitHub", "/tmp/gh");
+    const gitlabProject = makeProject("project-gl", "GitLab", "/tmp/gl");
+    const base = createGitHubCliWithFakeGh().service;
+    const githubRepositories: string[] = [];
+    const gitlabRepositories: string[] = [];
+    const github: GitHostCliShape = {
+      ...base,
+      getViewerLogin: () => Effect.succeed("gh-viewer"),
+      listRepositoryPullRequests: (input) =>
+        Effect.sync(() => {
+          githubRepositories.push(input.repository);
+          return makeBatch([makeItem(1, "acme/app")]);
+        }),
+    };
+    const gitlab: GitHostCliShape = {
+      ...base,
+      getViewerLogin: () => Effect.succeed("gl-viewer"),
+      listRepositoryPullRequests: (input) =>
+        Effect.sync(() => {
+          gitlabRepositories.push(input.repository);
+          return makeBatch([
+            {
+              ...makeItem(2, "gitlab.com/acme/app"),
+              url: "https://gitlab.com/acme/app/-/merge_requests/2",
+            },
+          ]);
+        }),
+    };
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [githubProject, gitlabProject],
+              repositories: new Map([
+                [githubProject.id, "acme/app"],
+                [gitlabProject.id, "gitlab.com/acme/app"],
+              ]),
+              github,
+              gitlab,
+            }),
+          );
+          return yield* service.list({ state: "open", involvement: "all" });
+        }),
+      ),
+    );
+
+    // Each host CLI only ever sees its own repository, however many involvement queries the
+    // "all" tab fans out per repository.
+    expect([...new Set(githubRepositories)]).toEqual(["acme/app"]);
+    expect([...new Set(gitlabRepositories)]).toEqual(["gitlab.com/acme/app"]);
+    expect(result.entries.map((entry) => entry.repository).toSorted()).toEqual([
+      "acme/app",
+      "gitlab.com/acme/app",
+    ]);
+    // The top-level viewer names the first repository's host account.
+    expect(result.viewer).toBe("gh-viewer");
+  });
 });
 
 describe("isDefinitivePullRequestNotFound", () => {
@@ -932,5 +993,18 @@ describe("isDefinitivePullRequestNotFound", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("trusts the glab layer's precise not-found classification", () => {
+    expect(
+      isDefinitivePullRequestNotFound(
+        new GitHostCliError({
+          host: "gitlab",
+          operation: "getPullRequestListItem",
+          detail: "Merge request not found. Check the MR number or URL and try again.",
+          reason: "not-found",
+        }),
+      ),
+    ).toBe(true);
   });
 });

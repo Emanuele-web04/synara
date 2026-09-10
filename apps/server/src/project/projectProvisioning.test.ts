@@ -77,6 +77,20 @@ function unavailableGitHubCli(): GitHostCliShape {
   } as unknown as GitHostCliShape;
 }
 
+function unavailableGitLabCli(): GitHostCliShape {
+  return {
+    getViewerLogin: () =>
+      Effect.fail(
+        new GitHostCliError({
+          host: "gitlab",
+          operation: "getViewerLogin",
+          detail: "GitLab CLI is not installed.",
+          reason: "not-installed",
+        }),
+      ),
+  } as unknown as GitHostCliShape;
+}
+
 describe("project provisioning", () => {
   it("uses authenticated GitHub CLI cloning without forcing SSH or HTTPS", async () => {
     const result = await Effect.runPromise(
@@ -136,6 +150,147 @@ describe("project provisioning", () => {
         "--progress",
       ],
     ]);
+  });
+
+  it("clones a GitLab project by URL with an authenticated glab", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
+        const glabCalls: ReadonlyArray<string>[] = [];
+        const gitlab = {
+          getViewerLogin: () => Effect.succeed("nouchetm"),
+          execute: (input: Parameters<GitHostCliShape["execute"]>[0]) =>
+            Effect.gen(function* () {
+              glabCalls.push(input.args);
+              yield* fileSystem.makeDirectory(input.args[3] ?? "", { recursive: true });
+              return { code: 0, stdout: "", stderr: "", signal: null, timedOut: false };
+            }),
+        } as unknown as GitHostCliShape;
+        const git = {
+          execute: () =>
+            Effect.succeed({
+              code: 0,
+              stdout: "git@gitlab.dotblocks.fr:dotblocks/platform/app.git\n",
+              stderr: "",
+            }),
+        } as unknown as GitCoreShape;
+        const provisioner = yield* makeProjectProvisioner({
+          homeDir: parent,
+          fileSystem,
+          path,
+          git,
+          gitHost: makeGitHostRouter({ gitlab }),
+        });
+        return {
+          provisioned: yield* provisioner.provisionCheckout(
+            makeInput(parent, {
+              host: "gitlab",
+              // A project URL is accepted as-is and canonicalized to `host/group/project`.
+              repository: "https://gitlab.dotblocks.fr/dotblocks/platform/app.git",
+              directoryName: "app",
+            }),
+            { publish: () => Effect.void },
+          ),
+          glabCalls,
+        };
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(result.provisioned.checkout).toBe("created");
+    expect(result.provisioned.repository).toBe("gitlab.dotblocks.fr/dotblocks/platform/app");
+    expect(result.glabCalls).toEqual([
+      [
+        "repo",
+        "clone",
+        "https://gitlab.dotblocks.fr/dotblocks/platform/app",
+        expect.stringContaining(".synara-clone-"),
+        "--",
+        "--progress",
+      ],
+    ]);
+  });
+
+  it("defaults a bare GitLab project path to gitlab.com and falls back to git clone", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
+        const gitCalls: ReadonlyArray<string>[] = [];
+        const git = {
+          execute: (input: { operation: string; args: ReadonlyArray<string> }) =>
+            Effect.gen(function* () {
+              gitCalls.push(input.args);
+              if (input.operation === "clone public project") {
+                yield* fileSystem.makeDirectory(input.args[4] ?? "", { recursive: true });
+                return { code: 0, stdout: "", stderr: "" };
+              }
+              return {
+                code: 0,
+                stdout: "https://gitlab.com/dotblocks/platform/app.git\n",
+                stderr: "",
+              };
+            }),
+        } as unknown as GitCoreShape;
+        const provisioner = yield* makeProjectProvisioner({
+          homeDir: parent,
+          fileSystem,
+          path,
+          git,
+          gitHost: makeGitHostRouter({ gitlab: unavailableGitLabCli() }),
+        });
+        return {
+          provisioned: yield* provisioner.provisionCheckout(
+            makeInput(parent, {
+              host: "gitlab",
+              repository: "dotblocks/platform/app",
+              directoryName: "app",
+            }),
+            { publish: () => Effect.void },
+          ),
+          gitCalls,
+        };
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(result.provisioned.repository).toBe("gitlab.com/dotblocks/platform/app");
+    expect(result.gitCalls[0]).toEqual([
+      "clone",
+      "--progress",
+      "--",
+      "https://gitlab.com/dotblocks/platform/app.git",
+      expect.stringContaining(".synara-clone-"),
+    ]);
+  });
+
+  it("rejects a GitLab input that is neither a project path nor a project URL", async () => {
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
+        const provisioner = yield* makeProjectProvisioner({
+          homeDir: parent,
+          fileSystem,
+          path,
+          git: {} as unknown as GitCoreShape,
+          gitHost: makeGitHostRouter({ gitlab: unavailableGitLabCli() }),
+        });
+        return yield* provisioner
+          .provisionCheckout(makeInput(parent, { host: "gitlab", repository: "app" }), {
+            publish: () => Effect.void,
+          })
+          .pipe(Effect.flip);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(error).toBeInstanceOf(ProjectProvisioningError);
+    expect(error.code).toBe("INVALID_REPOSITORY");
+    expect(error.message).toBe(
+      "Enter a GitLab project as `group/project`, `host/group/project`, or a GitLab project URL.",
+    );
   });
 
   it("clones into staging, verifies origin, and atomically promotes the checkout", async () => {

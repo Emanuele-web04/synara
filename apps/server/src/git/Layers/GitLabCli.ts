@@ -142,6 +142,11 @@ function normalizeGitLabCliError(
   });
 }
 
+function hostnameFlagValue(args: ReadonlyArray<string>): string | undefined {
+  const index = args.indexOf("--hostname");
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
 function notFound(operation: GitLabOperation, detail: string): GitHostCliError {
   return new GitHostCliError({ host: "gitlab", operation, detail, reason: "not-found" });
 }
@@ -741,7 +746,9 @@ export const makeGitLabCli = Effect.sync(() => {
           ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
         }),
-      catch: (error) => normalizeGitLabCliError("execute", error),
+      // `--hostname <host>` is present on every API call, so an auth failure can always name the
+      // instance the user has to sign in to.
+      catch: (error) => normalizeGitLabCliError("execute", error, hostnameFlagValue(input.args)),
     });
 
   const projectArgs = (

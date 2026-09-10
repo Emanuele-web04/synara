@@ -3034,4 +3034,77 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
     }),
   );
+
+  it.effect(
+    "creates a GitLab merge request with a bare branch selector",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/gitlab-mr"]);
+        const remoteDir = yield* createBareRemote();
+        // The fetch URL carries the GitLab identity while pushes land in a local bare repo, so
+        // the manager resolves a GitLab host without needing a reachable instance.
+        yield* runGit(repoDir, ["remote", "add", "origin", "git@gitlab.dotblocks.fr:acme/app.git"]);
+        yield* runGit(repoDir, ["config", "remote.origin.pushurl", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "gitlab.txt"), "gitlab\n");
+        yield* runGit(repoDir, ["add", "gitlab.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Add GitLab file"]);
+
+        const mergeRequest = {
+          number: 12,
+          title: "Add GitLab file",
+          url: "https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12",
+          baseRefName: "main",
+          headRefName: "feature/gitlab-mr",
+          state: "open" as const,
+          isDraft: false,
+          mergeability: "mergeable" as const,
+          additions: null,
+          deletions: null,
+          changedFiles: 1,
+          isCrossRepository: false,
+          updatedAt: "2026-09-01T10:00:00.000Z",
+        };
+        const createCalls: Array<{ headSelector: string; baseBranch: string }> = [];
+        let created = false;
+        const glabService = {
+          getDefaultBranch: () => Effect.succeed("main"),
+          listOpenPullRequests: () => Effect.succeed(created ? [mergeRequest] : []),
+          listPullRequests: () => Effect.succeed(created ? [mergeRequest] : []),
+          createPullRequest: (input: { headSelector: string; baseBranch: string }) =>
+            Effect.sync(() => {
+              createCalls.push({
+                headSelector: input.headSelector,
+                baseBranch: input.baseBranch,
+              });
+              created = true;
+            }),
+        } as unknown as GitHostCliShape;
+
+        const { manager } = yield* makeManager({
+          glabService,
+          gitlabWorkspaces: [repoDir],
+          gitlabHosts: ["gitlab.dotblocks.fr"],
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          prTitle: "Add GitLab file",
+          prBody: "Body.",
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.pr.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");
+        // GitLab has no `owner:branch` head selectors: the source branch is passed bare.
+        expect(createCalls).toEqual([
+          { headSelector: "feature/gitlab-mr", baseBranch: "main" },
+        ]);
+
+        const status = yield* manager.status({ cwd: repoDir });
+        expect(status.pr?.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");
+        expect(status.pr?.number).toBe(12);
+      }),
+    30_000,
+  );
 });
