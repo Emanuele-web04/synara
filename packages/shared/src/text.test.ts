@@ -36,10 +36,29 @@ describe("stripTerminalControlSequences", () => {
     ).toBe("Transmuting...");
   });
 
-  it("cleans CSI sequences that lost their escape prefix", () => {
-    expect(stripTerminalControlSequences("[38;2;215;119;87mCaveman level: FULL[0m")).toBe(
-      "Caveman level: FULL",
-    );
+  it.each([
+    "[test] completed",
+    "items[0]",
+    "/tmp/[draft]/project",
+    "[Open file](src/main.ts)",
+    "[38;2;215;119;87mCaveman level: FULL[0m",
+  ])("preserves ordinary bracketed text: %s", (value) => {
+    expect(stripTerminalControlSequences(value)).toBe(value);
+  });
+
+  it.each(["\u0007", "\u001b\\", "\u009c"])(
+    "preserves labels and text between OSC controls terminated by %j",
+    (terminator) => {
+      const link = `\u001b]8;;https://example.com${terminator}visible\u001b]8;;${terminator}`;
+      expect(stripTerminalControlSequences(`${link} after ${link}`)).toBe("visible after visible");
+    },
+  );
+
+  it("handles single-byte CSI and OSC introducers", () => {
+    expect(stripTerminalControlSequences("\u009b31mred\u009b0m")).toBe("red");
+    expect(
+      stripTerminalControlSequences("\u009d8;;https://example.com\u009cvisible\u009d8;;\u009c"),
+    ).toBe("visible");
   });
 });
 

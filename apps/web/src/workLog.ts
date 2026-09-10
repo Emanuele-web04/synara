@@ -627,7 +627,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activity.kind === "runtime.warning" &&
     typeof payload?.message === "string" &&
     payload.message.trim().length > 0
-      ? payload.message.trim()
+      ? stripTerminalControlSequences(payload.message).trim()
       : undefined;
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
@@ -1576,7 +1576,7 @@ function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const trimmed = stripTerminalControlSequences(value).trim();
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 

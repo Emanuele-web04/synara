@@ -47,13 +47,12 @@ export function nonEmptyTrimmed(value: string | null | undefined): string | unde
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-// Removes terminal formatting/control sequences from provider text before it
-// reaches chat or durable activity storage. The optional escape prefix handles
-// old rows where transport stripped ESC but left the visible CSI body behind.
+// Removes actual terminal control sequences while preserving ordinary brackets
+// and visible text between separate OSC controls (including hyperlink labels).
 export function stripTerminalControlSequences(value: string): string {
   return value
-    .replace(/(?:\u001B|\u009B)?\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/(?:\u001B\]|\u009D)[^\u0007]*(?:\u0007|\u001B\\)/gu, "");
+    .replace(/(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/(?:\u001B\]|\u009D)[^\u0007\u001B\u009C]*(?:\u0007|\u001B\\|\u009C)/gu, "");
 }
 
 // Returns the singular or plural form of a noun based on `count`. The plural

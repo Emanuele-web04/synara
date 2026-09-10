@@ -281,6 +281,8 @@ it("does not turn extension footer status into transcript tool progress", async 
     pi.on("agent_start", (_event, context) => {
       context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠠\u001b[0m caveman level: FULL");
       context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠔\u001b[0m caveman level: FULL");
+      context.ui.setWorkingMessage("Working...");
+      context.ui.setTitle("Pi terminal");
     });
   });
 
@@ -288,6 +290,66 @@ it("does not turn extension footer status into transcript tool progress", async 
     await send(adapter);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("keeps extension notifications visible without inventing tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.notify("\u001b[31mEnabled [full] mode\u001b[0m");
+      context.ui.notify("Configuration saved", "info");
+      context.ui.notify("Please reconnect", "warning");
+      context.ui.notify("Tool failed", "error");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const notices = events.filter((event) => event.raw?.method === "extension/ui/notify");
+    expect(notices.map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+      {
+        type: "runtime.warning",
+        payload: { message: "Enabled [full] mode", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Configuration saved", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Please reconnect", detail: { type: "warning" } },
+      },
+      { type: "runtime.warning", payload: { message: "Tool failed", detail: { type: "error" } } },
+    ]);
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("cleans input prompt formatting while preserving the user's answer", async () => {
+  responses("success");
+  const answer = "items[0]; \u001b[31m";
+  let received: string | undefined;
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", async (_event, context) => {
+      received = await context.ui.input("\u001b[31mExpression [code]\u001b[0m");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    const sent = send(adapter);
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "user-input.requested")).toBe(true),
+    );
+    const request = events.find((event) => event.type === "user-input.requested")!;
+    expect(request.payload.questions[0]?.question).toBe("Expression [code]");
+    await Effect.runPromise(
+      adapter.respondToUserInput(threadId, request.requestId!, { input: answer }),
+    );
+    await sent;
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(received).toBe(answer);
   });
 });
 
