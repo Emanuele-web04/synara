@@ -1,3 +1,9 @@
+import {
+  selectMessageTextChunks,
+  encodeMessageTextFallback,
+  selectSegmentEndedAt,
+  joinMessageTextChunks,
+} from "../messageTextChunks.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -44,6 +50,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id,
           role,
           text,
+          text_json,
           attachments_json,
           skills_json,
           mentions_json,
@@ -61,6 +68,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.turnId},
           ${row.role},
           ${row.text},
+          ${encodeMessageTextFallback(row.text)},
           ${nextAttachmentsJson},
           ${nextSkillsJson},
           ${nextMentionsJson},
@@ -77,6 +85,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id = excluded.turn_id,
           role = excluded.role,
           text = excluded.text,
+          text_json = excluded.text_json,
           attachments_json = COALESCE(
             excluded.attachments_json,
             projection_thread_messages.attachments_json
@@ -117,6 +126,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          text_json AS "encodedText",
+          ${selectMessageTextChunks(sql, "projection_thread_messages")},
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
@@ -167,6 +178,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          text_json AS "encodedText",
+          ${selectMessageTextChunks(sql, "projection_thread_messages")},
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
@@ -212,8 +225,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           message_id AS "messageId",
           sequence,
           started_at AS "startedAt",
-          ended_at AS "endedAt",
-          text
+          ${selectSegmentEndedAt(sql, "message_text_segments")},
+          text,
+          text_json AS "encodedText",
+          ${selectMessageTextChunks(sql, "message_text_segments", true)}
         FROM message_text_segments
         WHERE thread_id = ${threadId}
         ORDER BY sequence ASC, message_id ASC
@@ -230,8 +245,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           message_id AS "messageId",
           sequence,
           started_at AS "startedAt",
-          ended_at AS "endedAt",
-          text
+          ${selectSegmentEndedAt(sql, "message_text_segments")},
+          text,
+          text_json AS "encodedText",
+          ${selectMessageTextChunks(sql, "message_text_segments", true)}
         FROM message_text_segments
         WHERE thread_id = ${threadId}
           AND message_id = ${messageId}
@@ -270,7 +287,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         sequence: segment.sequence,
         startedAt: segment.startedAt,
         endedAt: segment.endedAt,
-        text: segment.text,
+        text: joinMessageTextChunks(segment),
       };
       if (existing) {
         existing.push(entry);
@@ -285,9 +302,17 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   };
 
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
-    upsertProjectionThreadMessageRow(row).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
-    );
+    sql
+      .withTransaction(
+        upsertProjectionThreadMessageRow(row).pipe(
+          Effect.andThen(
+            sql`DELETE FROM message_text_chunks WHERE thread_id = ${row.threadId} AND message_id = ${row.messageId}`,
+          ),
+        ),
+      )
+      .pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
+      );
 
   const getByThreadAndMessageId: ProjectionThreadMessageRepositoryShape["getByThreadAndMessageId"] =
     (input) =>
