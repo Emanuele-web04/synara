@@ -107,6 +107,7 @@ import {
   CheckpointStore,
   type CheckpointStoreShape,
 } from "../../checkpointing/Services/CheckpointStore.ts";
+import { CheckpointCaptureBudgetExceededError } from "../../checkpointing/Errors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -6269,8 +6270,54 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls.length).toBe(1);
     expect(captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
       cwd: "/tmp/provider-project",
+      policy: {
+        timeoutMs: 5_000,
+        maxOutputBytes: 64 * 1_024,
+        unseededScanMaxOutputBytes: 1_000_000,
+        failureCooldownMs: 60_000,
+      },
     });
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
+  });
+
+  it("continues the provider turn when the message-start checkpoint exceeds its budget", async () => {
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+      Effect.fail(
+        new CheckpointCaptureBudgetExceededError({
+          operation: "CheckpointStore.captureCheckpoint",
+          reason: "timeout",
+          timeoutMs: 5_000,
+          detail: "The advisory capture exceeded its 5000ms deadline.",
+        }),
+      ),
+    );
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
+        captureCheckpoint,
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-checkpoint-budget"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-checkpoint-budget"),
+          role: "user",
+          text: "continue despite the checkpoint budget",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(captureCheckpoint).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
   });
 
   it("waits for the Studio output baseline before sending the provider turn", async () => {
