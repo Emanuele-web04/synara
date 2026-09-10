@@ -646,3 +646,30 @@ describe("computerBackendIsVisibleDesktop", () => {
     expect(computerBackendIsVisibleDesktop(undefined)).toBe(false);
   });
 });
+
+describe("Linux clipboard setup", () => {
+  it.each(["kwin", "nested-kwin", "hyprland"] as const)(
+    "offers repair for %s even when connected",
+    (backend) => {
+      const current = {
+        ...state({
+          availability: { kind: "available", backend },
+          capabilities: { ...state().capabilities, clipboard: false },
+        }),
+        provisionable: true,
+      };
+      expect(computerStatusNeedsSetup(current)).toBe(true);
+      expect(
+        computerStatusNeedsSetup({
+          ...current,
+          capabilities: { ...current.capabilities, clipboard: true },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not require clipboard on a backend that does not offer it", () => {
+    const current = state({ capabilities: { ...state().capabilities, clipboard: false } });
+    expect(computerStatusNeedsSetup(current)).toBe(false);
+  });
+});

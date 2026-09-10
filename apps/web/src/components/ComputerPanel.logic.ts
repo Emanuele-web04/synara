@@ -1,6 +1,8 @@
 import {
   COMPUTER_INPUT_SCROLL_LIMIT,
   COMPUTER_MAC_BACKEND,
+  COMPUTER_KWIN_BACKEND,
+  COMPUTER_HYPRLAND_BACKEND,
   COMPUTER_NESTED_KWIN_BACKEND,
   COMPUTER_RELEASE_CONTROL_HOTKEY,
   COMPUTER_RELEASE_HOTKEY_BACKENDS,
@@ -166,7 +168,16 @@ export type ComputerSetupProbe = Pick<
 export function computerStatusNeedsSetup(status: ComputerSetupProbe | undefined): boolean {
   if (!status) return false;
   if (status.availability.kind === "unsupported-platform") return false;
+  const backend =
+    status.availability.kind === "available" ? status.availability.backend : undefined;
+  const clipboardNeedsSetup =
+    status.provisionable === true &&
+    !status.capabilities.clipboard &&
+    (backend === COMPUTER_KWIN_BACKEND ||
+      backend === COMPUTER_NESTED_KWIN_BACKEND ||
+      backend === COMPUTER_HYPRLAND_BACKEND);
   return (
+    clipboardNeedsSetup ||
     (status.provisionable === true && status.health.status !== "connected") ||
     status.availability.kind === "backend-unavailable" ||
     status.availability.kind === "permission-required" ||

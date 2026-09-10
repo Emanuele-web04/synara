@@ -71,6 +71,10 @@ import {
   type SystemPackagePlan,
 } from "./provisioning/systemPackages.ts";
 
+import { prebuiltBuiltOnForDistribution } from "./provisioning/linuxDistribution.ts";
+import { kwinDistributionSetupProblem } from "./provisioning/kwinCompatibility.ts";
+import { CLIPBOARD_SETUP_INCOMPLETE_MESSAGE, wlClipboardToolsPresent } from "./wlClipboard.ts";
+
 const KWIN_COMMAND = "kwin_wayland";
 const INSTALLED_PLUGIN_FILE = /^SynaraComputerUsePluginV\d+\.so$/;
 /**
@@ -101,6 +105,8 @@ export interface NestedComputerBackendOptions {
    */
   readonly createAtspiClient?: (env: NodeJS.ProcessEnv) => AtspiTreeReader;
   readonly platform?: string;
+  readonly linuxDistribution?: KWinComputerBackendOptions["linuxDistribution"];
+  readonly runningKwinVersion?: KWinComputerBackendOptions["runningKwinVersion"];
   /** The server's own environment, injected so tests do not read the host display. */
   readonly hostEnv?: NodeJS.ProcessEnv;
   /** Replaced in tests, which must never boot a compositor. */
@@ -151,10 +157,14 @@ export class NestedComputerBackend extends KWinComputerBackend {
     const ref: NestedSessionRef = { session: undefined, backend: undefined };
     const hostEnv = options.hostEnv ?? process.env;
     const installedPluginIds = options.installedPluginIds ?? (() => scanInstalledPluginIds());
+    const hasCommand = options.hasCommand ?? ((command: string) => commandOnPath(command, hostEnv));
     super({
       ...(options.platform !== undefined ? { platform: options.platform } : {}),
+      ...(options.linuxDistribution ? { linuxDistribution: options.linuxDistribution } : {}),
+      ...(options.runningKwinVersion ? { runningKwinVersion: options.runningKwinVersion } : {}),
       ...(options.provisionPlugin ? { provisionPlugin: options.provisionPlugin } : {}),
       installedPluginIds,
+      clipboardToolsPresent: () => wlClipboardToolsPresent(hasCommand),
       // The nested compositor is a Wayland session even when this server was
       // started from a tty or with no session at all; the base class must not
       // gate on the ambient session type.
@@ -192,13 +202,13 @@ export class NestedComputerBackend extends KWinComputerBackend {
     this.startSession = options.startSession ?? startNestedKWinSession;
     this.connectDbus =
       options.connectDbus ?? ((busAddress) => createSessionKWinComputerDbus({ busAddress }));
-    this.hasCommand = options.hasCommand ?? ((command) => commandOnPath(command, hostEnv));
+    this.hasCommand = hasCommand;
     this.installedPluginPresent = options.installedPluginPresent ?? anyPluginFileInstalled;
     this.nestedBuildToolingPresent = options.buildToolingPresent ?? localBuildToolingPresent;
     this.nestedPrebuiltRoot = options.prebuiltRoot ?? prebuiltPluginRoot;
     this.verifiedPrebuiltAvailable =
       options.verifiedPrebuiltAvailable ?? (() => this.hasVerifiedPrebuilt());
-    this.planPackages = options.planPackages ?? (() => planSystemPackageInstall());
+    this.planPackages = options.planPackages ?? (() => planSystemPackageInstall(this.hasCommand));
     this.installPackages = options.installPackages ?? installSystemPackages;
     this.listInstalledPluginIds = installedPluginIds;
   }
@@ -207,9 +217,9 @@ export class NestedComputerBackend extends KWinComputerBackend {
    * Passive and optimistic, per the `probeAvailability` contract: nothing is
    * booted or installed, and a machine that merely *could* be set up answers
    * "available" so the settings panel gets the chance to offer Set up. The one
-   * hard refusal is a windowed session with no Wayland host to nest into,
-   * because no amount of provisioning conjures a display this server was not
-   * started inside.
+   * refusals cover known incompatible package sets and a windowed session
+   * with no Wayland host to nest into. Neither can be fixed by installing
+   * the packages in the setup plan.
    */
   override async probeAvailability(): Promise<ComputerAvailability> {
     if (this.nestedPlatform !== "linux") {
@@ -218,6 +228,8 @@ export class NestedComputerBackend extends KWinComputerBackend {
     if (this.mode === "window" && !this.hostEnv.WAYLAND_DISPLAY) {
       return { kind: "backend-unavailable", message: NO_WAYLAND_HOST_MESSAGE };
     }
+    const problem = kwinDistributionSetupProblem(this.linuxDistribution());
+    if (problem) return { kind: "backend-unavailable", message: problem };
     return { kind: "available", backend: COMPUTER_NESTED_KWIN_BACKEND };
   }
 
@@ -244,6 +256,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
    * again.
    */
   override capabilities(): ComputerCapabilities {
+    if (kwinDistributionSetupProblem(this.linuxDistribution())) return NO_COMPUTER_CAPABILITIES;
     if (this.ref.session) return super.capabilities();
     if (this.hasCommand(KWIN_COMMAND) && this.installedPluginPresent()) {
       return super.capabilities();
@@ -272,6 +285,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
   }
 
   private async runProvision(): Promise<string> {
+    await this.assertKwinSetupSupported();
     const steps: string[] = [];
     if (await this.needsSystemPackages()) {
       const plan = this.planPackages();
@@ -283,6 +297,11 @@ export class NestedComputerBackend extends KWinComputerBackend {
         );
       }
       steps.push(await this.installPackages(plan));
+      this.resetKwinVersionProbe();
+      await this.assertKwinSetupSupported();
+      if (!wlClipboardToolsPresent(this.hasCommand)) {
+        throw new ComputerBackendError(CLIPBOARD_SETUP_INCOMPLETE_MESSAGE);
+      }
     }
     steps.push((await this.provisionOnce()).summary);
     let availability = await this.availability();
@@ -313,7 +332,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
    * installed plugin and no shipped binary to fall back to.
    */
   private async needsSystemPackages(): Promise<boolean> {
-    if (!this.hasCommand(KWIN_COMMAND)) return true;
+    if (!this.hasCommand(KWIN_COMMAND) || !wlClipboardToolsPresent(this.hasCommand)) return true;
     return !(await this.verifiedPrebuiltAvailable()) && !this.probeBuildToolingSafely();
   }
 
@@ -322,7 +341,15 @@ export class NestedComputerBackend extends KWinComputerBackend {
     if (!root) return false;
     const version = await this.probeRunningKwinVersion();
     const manifest = await readPrebuiltManifest(join(root, "manifest.json"));
-    const build = manifest && version ? selectPrebuilt(manifest, version, process.arch) : undefined;
+    const build =
+      manifest && version
+        ? selectPrebuilt(
+            manifest,
+            version,
+            process.arch,
+            prebuiltBuiltOnForDistribution(this.linuxDistribution()),
+          )
+        : undefined;
     return build ? verifyPrebuilt(join(root, build.file), build.sha256) : false;
   }
 
@@ -374,6 +401,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
   }
 
   private async bootSession(): Promise<NestedKWinSession> {
+    await this.assertKwinSetupSupported();
     // The session loads the plugin as part of coming up, so a machine that has
     // never had one gets the silent user-space install first: a shipped binary
     // when one matches, a source build otherwise. The system packages that

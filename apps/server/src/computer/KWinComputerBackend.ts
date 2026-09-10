@@ -94,11 +94,25 @@ import {
   type ComputerInputSink,
 } from "./pointerSequencing.ts";
 import {
+  CLIPBOARD_SETUP_INCOMPLETE_MESSAGE,
   readWlClipboard,
   spawnClipboardCommand,
   writeWlClipboard,
+  wlClipboardToolsPresent,
   type ClipboardCommandRunner,
 } from "./wlClipboard.ts";
+
+import { installClipboardSystemPackage } from "./provisioning/systemPackages.ts";
+import {
+  detectLinuxDistribution,
+  linuxDistributionIdentity,
+  prebuiltBuiltOnForDistribution,
+  type LinuxDistribution,
+} from "./provisioning/linuxDistribution.ts";
+import {
+  kwinDistributionSetupProblem,
+  kwinVersionSetupProblem,
+} from "./provisioning/kwinCompatibility.ts";
 
 const DEFAULT_COMPUTER_ID = "desktop";
 const DEFAULT_GLIDE_DURATION_MS = 180;
@@ -256,6 +270,10 @@ export interface KWinComputerBackendOptions {
   readonly resolveApp?: AppLaunchResolver;
   /** wl-clipboard process runner, replaced in tests. */
   readonly runClipboardCommand?: ClipboardCommandRunner;
+  /** Passive executable checks, injected independently of the clipboard runner. */
+  readonly clipboardToolsPresent?: () => boolean;
+  /** Only called by explicit setup, never by availability or reconnects. */
+  readonly provisionClipboardTools?: () => Promise<string>;
   readonly glideDurationMs?: number;
   readonly stillIntervalMs?: number;
   readonly captureMaxDimension?: number;
@@ -282,6 +300,7 @@ export interface KWinComputerBackendOptions {
   readonly readInstallStamp?: () => Promise<string | undefined>;
   /** Running KWin version, read only to explain a load refusal. */
   readonly runningKwinVersion?: () => Promise<string | undefined>;
+  readonly linuxDistribution?: () => LinuxDistribution | undefined;
   /**
    * Installs the plugin for the running KWin. Asked when connecting finds
    * nothing loadable, or when the user presses "Set up"; after KWin refuses
@@ -338,8 +357,12 @@ export class KWinComputerBackend implements ComputerBackend {
   private readonly busNameHasOwner: (name: string) => Promise<boolean>;
   private readonly prebuiltRoot: () => string | undefined;
   private readonly buildToolingPresent: () => boolean;
+  private readonly clipboardToolsPresent: () => boolean;
+  private readonly provisionClipboardTools: () => Promise<string>;
+  private explicitProvision: Promise<string> | undefined;
   private readonly readInstallStamp: () => Promise<string | undefined>;
   private readonly runningKwinVersion: () => Promise<string | undefined>;
+  protected readonly linuxDistribution: () => LinuxDistribution | undefined;
   private runningKwinVersionPromise: Promise<string | undefined> | undefined;
   private readonly provisionPlugin: (options: {
     readonly signal?: AbortSignal;
@@ -451,10 +474,13 @@ export class KWinComputerBackend implements ComputerBackend {
       (options.busAddress ? async () => true : (name) => sessionBusNameHasOwner(name));
     this.prebuiltRoot = options.prebuiltRoot ?? (() => prebuiltPluginRoot());
     this.buildToolingPresent = options.buildToolingPresent ?? localBuildToolingPresent;
+    this.clipboardToolsPresent = options.clipboardToolsPresent ?? wlClipboardToolsPresent;
+    this.provisionClipboardTools = options.provisionClipboardTools ?? installClipboardSystemPackage;
     this.readInstallStamp =
       options.readInstallStamp ??
       (() => readInstallStamp(options.installStampPath ?? defaultInstallStampPath()));
     this.runningKwinVersion = options.runningKwinVersion ?? detectRunningKwinVersion;
+    this.linuxDistribution = options.linuxDistribution ?? detectLinuxDistribution;
     this.provisionPlugin =
       options.provisionPlugin ??
       (({ allowPrebuilt, force }) =>
@@ -471,6 +497,7 @@ export class KWinComputerBackend implements ComputerBackend {
             listPluginFiles(options.pluginDirectories ?? defaultPluginDirectories()),
           kwinVersion: () => this.probeRunningKwinVersion(),
           arch: process.arch,
+          linuxDistribution: this.linuxDistribution,
           prebuiltRoot: allowPrebuilt ? prebuiltPluginRoot() : undefined,
           buildFromSource: buildPluginFromSource,
           // Provisioning runs again whenever connecting finds nothing loadable
@@ -484,7 +511,7 @@ export class KWinComputerBackend implements ComputerBackend {
               listPluginFiles(options.pluginDirectories ?? defaultPluginDirectories()),
               this.probeRunningKwinVersion(),
             ]);
-            return installStampIsCurrent(stamp, files, running);
+            return installStampIsCurrent(stamp, files, running, this.linuxDistribution());
           },
           stampPath: options.installStampPath ?? defaultInstallStampPath(),
           ...(options.compositorSeesPluginRoot
@@ -519,7 +546,7 @@ export class KWinComputerBackend implements ComputerBackend {
       stacking: true,
       capture: true,
       input: true,
-      clipboard: true,
+      clipboard: this.clipboardToolsPresent(),
       focus: true,
       raise: true,
       ghostCursor: true,
@@ -551,6 +578,8 @@ export class KWinComputerBackend implements ComputerBackend {
     if (this.sessionType.toLowerCase() !== "wayland") {
       return { kind: "backend-unavailable", message: WAYLAND_REQUIRED_MESSAGE };
     }
+    const setupProblem = kwinDistributionSetupProblem(this.linuxDistribution());
+    if (setupProblem) return { kind: "backend-unavailable", message: setupProblem };
     if (!(await this.nameHasOwner(KWIN_SERVICE))) {
       return { kind: "backend-unavailable", message: NO_KWIN_MESSAGE };
     }
@@ -582,7 +611,14 @@ export class KWinComputerBackend implements ComputerBackend {
       this.probeRunningKwinVersion(),
     ]);
     if (!manifest || !version) return false;
-    return selectPrebuilt(manifest, version, process.arch) !== undefined;
+    return (
+      selectPrebuilt(
+        manifest,
+        version,
+        process.arch,
+        prebuiltBuiltOnForDistribution(this.linuxDistribution()),
+      ) !== undefined
+    );
   }
 
   private probeBuildTooling(): boolean {
@@ -1409,6 +1445,7 @@ export class KWinComputerBackend implements ComputerBackend {
    * keeps a repeat cheap when nothing changed.
    */
   protected async provisionOnce(allowPrebuilt = true, force = false): Promise<ProvisionResult> {
+    if (this.integrationName === "KWin") await this.assertKwinSetupSupported();
     const key = `${allowPrebuilt ? "any" : "source"}:${force ? "forced" : "current"}`;
     const existing = this.provisionPromises.get(key);
     if (existing) return await existing;
@@ -1438,7 +1475,20 @@ export class KWinComputerBackend implements ComputerBackend {
    * already knows how to unload stale ids first.
    */
   async provision(): Promise<string> {
-    return (await this.provisionOnce()).summary;
+    this.explicitProvision ??= this.runExplicitProvision().finally(() => {
+      this.explicitProvision = undefined;
+    });
+    return this.explicitProvision;
+  }
+
+  private async runExplicitProvision(): Promise<string> {
+    const summary = (await this.provisionOnce()).summary;
+    if (this.clipboardToolsPresent()) return summary;
+    const clipboard = await this.provisionClipboardTools();
+    if (!this.clipboardToolsPresent()) {
+      throw new ComputerBackendError(CLIPBOARD_SETUP_INCOMPLETE_MESSAGE);
+    }
+    return `${summary} ${clipboard}`;
   }
 
   /**
@@ -1509,6 +1559,17 @@ export class KWinComputerBackend implements ComputerBackend {
     // pair says nothing, so only a real mismatch is worth naming.
     if (!builtFor || !running || builtFor === running) return undefined;
     return { builtFor, running };
+  }
+
+  protected async assertKwinSetupSupported(): Promise<void> {
+    const problem =
+      kwinDistributionSetupProblem(this.linuxDistribution()) ??
+      kwinVersionSetupProblem(await this.probeRunningKwinVersion());
+    if (problem) throw new ComputerBackendError(problem);
+  }
+
+  protected resetKwinVersionProbe(): void {
+    this.runningKwinVersionPromise = undefined;
   }
 
   protected probeRunningKwinVersion(): Promise<string | undefined> {
@@ -2170,17 +2231,25 @@ function stampPluginId(stamp: string | undefined): string | undefined {
  * version it was built for must match the running compositor when both are
  * readable. That mismatch check is what lets provisioning produce a fresh
  * candidate after a KWin upgrade instead of answering "already current" about
- * an install KWin now refuses; a half-known pair stays current, because an
- * unreadable version is not evidence of anything.
+ * an install KWin now refuses. The distro identity must also match; legacy
+ * stamps without it are rebuilt once. An unreadable KWin version alone does
+ * not invalidate an install with a matching distro identity.
  */
 export function installStampIsCurrent(
   stamp: string | undefined,
   installedFiles: readonly string[],
   runningKwinVersion: string | undefined,
+  distribution: LinuxDistribution | undefined,
 ): boolean {
   const pluginId = stampPluginId(stamp);
   if (!pluginId) return false;
   if (!installedFiles.includes(`${pluginId}.so`)) return false;
+  const hostIdentity = linuxDistributionIdentity(distribution);
+  const installedIdentity = stamp
+    ?.split("\n")
+    .find((line) => line.startsWith("linux_distribution="))
+    ?.slice("linux_distribution=".length);
+  if (!hostIdentity || installedIdentity !== hostIdentity) return false;
   const builtFor = stampKwinVersion(stamp);
   if (builtFor && runningKwinVersion && builtFor !== runningKwinVersion) return false;
   return true;

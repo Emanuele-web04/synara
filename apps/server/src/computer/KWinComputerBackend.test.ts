@@ -270,6 +270,11 @@ function makeBackend(
   options: Omit<KWinComputerBackendOptions, "dbus"> = {},
 ): KWinComputerBackend {
   return new KWinComputerBackend({
+    clipboardToolsPresent: () => true,
+    provisionClipboardTools: async () => {
+      throw new Error("Unexpected clipboard installation");
+    },
+    linuxDistribution: () => ({ id: "arch" }),
     ...options,
     dbus,
     atspi: options.atspi ?? atspi,
@@ -327,6 +332,7 @@ async function withProvisionHome(body: (home: string) => Promise<void>): Promise
   process.env.XDG_CONFIG_HOME = join(home, "config");
   process.env.XDG_STATE_HOME = join(home, "state");
   for (const key of keys.slice(3)) delete process.env[key];
+  process.env.SYNARA_KWIN_SOURCE_DIR = join(home, "absent-native-source");
   try {
     await body(home);
   } finally {
@@ -354,6 +360,7 @@ async function writePrebuiltBundle(
         {
           kwinVersion,
           arch: process.arch,
+          builtOn: "arch",
           file: "p.so",
           sha256: createHash("sha256").update(bytes).digest("hex"),
         },
@@ -378,6 +385,7 @@ function provisionWiringBackend(options: {
 }): KWinComputerBackend {
   return new KWinComputerBackend({
     dbus: options.dbus,
+    linuxDistribution: () => ({ id: "arch" }),
     atspi,
     platform: "linux",
     sessionType: "wayland",
@@ -509,6 +517,7 @@ const stamp = (pluginId: string, kwinVersion: string): string =>
     "installed_at=2026-01-01T00:00:00.000Z",
     `plugin_path=/somewhere/${pluginId}.so`,
     `kwin_version=${kwinVersion}`,
+    "linux_distribution=arch::",
     "",
   ].join("\n");
 
@@ -550,20 +559,48 @@ describe("localBuildToolingPresent", () => {
  * and successes stop being memoized, so its four verdicts are pinned here.
  */
 describe("installStampIsCurrent", () => {
+  it("invalidates the install after a distribution change with the same KWin", () => {
+    const existing = stamp("SynaraComputerUsePluginV3", "6.7.3");
+    expect(
+      installStampIsCurrent(existing, ["SynaraComputerUsePluginV3.so"], "6.7.3", {
+        id: "fedora",
+        versionId: "44",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not trust legacy stamps or an unknown host identity", () => {
+    const existing = stamp("SynaraComputerUsePluginV3", "6.7.3");
+    expect(
+      installStampIsCurrent(
+        existing.replace("linux_distribution=arch::", ""),
+        ["SynaraComputerUsePluginV3.so"],
+        "6.7.3",
+        { id: "arch" },
+      ),
+    ).toBe(false);
+    expect(
+      installStampIsCurrent(existing, ["SynaraComputerUsePluginV3.so"], "6.7.3", undefined),
+    ).toBe(false);
+  });
+
   it("is current when the stamped file exists for the running KWin", () => {
     expect(
       installStampIsCurrent(
         stamp("SynaraComputerUsePluginV3", "6.7.3"),
         ["SynaraComputerUsePluginV3.so"],
         "6.7.3",
+        { id: "arch" },
       ),
     ).toBe(true);
   });
 
   it("is not current when the stamped file is gone", () => {
-    expect(installStampIsCurrent(stamp("SynaraComputerUsePluginV3", "6.7.3"), [], "6.7.3")).toBe(
-      false,
-    );
+    expect(
+      installStampIsCurrent(stamp("SynaraComputerUsePluginV3", "6.7.3"), [], "6.7.3", {
+        id: "arch",
+      }),
+    ).toBe(false);
   });
 
   it("is not current when the running KWin is newer than the build", () => {
@@ -574,6 +611,7 @@ describe("installStampIsCurrent", () => {
         stamp("SynaraComputerUsePluginV3", "6.7.3"),
         ["SynaraComputerUsePluginV3.so"],
         "6.8.0",
+        { id: "arch" },
       ),
     ).toBe(false);
   });
@@ -584,6 +622,7 @@ describe("installStampIsCurrent", () => {
         stamp("SynaraComputerUsePluginV3", ""),
         ["SynaraComputerUsePluginV3.so"],
         undefined,
+        { id: "arch" },
       ),
     ).toBe(true);
     expect(
@@ -591,12 +630,15 @@ describe("installStampIsCurrent", () => {
         stamp("SynaraComputerUsePluginV3", "6.7.3"),
         ["SynaraComputerUsePluginV3.so"],
         undefined,
+        { id: "arch" },
       ),
     ).toBe(true);
   });
 
   it("is not current without a stamp at all", () => {
-    expect(installStampIsCurrent(undefined, ["SynaraComputerUsePluginV3.so"], "6.7.3")).toBe(false);
+    expect(
+      installStampIsCurrent(undefined, ["SynaraComputerUsePluginV3.so"], "6.7.3", { id: "arch" }),
+    ).toBe(false);
   });
 });
 
@@ -611,7 +653,15 @@ describe("KWinComputerBackend passive probe", () => {
     await writeFile(
       join(directory, "manifest.json"),
       JSON.stringify({
-        builds: [{ kwinVersion, arch: process.arch, file: "plugin.so", sha256: "0".repeat(64) }],
+        builds: [
+          {
+            kwinVersion,
+            builtOn: "arch",
+            arch: process.arch,
+            file: "plugin.so",
+            sha256: "0".repeat(64),
+          },
+        ],
       }),
     );
     return directory;
@@ -1499,6 +1549,17 @@ describe("KWinComputerBackend", () => {
     expect(message).not.toContain("exact KWin version");
     // No rebuild: nothing built here could load until the next login either.
     expect(forced).toBe(false);
+    await backend.dispose();
+  });
+
+  it("refuses KWin 5 before invoking the plugin installer", async () => {
+    const provisionPlugin = vi.fn();
+    const backend = makeBackend(new FakeDbus(), {
+      runningKwinVersion: async () => "5.27.11",
+      provisionPlugin,
+    });
+    await expect(backend.provision()).rejects.toThrow("KWin 5.27.11 is unsupported");
+    expect(provisionPlugin).not.toHaveBeenCalled();
     await backend.dispose();
   });
 
@@ -2786,6 +2847,53 @@ describe("KWinComputerBackend", () => {
 });
 
 describe("KWinComputerBackend clipboard", () => {
+  it("repairs clipboard tools only on explicit setup and coalesces duplicate requests", async () => {
+    let present = false;
+    const provisionClipboardTools = vi.fn(async () => {
+      present = true;
+      return "Installed wl-clipboard";
+    });
+    const backend = makeBackend(new FakeDbus(), {
+      clipboardToolsPresent: () => present,
+      provisionClipboardTools,
+      provisionPlugin: async () => ({
+        action: "already-current",
+        summary: "Current",
+        requiresRelogin: false,
+      }),
+    });
+    await backend.probeAvailability();
+    expect(backend.capabilities().clipboard).toBe(false);
+    expect(provisionClipboardTools).not.toHaveBeenCalled();
+    const summaries = await Promise.all([backend.provision(), backend.provision()]);
+    expect(summaries).toEqual(["Current Installed wl-clipboard", "Current Installed wl-clipboard"]);
+    expect(provisionClipboardTools).toHaveBeenCalledTimes(1);
+    expect(backend.capabilities().clipboard).toBe(true);
+    await backend.dispose();
+  });
+
+  it("reports incomplete setup if the clipboard installation did not supply both utilities", async () => {
+    const backend = makeBackend(new FakeDbus(), {
+      clipboardToolsPresent: () => false,
+      provisionClipboardTools: async () => "Installed",
+      provisionPlugin: async () => ({
+        action: "already-current",
+        summary: "Current",
+        requiresRelogin: false,
+      }),
+    });
+    await expect(backend.provision()).rejects.toThrow("Clipboard setup is incomplete");
+    await backend.dispose();
+  });
+
+  it("updates clipboard capability when utilities become available", () => {
+    let present = false;
+    const backend = makeBackend(new FakeDbus(), { clipboardToolsPresent: () => present });
+    expect(backend.capabilities().clipboard).toBe(false);
+    present = true;
+    expect(backend.capabilities().clipboard).toBe(true);
+  });
+
   function clipboardBackend(
     reply: (spec: ClipboardCommandSpec) => ClipboardCommandResult | Promise<never>,
   ): {

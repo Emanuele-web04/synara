@@ -17,6 +17,7 @@ import {
   selectPrebuilt,
   sessionSeesPluginRoot,
   verifyPrebuilt,
+  writeInstallStamp,
   type ProvisionDependencies,
 } from "./kwinPluginProvisioning.ts";
 
@@ -142,21 +143,42 @@ describe("what the running compositor can see", () => {
 describe("prebuilt selection", () => {
   const manifest = {
     builds: [
-      { kwinVersion: "6.7.3", arch: "x64", file: "a.so", sha256: "aa" },
-      { kwinVersion: "6.8.0", arch: "x64", file: "b.so", sha256: "bb" },
-      { kwinVersion: "6.7.3", arch: "arm64", file: "c.so", sha256: "cc" },
+      {
+        kwinVersion: "6.7.3",
+        arch: "x64",
+        builtOn: "fedora-43" as const,
+        file: "fedora.so",
+        sha256: "aa",
+      },
+      {
+        kwinVersion: "6.7.3",
+        arch: "x64",
+        builtOn: "debian-trixie" as const,
+        file: "debian.so",
+        sha256: "bb",
+      },
+      {
+        kwinVersion: "6.7.3",
+        arch: "arm64",
+        builtOn: "fedora-43" as const,
+        file: "arm.so",
+        sha256: "cc",
+      },
     ],
   };
 
-  it("matches the exact KWin version and architecture", () => {
-    expect(selectPrebuilt(manifest, "6.7.3", "x64")?.file).toBe("a.so");
-    expect(selectPrebuilt(manifest, "6.7.3", "arm64")?.file).toBe("c.so");
+  it("matches the exact KWin version, architecture, and distro build", () => {
+    expect(selectPrebuilt(manifest, "6.7.3", "x64", "fedora-43")?.file).toBe("fedora.so");
+    expect(selectPrebuilt(manifest, "6.7.3", "x64", "debian-trixie")?.file).toBe("debian.so");
+    expect(selectPrebuilt(manifest, "6.7.3", "arm64", "fedora-43")?.file).toBe("arm.so");
   });
 
   it("never settles for a near miss, which would fail at load with no reason given", () => {
-    expect(selectPrebuilt(manifest, "6.7.4", "x64")).toBeUndefined();
-    expect(selectPrebuilt(manifest, "6.7", "x64")).toBeUndefined();
-    expect(selectPrebuilt(manifest, "6.7.3", "riscv64")).toBeUndefined();
+    expect(selectPrebuilt(manifest, "6.7.4", "x64", "fedora-43")).toBeUndefined();
+    expect(selectPrebuilt(manifest, "6.7", "x64", "fedora-43")).toBeUndefined();
+    expect(selectPrebuilt(manifest, "6.7.3", "riscv64", "fedora-43")).toBeUndefined();
+    expect(selectPrebuilt(manifest, "6.7.3", "x64", "fedora-44")).toBeUndefined();
+    expect(selectPrebuilt(manifest, "6.7.3", "x64", undefined)).toBeUndefined();
   });
 
   it("treats a missing or corrupt manifest as no prebuilts, not as a failure", async () => {
@@ -164,6 +186,23 @@ describe("prebuilt selection", () => {
     expect(await readPrebuiltManifest(join(dir, "absent.json"))).toBeUndefined();
     await writeFile(join(dir, "bad.json"), "{ not json");
     expect(await readPrebuiltManifest(join(dir, "bad.json"))).toBeUndefined();
+    await writeFile(join(dir, "null.json"), "null");
+    expect(await readPrebuiltManifest(join(dir, "null.json"))).toBeUndefined();
+
+    await writeFile(
+      join(dir, "legacy.json"),
+      JSON.stringify({
+        builds: [
+          {
+            kwinVersion: "6.7.3",
+            arch: "x64",
+            file: "old.so",
+            sha256: "0".repeat(64),
+          },
+        ],
+      }),
+    );
+    expect(await readPrebuiltManifest(join(dir, "legacy.json"))).toBeUndefined();
   });
 });
 
@@ -209,6 +248,7 @@ describe("provisioning", () => {
       listInstalled: async () => [],
       kwinVersion: async () => "6.7.3",
       arch: "x64",
+      linuxDistribution: () => ({ id: "fedora", versionId: "43" }),
       buildFromSource: async () => {
         const built = join(dir, "built.so");
         await writeFile(built, "from source");
@@ -228,7 +268,9 @@ describe("provisioning", () => {
     const sha256 = createHash("sha256").update("prebuilt bytes").digest("hex");
     await writeFile(
       join(prebuiltRoot, "manifest.json"),
-      JSON.stringify({ builds: [{ kwinVersion: "6.7.3", arch: "x64", file: "p.so", sha256 }] }),
+      JSON.stringify({
+        builds: [{ kwinVersion: "6.7.3", arch: "x64", builtOn: "fedora-43", file: "p.so", sha256 }],
+      }),
     );
 
     let built = false;
@@ -258,6 +300,38 @@ describe("provisioning", () => {
     ).toBe("from source");
   });
 
+  it("builds from source rather than using another distro's matching KWin", async () => {
+    const dir = await temp();
+    const prebuiltRoot = join(dir, "prebuilt");
+    await mkdir(prebuiltRoot, { recursive: true });
+    await writeFile(join(prebuiltRoot, "debian.so"), "debian bytes");
+    const { createHash } = await import("node:crypto");
+    await writeFile(
+      join(prebuiltRoot, "manifest.json"),
+      JSON.stringify({
+        builds: [
+          {
+            kwinVersion: "6.7.3",
+            arch: "x64",
+            builtOn: "debian-trixie",
+            file: "debian.so",
+            sha256: createHash("sha256").update("debian bytes").digest("hex"),
+          },
+        ],
+      }),
+    );
+
+    const result = await provisionKWinPlugin(await baseDeps({ prebuiltRoot }));
+    expect(result.action).toBe("installed-from-source");
+  });
+
+  it("builds from source on an unrecognized host", async () => {
+    const deps = await baseDeps({
+      linuxDistribution: () => ({ id: "nobara", versionId: "43" }),
+    });
+    expect((await provisionKWinPlugin(deps)).action).toBe("installed-from-source");
+  });
+
   it("refuses a prebuilt whose bytes do not match the manifest", async () => {
     const dir = await temp();
     const prebuiltRoot = join(dir, "prebuilt");
@@ -270,6 +344,7 @@ describe("provisioning", () => {
           {
             kwinVersion: "6.7.3",
             arch: "x64",
+            builtOn: "fedora-43",
             file: "p.so",
             // Well-formed but wrong: this is the mismatch case, not the
             // malformed-entry case.
@@ -367,9 +442,23 @@ describe("provisioning", () => {
 
     expect(stamp).toContain("plugin_id=SynaraComputerUsePluginV1");
     expect(stamp).toContain("kwin_version=6.7.3");
+    expect(stamp).toContain("linux_distribution=fedora:43:");
     // Absent on purpose: the shell installer treats a missing signature as
     // "rebuild", which is the right answer for a stamp it did not write.
     expect(stamp).not.toContain("signature=");
+  });
+
+  it("serializes an unknown distro identity into direct install stamps", async () => {
+    const dir = await temp();
+    const path = join(dir, "install.stamp");
+    await writeInstallStamp(path, {
+      pluginId: "SynaraComputerUsePluginV2",
+      pluginPath: join(dir, "plugin.so"),
+      kwinVersion: "6.7.3",
+      linuxDistribution: { id: "custom:linux", versionId: "1", versionCodename: "edge" },
+      installedAt: "2026-09-10T00:00:00.000Z",
+    });
+    expect(await readFile(path, "utf8")).toContain("linux_distribution=custom%3Alinux:1:edge\n");
   });
 
   it("deletes the build it supersedes, which would otherwise auto-load and win the bus name", async () => {

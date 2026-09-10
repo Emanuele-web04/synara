@@ -210,11 +210,14 @@ describe("startNestedKWinSession", () => {
   it("keeps a virtual compositor off the host display", async () => {
     const harness = new NestedHarness();
     const session = await startNestedKWinSession(
-      harness.options({ hostEnv: { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" } }),
+      harness.options({
+        hostEnv: { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0", QT_QPA_PLATFORMTHEME: "gtk3" },
+      }),
     );
     expect(harness.spawns[1]?.args[0]).toBe("--virtual");
     expect(harness.spawns[1]?.env.WAYLAND_DISPLAY).toBeUndefined();
     expect(harness.spawns[1]?.env.DISPLAY).toBeUndefined();
+    expect(harness.spawns[1]?.env.QT_QPA_PLATFORMTHEME).toBeUndefined();
     const runtime = session.runtimeDirectory!;
     expect((await stat(runtime)).mode & 0o777).toBe(0o700);
     expect(harness.spawns[1]?.env.XDG_RUNTIME_DIR).toBe(runtime);

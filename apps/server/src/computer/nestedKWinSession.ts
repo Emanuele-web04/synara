@@ -508,7 +508,12 @@ function compositorEnv(
     // freshly installed plugin is invisible to the very KWin booted to load it.
     QT_PLUGIN_PATH: prependQtPluginRoot(hostEnv.QT_PLUGIN_PATH),
   };
-  if (mode === "virtual") delete env.WAYLAND_DISPLAY;
+  if (mode === "virtual") {
+    delete env.WAYLAND_DISPLAY;
+    // The host's gtk3 Qt theme calls GTK initialization, which requires a
+    // display even though this compositor uses its own virtual output.
+    delete env.QT_QPA_PLATFORMTHEME;
+  }
   delete env.DISPLAY;
   return env;
 }

@@ -1,4 +1,4 @@
-# Prebuilt KWin plugin binaries, one per KWin version we can reach.
+# Prebuilt KWin plugin binaries, one per distro, KWin version, and architecture.
 #
 # The plugin is a binary KWin module: it loads into the exact KWin version it was
 # compiled against and no other, and KWin refuses everything else with no reason
@@ -10,9 +10,9 @@
 # pinned to whatever KWin that distribution ships; the version is read off the
 # built system rather than declared, because the point is to cover what users
 # actually run, not what we wish they ran. Synara picks a build by exact KWin
-# version and architecture at install time and falls back to building from source
-# when there is no match - so a distribution missing from this matrix costs a user
-# a local build, not the feature.
+# version, architecture, and exact distro release at install time. It falls back
+# to building from source when there is no match, so a distribution missing from
+# this matrix costs a user a local build, not the feature.
 #
 # The artifacts land in `apps/server/native/computer-use-kwin/prebuilt/` in a
 # packaged build, next to the `manifest.json` the assemble job writes.
@@ -48,7 +48,9 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/kwin-plugin-prebuilds.yml"
       - "apps/server/native/computer-use-kwin/**"
+      - "scripts/assemble-kwin-plugin-prebuilds.mjs"
   # KWin moves on the distributions' schedule, not ours, so a monthly rebuild
   # keeps the matrix honest between releases.
   schedule:
@@ -238,6 +240,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout the assembly script
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref }}
+
       - name: Download every build
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
@@ -249,70 +256,16 @@ jobs:
 
       - name: Write manifest.json
         shell: bash
-        # Checksums are computed here, over the bytes that will actually ship, so
-        # the runtime check verifies the same file this job produced rather than
-        # a claim made upstream of it. A duplicate (kwinVersion, arch) is a real
-        # ambiguity - two distributions shipping the same KWin - and the first
-        # wins, deterministically, by sorted build id.
-        #
-        # Coverage is judged against the build matrix, over the entries that
-        # arrived rather than the manifest rows that survived deduplication:
-        # two distributions shipping the same KWin both built successfully. An
-        # empty manifest always fails - it means the wiring broke, not that a
-        # distribution drifted - and a partial one is a warning on a scheduled
-        # run but an error under `strict`, because a release that ships a gap
-        # ships it to everyone until the next release.
+        # Checksums cover the bytes that ship. The script keeps builds distinct
+        # by distro, exact KWin, and architecture, then measures coverage from
+        # the retained manifest rows. A true duplicate selector fails instead
+        # of silently choosing one. Empty output always fails; partial output is
+        # a warning on scheduled runs and an error for strict release runs.
         env:
           STRICT: ${{ inputs.strict }}
         run: |
           set -euo pipefail
-          mkdir -p prebuilt
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, shutil, sys
-
-          # Mirrors the build matrix above; a distribution added there must be
-          # added here for coverage to guard it.
-          expected = [
-              ("fedora-43", "x64"), ("fedora-43", "arm64"),
-              ("fedora-44", "x64"), ("fedora-44", "arm64"),
-              ("debian-trixie", "x64"), ("debian-trixie", "arm64"),
-              ("ubuntu-2604", "x64"), ("ubuntu-2604", "arm64"),
-              ("opensuse-tumbleweed", "x64"), ("opensuse-tumbleweed", "arm64"),
-              ("arch", "x64"),
-          ]
-
-          source = pathlib.Path("downloaded")
-          out = pathlib.Path("prebuilt")
-          builds, seen, arrived = [], set(), set()
-          for entry in sorted(source.glob("*.so.json")):
-              meta = json.loads(entry.read_text())
-              key = (meta["kwinVersion"], meta["arch"])
-              binary = source / meta["file"]
-              if binary.is_file():
-                  arrived.add((meta["builtOn"], meta["arch"]))
-              if key in seen or not binary.is_file():
-                  print(f"skipping {meta['file']}: duplicate or missing")
-                  continue
-              seen.add(key)
-              meta["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
-              shutil.copy2(binary, out / meta["file"])
-              builds.append(meta)
-
-          (out / "manifest.json").write_text(json.dumps({"builds": builds}, indent=2) + "\n")
-          print(f"{len(builds)} build(s) in the manifest")
-
-          if not builds:
-              print("::error::No KWin plugin builds arrived at all; the release would ship an empty prebuilt/")
-              sys.exit(1)
-          strict = os.environ.get("STRICT") == "true"
-          missing = [pair for pair in expected if pair not in arrived]
-          for distro, arch in missing:
-              kind = "error" if strict else "warning"
-              print(f"::{kind}::No KWin plugin build from {distro} ({arch}); its KWin version may be uncovered")
-          if strict and missing:
-              sys.exit(1)
-          PY
-          cat prebuilt/manifest.json
+          node scripts/assemble-kwin-plugin-prebuilds.mjs downloaded prebuilt
 
       - name: Upload the drop-in directory
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

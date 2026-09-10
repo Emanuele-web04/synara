@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   commandOnPath,
   installSystemPackages,
+  installClipboardSystemPackage,
   planSystemPackageInstall,
   type PrivilegedRunner,
   type SystemPackagePlan,
@@ -35,6 +36,7 @@ describe("planSystemPackageInstall", () => {
       expect(plan, manager).toBeDefined();
       expect(plan!.packages.join(" "), manager).toMatch(/kwin/);
       expect(plan!.packages, manager).toContain("cmake");
+      expect(plan!.packages, manager).toContain("wl-clipboard");
       expect(plan!.packages, manager).toContain("extra-cmake-modules");
       expect(plan!.packages, manager).toContain("make");
       // The build script configures CMake with `-G Ninja` and refuses to start
@@ -137,5 +139,35 @@ describe("commandOnPath", () => {
 
   it("answers no with no PATH at all", () => {
     expect(commandOnPath("kwin_wayland", {}, () => true)).toBe(false);
+  });
+});
+
+describe("installClipboardSystemPackage", () => {
+  it("installs only clipboard utilities on an existing host desktop", async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    await installClipboardSystemPackage(
+      () => planSystemPackageInstall((command) => command === "apt-get"),
+      async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "" };
+      },
+    );
+    expect(calls).toEqual([
+      {
+        command: "env",
+        args: ["DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "wl-clipboard"],
+      },
+    ]);
+  });
+
+  it("offers manual setup when no package manager is recognized", async () => {
+    await expect(
+      installClipboardSystemPackage(
+        () => undefined,
+        async () => {
+          throw new Error("must not install");
+        },
+      ),
+    ).rejects.toThrow("Install wl-clipboard with your distribution's package manager");
   });
 });

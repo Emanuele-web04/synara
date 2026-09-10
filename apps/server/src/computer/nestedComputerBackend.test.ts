@@ -85,8 +85,11 @@ function makeHarness(
   options: {
     readonly mode?: "window" | "virtual";
     readonly platform?: string;
+    readonly linuxDistribution?: NestedComputerBackendOptions["linuxDistribution"];
+    readonly runningKwinVersion?: NestedComputerBackendOptions["runningKwinVersion"];
     readonly hostEnv?: NodeJS.ProcessEnv;
     readonly kwinInstalled?: boolean;
+    readonly clipboardInstalled?: boolean;
     readonly pluginInstalled?: boolean;
     readonly buildToolingPresent?: boolean;
     readonly prebuiltRoot?: string | undefined;
@@ -108,7 +111,10 @@ function makeHarness(
   const installedPlans: SystemPackagePlan[] = [];
   const pluginProvisions: number[] = [];
   const events: ComputerBackendEvent[] = [];
-  const state = { installedPlugins: options.pluginInstalled === false ? [] : [PLUGIN_ID] };
+  const state = {
+    installedPlugins: options.pluginInstalled === false ? [] : [PLUGIN_ID],
+    clipboardInstalled: options.clipboardInstalled ?? true,
+  };
 
   const startSession =
     options.startSession ??
@@ -142,6 +148,8 @@ function makeHarness(
     ...(options.atspiMode !== undefined ? { atspiMode: options.atspiMode } : {}),
     ...(options.createAtspiClient ? { createAtspiClient: options.createAtspiClient } : {}),
     platform: options.platform ?? "linux",
+    linuxDistribution: options.linuxDistribution ?? (() => ({ id: "arch" })),
+    runningKwinVersion: options.runningKwinVersion ?? (async () => "6.7.3"),
     hostEnv: options.hostEnv ?? { WAYLAND_DISPLAY: "wayland-0", PATH: "/usr/bin" },
     startSession,
     connectDbus: async () => {
@@ -149,7 +157,10 @@ function makeHarness(
       dbusHandles.push(handle);
       return handle.dbus;
     },
-    hasCommand: (command) => (command === "kwin_wayland" ? (options.kwinInstalled ?? true) : false),
+    hasCommand: (command) =>
+      command === "kwin_wayland"
+        ? (options.kwinInstalled ?? true)
+        : (command === "wl-copy" || command === "wl-paste") && state.clipboardInstalled,
     installedPluginPresent: () => state.installedPlugins.length > 0,
     installedPluginIds: async () => state.installedPlugins,
     buildToolingPresent: () => options.buildToolingPresent ?? true,
@@ -160,6 +171,7 @@ function makeHarness(
       options.installPackages ??
       (async (plan) => {
         installedPlans.push(plan);
+        state.clipboardInstalled = true;
         return `Installed ${plan.packages.join(", ")} with ${plan.manager}.`;
       }),
     provisionPlugin: async () => {
@@ -299,6 +311,8 @@ describe("lazy session boot", () => {
     const failing = new NestedComputerBackend({
       mode: "window",
       platform: "linux",
+      linuxDistribution: () => ({ id: "arch" }),
+      runningKwinVersion: async () => "6.7.3",
       hostEnv: { WAYLAND_DISPLAY: "wayland-0", PATH: "/usr/bin" },
       startSession: async () => {
         throw new Error("must not boot");
@@ -319,6 +333,59 @@ describe("lazy session boot", () => {
 });
 
 describe("provision", () => {
+  it("refuses Ubuntu 24.04 in the probe, setup and first use without side effects", async () => {
+    const harness = makeHarness({
+      linuxDistribution: () => ({ id: "ubuntu", versionId: "24.04" }),
+      kwinInstalled: false,
+      pluginInstalled: false,
+    });
+    await expect(harness.backend.probeAvailability()).resolves.toMatchObject({
+      kind: "backend-unavailable",
+      message: expect.stringContaining("Ubuntu 24.04 ships KWin 5"),
+    });
+    await expect(harness.backend.provision()).rejects.toThrow("Ubuntu 24.04 ships KWin 5");
+    await expect(harness.backend.availability()).resolves.toMatchObject({
+      kind: "backend-unavailable",
+    });
+    expect(harness.backend.capabilities().input).toBe(false);
+    expect(harness.installedPlans).toHaveLength(0);
+    expect(harness.pluginProvisions).toHaveLength(0);
+    expect(harness.sessionStarts).toHaveLength(0);
+    await harness.backend.dispose();
+  });
+
+  it("refuses an existing KWin 5 on any distro before privileged setup", async () => {
+    const harness = makeHarness({
+      runningKwinVersion: async () => "5.27.11",
+      buildToolingPresent: false,
+    });
+    await expect(harness.backend.provision()).rejects.toThrow("KWin 5.27.11 is unsupported");
+    expect(harness.installedPlans).toHaveLength(0);
+    expect(harness.pluginProvisions).toHaveLength(0);
+    expect(harness.sessionStarts).toHaveLength(0);
+    await harness.backend.dispose();
+  });
+
+  it("installs missing clipboard tools even with a usable compositor and plugin", async () => {
+    const harness = makeHarness({ clipboardInstalled: false, verifiedPrebuilt: true });
+    expect(harness.backend.capabilities().clipboard).toBe(false);
+    await harness.backend.provision();
+    expect(harness.installedPlans).toHaveLength(1);
+    expect(harness.backend.capabilities().clipboard).toBe(true);
+    await harness.backend.dispose();
+  });
+
+  it("does not report successful setup when clipboard utilities are still missing", async () => {
+    const harness = makeHarness({
+      clipboardInstalled: false,
+      installPackages: async () => "Installed",
+    });
+    await expect(harness.backend.provision()).rejects.toThrow("Clipboard setup is incomplete");
+    expect(harness.pluginProvisions).toHaveLength(0);
+    expect(harness.sessionStarts).toHaveLength(0);
+    await harness.backend.dispose();
+  });
+
   it("installs packages, provisions the plugin, and boots, in that order", async () => {
     const order: string[] = [];
     const harness = makeHarness({
@@ -430,14 +497,22 @@ describe("provision", () => {
   it("replaces a session that is alive but broken only on another explicit Set up", async () => {
     const sessions: string[] = [];
     const disposed: string[] = [];
+    const installPackages = vi.fn(async () => {
+      throw new Error("Unexpected system installation");
+    });
     const deadBuses = new Set<string>();
     const handles = new Map<string, ReturnType<typeof fakeDbusHandle>>();
     const backend = new NestedComputerBackend({
       mode: "window",
       platform: "linux",
+      linuxDistribution: () => ({ id: "arch" }),
+      runningKwinVersion: async () => "6.7.3",
       hostEnv: { WAYLAND_DISPLAY: "wayland-0", PATH: "/usr/bin" },
       hasCommand: () => true,
       buildToolingPresent: () => true,
+      verifiedPrebuiltAvailable: async () => false,
+      planPackages: () => PACMAN_PLAN,
+      installPackages,
       installedPluginPresent: () => true,
       installedPluginIds: async () => [PLUGIN_ID],
       provisionPlugin: async () => ({
@@ -486,6 +561,7 @@ describe("provision", () => {
     const summary = await backend.provision();
     expect(sessions).toHaveLength(2);
     expect(disposed).toContain(sessions[0]);
+    expect(installPackages).not.toHaveBeenCalled();
     expect(summary).toContain("The agent's isolated desktop is running.");
     await backend.dispose();
   });

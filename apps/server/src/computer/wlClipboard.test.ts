@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { spawnClipboardCommand, type ClipboardCommandSpec } from "./wlClipboard.ts";
+import {
+  wlClipboardToolsPresent,
+  spawnClipboardCommand,
+  type ClipboardCommandSpec,
+} from "./wlClipboard.ts";
 
 /**
  * The process primitive is exercised against real children, because everything
@@ -72,5 +76,20 @@ describe("spawnClipboardCommand", () => {
     await expect(
       spawnClipboardCommand({ command: "synara-absent-clipboard-binary", args: [] }),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("wlClipboardToolsPresent", () => {
+  it.each<string[]>([[], ["wl-copy"], ["wl-paste"]])(
+    "requires both utilities: %j",
+    (...commands) => {
+      expect(wlClipboardToolsPresent((command) => commands.includes(command))).toBe(false);
+    },
+  );
+
+  it("recognizes both directions", () => {
+    expect(wlClipboardToolsPresent((command) => ["wl-copy", "wl-paste"].includes(command))).toBe(
+      true,
+    );
   });
 });

@@ -30,8 +30,15 @@ import { chmod, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { verifyPrebuilt } from "./provisioning/prebuiltVerification.ts";
 import { withProvisioningFileLock } from "./provisioning/fileLock.ts";
+import {
+  detectLinuxDistribution,
+  linuxDistributionIdentity,
+  prebuiltBuiltOnForDistribution,
+  type KWinPrebuiltBuiltOn,
+  type LinuxDistribution,
+} from "./provisioning/linuxDistribution.ts";
+import { verifyPrebuilt } from "./provisioning/prebuiltVerification.ts";
 
 /**
  * The env script's name, which is also the uninstall instruction: this file and
@@ -151,6 +158,8 @@ export interface PrebuiltBuild {
   /** The exact KWin version this was compiled against. */
   readonly kwinVersion: string;
   readonly arch: string;
+  /** Exact distro release used to compile this binary. */
+  readonly builtOn: KWinPrebuiltBuiltOn;
   /** Path relative to the prebuilt root. */
   readonly file: string;
   readonly sha256: string;
@@ -161,7 +170,7 @@ export interface PrebuiltManifest {
 }
 
 /**
- * Exact match on both fields, never nearest.
+ * Exact match on KWin, architecture, and distro build, never nearest.
  *
  * A KWin plugin loads into the version it was built against and no other, and
  * KWin's refusal carries no reason at all - it answers `false` and logs
@@ -173,8 +182,13 @@ export function selectPrebuilt(
   manifest: PrebuiltManifest,
   kwinVersion: string,
   arch: string,
+  builtOn: KWinPrebuiltBuiltOn | undefined,
 ): PrebuiltBuild | undefined {
-  return manifest.builds.find((build) => build.kwinVersion === kwinVersion && build.arch === arch);
+  if (!builtOn) return undefined;
+  return manifest.builds.find(
+    (build) =>
+      build.kwinVersion === kwinVersion && build.arch === arch && build.builtOn === builtOn,
+  );
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -194,22 +208,42 @@ export async function readPrebuiltManifest(path: string): Promise<PrebuiltManife
   } catch {
     return undefined;
   }
+  if (parsed === null || typeof parsed !== "object") return undefined;
   const builds = (parsed as { builds?: unknown }).builds;
   if (!Array.isArray(builds)) return undefined;
   const accepted = builds.flatMap((entry) => {
     const build = entry as Partial<PrebuiltBuild> | null;
     if (!build || typeof build !== "object") return [];
-    const { kwinVersion, arch, file, sha256 } = build;
-    if (!isText(kwinVersion) || !isText(arch) || !isText(file) || !isText(sha256)) return [];
+    const { kwinVersion, arch, builtOn, file, sha256 } = build;
+    if (
+      !isText(kwinVersion) ||
+      !isText(arch) ||
+      !isPrebuiltBuiltOn(builtOn) ||
+      !isText(file) ||
+      !isText(sha256)
+    ) {
+      return [];
+    }
     if (file.includes("/") || file.includes("\\") || file === "." || file === "..") return [];
     if (!SHA256_HEX.test(sha256)) return [];
-    return [{ kwinVersion, arch, file, sha256 } satisfies PrebuiltBuild];
+    return [{ kwinVersion, arch, builtOn, file, sha256 } satisfies PrebuiltBuild];
   });
   return accepted.length > 0 ? { builds: accepted } : undefined;
 }
 
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
+}
+
+function isPrebuiltBuiltOn(value: unknown): value is KWinPrebuiltBuiltOn {
+  return (
+    value === "fedora-43" ||
+    value === "fedora-44" ||
+    value === "debian-trixie" ||
+    value === "ubuntu-2604" ||
+    value === "opensuse-tumbleweed" ||
+    value === "arch"
+  );
 }
 
 /**
@@ -286,6 +320,7 @@ export async function writeInstallStamp(
     readonly pluginId: string;
     readonly pluginPath: string;
     readonly kwinVersion: string | undefined;
+    readonly linuxDistribution: LinuxDistribution | undefined;
     readonly installedAt: string;
   },
 ): Promise<void> {
@@ -301,6 +336,7 @@ export async function writeInstallStamp(
         `installed_at=${record.installedAt}`,
         `plugin_path=${record.pluginPath}`,
         `kwin_version=${record.kwinVersion ?? ""}`,
+        `linux_distribution=${linuxDistributionIdentity(record.linuxDistribution) ?? ""}`,
         "",
       ].join("\n"),
     );
@@ -340,6 +376,8 @@ export interface ProvisionDependencies {
   /** The KWin the user is actually running, or undefined if it cannot be read. */
   readonly kwinVersion: () => Promise<string | undefined>;
   readonly arch: string;
+  /** Host os-release identity. Defaults to the cached system detector. */
+  readonly linuxDistribution?: () => LinuxDistribution | undefined;
   /** Where the shipped binaries live, or undefined when the app ships none. */
   readonly prebuiltRoot?: string | undefined;
   /**
@@ -348,7 +386,7 @@ export interface ProvisionDependencies {
    * KWin development headers are missing.
    */
   readonly buildFromSource: () => Promise<string>;
-  /** Whether an install for this exact KWin version is already in place. */
+  /** Whether an install for this exact KWin and distro identity is in place. */
   readonly isCurrent: () => Promise<boolean>;
   /**
    * Reinstall even when `isCurrent` says nothing needs doing. The backend asks
@@ -412,10 +450,15 @@ async function provisionKWinPluginLocked(deps: ProvisionDependencies): Promise<P
   }
 
   const version = await deps.kwinVersion();
+  const distribution = deps.linuxDistribution
+    ? deps.linuxDistribution()
+    : detectLinuxDistribution();
+  const builtOn = prebuiltBuiltOnForDistribution(distribution);
   const manifest = deps.prebuiltRoot
     ? await readPrebuiltManifest(join(deps.prebuiltRoot, "manifest.json"))
     : undefined;
-  const prebuilt = manifest && version ? selectPrebuilt(manifest, version, deps.arch) : undefined;
+  const prebuilt =
+    manifest && version ? selectPrebuilt(manifest, version, deps.arch, builtOn) : undefined;
 
   let source: string;
   let action: ProvisionAction;
@@ -446,6 +489,7 @@ async function provisionKWinPluginLocked(deps: ProvisionDependencies): Promise<P
     pluginId,
     pluginPath,
     kwinVersion: version,
+    linuxDistribution: distribution,
     installedAt: (deps.now?.() ?? new Date()).toISOString(),
   });
 

@@ -15,6 +15,8 @@
  */
 import { spawn } from "node:child_process";
 
+import { commandOnPath } from "./provisioning/systemPackages.ts";
+
 import { ComputerBackendError, MAX_COMPUTER_CLIPBOARD_BYTES } from "./ComputerBackend.ts";
 
 /** Enough stderr to quote a wl-clipboard diagnostic, never enough to hold a payload. */
@@ -28,6 +30,15 @@ const CLIPBOARD_TIMEOUT_MS = 5_000;
 const WL_COPY = "wl-copy";
 const WL_PASTE = "wl-paste";
 const WL_CLIPBOARD_PACKAGE = "wl-clipboard";
+export const CLIPBOARD_SETUP_INCOMPLETE_MESSAGE =
+  "Clipboard setup is incomplete. Install wl-clipboard and make sure wl-copy and wl-paste are on Synara's PATH, then click Set up again.";
+
+/** Both directions must be installed before advertising clipboard support. */
+export function wlClipboardToolsPresent(
+  hasCommand: (command: string) => boolean = commandOnPath,
+): boolean {
+  return hasCommand(WL_COPY) && hasCommand(WL_PASTE);
+}
 
 /**
  * Generic type name: wl-paste picks any offered `text/*` representation, and

@@ -99,7 +99,9 @@ describe("connectPlugin owner pinning", () => {
             GetNameOwner: (name: string) => {
               if (options.owner === undefined) {
                 return Promise.reject(
-                  new Error("org.freedesktop.DBus.Error.NameHasNoOwner: no owner"),
+                  Object.assign(new Error("Could not get owner of name: no such name"), {
+                    type: "org.freedesktop.DBus.Error.NameHasNoOwner",
+                  }),
                 );
               }
               return Promise.resolve(name === COMPUTER_SERVICE ? options.owner : ":0.0");

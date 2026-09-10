@@ -340,6 +340,14 @@ export async function waitForSessionBusName(options: {
 }
 
 function isUnownedNameError(error: unknown): boolean {
+  // dbus-next keeps the D-Bus error name in `type`; `message` contains only
+  // the human-readable text and need not mention NameHasNoOwner at all.
+  const type = (error as { type?: unknown } | null)?.type;
+  if (
+    type === "org.freedesktop.DBus.Error.NameHasNoOwner" ||
+    type === "org.freedesktop.DBus.Error.ServiceUnknown"
+  )
+    return true;
   const text = error instanceof Error ? error.message : String(error);
   return text.includes("NameHasNoOwner") || text.includes("ServiceUnknown");
 }

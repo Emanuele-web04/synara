@@ -48,13 +48,14 @@ const PLANS: readonly SystemPackagePlan[] = [
   {
     manager: "pacman",
     args: ["-S", "--needed", "--noconfirm"],
-    packages: ["kwin", "cmake", "extra-cmake-modules", "gcc", "make", "ninja"],
+    packages: ["kwin", "wl-clipboard", "cmake", "extra-cmake-modules", "gcc", "make", "ninja"],
   },
   {
     manager: "apt-get",
     args: ["install", "-y"],
     packages: [
       "kwin-wayland",
+      "wl-clipboard",
       "kwin-dev",
       "cmake",
       "extra-cmake-modules",
@@ -68,6 +69,7 @@ const PLANS: readonly SystemPackagePlan[] = [
     args: ["install", "-y"],
     packages: [
       "kwin-wayland",
+      "wl-clipboard",
       "kwin-devel",
       "cmake",
       "extra-cmake-modules",
@@ -79,7 +81,16 @@ const PLANS: readonly SystemPackagePlan[] = [
   {
     manager: "zypper",
     args: ["--non-interactive", "install"],
-    packages: ["kwin6", "kwin6-devel", "cmake", "extra-cmake-modules", "gcc-c++", "make", "ninja"],
+    packages: [
+      "kwin6",
+      "kwin6-devel",
+      "wl-clipboard",
+      "cmake",
+      "extra-cmake-modules",
+      "gcc-c++",
+      "make",
+      "ninja",
+    ],
   },
 ];
 
@@ -113,6 +124,20 @@ export function planSystemPackageInstall(
   hasCommand: (command: string) => boolean = (command) => commandOnPath(command),
 ): SystemPackagePlan | undefined {
   return PLANS.find((plan) => hasCommand(plan.manager));
+}
+
+/** Explicit setup for a host compositor needs clipboard tools, not another compositor. */
+export async function installClipboardSystemPackage(
+  planPackages: () => SystemPackagePlan | undefined = planSystemPackageInstall,
+  run: PrivilegedRunner = pkexecRunner,
+): Promise<string> {
+  const plan = planPackages();
+  if (!plan) {
+    throw new ComputerBackendError(
+      "Install wl-clipboard with your distribution's package manager, then run Set up again.",
+    );
+  }
+  return installSystemPackages({ ...plan, packages: ["wl-clipboard"] }, run);
 }
 
 export type PrivilegedRunner = (
