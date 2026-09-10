@@ -5,10 +5,14 @@ import { describe, expect, it } from "vitest";
 import {
   cleanupSucceededUnlessInterrupted,
   detachThreadDevice,
+  detachThreadComputer,
   isThreadCurrentlyArchived,
   isThreadLifecycleCleanupEvent,
 } from "./ThreadDeletionReactor";
 import { DeviceService } from "../../device/Services/DeviceService";
+import { ComputerService } from "../../computer/Services/ComputerService";
+import { ComputerManager } from "../../computer/ComputerManager";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend";
 import { DeviceManager } from "../../device/DeviceManager";
 import { FakeDeviceBackend } from "../../device/FakeDeviceBackend";
 
@@ -104,4 +108,25 @@ describe("detachThreadDevice", () => {
     expect((await manager.getThreadState(threadId)).attachedDeviceUdid).toBeNull();
     expect(backend.hasStream("FAKE-0001")).toBe(false);
   });
+});
+
+it("deletion releases computer state and the desktop lease", async () => {
+  const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+  try {
+    const threadId = ThreadId.makeUnsafe("deleted-owner");
+    await manager.getThreadState(threadId);
+    await manager.click(threadId, { x: 10, y: 10 });
+    await Effect.runPromise(
+      detachThreadComputer(threadId).pipe(
+        Effect.provideService(ComputerService, {
+          supported: true,
+          availability: { kind: "available" },
+          manager,
+        }),
+      ),
+    );
+    await expect(manager.click("next-owner", { x: 10, y: 10 })).resolves.toBeDefined();
+  } finally {
+    await manager.dispose();
+  }
 });
