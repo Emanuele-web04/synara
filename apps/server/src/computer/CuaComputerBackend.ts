@@ -14,8 +14,13 @@ import type {
   ComputerPermission,
 } from "@synara/contracts";
 import {
+  computerPermissionSetupMessage,
+  listComputerPermissions,
+} from "@synara/shared/computerPermissions";
+import {
   cuaRequest,
   CUA_HOST_SOCKET_ENV,
+  CUA_SETUP_TIMEOUT_MS,
   CuaTransportError,
   type CuaReply,
   type CuaToolResult,
@@ -205,7 +210,11 @@ export class CuaComputerBackend implements ComputerBackend {
             : {}),
           capability: this.capability,
         },
-        { signal: desktopOperationSignal(), mutation, timeoutMs: 35_000 },
+        {
+          signal: desktopOperationSignal(),
+          mutation,
+          timeoutMs: request.method === "setup" ? CUA_SETUP_TIMEOUT_MS : 35_000,
+        },
       );
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
@@ -317,10 +326,16 @@ export class CuaComputerBackend implements ComputerBackend {
     return this.permissions;
   }
   async provision(): Promise<string> {
+    // Let a pre-setup status read settle before invalidating it. Its missing
+    // grants must not win the refresh after the user requests permissions.
+    await this.snapshot?.catch(() => undefined);
     await this.host({ method: "setup" });
     this.snapshotAt = 0;
-    await this.refresh();
-    return "Enable Accessibility and Screen Recording for this Synara app in System Settings, then fully quit and reopen Synara. The bundled Cua driver needs no Xcode installation.";
+    this.captureFailed = false;
+    await this.refresh(true);
+    return this.permissions.length
+      ? `Allow ${listComputerPermissions(this.permissions)} for this copy of Synara in System Settings. Return here to check again; if macOS asks you to quit and reopen the app, do so.`
+      : "Computer permissions are ready. Send a message to continue; no action is retried automatically.";
   }
   private refresh(force = false): Promise<void> {
     if (this.snapshot) return this.snapshot;
@@ -328,9 +343,13 @@ export class CuaComputerBackend implements ComputerBackend {
     this.snapshot = (async () => {
       const permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+      const previousPermissions = this.permissions;
       this.permissions = [];
       if (permission.accessibility !== true) this.permissions.push("accessibility");
       if (permission.screen_recording !== true) this.permissions.push("screenRecording");
+      if (previousPermissions.includes("screenRecording") && permission.screen_recording === true)
+        this.captureFailed = false;
+      const bundleId = text(record(permission.source).host_bundle_id, 256);
       this.setHealth({
         ...this.currentHealth,
         status: this.captureFailed ? "unavailable" : "connected",
@@ -342,8 +361,12 @@ export class CuaComputerBackend implements ComputerBackend {
             kind: "permission-required",
             missing: this.permissions,
             buildSignature: "unknown",
-            message:
-              "Enable Accessibility and Screen Recording for Synara in System Settings, then relaunch Synara.",
+            ...(bundleId ? { bundleId } : {}),
+            message: computerPermissionSetupMessage(
+              this.permissions,
+              "unknown",
+              bundleId || undefined,
+            ),
           }
         : { kind: "available", backend: "cua" };
       if (!this.permissions.length) {

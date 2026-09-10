@@ -7,18 +7,10 @@ let emitter = NDJSONEmitter()
 do {
     let options = try AppSnapOptions.parse(Array(CommandLine.arguments.dropFirst()))
     switch options.mode {
-    case .checkPermissions:
-        let permissions = preflightAppSnapPermissions()
-        emitter.emitPermissions(
-            inputMonitoring: permissions.inputMonitoring,
-            screenRecording: permissions.screenRecording
-        )
-    case .requestPermissions:
-        let permissions = requestAppSnapPermissions()
-        emitter.emitPermissions(
-            inputMonitoring: permissions.inputMonitoring,
-            screenRecording: permissions.screenRecording
-        )
+    case let .checkPermissions(selectedPermissions):
+        emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
+    case let .requestPermissions(selectedPermissions):
+        emitter.emitPermissions(requestAppSnapPermissions(selectedPermissions))
     case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)

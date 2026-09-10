@@ -37,6 +37,10 @@ Desktop backend shutdown additionally suspends host admission. Requests arriving
 
 macOS attributes permissions through the actual process responsibility chain. `CUA_DRIVER_HOST_BUNDLE_ID` describes the host but cannot impersonate it. The standalone server reports that the macOS desktop app is required when no authenticated GUI host exists.
 
+AppSnap and Computer share the desktop-owned `DesktopPermissionService` and AppSnap's native permission helper. Computer selects Accessibility and Screen Recording; AppSnap retains Input Monitoring and Screen Recording. Passive checks never request grants. Explicit setup requests only missing selected grants, checks again in a fresh child process, and opens the first remaining Settings pane. This avoids retaining a negative macOS preflight result in the embedded Cua process. A detected grant change retires that process through its existing cleanup barrier and requires a fresh model observation before input resumes.
+
+Both features refresh visible setup state on return from System Settings. Requests are serialized, deduplicated and bounded, including time in the permission queue. An unrelated permission dialog cannot hold Computer's Stop or disconnect cleanup. See the [permission flow fix and verification](permission-flow-fix.md).
+
 ## Authority and approvals
 
 - Computer control is disabled by default for new conversations. Enabling it provisions only supported provider sessions. The effective provider capability is removed when control is disabled or the provider changes.
@@ -91,7 +95,7 @@ node apps/desktop/scripts/provision-cua-driver.mjs --artifact-dir /path/to/artif
 
 The script archives the exact source commit, verifies and applies the patch, and builds with the pinned Rust toolchain and Cargo lockfile. Rust and Apple build tools are build-time dependencies only. Artifact reuse verifies identity, patch, binary checksum and Mach-O architectures; desktop packaging accepts the same directory through `SYNARA_CUA_ARTIFACT_DIR`. Packaging places the executable outside ASAR and includes it in signing. The recorded binary checksum precedes app signing. Production signing/notarization was not performed here. See [native build details](../../apps/desktop/patches/cua-driver/README.md).
 
-Launch the actual Synara GUI bundle. In Settings → Computer use, select Set up and grant Accessibility and Screen Recording to that bundle, then fully quit and relaunch it. The driver needs no separate permission entry and the installed feature does not require Xcode. An ad-hoc rebuild changes the code identity: stale TCC grants can require removing/re-adding that exact test bundle. Do not reset unrelated applications' grants.
+Launch the actual Synara GUI bundle. In Settings → Computer use, select Set up and grant Accessibility and Screen Recording to that bundle, then return to Synara to refresh its status. Quit and reopen if macOS requests it. The driver needs no separate permission entry and the installed feature does not require Xcode. An ad-hoc rebuild can change the code identity: stale TCC grants can require removing/re-adding that exact test bundle. The development launcher signs its generated copy after customization and preserves that signature on unchanged launches. Do not reset unrelated applications' grants.
 
 ## Reproducible fixtures
 

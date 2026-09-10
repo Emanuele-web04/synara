@@ -42,6 +42,14 @@ describe("ComputerAvailability permission-required", () => {
     expect(decodes({ kind: "backend-unavailable", message: "No helper." })).toBe(true);
   });
 
+  it("preserves the responsible app in live permission status across the wire", () => {
+    const state = { ...PERMISSION_REQUIRED, bundleId: "com.emanueledipietro.synara.dev" };
+    const decoded = Schema.decodeUnknownSync(ComputerAvailability)(state);
+    expect(Schema.encodeUnknownSync(ComputerAvailability)(decoded)).toEqual(state);
+    expect(decodes({ ...state, bundleId: "" })).toBe(false);
+    expect(decodes({ ...state, bundleId: "x".repeat(257) })).toBe(false);
+  });
+
   it("refuses a permission state that names no grant", () => {
     // An empty list would render as "Computer control needs " on the card, and
     // would mean the backend reported a permission problem it cannot name — a

@@ -14,7 +14,7 @@
 // the same helper.
 
 import type { ComputerPermission, ComputerProvisionResult } from "@synara/contracts";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "~/components/ui/toast";
 import {
@@ -25,6 +25,8 @@ import {
   computerProvisionStartToast,
 } from "~/lib/computerProvisioning";
 import { provisionComputer, serverQueryKeys } from "~/lib/serverReactQuery";
+
+const COMPUTER_PROVISION_MUTATION_KEY = ["computer", "provision"] as const;
 
 export interface UseProvisionComputerResult {
   /** Starts a provision, or does nothing while one is already running. */
@@ -54,6 +56,7 @@ export function useProvisionComputer(options?: {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
+    mutationKey: COMPUTER_PROVISION_MUTATION_KEY,
     mutationFn: provisionComputer,
     onSuccess: (result) => {
       // The call already returns the refreshed status, so every surface reading
@@ -68,12 +71,13 @@ export function useProvisionComputer(options?: {
     },
   });
 
-  const { isPending, mutate } = mutation;
+  const isPending = useIsMutating({ mutationKey: COMPUTER_PROVISION_MUTATION_KEY }) > 0;
+  const { mutate } = mutation;
   const provision = () => {
     // React Query happily runs a second mutation over the first; a second
     // provision would re-enter the installer and re-arm the permission prompt
     // behind the dialog the user is already looking at.
-    if (isPending) return;
+    if (queryClient.isMutating({ mutationKey: COMPUTER_PROVISION_MUTATION_KEY }) > 0) return;
     if (notify) toastManager.add(computerProvisionStartToast(missing));
     mutate();
   };
@@ -83,6 +87,7 @@ export function useProvisionComputer(options?: {
     isPending,
     note: computerProvisionNote({
       isPending,
+      ...(missing ? { missing } : {}),
       error: mutation.error,
       result: mutation.data,
     }),

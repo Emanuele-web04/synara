@@ -6,6 +6,8 @@ export const CUA_NATIVE_REVISION = release.nativeRevision;
 export const CUA_DRIVER_SOURCE = release.source;
 export const CUA_DRIVER_ARCHIVE_SHA256 = release.sha256;
 export const CUA_HOST_SOCKET_ENV = "SYNARA_CUA_HOST_SOCKET";
+// Setup includes native input retirement and a bounded, user-facing permission request.
+export const CUA_SETUP_TIMEOUT_MS = 120_000;
 export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
 export type CuaEffect = "not-dispatched" | "dispatched-unknown" | "verified";
 export class CuaTransportError extends Error {

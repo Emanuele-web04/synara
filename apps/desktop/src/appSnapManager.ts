@@ -31,6 +31,8 @@ import {
   sameAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
 
+import { APP_SNAP_PERMISSIONS, DesktopPermissionService } from "./desktopPermissions";
+
 const MAX_PENDING_CAPTURES = PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
 const MAX_HELPER_STDERR_CHARS = 4_096;
 const MAX_PENDING_CAPTURE_METADATA_BYTES = 512 * 1024;
@@ -147,6 +149,7 @@ export interface DesktopAppSnapManagerOptions {
   onError: (error: DesktopAppSnapErrorEvent, focusApp: boolean) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
+  permissions?: Pick<DesktopPermissionService, "check" | "request">;
   shortcutRegistry?: {
     register: (accelerator: string, callback: () => void) => boolean;
     unregister: (accelerator: string) => void;
@@ -436,8 +439,8 @@ export class DesktopAppSnapManager {
   #watchOutputLines: Readline.Interface | null = null;
   #watchReconcilePromise: Promise<void> | null = null;
   #watchReconcileRequested = false;
-  #permissionProcess: AppSnapHelperProcess | null = null;
-  #permissionCommandQueue: Promise<void> = Promise.resolve();
+  readonly #permissions: Pick<DesktopPermissionService, "check" | "request">;
+  readonly #ownedPermissions: DesktopPermissionService | undefined;
   #disposed = false;
   #requestedCapture: { id: string; cancel: () => void } | null = null;
   #intentionalWatchStop = false;
@@ -456,6 +459,14 @@ export class DesktopAppSnapManager {
       now: options.now ?? (() => new Date()),
       spawn: options.spawn ?? ChildProcess.spawn,
     };
+    this.#ownedPermissions = options.permissions
+      ? undefined
+      : new DesktopPermissionService({
+          platform: options.platform,
+          helperPath: options.helperPath,
+          spawn: this.#options.spawn,
+        });
+    this.#permissions = options.permissions ?? this.#ownedPermissions!;
     this.#platform = desktopAppSnapPlatform(options.platform);
     this.#status = this.#platform === "macos" ? "disabled" : "unsupported";
     this.#message =
@@ -834,8 +845,9 @@ export class DesktopAppSnapManager {
     this.#requestedCapture?.cancel();
     this.#stopWatchProcess();
     this.#releaseShortcutReservation();
-    this.#permissionProcess?.kill("SIGTERM");
-    this.#permissionProcess = null;
+    void this.#ownedPermissions?.dispose().catch((error) => {
+      console.warn("[desktop-appsnap] Could not stop the permission helper", error);
+    });
     this.#pendingCaptures = [];
     this.#timedOutCaptureRequestIds.clear();
   }
@@ -1247,72 +1259,22 @@ export class DesktopAppSnapManager {
   async #runPermissionCommand(
     command: "--check-permissions" | "--request-permissions",
   ): Promise<boolean> {
-    const run = this.#permissionCommandQueue.then(() => this.#executePermissionCommand(command));
-    this.#permissionCommandQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await run;
-  }
-
-  async #executePermissionCommand(
-    command: "--check-permissions" | "--request-permissions",
-  ): Promise<boolean> {
     if (this.#disposed || this.#platform !== "macos") return false;
-    if (!FS.existsSync(this.#options.helperPath)) {
-      this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
+    try {
+      const state = await (command === "--check-permissions"
+        ? this.#permissions.check(APP_SNAP_PERMISSIONS)
+        : this.#permissions.request(APP_SNAP_PERMISSIONS));
+      if (this.#disposed) return false;
+      this.#inputMonitoringPermission = state.inputMonitoring;
+      this.#screenRecordingPermission = state.screenRecording;
+      this.#emitState();
+      return true;
+    } catch (error) {
+      if (!this.#disposed) {
+        this.#setState("error", error instanceof Error ? error.message : String(error));
+      }
       return false;
     }
-
-    return await new Promise<boolean>((resolve) => {
-      let child: AppSnapHelperProcess;
-      try {
-        child = this.#options.spawn(this.#options.helperPath, [command], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (error) {
-        this.#setState(
-          "error",
-          `Could not inspect AppSnap permissions: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        resolve(false);
-        return;
-      }
-      this.#permissionProcess = child;
-      let receivedPermissions = false;
-      let reportedError: string | null = null;
-      let spawnFailed = false;
-      this.#wireHelperOutput(child, (message) => {
-        if (message.type === "permissions") {
-          receivedPermissions = true;
-          this.#inputMonitoringPermission = message.inputMonitoring;
-          this.#screenRecordingPermission = message.screenRecording;
-          this.#emitState();
-        } else if (message.type === "error") {
-          reportedError = message.message;
-        }
-      });
-      child.once("error", (error) => {
-        spawnFailed = true;
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        this.#setState("error", `Could not inspect AppSnap permissions: ${error.message}`);
-        resolve(false);
-      });
-      child.once("close", () => {
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        if (this.#disposed) {
-          resolve(false);
-          return;
-        }
-        if (!receivedPermissions && !spawnFailed) {
-          this.#setState(
-            "error",
-            reportedError ?? "The AppSnap helper did not report its permission state.",
-          );
-        }
-        resolve(receivedPermissions);
-      });
-    });
   }
 
   #handleWatchMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
