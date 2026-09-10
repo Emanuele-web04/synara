@@ -417,6 +417,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const contentsRef = useRef<HTMLDivElement>(null);
+  const editAreaRef = useRef<HTMLTextAreaElement>(null);
+  const editGutterRef = useRef<HTMLDivElement>(null);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
@@ -664,6 +666,20 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       error: null,
     }));
   };
+
+  // The inline editor is a plain textarea, so its line-number gutter is a
+  // separate column that mirrors the textarea's vertical scroll position.
+  const syncEditGutterScroll = useCallback(() => {
+    const area = editAreaRef.current;
+    const gutter = editGutterRef.current;
+    if (area && gutter) {
+      gutter.scrollTop = area.scrollTop;
+    }
+  }, []);
+
+  useEffect(() => {
+    syncEditGutterScroll();
+  }, [syncEditGutterScroll, displayedFileContents, filePath]);
 
   const handleEditBufferSave = async () => {
     if (
@@ -1111,23 +1127,36 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ) : !hasFileContents ? (
         <FilePreviewLoadingState />
       ) : activeEditBuffer && editableDocument && !showMarkdownPreview ? (
-        <textarea
-          className="editor-file-editor"
-          aria-label={`Edit ${filePath}`}
-          aria-busy={activeEditBuffer.saving}
-          aria-invalid={activeEditBuffer.error ? "true" : undefined}
-          value={activeEditBuffer.contents}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          onChange={(event) => handleEditBufferChange(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-              event.preventDefault();
-              void handleEditBufferSave();
-            }
-          }}
-        />
+        <div className="editor-file-editor-wrap">
+          {lineCount > 0 && lineCount <= MAX_PLAIN_NUMBERED_LINES ? (
+            <div ref={editGutterRef} className="editor-file-editor__gutter" aria-hidden="true">
+              {Array.from({ length: lineCount }, (_, index) => (
+                <span key={index + 1} className="editor-file-editor__gutter-line">
+                  {index + 1}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <textarea
+            ref={editAreaRef}
+            className="editor-file-editor"
+            aria-label={`Edit ${filePath}`}
+            aria-busy={activeEditBuffer.saving}
+            aria-invalid={activeEditBuffer.error ? "true" : undefined}
+            value={activeEditBuffer.contents}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            onChange={(event) => handleEditBufferChange(event.currentTarget.value)}
+            onScroll={syncEditGutterScroll}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+                event.preventDefault();
+                void handleEditBufferSave();
+              }
+            }}
+          />
+        </div>
       ) : (
         <div
           ref={contentsRef}

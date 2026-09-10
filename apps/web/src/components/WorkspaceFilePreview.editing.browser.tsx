@@ -148,6 +148,37 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
   }
 });
 
+it("renders a line-number gutter next to the inline editor", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "one\ntwo\nthree\n" }));
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+
+    await vi.waitFor(() => {
+      const gutter = document.querySelector(".editor-file-editor__gutter");
+      if (!gutter) {
+        throw new Error("editor line-number gutter not found");
+      }
+      expect(gutter.getAttribute("aria-hidden")).toBe("true");
+      // "one\ntwo\nthree\n" splits into four rows (the trailing newline leaves
+      // the caret on an empty fourth line), matching the editor's line count.
+      expect(gutter.textContent).toBe("1234");
+    });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("keeps the buffer dirty and shows guarded write failures", async () => {
   const conflictMessage =
     "This file changed on disk after it was opened. Reload it before saving to avoid overwriting those changes.";
