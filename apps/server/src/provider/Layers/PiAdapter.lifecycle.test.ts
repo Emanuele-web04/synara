@@ -10,7 +10,12 @@ import type {
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, Stream } from "effect";
-import { ThreadId, type ProviderRuntimeEvent, type TurnId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  ThreadId,
+  type ProviderRuntimeEvent,
+  type TurnId,
+} from "@synara/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   AgentGatewayCredentials,
@@ -345,7 +350,9 @@ it("cleans input prompt formatting while preserving the user's answer", async ()
     const request = events.find((event) => event.type === "user-input.requested")!;
     expect(request.payload.questions[0]?.question).toBe("Expression [code]");
     await Effect.runPromise(
-      adapter.respondToUserInput(threadId, request.requestId!, { input: answer }),
+      adapter.respondToUserInput(threadId, ApprovalRequestId.makeUnsafe(request.requestId!), {
+        input: answer,
+      }),
     );
     await sent;
     await waitFor(() => expect(completions(events)).toHaveLength(1));
