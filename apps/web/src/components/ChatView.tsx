@@ -133,10 +133,7 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
-import {
-  getScrollContainerDistanceFromBottom,
-  isScrollContainerNearBottom,
-} from "../chat-scroll";
+import { getScrollContainerDistanceFromBottom, isScrollContainerNearBottom } from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
@@ -1243,17 +1240,14 @@ function nestedScrollableCanHandleKeyboardScroll(
   container: HTMLElement,
   upward: boolean,
 ): boolean {
-  let element: HTMLElement | null =
-    target instanceof HTMLElement ? target : target.parentElement;
+  let element: HTMLElement | null = target instanceof HTMLElement ? target : target.parentElement;
   while (element && element !== container) {
     const overflowY = window.getComputedStyle(element).overflowY;
     if (
       (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
       element.scrollHeight > element.clientHeight + 1
     ) {
-      return upward
-        ? element.scrollTop > 1
-        : getScrollContainerDistanceFromBottom(element) > 1;
+      return upward ? element.scrollTop > 1 : getScrollContainerDistanceFromBottom(element) > 1;
     }
     element = element.parentElement;
   }

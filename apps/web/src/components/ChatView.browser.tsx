@@ -3774,8 +3774,11 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
-        const { anchorIndex, anchorSelector, top: detachedTop } =
-          await waitForQuietReadingAnchor(container);
+        const {
+          anchorIndex,
+          anchorSelector,
+          top: detachedTop,
+        } = await waitForQuietReadingAnchor(container);
         const readAnchorTop = () =>
           container
             .querySelector(anchorSelector)!
