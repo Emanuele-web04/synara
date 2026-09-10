@@ -1,10 +1,19 @@
-import { EventId, ThreadId, TurnId, type ProviderRuntimeEvent } from "@synara/contracts";
+import {
+  EventId,
+  RuntimeTaskId,
+  ThreadId,
+  TurnId,
+  type ProviderRuntimeEvent,
+} from "@synara/contracts";
+import { Deferred, Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   compactProviderRuntimeEventForIngress,
+  isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES,
 } from "./providerRuntimeEventIngress.ts";
+import { makeBoundedCallbackIngress } from "./boundedCallbackIngress.ts";
 
 function runtimeDelta(rawPayload: unknown): ProviderRuntimeEvent {
   return {
@@ -28,6 +37,52 @@ afterEach(() => {
 });
 
 describe("provider runtime event ingress sizing", () => {
+  it("preserves task settlement and turn aborts under callback pressure", async () => {
+    const base = runtimeDelta({});
+    const taskId = RuntimeTaskId.makeUnsafe("memory-task");
+    const terminals: ProviderRuntimeEvent[] = [
+      { ...base, type: "turn.aborted", payload: { reason: "cancelled" } },
+      { ...base, type: "task.completed", payload: { taskId, status: "completed" } },
+      ...(["completed", "failed", "killed", "paused"] as const).map((status) => ({
+        ...base,
+        type: "task.updated" as const,
+        payload: { taskId, status },
+      })),
+    ];
+    for (const terminal of terminals) {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const started = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const processed: ProviderRuntimeEvent[] = [];
+            const ingress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
+              (event) =>
+                Effect.sync(() => processed.push(event)).pipe(
+                  Effect.andThen(Deferred.succeed(started, undefined)),
+                  Effect.andThen(Deferred.await(release)),
+                ),
+              {
+                capacity: 2,
+                maxBufferedBytes: 100,
+                terminalReserve: 1,
+                isTerminal: isTerminalProviderRuntimeEvent,
+                sizeOf: () => 1,
+              },
+            );
+            ingress.offer(base);
+            yield* Deferred.await(started);
+            expect(ingress.offer(base)).toBe("accepted");
+            expect(ingress.offer(base)).toBe("dropped");
+            expect(ingress.offer(terminal)).toBe("accepted");
+            yield* Deferred.succeed(release, undefined);
+            yield* ingress.stop;
+            expect(processed).toContain(terminal);
+          }),
+        ),
+      );
+    }
+  });
   it("measures a normal event once and carries its exact byte count", () => {
     const event = runtimeDelta({ delta: "hello" });
     const expectedBytes = Buffer.byteLength(JSON.stringify(event), "utf8");

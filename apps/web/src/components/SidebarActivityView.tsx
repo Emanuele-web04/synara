@@ -115,6 +115,7 @@ function ActivityThreadRow({
   pr,
   status,
   onOpen,
+  onOpenPullRequest,
   onSetSettled,
   onTogglePinned,
   onArchive,
@@ -131,6 +132,7 @@ function ActivityThreadRow({
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
+  onOpenPullRequest: (event: MouseEvent<HTMLElement>, pr: OrchestrationThreadPullRequest) => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
   onArchive: () => void;
@@ -222,7 +224,13 @@ function ActivityThreadRow({
               {resolveThreadProjectLabel(project)}
             </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
+              {pr ? (
+                <PrStateChip
+                  pr={pr}
+                  className="[&_svg]:size-2.5"
+                  onOpen={(event) => onOpenPullRequest(event, pr)}
+                />
+              ) : null}
               {branch ? (
                 <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
                   <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
@@ -532,6 +540,7 @@ export function SidebarActivityView({
   threadsHydrated,
   resolveThreadStatus,
   onOpenThread,
+  onOpenThreadPullRequest,
   onSetThreadSettled,
   onToggleThreadPinned,
   onArchiveThread,
@@ -556,6 +565,12 @@ export function SidebarActivityView({
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
+  /** PR chip click: plain click opens it in the thread, cmd/ctrl/middle-click on GitHub. */
+  onOpenThreadPullRequest: (
+    event: MouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled: (threadId: ThreadId, settled: boolean) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
@@ -789,6 +804,7 @@ export function SidebarActivityView({
       }
       status={resolveThreadStatus(thread)}
       onOpen={() => openThread(thread)}
+      onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
         clearReadOrderHoldForThread(thread.id);
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
