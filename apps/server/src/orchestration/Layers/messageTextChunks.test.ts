@@ -340,3 +340,18 @@ it("preserves a legacy streaming prefix and cascades chunk deletion on hard purg
     await system.runtime.dispose();
   }
 });
+
+it("preserves cached text on completion when the projection message row is missing", async () => {
+  const system = await openSystem();
+  try {
+    await system.seed();
+    await system.delta("before-missing-projection", "Hello world");
+    await system.run(
+      system.sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId} AND message_id = ${messageId}`,
+    );
+    await system.complete();
+    await assertReaders(system, "Hello world");
+  } finally {
+    await system.runtime.dispose();
+  }
+});
