@@ -48,8 +48,8 @@ describe("errorMessages", () => {
   });
 
   it("exposes the stable duplicate-approval invariant marker", () => {
-    expect(
-      "Approval request 'approval-1' on thread 'thread-1' was already answered.",
-    ).toContain(APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER);
+    expect("Approval request 'approval-1' on thread 'thread-1' was already answered.").toContain(
+      APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+    );
   });
 });

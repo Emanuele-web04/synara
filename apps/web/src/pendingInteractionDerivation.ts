@@ -341,10 +341,7 @@ export function derivePendingApprovals(
       continue;
     }
     retryableAttemptKeys.set(
-      pendingRequestInstanceKey(
-        settlement.requestId,
-        settlement.lifecycleGeneration ?? undefined,
-      ),
+      pendingRequestInstanceKey(settlement.requestId, settlement.lifecycleGeneration ?? undefined),
       JSON.stringify([settlement.responseCommandId, settlement.responseRequestedAt]),
     );
   }

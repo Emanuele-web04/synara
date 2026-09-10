@@ -134,37 +134,40 @@ describe("planRestartTurnReconciliation", () => {
     ["retryable", true],
     ["confirmed", false],
     ["uncertain", false],
-  ] as const)("treats a %s projected approval according to restart callback state", (status, stale) => {
-    const thread = makeThread(`projected-${status}`, {
-      session: makeSession(`projected-${status}`, { status: "ready", activeTurnId: null }),
-      latestTurn: { state: "completed" },
-      pendingInteractions: [
-        {
-          interactionKind: "approval",
-          requestId: `approval-${status}`,
-          lifecycleGeneration: "generation-a",
-          status,
-        },
-      ],
-    });
-
-    const commands = planRestartTurnReconciliation({ threads: [thread], now: NOW });
-    if (!stale) {
-      expect(commands).toEqual([]);
-      return;
-    }
-    expect(commands).toEqual([
-      expect.objectContaining({
-        type: "thread.activity.append",
-        activity: expect.objectContaining({
-          payload: expect.objectContaining({
+  ] as const)(
+    "treats a %s projected approval according to restart callback state",
+    (status, stale) => {
+      const thread = makeThread(`projected-${status}`, {
+        session: makeSession(`projected-${status}`, { status: "ready", activeTurnId: null }),
+        latestTurn: { state: "completed" },
+        pendingInteractions: [
+          {
+            interactionKind: "approval",
             requestId: `approval-${status}`,
             lifecycleGeneration: "generation-a",
+            status,
+          },
+        ],
+      });
+
+      const commands = planRestartTurnReconciliation({ threads: [thread], now: NOW });
+      if (!stale) {
+        expect(commands).toEqual([]);
+        return;
+      }
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "thread.activity.append",
+          activity: expect.objectContaining({
+            payload: expect.objectContaining({
+              requestId: `approval-${status}`,
+              lifecycleGeneration: "generation-a",
+            }),
           }),
         }),
-      }),
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("does not replay stale activities when a present projection is empty", () => {
     const thread = makeThread("projected-empty", {

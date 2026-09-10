@@ -96,19 +96,16 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const respondOnce = (decision: ProviderApprovalDecision) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
     submittedRequestKeyRef.current = submissionKey;
-    void onRespond(
-      requestId,
-      decision,
-      approval.lifecycleGeneration,
-      approval.requestKind,
-    ).catch(() => {
-      // Immediate command failures remain retryable. A successful dispatch keeps
-      // the claim until the request disappears or a newer durable retry attempt
-      // changes `submissionKey`.
-      if (submittedRequestKeyRef.current === submissionKey) {
-        submittedRequestKeyRef.current = null;
-      }
-    });
+    void onRespond(requestId, decision, approval.lifecycleGeneration, approval.requestKind).catch(
+      () => {
+        // Immediate command failures remain retryable. A successful dispatch keeps
+        // the claim until the request disappears or a newer durable retry attempt
+        // changes `submissionKey`.
+        if (submittedRequestKeyRef.current === submissionKey) {
+          submittedRequestKeyRef.current = null;
+        }
+      },
+    );
   };
 
   // Digit shortcuts bubble from focused controls inside this card only; a bare
