@@ -1045,16 +1045,16 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
 }
 
 function toolTitle(toolName: string, args: unknown): string {
-  const command = toolName === "bash" ? toolCommand(args) : undefined;
+  const command = toolName === "bash" ? trimPiDisplayText(toolCommand(args)) : undefined;
   if (command) return command;
-  const filePath = toolPath(args);
+  const filePath = trimPiDisplayText(toolPath(args));
   if (
     filePath &&
     (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === "ls")
   ) {
     return `${toolName} ${filePath}`;
   }
-  const query = toolSearchQuery(toolName, args);
+  const query = trimPiDisplayText(toolSearchQuery(toolName, args));
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
