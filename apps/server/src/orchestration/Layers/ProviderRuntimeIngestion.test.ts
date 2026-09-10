@@ -30,6 +30,7 @@ import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/Pro
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
+  type PersistedProviderRuntimeEvent,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   ProviderService,
@@ -51,6 +52,7 @@ import {
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -72,8 +74,9 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(options?: { readonly persistedStream?: boolean }) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const persistedEventPubSub = Effect.runSync(PubSub.unbounded<PersistedProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -100,6 +103,11 @@ function createProviderServiceHarness() {
     compactThread: () => unsupported(),
     closeRuntimeEvents: Effect.void,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+    // Only the already-persisted path uses this; when present the ingestion
+    // ignores `streamEvents`, so ordinary harnesses must not provide it.
+    ...(options?.persistedStream === true
+      ? { streamPersistedEvents: Stream.fromPubSub(persistedEventPubSub) }
+      : {}),
   };
 
   const setSession = (session: ProviderSession): void => {
@@ -146,9 +154,14 @@ function createProviderServiceHarness() {
     );
   };
 
+  const emitPersisted = (persisted: PersistedProviderRuntimeEvent): void => {
+    Effect.runSync(PubSub.publish(persistedEventPubSub, persisted));
+  };
+
   return {
     service,
     emit,
+    emitPersisted,
     setSession,
   };
 }
@@ -226,7 +239,10 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProviderRuntimeEventRepository
+    | SqlClient.SqlClient,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -252,10 +268,15 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { readonly startIngestion?: boolean }) {
+  async function createHarness(options?: {
+    readonly startIngestion?: boolean;
+    readonly persistedStream?: boolean;
+  }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const provider = createProviderServiceHarness(
+      options?.persistedStream === true ? { persistedStream: true } : undefined,
+    );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -354,6 +375,7 @@ describe("ProviderRuntimeIngestion", () => {
     return {
       engine,
       emit: provider.emit,
+      emitPersisted: provider.emitPersisted,
       setProviderSession: provider.setSession,
       drain,
       startIngestion,
@@ -7577,5 +7599,57 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+  it("acknowledges a burst of live journal notifications in pages, not one per event", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    await Effect.runPromise(
+      sql`CREATE TABLE cursor_acks (from_sequence INTEGER, to_sequence INTEGER)`,
+    );
+    await Effect.runPromise(sql`
+      CREATE TRIGGER capture_cursor_acks AFTER UPDATE ON provider_runtime_event_consumers
+      BEGIN
+        INSERT INTO cursor_acks VALUES (OLD.last_acked_sequence, NEW.last_acked_sequence);
+      END
+    `);
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 32; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "runtime.warning",
+            eventId: asEventId(`live-burst-${index}`),
+            provider: "codex",
+            threadId: asThreadId("thread-1"),
+            createdAt: "2026-09-10T00:00:00.000Z",
+            payload: { message: "burst" },
+          }),
+        ),
+      );
+    }
+    // Every notification arrives while the first one's drain is still in
+    // flight, so the rest must be picked up as pages by that drain.
+    for (const row of rows) harness.emitPersisted(row);
+    const target = rows.at(-1)!.sequence;
+    const deadline = Date.now() + 5_000;
+    while (
+      (await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      )) < target
+    ) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the live drain");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const acks = await Effect.runPromise(
+      sql<{ readonly fromSequence: number; readonly toSequence: number }>`
+        SELECT from_sequence AS "fromSequence", to_sequence AS "toSequence" FROM cursor_acks
+        ORDER BY to_sequence ASC
+      `,
+    );
+    expect(acks.at(-1)?.toSequence).toBe(target);
+    // One acknowledgement for the first notification, then the backlog in
+    // (at most) pages; never one transaction per event.
+    expect(acks.length).toBeLessThan(rows.length);
+    expect(acks.length).toBeLessThanOrEqual(4);
   });
 });

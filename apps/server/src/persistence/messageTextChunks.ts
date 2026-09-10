@@ -55,11 +55,15 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
   // contain it, even when the value is unchanged, so the streaming hot path
   // only touches the columns that actually changed for this delta. None of the
   // always-written columns (updated_at, is_streaming, text_event_sequence,
-  // text/text_json) are indexed.
+  // text/text_json) are indexed. A legacy/imported row without an ordering
+  // sequence receives this event's sequence once (first writer wins, as the
+  // previous upsert did), so a resumed message keeps its causal position in the
+  // capped message windows.
   const readMessageState = (event: MessageEvent) =>
     sql<{
       readonly textEventSequence: number;
       readonly turnId: string | null;
+      readonly sequence: number | null;
       readonly role: string;
       readonly source: string;
       readonly hasBody: number;
@@ -67,6 +71,7 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
     SELECT
       text_event_sequence AS "textEventSequence",
       turn_id AS "turnId",
+      sequence,
       role,
       source,
       (text <> '' OR text_json IS NOT NULL) AS "hasBody"
@@ -110,6 +115,7 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
           text_event_sequence = ${event.sequence}
           ${state.hasBody === 1 ? sql`, text = '', text_json = NULL` : sql``}
           ${state.turnId === null && p.turnId !== undefined ? sql`, turn_id = ${p.turnId}` : sql``}
+          ${state.sequence === null ? sql`, sequence = ${event.sequence}` : sql``}
           ${state.role !== p.role ? sql`, role = ${p.role}` : sql``}
           ${state.source !== p.source ? sql`, source = ${p.source}` : sql``}
           ${p.attachments !== undefined ? sql`, attachments_json = ${JSON.stringify(p.attachments)}` : sql``}
