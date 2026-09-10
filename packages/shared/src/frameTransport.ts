@@ -219,7 +219,7 @@ export class FrameTransport<TStreamId extends string, TFrame> {
     streamSubscribers.add(subscriber);
 
     const config = this.codecConfig.get(streamId);
-    if (config) this.deliver(subscriber, config);
+    if (config) this.deliver(subscriber, config, true);
     const keyframe = this.latestKeyframe.get(streamId);
     if (keyframe) {
       subscriber.awaitingKeyframe = false;
@@ -329,9 +329,12 @@ export class FrameTransport<TStreamId extends string, TFrame> {
       subscriber.queue.length >= this.queueLimit ||
       subscriber.queuedBytes + encoded.byteLength > this.socketBudgetBytes
     ) {
-      subscriber.dropped += subscriber.queue.length + 1;
+      const config = this.codecConfig.get(subscriber.streamId);
+      const retainedConfig = config && subscriber.queue.includes(config) ? config : undefined;
+      subscriber.dropped += subscriber.queue.length + 1 - (retainedConfig ? 1 : 0);
       subscriber.queue.length = 0;
-      subscriber.queuedBytes = 0;
+      if (retainedConfig) subscriber.queue.push(retainedConfig);
+      subscriber.queuedBytes = retainedConfig?.byteLength ?? 0;
       subscriber.awaitingKeyframe = true;
       return;
     }

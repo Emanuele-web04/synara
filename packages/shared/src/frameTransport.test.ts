@@ -180,6 +180,40 @@ describe("shared frame transport", () => {
     expect(sink.received).toEqual([1, 40, 42, 43]);
   });
 
+  it.each([
+    { queueLimit: 8, socketBudgetBytes: 1 },
+    { queueLimit: 1, socketBudgetBytes: 10 },
+  ])("retains configuration across overflowing keyframes with %j", (limits) => {
+    const transport = makeTransport(limits);
+    const sink = new Sink();
+    sink.buffered = 100;
+    transport.subscribe("desktop", sink);
+    transport.publish("desktop", { sequence: 1, keyframe: false, codecConfig: true });
+    for (let sequence = 2; sequence <= 20; sequence += 1) {
+      transport.publish("desktop", { sequence, keyframe: true, codecConfig: false });
+      expect(transport.statsFor("desktop")[0]?.queued).toBe(1);
+      expect(transport.statsFor("desktop")[0]?.awaitingKeyframe).toBe(true);
+    }
+    sink.buffered = 0;
+    transport.publish("desktop", { sequence: 21, keyframe: false, codecConfig: false });
+    expect(sink.received).toEqual([]);
+    transport.publish("desktop", { sequence: 22, keyframe: true, codecConfig: false });
+    expect(sink.received).toEqual([1, 22]);
+  });
+
+  it("retains a late subscriber's config when its cached keyframe overflows", () => {
+    const transport = makeTransport({ socketBudgetBytes: 1 });
+    transport.publish("desktop", { sequence: 1, keyframe: false, codecConfig: true });
+    transport.publish("desktop", { sequence: 2, keyframe: true, codecConfig: false });
+    const sink = new Sink();
+    sink.buffered = 100;
+    transport.subscribe("desktop", sink);
+    expect(transport.statsFor("desktop")[0]?.queued).toBe(1);
+    sink.buffered = 0;
+    transport.publish("desktop", { sequence: 3, keyframe: true, codecConfig: false });
+    expect(sink.received).toEqual([1, 3]);
+  });
+
   it("shares bounded sink accounting and resync parsing", async () => {
     let open = true;
     let sent = 0;
