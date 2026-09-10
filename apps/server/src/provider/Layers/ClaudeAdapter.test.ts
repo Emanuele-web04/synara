@@ -5184,6 +5184,68 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("retains an uninstalled Auto process through failed cleanup and explicit stop", () => {
+    const query = new FakeClaudeQuery();
+    (
+      query as unknown as {
+        supportedModels: () => Promise<
+          Array<{ value: string; displayName: string; supportsAutoMode: boolean }>
+        >;
+      }
+    ).supportedModels = async () => [
+      { value: "claude-sonnet-5", displayName: "Sonnet", supportsAutoMode: false },
+    ];
+    let createCalls = 0;
+    let teardownCalls = 0;
+    const ownedProcess = {
+      pid: 73_314,
+      exitCode: 0,
+      signalCode: null,
+    } as unknown as ClaudeOwnedProcess;
+    const layer = makeClaudeAdapterLive({
+      spawnClaudeCodeProcess: () => ownedProcess,
+      teardownProcessTree: async () => {
+        if (++teardownCalls < 3) throw new Error("descendant remains");
+        return { escalated: true, signalErrors: [] };
+      },
+      createQuery: (input) => {
+        createCalls++;
+        input.options.spawnClaudeCodeProcess?.({
+          command: "claude",
+          args: [],
+          env: {},
+          signal: new AbortController().signal,
+        });
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const input = {
+        threadId: THREAD_ID,
+        provider: "claudeAgent" as const,
+        runtimeMode: "auto" as const,
+        modelSelection: { provider: "claudeAgent" as const, model: "claude-sonnet-5" },
+      };
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(adapter.startSession(input))));
+      assert.equal(teardownCalls, 1);
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(adapter.startSession(input))));
+      assert.equal(teardownCalls, 2);
+      assert.equal(createCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      yield* adapter.stopSession(THREAD_ID);
+      assert.equal(teardownCalls, 3);
+      yield* adapter.stopSession(THREAD_ID);
+      assert.equal(teardownCalls, 3);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("blocks a retry when createQuery spawned before failing cleanup", () => {
     const query = new FakeClaudeQuery();
     let allowStart = false;
@@ -7856,6 +7918,74 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect(
+    "preserves earlier SDK history and previously returned snapshots after another turn",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const runTurn = (input: string, suffix: string) =>
+          Effect.gen(function* () {
+            const turn = yield* adapter.sendTurn({
+              threadId: session.threadId,
+              input,
+              attachments: [],
+            });
+            const completedFiber = yield* Stream.filter(
+              adapter.streamEvents,
+              (event) => event.type === "turn.completed",
+            ).pipe(Stream.runHead, Effect.forkChild);
+            harness.query.emit({
+              type: "assistant",
+              session_id: "sdk-session-retained-items",
+              uuid: `assistant-${suffix}`,
+              parent_tool_use_id: null,
+              message: {
+                id: `assistant-message-${suffix}`,
+                content: [{ type: "text", text: "x".repeat(64 * 1024) }],
+              },
+            } as unknown as SDKMessage);
+            harness.query.emit({
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              errors: [],
+              session_id: "sdk-session-retained-items",
+              uuid: `result-${suffix}`,
+            } as unknown as SDKMessage);
+            const completed = yield* Fiber.join(completedFiber);
+            assert.equal(completed._tag, "Some");
+            return turn;
+          });
+
+        const firstTurn = yield* runTurn("first", "first");
+        const afterFirst = yield* adapter.readThread(session.threadId);
+        assert.equal(afterFirst.turns.length, 1);
+        assert.equal(afterFirst.turns[0]?.items.length, 1);
+
+        const secondTurn = yield* runTurn("second", "second");
+        const afterSecond = yield* adapter.readThread(session.threadId);
+        assert.equal(afterSecond.turns.length, 2);
+        assert.equal(afterSecond.turns[0]?.id, firstTurn.turnId);
+        assert.equal(afterSecond.turns[1]?.id, secondTurn.turnId);
+        assert.deepEqual(afterSecond.turns[0]?.items, afterFirst.turns[0]?.items);
+        assert.equal(afterFirst.turns.length, 1);
+        assert.equal(afterFirst.turns[0]?.items.length, 1);
+        assert.equal(afterSecond.turns[1]?.items.length, 1);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("updates model on sendTurn when model override is provided", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -10436,6 +10566,60 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  it.effect("denies an already aborted AskUserQuestion without publishing a prompt", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const canUseTool = harness.getLastCreateQueryInput()!.options.canUseTool!;
+      const questions = [
+        {
+          id: "Q",
+          header: "Q",
+          question: "Continue?",
+          options: [{ label: "Yes", description: "Proceed" }],
+        },
+      ];
+      const denied = yield* Effect.promise(() =>
+        canUseTool(
+          "AskUserQuestion",
+          { questions },
+          {
+            signal: AbortSignal.abort(),
+            toolUseID: "aborted-ask",
+            requestId: "aborted-ask",
+          },
+        ),
+      );
+      assert.equal(denied?.behavior, "deny");
+      const next = canUseTool(
+        "AskUserQuestion",
+        { questions },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "live-ask",
+          requestId: "live-ask",
+        },
+      );
+      const event = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(event._tag, "Some");
+      if (event._tag !== "Some" || event.value.type !== "user-input.requested")
+        return assert.fail("Expected live question");
+      assert.equal(event.value.providerRefs?.providerItemId, "live-ask");
+      yield* adapter.respondToUserInput(
+        THREAD_ID,
+        ApprovalRequestId.makeUnsafe(event.value.requestId!),
+        { Q: "Yes" },
+      );
+      assert.equal((yield* Effect.promise(() => next))?.behavior, "allow");
+    }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("denies AskUserQuestion when the waiting turn is aborted", () => {
