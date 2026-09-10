@@ -4,7 +4,7 @@ import { basenameOfPath } from "~/file-icons";
 import {
   ChevronRightIcon,
   Redo2Icon,
-  RotateCcwIcon,
+  ResetIcon,
   TriangleAlertIcon,
   Undo2Icon,
   XIcon,
@@ -81,7 +81,7 @@ export function WorkspaceFileEditorHistoryActions(props: WorkspaceFileEditorHist
         disabled={!props.canRevert}
         onClick={props.onRevert}
       >
-        <RotateCcwIcon aria-hidden="true" className="size-3.5" />
+        <ResetIcon aria-hidden="true" className="size-3.5" />
       </ChatHeaderIconButton>
     </>
   );

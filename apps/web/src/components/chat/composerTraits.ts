@@ -9,14 +9,17 @@ import {
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import {
+  applyClaudePromptEffortPrefix,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   trimOrNull,
 } from "@synara/shared/model";
 
-import type { ProviderOptions } from "../../providerModelOptions";
+import { buildProviderOptionPatch, type ProviderOptions } from "../../providerModelOptions";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
+
+const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
 function getCursorBooleanModelParameter(
   model: string | null | undefined,
@@ -228,12 +231,80 @@ export function hasVisibleComposerTraitControls(
   >,
   options?: {
     includeFastMode?: boolean;
+    // Off when another surface (the effort slider card) already owns the effort ladder.
+    includeEffort?: boolean;
   },
 ): boolean {
   return (
-    selection.effortLevels.length > 0 ||
+    ((options?.includeEffort ?? true) && selection.effortLevels.length > 0) ||
     selection.thinkingEnabled !== null ||
     selection.contextWindowOptions.length > 1 ||
     ((options?.includeFastMode ?? true) && supportsComposerFastModeControl(selection))
   );
+}
+
+// Persisted option key for the primary effort ladder when the descriptor is missing.
+function fallbackEffortOptionId(provider: ProviderKind): string {
+  if (provider === "opencode") return "variant";
+  if (provider === "pi") return "thinkingLevel";
+  if (provider === "claudeAgent") return "effort";
+  return "reasoningEffort";
+}
+
+export type ComposerEffortChangePlan =
+  // Prompt-injected levels (Claude Ultrathink) rewrite the prompt instead of the options.
+  | { readonly kind: "prompt"; readonly prompt: string }
+  | { readonly kind: "options"; readonly patch: Record<string, unknown> };
+
+// Single decision point for "the user picked effort X": every effort surface
+// (radio menu, slider) turns its choice into the same prompt rewrite or option
+// patch here, so ultrathink handling and option ids can never drift apart.
+// Returns null when the change must be ignored (locked by the prompt, unknown value).
+export function planComposerEffortChange(input: {
+  provider: ProviderKind;
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    | "effortLevels"
+    | "promptInjectedValues"
+    | "primarySelectDescriptor"
+    | "ultrathinkPromptControlled"
+  >;
+  prompt: string;
+  value: string;
+}): ComposerEffortChangePlan | null {
+  const { provider, selection, prompt, value } = input;
+  if (selection.ultrathinkPromptControlled) return null;
+  if (!value) return null;
+  const nextOption = selection.effortLevels.find((option) => option.value === value);
+  if (!nextOption) return null;
+  if (selection.promptInjectedValues.includes(nextOption.value)) {
+    return {
+      kind: "prompt",
+      prompt:
+        prompt.trim().length === 0
+          ? ULTRATHINK_PROMPT_PREFIX
+          : applyClaudePromptEffortPrefix(prompt, "ultrathink"),
+    };
+  }
+  const optionId = selection.primarySelectDescriptor?.id ?? fallbackEffortOptionId(provider);
+  return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
+}
+
+// Index of the effort the slider thumb should rest on. While Ultrathink is
+// pinned by the prompt the resolved `effort` falls back to the default, so the
+// thumb follows the prompt-injected level instead when the ladder exposes it.
+export function resolveComposerEffortLadderIndex(
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    "effort" | "effortLevels" | "promptInjectedValues" | "ultrathinkPromptControlled"
+  >,
+): number {
+  if (selection.ultrathinkPromptControlled) {
+    const injectedIndex = selection.effortLevels.findIndex((level) =>
+      selection.promptInjectedValues.includes(level.value),
+    );
+    if (injectedIndex >= 0) return injectedIndex;
+  }
+  const index = selection.effortLevels.findIndex((level) => level.value === selection.effort);
+  return index >= 0 ? index : 0;
 }
