@@ -45,10 +45,10 @@ export const PICKER_PANEL_ROW_SELECTED_CLASS_NAME =
 
 /** Quiet section header above a plain picker list group. */
 export const PICKER_PANEL_GROUP_LABEL_CLASS_NAME =
-  "px-1.5 py-1 font-normal text-muted-foreground/60 text-xs";
+  "px-1.5 py-1 font-normal text-muted-foreground/60 text-[length:var(--app-font-size-ui-xs,10px)]";
 
-/** Full-width action row in a picker footer (add project, reset to home). */
-export const PICKER_PANEL_ACTION_ROW_CLASS_NAME = `flex w-full items-center text-left text-sm ${PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME} ${ELEVATED_HOVER_SURFACE_CLASS_NAME} hover:text-[var(--color-text-foreground)]`;
+/** Footer actions share the app UI size used by ComboboxItem (add project, reset to home). */
+export const PICKER_PANEL_ACTION_ROW_CLASS_NAME = `flex w-full items-center text-left text-[length:var(--app-font-size-ui,12px)] ${PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME} ${ELEVATED_HOVER_SURFACE_CLASS_NAME} hover:text-[var(--color-text-foreground)]`;
 
 /** Scroll chrome for the plain panel body; list chrome supplies its own 4px padding. */
 export const PICKER_PANEL_PLAIN_BODY_CLASS_NAME = COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME;
