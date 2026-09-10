@@ -2,6 +2,8 @@
 
 Run these commands from the repository root on macOS with the Xcode Command Line Tools installed. Test executables and the helper are built into a temporary directory.
 
+The Computer Helper Matrix workflow compiles and probes the helper, then runs the geometry, delivery-history, and cancellation tests below for PRs that change the helper. Fork PRs need a maintainer to approve the workflow. These tests send no desktop input. Live input and installed-build permission tests remain separate.
+
 ## Capture geometry
 
 These assertions cover mixed display scales, negative origins, gaps between displays, and host-window masking. They use synthetic images and do not capture or control the desktop.
