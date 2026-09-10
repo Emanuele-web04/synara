@@ -48,6 +48,47 @@ afterEach(() => {
 });
 
 describe("desktop permission service", () => {
+  it("cancels an aged queued setup without opening a late prompt or cancelling another owner", async () => {
+    const first = createChild();
+    const refreshed = createChild();
+    const { service, spawn, openSettings } = createService([first, refreshed]);
+    const other = service.request(APP_SNAP_PERMISSIONS);
+    const abort = new AbortController();
+    const setup = service.request(COMPUTER_PERMISSIONS, abort.signal);
+    const cancelled = expect(setup).rejects.toThrow("cancelled");
+    await flush();
+    abort.abort();
+    await cancelled;
+    expect(first.kill).not.toHaveBeenCalled();
+    complete(first, { inputMonitoring: "granted", screenRecording: "granted" });
+    await flush();
+    complete(refreshed, { inputMonitoring: "granted", screenRecording: "granted" });
+    await other;
+    await service.dispose();
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(openSettings).not.toHaveBeenCalled();
+  });
+
+  it("reaps its active prompt on dismissal before admitting a replacement", async () => {
+    const first = createChild();
+    const next = createChild();
+    const { service, spawn } = createService([first, next]);
+    const abort = new AbortController();
+    const request = service.request(COMPUTER_PERMISSIONS, abort.signal);
+    const cancelled = expect(request).rejects.toThrow("cancelled");
+    await flush();
+    abort.abort();
+    await cancelled;
+    const check = service.check(COMPUTER_PERMISSIONS);
+    await flush();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(first.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    first.emit("close", null);
+    await flush();
+    complete(next, { accessibility: "granted", screenRecording: "granted" });
+    await check;
+    await service.dispose();
+  });
   it("reports a missing helper as a build failure without spawning or opening Settings", async () => {
     const spawn = vi.fn();
     const openSettings = vi.fn();

@@ -8,6 +8,7 @@ struct AppSnapFailure: Error {
 enum AppSnapMode {
     case checkPermissions(Set<AppSnapPermission>)
     case requestPermissions(Set<AppSnapPermission>)
+    case permissionGuide(appPath: String, appName: String)
     case watch(
         outputDirectory: URL,
         excludedBundleIdentifier: String,
@@ -24,6 +25,8 @@ struct AppSnapOptions {
         var excludedBundleIdentifier: String?
         var externalTrigger = false
         var permissions = Set<AppSnapPermission>()
+        var guideAppPath: String?
+        var guideAppName: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -52,7 +55,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch":
+            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -77,6 +80,13 @@ struct AppSnapOptions {
                     )
                 }
                 permissions.insert(permission)
+            case "--app-path", "--app-name":
+                index += 1
+                guard index < arguments.count else {
+                    throw AppSnapFailure(code: "invalid_arguments", message: "\(argument) requires a value.")
+                }
+                if argument == "--app-path" { guideAppPath = arguments[index] }
+                else { guideAppName = arguments[index] }
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -86,7 +96,18 @@ struct AppSnapOptions {
             index += 1
         }
 
+        if requestedMode != "--permission-guide", guideAppPath != nil || guideAppName != nil {
+            throw AppSnapFailure(code: "invalid_arguments", message: "App metadata is only used by the permission guide.")
+        }
         switch requestedMode {
+        case "--permission-guide":
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger,
+                  permissions.isEmpty, let appPath = guideAppPath, appPath.hasPrefix("/"),
+                  appPath.hasSuffix(".app"), FileManager.default.fileExists(atPath: appPath),
+                  let appName = guideAppName, !appName.isEmpty, appName.count <= 256 else {
+                throw AppSnapFailure(code: "invalid_arguments", message: "The permission guide requires the running app bundle and its name.")
+            }
+            return AppSnapOptions(mode: .permissionGuide(appPath: appPath, appName: appName))
         case "--check-permissions":
             guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
                 throw AppSnapFailure(

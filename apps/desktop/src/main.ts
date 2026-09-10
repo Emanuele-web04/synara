@@ -283,6 +283,9 @@ import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
 import { COMPUTER_PERMISSIONS } from "@synara/shared/computerPermissions";
 import { DesktopPermissionService, desktopPermissionSettingsUrl } from "./desktopPermissions";
+import { DesktopPermissionSetup } from "./desktopPermissionSetup";
+import { NativePermissionGuide } from "./nativePermissionGuide";
+import { registerDesktopPermissionIpc } from "./desktopPermissionIpc";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -481,6 +484,7 @@ const browserManager = new DesktopBrowserManager({
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let desktopPermissions: DesktopPermissionService | undefined;
+let desktopPermissionSetup: DesktopPermissionSetup | undefined;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
@@ -1854,6 +1858,68 @@ function getDesktopPermissions(): DesktopPermissionService {
   return desktopPermissions;
 }
 
+function permissionAppBundlePath(): string | null {
+  if (process.platform !== "darwin") return null;
+  const bundle = Path.dirname(Path.dirname(Path.dirname(process.execPath)));
+  return bundle.endsWith(".app") && FS.existsSync(Path.join(bundle, "Contents", "Info.plist"))
+    ? bundle
+    : null;
+}
+
+function getDesktopPermissionSetup(): DesktopPermissionSetup {
+  if (desktopPermissionSetup) return desktopPermissionSetup;
+  const appPath = permissionAppBundlePath();
+  const appName = appPath ? Path.basename(appPath, ".app") : APP_DISPLAY_NAME;
+  const revealApp = () => {
+    if (appPath) shell.showItemInFolder(appPath);
+  };
+  const fail = (message: string) => {
+    void desktopPermissionSetup
+      ?.stop(message)
+      .catch((error) => safeConsoleError("[desktop] permission guide cleanup failed", error));
+  };
+  const guide = appPath
+    ? new NativePermissionGuide({
+        helperPath: resolveAppSnapHelperPath(),
+        appPath,
+        appName,
+        onAction: (action) => {
+          if (action === "reveal") revealApp();
+          else
+            void (
+              action === "retry"
+                ? getDesktopPermissionSetup().retry()
+                : getDesktopPermissionSetup().stop()
+            ).catch((error) => fail(String(error)));
+        },
+        onError: fail,
+      })
+    : { show: () => {}, close: async () => {} };
+  let lastGrants = "";
+  desktopPermissionSetup = new DesktopPermissionSetup({
+    appName,
+    appPath,
+    permissions: getDesktopPermissions(),
+    guide,
+    beforeStart: async () => {
+      if (!appPath) throw new Error("Open the Synara macOS app to set up desktop permissions.");
+      await cuaDriverHost?.stop();
+    },
+    onState: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send(IPC.permissions.state, state);
+      const grants = JSON.stringify(state.grants);
+      if (grants !== lastGrants && Object.keys(state.grants).length > 0) {
+        lastGrants = grants;
+        void appSnapManager
+          ?.refreshState()
+          .catch((error) => safeConsoleError("[desktop] AppSnap permission refresh failed", error));
+      }
+    },
+  });
+  return desktopPermissionSetup;
+}
+
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
   if (mainWindow?.isDestroyed()) {
     mainWindow = null;
@@ -1889,7 +1955,13 @@ function initializeDesktopAppSnap(): void {
   appSnapManager = new DesktopAppSnapManager({
     platform: process.platform,
     helperPath: resolveAppSnapHelperPath(),
-    permissions: getDesktopPermissions(),
+    permissions: {
+      check: (permissions) => getDesktopPermissions().check(permissions),
+      request: async (permissions) => {
+        await getDesktopPermissionSetup().start("appsnap");
+        return getDesktopPermissions().check(permissions);
+      },
+    },
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
     shortcutRegistry: globalShortcut,
@@ -3577,7 +3649,7 @@ async function startCuaHost(): Promise<void> {
       };
     },
     setup: async () => {
-      await getDesktopPermissions().request(COMPUTER_PERMISSIONS);
+      await getDesktopPermissionSetup().start("computer");
     },
     normalizeOverview: (result) => {
       const image = result.content?.find((part) => part.type === "image" && part.data);
@@ -4307,6 +4379,12 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       appSnapManager?.dispose();
       appSnapManager = null;
       try {
+        await desktopPermissionSetup?.dispose();
+      } catch (error) {
+        safeConsoleError("[desktop] permission guide cleanup failed", error);
+      }
+      desktopPermissionSetup = undefined;
+      try {
         await desktopPermissions?.dispose();
       } catch (error) {
         safeConsoleError("[desktop] permission helper cleanup failed", error);
@@ -4771,6 +4849,23 @@ function registerIpcHandlers(): void {
   if (appSnapManager) {
     registerAppSnapIpcHandlers(ipcMain, appSnapManager);
   }
+  registerDesktopPermissionIpc(ipcMain, {
+    setup: getDesktopPermissionSetup,
+    mainWebContents: () => mainWindow?.webContents,
+    revealApp: () => {
+      const path = permissionAppBundlePath();
+      if (path) shell.showItemInFolder(path);
+    },
+    startDrag: (sender) => {
+      const file = permissionAppBundlePath();
+      const iconPath = resolveIconPath("png") ?? resolveResourcePath("synara.png");
+      if (file && iconPath)
+        sender.startDrag({
+          file,
+          icon: nativeImage.createFromPath(iconPath).resize({ width: 32, height: 32 }),
+        });
+    },
+  });
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);

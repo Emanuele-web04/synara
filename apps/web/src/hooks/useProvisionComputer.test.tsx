@@ -13,7 +13,7 @@
 import type { ComputerProvisionResult, ComputerStatusResult } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProvisionComputer } from "./useProvisionComputer";
@@ -88,7 +88,23 @@ function reset() {
   toastAdd.mockReset();
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("useProvisionComputer", () => {
+  it("keeps a newer native grant when the initiating RPC returns an older missing status", async () => {
+    reset();
+    vi.stubGlobal("window", { desktopBridge: { permissions: {} } });
+    const queryClient = createQueryClient();
+    const newer = status();
+    queryClient.setQueryData(serverQueryKeys.computerStatus(), newer);
+    const invalidation = vi.spyOn(queryClient, "invalidateQueries");
+    provisionComputer.mockResolvedValue({ summary: "Still missing.", status: blockedStatus() });
+    mountProvisionHook(queryClient, { notify: true }).provision();
+    await vi.waitFor(() => expect(invalidation).toHaveBeenCalledOnce());
+    expect(queryClient.getQueryData(serverQueryKeys.computerStatus())).toEqual(newer);
+    expect(toastAdd).toHaveBeenCalledTimes(1);
+  });
+
   it("writes the refreshed status the call returned straight into the cache", async () => {
     reset();
     const result: ComputerProvisionResult = { summary: "Granted.", status: status() };

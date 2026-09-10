@@ -15,6 +15,7 @@ import {
 } from "@synara/contracts";
 import {
   COMPUTER_PERMISSION_LABELS,
+  COMPUTER_PERMISSIONS,
   listComputerPermissions,
 } from "@synara/shared/computerPermissions";
 import { useQuery } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
+import { DesktopPermissionSetup } from "./DesktopPermissionSetup";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
@@ -236,7 +238,7 @@ export function ComputerSettingsPanel({
               }
             />
           ) : null}
-          {missingPermissions.length > 0 ? (
+          {missingPermissions.length > 0 && !window.desktopBridge?.permissions ? (
             <SettingsRow
               title={
                 <span className="flex items-center gap-2">
@@ -249,6 +251,26 @@ export function ComputerSettingsPanel({
                 .map((permission) => COMPUTER_PERMISSION_LABELS[permission])
                 .join(" · ")}
             />
+          ) : null}
+          {window.desktopBridge?.permissions ? (
+            <div className="p-3">
+              <DesktopPermissionSetup
+                feature="computer"
+                active={active}
+                grants={Object.fromEntries(
+                  COMPUTER_PERMISSIONS.map((permission) => [
+                    permission,
+                    status?.availability.kind === "permission-required"
+                      ? missingPermissions.includes(permission)
+                        ? "denied"
+                        : "granted"
+                      : status?.availability.kind === "available"
+                        ? "granted"
+                        : "unknown",
+                  ]),
+                )}
+              />
+            </div>
           ) : null}
           {captureBlocked && missingPermissions.length === 0 ? (
             <SettingsRow

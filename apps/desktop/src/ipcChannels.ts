@@ -44,6 +44,15 @@ export const DESKTOP_IPC_CHANNELS = {
     read: "desktop:storage-migration-read",
     acknowledge: "desktop:storage-migration-acknowledge",
   },
+  permissions: {
+    getState: "desktop:permissions-state",
+    start: "desktop:permissions-start",
+    stop: "desktop:permissions-stop",
+    retry: "desktop:permissions-retry",
+    revealApp: "desktop:permissions-reveal-app",
+    startDrag: "desktop:permissions-drag-app",
+    state: "desktop:permissions-changed",
+  },
   appSnap: {
     captureCurrentApp: "desktop:appsnap-capture-current-app",
     cancelCapture: "desktop:appsnap-cancel-capture",
