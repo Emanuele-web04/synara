@@ -297,6 +297,7 @@ import {
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -10245,6 +10246,9 @@ export default function ChatView({
   ]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      if (activeProject) {
+        useProjectEnvironmentStore.getState().setProjectEnvMode(activeProject.id, mode);
+      }
       const nextBranch =
         mode === "worktree"
           ? (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
@@ -10272,6 +10276,7 @@ export default function ChatView({
       scheduleComposerFocus();
     },
     [
+      activeProject,
       activeThread,
       activeRootBranch,
       draftThread?.branch,
