@@ -37,6 +37,7 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream }
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { createAccountSession } from "./accountSession";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import {
@@ -141,6 +142,12 @@ import {
   WsConnectionSessionsLive,
   type WsConnectionSession,
 } from "./wsConnectionSessions";
+import { makeAccountRpcHandlers } from "./wsAccountRpc";
+import { makeHostsRpcHandlers } from "./wsHostsRpc";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryService } from "./hostConnections/registry";
+import { makeHostConnectionsPort } from "./hostConnections/port";
+import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -165,7 +172,7 @@ import {
 } from "./project/githubProjectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
-  return role === "owner";
+  return isOwnerRole(role);
 }
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
@@ -373,10 +380,15 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const remoteSessions = yield* RemoteSessionRegistryService;
       // Optional so route-level tests and non-macOS builds can mount the RPC
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
+      // One per server, not per connection: it owns the credential file, and
+      // the pending sign-in attempts it tracks have to outlive the WebSocket
+      // that started them so a reconnecting client can still complete one.
+      const accountSession = createAccountSession({ baseDir: config.baseDir });
       const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
         homeDir: config.homeDir,
         fileSystem,
@@ -831,6 +843,26 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      /**
+       * The account RPCs are owner-only, entirely — reads included; see
+       * wsAccountRpc.ts, which owns the guard, the error mappings, and the
+       * handler bodies.
+       */
+      const accountRpcHandlers = makeAccountRpcHandlers({
+        accountSession,
+        openBrowser: (url) => open.openBrowser(url),
+      });
+      const hostConnectionRegistry = yield* HostConnectionRegistryService;
+      const hostsRpcHandlers = makeHostsRpcHandlers({
+        accountSession,
+        remoteSessions,
+        hostConnections: makeHostConnectionsPort({
+          accountSession,
+          registry: hostConnectionRegistry,
+          relayUrl: config.relayUrl?.toString(),
+        }),
+      });
+
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
           ? new WsRpcError({
@@ -856,11 +888,7 @@ const makeWsRpcHandlersLayer = () =>
           );
 
       const requireOwner = Effect.gen(function* () {
-        if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
-          return yield* Effect.fail(
-            new WsRpcError({ message: "Owner authorization is required for this operation." }),
-          );
-        }
+        yield* requireOwnerRole;
         if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
           return yield* Effect.fail(
             new WsRpcError({
@@ -2007,6 +2035,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        ...accountRpcHandlers,
+        ...hostsRpcHandlers,
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>
