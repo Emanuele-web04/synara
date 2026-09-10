@@ -8,6 +8,11 @@ import { runInNewContext } from "node:vm";
 import { createCookieSessionBackend } from "../src/browserAutomation/electronCookieSession";
 import { BrowserSessionRestore } from "../src/browserAutomation/browserSessionRestore";
 
+function cookieIdentity(cookie: unknown): string {
+  const entry = cookie as { name: string; value: string; partitionKey?: unknown };
+  return JSON.stringify([entry.name, entry.value, entry.partitionKey]);
+}
+
 void (async () => {
   const home = await mkdtemp(join(tmpdir(), "synara-session-native-"));
   app.setPath("userData", home);
@@ -92,11 +97,10 @@ void (async () => {
     const restarted = new BrowserSessionRestore(join(home, "restore"), restartedBackend, keyStore);
     await restarted.initialize();
     const replayed = await restartedBackend.read();
-    const identity = (cookie: unknown) => {
-      const entry = cookie as { name: string; value: string; partitionKey?: unknown };
-      return JSON.stringify([entry.name, entry.value, entry.partitionKey]);
-    };
-    assert.deepEqual(replayed.map(identity).sort(), cookies.map(identity).sort());
+    assert.deepEqual(
+      replayed.map(cookieIdentity).toSorted(),
+      cookies.map(cookieIdentity).toSorted(),
+    );
     await restarted.shutdown();
     console.log(
       "Session restoration native smoke passed: encrypted checkpoint and replay, including partitioned cookies",
