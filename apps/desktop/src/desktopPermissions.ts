@@ -2,7 +2,8 @@ import * as ChildProcess from "node:child_process";
 import * as FS from "node:fs";
 import type { Readable } from "node:stream";
 
-export type DesktopPermission = "accessibility" | "screenRecording" | "inputMonitoring";
+import type { DesktopPermission } from "@synara/contracts";
+export type { DesktopPermission } from "@synara/contracts";
 export type DesktopPermissionStatus = "granted" | "denied";
 export type DesktopPermissionState<Permission extends DesktopPermission> = Record<
   Permission,
@@ -54,8 +55,9 @@ export class DesktopPermissionService {
 
   request<Permission extends DesktopPermission>(
     permissions: readonly Permission[],
+    signal?: AbortSignal,
   ): Promise<DesktopPermissionState<Permission>> {
-    return this.#enqueue("--request-permissions", permissions);
+    return this.#enqueue("--request-permissions", permissions, signal);
   }
 
   async dispose(): Promise<void> {
@@ -71,17 +73,27 @@ export class DesktopPermissionService {
   #enqueue<Permission extends DesktopPermission>(
     command: PermissionCommand,
     permissions: readonly Permission[],
+    signal?: AbortSignal,
   ): Promise<DesktopPermissionState<Permission>> {
     const selected = [...new Set(permissions)].sort();
     if (selected.length === 0) {
       return Promise.reject(new Error("Choose at least one desktop permission."));
     }
     const key = `${command}:${selected.join(",")}`;
-    const existing = this.#inFlight.get(key);
+    // A cancellable setup owns its prompt. Do not coalesce its lifetime with another caller.
+    const existing = signal ? undefined : this.#inFlight.get(key);
     if (existing) return existing as Promise<DesktopPermissionState<Permission>>;
     const abort = new AbortController();
     let deadlineTimer: ReturnType<typeof setTimeout>;
+    let cancel: (() => void) | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
+      cancel = () => {
+        const error = new Error("Desktop permission setup was cancelled.");
+        abort.abort(error);
+        reject(error);
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
       deadlineTimer = setTimeout(
         () => {
           const error = new Error("The desktop permission operation timed out. Try again.");
@@ -106,9 +118,10 @@ export class DesktopPermissionService {
     });
     const tracked = Promise.race([run, deadline]).finally(() => {
       clearTimeout(deadlineTimer);
+      if (cancel) signal?.removeEventListener("abort", cancel);
       if (this.#inFlight.get(key) === tracked) this.#inFlight.delete(key);
     });
-    this.#inFlight.set(key, tracked);
+    if (!signal) this.#inFlight.set(key, tracked);
     // A deadline settles the caller immediately, but the lane remains owned until cleanup finishes.
     this.#queue = run.then(
       () => undefined,

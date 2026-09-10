@@ -5,6 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
+import { DesktopPermissionSetup } from "../settings/DesktopPermissionSetup";
 import {
   computerStatusQueryOptions,
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
@@ -185,20 +186,41 @@ export function ConnectedComputerSetupRequiredCard(
     notify: true,
   });
   return (
-    <ComputerSetupRequiredCard
-      {...props}
-      {...(status ? { status } : {})}
-      {...(statusQuery.isError
-        ? {
-            statusError:
-              statusQuery.error instanceof Error && statusQuery.error.message
-                ? statusQuery.error.message
-                : "Could not check computer access. Try again.",
-          }
-        : {})}
-      isPending={setup.isPending}
-      onSetUp={setup.provision}
-      onRecheck={() => void statusQuery.refetch()}
-    />
+    <div className="space-y-2">
+      <ComputerSetupRequiredCard
+        {...props}
+        {...(status ? { status } : {})}
+        {...(statusQuery.isError
+          ? {
+              statusError:
+                statusQuery.error instanceof Error && statusQuery.error.message
+                  ? statusQuery.error.message
+                  : "Could not check computer access. Try again.",
+            }
+          : {})}
+        isPending={setup.isPending}
+        onSetUp={setup.provision}
+        onRecheck={() => void statusQuery.refetch()}
+      />
+      {window.desktopBridge?.permissions ? (
+        <DesktopPermissionSetup
+          feature="computer"
+          grants={{
+            accessibility:
+              status?.availability.kind === "available" ||
+              (status?.availability.kind === "permission-required" &&
+                !status.availability.missing.includes("accessibility"))
+                ? "granted"
+                : "unknown",
+            screenRecording:
+              status?.availability.kind === "available" ||
+              (status?.availability.kind === "permission-required" &&
+                !status.availability.missing.includes("screenRecording"))
+                ? "granted"
+                : "unknown",
+          }}
+        />
+      ) : null}
+    </div>
   );
 }

@@ -59,11 +59,20 @@ export function useProvisionComputer(options?: {
     mutationKey: COMPUTER_PROVISION_MUTATION_KEY,
     mutationFn: provisionComputer,
     onSuccess: (result) => {
-      // The call already returns the refreshed status, so every surface reading
-      // it repaints from this round trip rather than racing a refetch against a
-      // backend that has only just rebuilt its providers.
-      queryClient.setQueryData(serverQueryKeys.computerStatus(), result.status);
-      if (notify) toastManager.add(computerProvisionResultToast(result));
+      // Legacy setup returns its final status; the native guide also pushes later grants.
+      if (globalThis.window?.desktopBridge?.permissions) {
+        // Native setup can advance while the initiating RPC is returning.
+        // Do not overwrite a newer grant push with its earlier status snapshot.
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.computerStatus() });
+      } else {
+        queryClient.setQueryData(serverQueryKeys.computerStatus(), result.status);
+      }
+      if (
+        notify &&
+        (!globalThis.window?.desktopBridge?.permissions ||
+          computerProvisionOutcome(result) === "ready")
+      )
+        toastManager.add(computerProvisionResultToast(result));
       if (computerProvisionOutcome(result) === "ready") onReady?.(result);
     },
     onError: (error: unknown) => {
@@ -89,7 +98,7 @@ export function useProvisionComputer(options?: {
       isPending,
       ...(missing ? { missing } : {}),
       error: mutation.error,
-      result: mutation.data,
+      result: globalThis.window?.desktopBridge?.permissions ? undefined : mutation.data,
     }),
   };
 }

@@ -3,6 +3,7 @@ import type {
   BrowserAnnotationEvent,
   BrowserUseOpenPanelRequest,
   DesktopBridge,
+  DesktopPermissionSetupState,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -177,6 +178,26 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     isSupported: () => ipcRenderer.invoke(IPC.notificationsIsSupported),
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
+  ...(process.platform === "darwin"
+    ? {
+        permissions: {
+          getState: () => ipcRenderer.invoke(IPC.permissions.getState),
+          start: (feature) => ipcRenderer.invoke(IPC.permissions.start, feature),
+          stop: () => ipcRenderer.invoke(IPC.permissions.stop),
+          retry: () => ipcRenderer.invoke(IPC.permissions.retry),
+          revealApp: () => ipcRenderer.invoke(IPC.permissions.revealApp),
+          startDrag: () => ipcRenderer.send(IPC.permissions.startDrag),
+          onState: (listener) => {
+            const handler = (
+              _event: Electron.IpcRendererEvent,
+              state: DesktopPermissionSetupState,
+            ) => listener(state);
+            ipcRenderer.on(IPC.permissions.state, handler);
+            return () => ipcRenderer.removeListener(IPC.permissions.state, handler);
+          },
+        } satisfies NonNullable<DesktopBridge["permissions"]>,
+      }
+    : {}),
   appSnap: {
     captureCurrentApp: (requestId) => ipcRenderer.invoke(IPC.appSnap.captureCurrentApp, requestId),
     cancelCapture: (requestId) => ipcRenderer.invoke(IPC.appSnap.cancelCapture, requestId),
