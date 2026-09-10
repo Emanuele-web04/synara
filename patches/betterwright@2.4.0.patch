@@ -159,9 +159,18 @@ index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..5a92ac2408b454ff19c839e913bd54ee
      return normalizeCookieSnapshot(snapshot, options);
  }
 diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
-index d704ee96ab1b8b89ca80f993572804327d0bb442..017e0a2d32dfa1315bfc8a7ab1351dd5096aa6f4 100644
+index d704ee96ab1b8b89ca80f993572804327d0bb442..46a1ff5c85f7c9f1540fe8990a712dedea2e4bb9 100644
 --- a/dist/src/vault-capture.js
 +++ b/dist/src/vault-capture.js
+@@ -76,7 +76,7 @@ function saveNeverOrigins(prefsPath, neverOrigins) {
+  * @param {number} [deps.promptTtlMs] prompt lifetime (default 30000)
+  * @param {number} [deps.modelWindowMs] model-activity window (default 5000)
+  */
+-export function installVaultCapture(context, deps = {}) {
++export function installVaultCapture(context, deps) {
+     const timings = {
+         gateMs: Math.max(50, Number(deps.gateMs) || 8_000),
+         confirmMs: Math.max(50, Number(deps.confirmMs) || 2_500),
 @@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
      const state = {
          disposed: false,
@@ -565,7 +574,7 @@ index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1
        "import": "./dist/src/index.js",
 diff --git a/types/capture.d.ts b/types/capture.d.ts
 new file mode 100644
-index 0000000..30cb7fe
+index 0000000000000000000000000000000000000000..3b95156e5daefedd1156860949ed6316e633b498
 --- /dev/null
 +++ b/types/capture.d.ts
 @@ -0,0 +1,58 @@
@@ -625,7 +634,7 @@ index 0000000..30cb7fe
 +
 +export function installVaultCapture(
 +  context: CaptureContext,
-+  deps?: Partial<VaultCaptureDeps>,
++  deps: VaultCaptureDeps,
 +): VaultCapture;
 diff --git a/types/public.d.ts b/types/public.d.ts
 index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
