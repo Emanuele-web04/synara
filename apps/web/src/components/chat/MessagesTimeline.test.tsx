@@ -364,7 +364,7 @@ describe("MessagesTimeline", () => {
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
     expect(markup).toContain("chat-user-message-bubble");
-    expect(markup).toContain("py-2");
+    expect(markup).toContain("py-3");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
