@@ -28,7 +28,7 @@ import {
   gitUnstageFilesMutationOptions,
   gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
-import { PlusIcon, RefreshCwIcon, RotateCcwIcon } from "~/lib/icons";
+import { PlusIcon, RefreshCwIcon, ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
@@ -109,7 +109,7 @@ function GitFileRow(props: {
         {props.actionIcon === "stage" ? (
           <PlusIcon className="size-3.5" />
         ) : (
-          <RotateCcwIcon className="size-3.5" />
+          <ResetIcon className="size-3.5" />
         )}
       </IconButton>
     </div>
