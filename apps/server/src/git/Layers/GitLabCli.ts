@@ -50,6 +50,9 @@ const DISCUSSION_PAGE_LIMIT = 5;
 const REVIEW_COMMENT_LIMIT = 20;
 // GitLab rebases asynchronously; poll `rebase_in_progress` for at most a minute.
 const REBASE_POLL_LIMIT = 60;
+// `glab api --input -` pipes the body verbatim without a media type, and GitLab answers HTTP 415
+// to a JSON body it was not told to parse. Every piped body therefore declares its own type.
+const JSON_BODY_ARGS = ["--input", "-", "-H", "Content-Type: application/json"] as const;
 
 type GitLabOperation =
   | "execute"
@@ -75,15 +78,12 @@ type GitLabOperation =
   | "checkoutPullRequest"
   | "projectArgs";
 
-const NOT_AUTHENTICATED_MARKERS = [
-  "401",
-  "unauthorized",
-  "glab auth login",
-  "no token",
-  "not logged in",
-  "invalid_token",
-  "authentication",
-] as const;
+// Deliberately anchored, not substring matches: a bare "401"/"404" also occurs inside process
+// ids, object ids, and temp-file names, and treating one of those as an auth failure blanks the
+// whole Pull Requests surface with a bogus "sign in to GitLab CLI" state.
+const NOT_AUTHENTICATED_PATTERN =
+  /\bhttp\s*401\b|\b401\s*(?:unauthorized|\{)|\bunauthorized\b|glab auth login|no token found|not logged in|invalid_token|authentication (?:failed|required)/i;
+const NOT_FOUND_PATTERN = /\bhttp\s*404\b|\b404\s*(?:not found|\{)|\bnot found\b|no merge request/i;
 
 function normalizeGitLabCliError(
   operation: GitLabOperation,
@@ -110,8 +110,7 @@ function normalizeGitLabCliError(
     });
   }
 
-  const lower = error.message.toLowerCase();
-  if (NOT_AUTHENTICATED_MARKERS.some((marker) => lower.includes(marker))) {
+  if (NOT_AUTHENTICATED_PATTERN.test(error.message)) {
     const hostFlag = host ? ` --hostname ${host}` : "";
     return new GitHostCliError({
       host: "gitlab",
@@ -122,7 +121,7 @@ function normalizeGitLabCliError(
     });
   }
 
-  if (lower.includes("404") || lower.includes("not found") || lower.includes("no merge request")) {
+  if (NOT_FOUND_PATTERN.test(error.message)) {
     return new GitHostCliError({
       host: "gitlab",
       operation,
@@ -574,16 +573,21 @@ function normalizeDetailComments(
   return (raw?.nodes ?? []).flatMap((note) => {
     // System notes are activity-feed entries ("assigned to @x"), never human comments.
     if (note.system === true) return [];
+    // Diff-anchored notes are review-thread comments, which `getPullRequestReviewComments`
+    // contributes separately. GitLab's `notes` connection returns both kinds, so keeping them
+    // here would show every review comment twice — `gh pr view --json comments` returns only
+    // issue comments, and this call has to match that split.
+    if (note.position) return [];
     return [
       {
         id: note.id,
-        kind: note.position ? ("review-comment" as const) : ("issue-comment" as const),
+        kind: "issue-comment" as const,
         author: normalizeActor(host, note.author),
         body: note.body ?? "",
         createdAt: note.createdAt,
         updatedAt: note.updatedAt?.trim() || null,
         url: note.url?.trim() || null,
-        path: note.position?.filePath?.trim() || null,
+        path: null,
         reviewState: null,
       } satisfies PullRequestComment,
     ];
@@ -814,7 +818,7 @@ export const makeGitLabCli = Effect.sync(() => {
         ...(input.host ? ["--hostname", input.host] : []),
         ...(input.method ? ["-X", input.method] : []),
         input.endpoint,
-        ...(input.stdin !== undefined ? ["--input", "-"] : []),
+        ...(input.stdin !== undefined ? JSON_BODY_ARGS : []),
       ],
       ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
       ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
@@ -828,7 +832,12 @@ export const makeGitLabCli = Effect.sync(() => {
     readonly cwd: string;
     readonly host: string;
     readonly query: string;
-    readonly variables: Readonly<Record<string, string>>;
+    /**
+     * A string value is sent with `--raw-field` and reaches GraphQL as a `String`; a number is
+     * sent with `--field` and reaches it as an `Int`. GitLab types `iid` as `String!` and `first`
+     * as `Int!`, so the wrong flag makes the server refuse to coerce the variable.
+     */
+    readonly variables: Readonly<Record<string, string | number>>;
     readonly schema: S;
     readonly operation: GitLabOperation;
     readonly invalidDetail: string;
@@ -842,7 +851,10 @@ export const makeGitLabCli = Effect.sync(() => {
         "graphql",
         "-f",
         `query=${input.query}`,
-        ...Object.entries(input.variables).flatMap(([key, value]) => ["-f", `${key}=${value}`]),
+        ...Object.entries(input.variables).flatMap(([key, value]) => [
+          typeof value === "number" ? "-F" : "-f",
+          `${key}=${value}`,
+        ]),
       ],
     }).pipe(
       Effect.flatMap((result) =>
@@ -970,7 +982,7 @@ export const makeGitLabCli = Effect.sync(() => {
             variables: {
               fullPath,
               state: GRAPHQL_MERGE_REQUEST_STATES[input.state],
-              first: String(input.limit ?? DEFAULT_LIST_LIMIT),
+              first: input.limit ?? DEFAULT_LIST_LIMIT,
               ...(input.involvement === "all" ? {} : { viewer: input.viewer }),
             },
             schema: RawGraphQlMergeRequestListResponseSchema,
@@ -1030,7 +1042,7 @@ export const makeGitLabCli = Effect.sync(() => {
             variables: {
               fullPath,
               viewer: input.viewer,
-              first: String(input.limit ?? DEFAULT_LIST_LIMIT),
+              first: input.limit ?? DEFAULT_LIST_LIMIT,
             },
             schema: RawGraphQlNumbersResponseSchema,
             operation: "listReviewRequestedPullRequestNumbers",
@@ -1233,8 +1245,7 @@ export const makeGitLabCli = Effect.sync(() => {
               "-X",
               "POST",
               `${apiPrefix}/merge_requests/${input.number}/notes`,
-              "--input",
-              "-",
+              ...JSON_BODY_ARGS,
             ],
             stdin: JSON.stringify({ body: input.body }),
           }),

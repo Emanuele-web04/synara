@@ -170,7 +170,10 @@ function classifyCloneFailure(host: GitHostKind, cause: unknown): ProjectProvisi
   if (
     lower.includes("repository not found") ||
     lower.includes("could not resolve to a repository") ||
-    lower.includes("http 404")
+    lower.includes("http 404") ||
+    // GitLab's own wording, from `git clone` against a missing or unreadable project.
+    lower.includes("the project you were looking for could not be found") ||
+    /repository '[^']*' not found/.test(lower)
   ) {
     return provisioningError(
       "REPOSITORY_NOT_FOUND",
@@ -400,12 +403,17 @@ export const makeProjectProvisioner = Effect.fn(function* (
         args:
           selection.kind === "github"
             ? ["repo", "clone", "--no-upstream", repository, stagingPath, "--", "--progress"]
-            : // glab clones by project URL so a self-hosted instance needs no ambient host.
-              ["repo", "clone", httpsUrl, stagingPath, "--", "--progress"],
+            : ["repo", "clone", httpsUrl, stagingPath, "--", "--progress"],
         timeoutMs: CLONE_TIMEOUT_MS,
         maxBufferBytes: CLONE_OUTPUT_LIMIT_BYTES,
         outputMode: "truncate",
-        env: cloneEnv,
+        env:
+          selection.kind === "gitlab"
+            ? // `glab repo clone` takes no `--hostname`, and it resolves the API host from the
+              // cwd — which is the destination parent, outside any repository. Without this the
+              // clone authenticates against gitlab.com and a self-hosted project answers 401.
+              { ...cloneEnv, GITLAB_HOST: selection.host }
+            : cloneEnv,
         onStdoutChunk: publishChunk,
         onStderrChunk: publishChunk,
       });

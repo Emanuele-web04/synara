@@ -23,6 +23,23 @@ function processResult(stdout: string, overrides: Record<string, unknown> = {}) 
   return { stdout, stderr: "", code: 0, signal: null, timedOut: false, ...overrides };
 }
 
+/**
+ * GraphQL variables as the flag/value pairs actually passed. Read adjacently on purpose: `glab`
+ * types a variable by its flag (`-f` string, `-F` int), so an assertion that only checks both
+ * tokens appear somewhere would accept a variable GitLab then refuses to coerce.
+ */
+function graphQlVariableArgs(args: ReadonlyArray<string>): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (let index = 0; index < args.length - 1; index += 1) {
+    const flag = args[index]!;
+    const value = args[index + 1]!;
+    if ((flag === "-f" || flag === "-F") && !value.startsWith("query=")) {
+      pairs.push([flag, value]);
+    }
+  }
+  return pairs;
+}
+
 // Shaped after a real `glab mr view -F json` payload on gitlab.dotblocks.fr.
 const REST_MERGE_REQUEST = {
   iid: 7,
@@ -179,18 +196,13 @@ layer("GitLabCliLive", (it) => {
 
       const args = mockedRunProcess.mock.calls[0]?.[1] ?? [];
       expect(args.slice(0, 4)).toEqual(["api", "--hostname", HOST, "graphql"]);
-      expect(args).toEqual(
-        expect.arrayContaining([
-          "-f",
-          "fullPath=dotblocks/platform/app",
-          "-f",
-          "state=opened",
-          "-f",
-          "first=20",
-          "-f",
-          "viewer=nouchetm",
-        ]),
-      );
+      // `first` is an `Int!`, so it must ride `-F`; the rest are `String`/`ID` and ride `-f`.
+      expect(graphQlVariableArgs(args)).toEqual([
+        ["-f", "fullPath=dotblocks/platform/app"],
+        ["-f", "state=opened"],
+        ["-F", "first=20"],
+        ["-f", "viewer=nouchetm"],
+      ]);
       expect(args.some((arg) => arg.includes("reviewerUsername: $viewer"))).toBe(true);
     }),
   );
@@ -210,7 +222,11 @@ layer("GitLabCliLive", (it) => {
       });
 
       const args = mockedRunProcess.mock.calls[0]?.[1] ?? [];
-      expect(args).toEqual(expect.arrayContaining(["-f", "state=merged", "-f", "first=51"]));
+      expect(graphQlVariableArgs(args)).toEqual([
+        ["-f", "fullPath=dotblocks/platform/app"],
+        ["-f", "state=merged"],
+        ["-F", "first=51"],
+      ]);
       expect(args.some((arg) => arg.startsWith("viewer="))).toBe(false);
       expect(args.some((arg) => arg.includes("authorUsername"))).toBe(false);
     }),
@@ -228,6 +244,11 @@ layer("GitLabCliLive", (it) => {
 
       assert.equal(error.reason, "not-found");
       assert.equal(error.host, "gitlab");
+      // GitLab types `iid` as `String!`, so it must stay a raw string variable.
+      expect(graphQlVariableArgs(mockedRunProcess.mock.calls[0]?.[1] ?? [])).toEqual([
+        ["-f", "fullPath=dotblocks/platform/app"],
+        ["-f", "iid=7"],
+      ]);
     }),
   );
 
@@ -296,6 +317,15 @@ layer("GitLabCliLive", (it) => {
                         author: { username: "reviewer-1" },
                         position: { filePath: "src/index.ts" },
                       },
+                      {
+                        id: "gid://gitlab/Note/3257",
+                        body: "Looks good, one nit.",
+                        system: false,
+                        createdAt: "2026-09-01T09:22:00Z",
+                        url: `${PROJECT_URL}/-/merge_requests/7#note_3257`,
+                        author: { username: "reviewer-1" },
+                        position: null,
+                      },
                     ],
                   },
                   commits: {
@@ -346,10 +376,13 @@ layer("GitLabCliLive", (it) => {
           completedAt: null,
         },
       ]);
-      // System notes are activity-feed entries, never comments.
-      assert.equal(detail.comments.length, 1);
-      assert.equal(detail.comments[0]?.kind, "review-comment");
-      assert.equal(detail.comments[0]?.path, "src/index.ts");
+      // System notes are activity-feed entries, never comments. The diff-anchored note is a
+      // review-thread comment, contributed by `getPullRequestReviewComments`, so including it
+      // here too would render it twice.
+      assert.deepStrictEqual(
+        detail.comments.map((comment) => ({ kind: comment.kind, body: comment.body })),
+        [{ kind: "issue-comment", body: "Looks good, one nit." }],
+      );
       assert.deepStrictEqual(detail.commits, [
         {
           oid: "bd73862879f6f0237f624640960cae84736fa7b7",
@@ -456,6 +489,7 @@ layer("GitLabCliLive", (it) => {
 
       assert.deepStrictEqual(result, { mergeOutcome: "merged" });
       const mergeCall = mockedRunProcess.mock.calls[1];
+      // GitLab answers HTTP 415 to a piped JSON body without an explicit media type.
       expect(mergeCall?.[1]).toEqual([
         "api",
         "--hostname",
@@ -465,6 +499,8 @@ layer("GitLabCliLive", (it) => {
         `${PROJECT_API}/merge_requests/7/merge`,
         "--input",
         "-",
+        "-H",
+        "Content-Type: application/json",
       ]);
       expect(mergeCall?.[2]).toEqual(
         expect.objectContaining({ stdin: JSON.stringify({ squash: true }) }),
@@ -627,6 +663,8 @@ layer("GitLabCliLive", (it) => {
         `${PROJECT_API}/merge_requests/7/notes`,
         "--input",
         "-",
+        "-H",
+        "Content-Type: application/json",
       ]);
       expect(args?.some((arg) => arg.includes("secret review note"))).toBe(false);
       expect(options).toEqual(
@@ -912,6 +950,34 @@ layer("GitLabCliLive", (it) => {
         unauthenticated.detail,
         `GitLab CLI is not authenticated. Run \`glab auth login --hostname ${HOST}\` and retry.`,
       );
+    }),
+  );
+
+  it.effect("does not read a digit run containing 401 or 404 as an auth or missing failure", () =>
+    Effect.gen(function* () {
+      const glab = yield* GitLabCli;
+      // Verbatim from a real `glab mr create` failure: the temp body file carries the process id,
+      // and a substring match on "401" turned that into a bogus not-authenticated state.
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "glab mr create --description-file /tmp/synara-pr-body-40175-ec5f45dd.md failed (code=1). " +
+            "Failed to create merge request. Created recovery file: /tmp/glab-cli/recover/mr.json",
+        ),
+      );
+      const createFailure = yield* glab
+        .createPullRequest({
+          cwd: "/repo",
+          baseBranch: "main",
+          headSelector: "feat/gitlab",
+          title: "t",
+          bodyFile: "/tmp/body.md",
+        })
+        .pipe(Effect.flip);
+
+      mockedRunProcess.mockRejectedValueOnce(new Error("pipeline 40412 has no jobs"));
+      const digitRun = yield* glab.getViewerLogin({ cwd: "/repo", host: HOST }).pipe(Effect.flip);
+
+      assert.deepStrictEqual([createFailure.reason, digitRun.reason], ["other", "other"]);
     }),
   );
 

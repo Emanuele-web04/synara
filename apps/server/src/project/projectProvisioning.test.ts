@@ -262,6 +262,52 @@ describe("project provisioning", () => {
     ]);
   });
 
+  it("reports GitLab's missing-project wording as REPOSITORY_NOT_FOUND", async () => {
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
+        const git = {
+          // Verbatim from `git clone` against a missing project on a self-hosted GitLab.
+          execute: () =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "clone public project",
+                command: "git clone",
+                cwd: parent,
+                detail:
+                  "remote: The project you were looking for could not be found or you don't have permission to view it.\n" +
+                  "fatal: repository 'https://gitlab.dotblocks.fr/acme/nope.git/' not found",
+              }),
+            ),
+        } as unknown as GitCoreShape;
+        const provisioner = yield* makeProjectProvisioner({
+          homeDir: parent,
+          fileSystem,
+          path,
+          git,
+          gitHost: makeGitHostRouter({ gitlab: unavailableGitLabCli() }),
+        });
+        return yield* provisioner
+          .provisionCheckout(
+            makeInput(parent, {
+              host: "gitlab",
+              repository: "gitlab.dotblocks.fr/acme/nope",
+              directoryName: "nope",
+            }),
+            { publish: () => Effect.void },
+          )
+          .pipe(Effect.flip);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(error.code).toBe("REPOSITORY_NOT_FOUND");
+    expect(error.message).toBe(
+      "The GitLab repository was not found, or the current account cannot access it.",
+    );
+  });
+
   it("rejects a GitLab input that is neither a project path nor a project URL", async () => {
     const error = await Effect.runPromise(
       Effect.gen(function* () {
