@@ -108,6 +108,8 @@ interface EngineAdmissionState {
 
 type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
+  /** Sequences whose deferred phase was settled inside the commit transaction. */
+  readonly deferredSettledSequences: ReadonlySet<number>;
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
 };
@@ -822,6 +824,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         never
       > = Effect.gen(function* () {
         const committedEvents: OrchestrationEvent[] = [];
+        const deferredSettledSequences = new Set<number>();
         let nextCommandReadModel = commandReadModel;
 
         if (command.type === "thread.turn.start") {
@@ -851,7 +854,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (isShellMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
-            yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            const { deferredPhaseSettled } =
+              yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            if (deferredPhaseSettled) deferredSettledSequences.add(savedEvent.sequence);
           }
           committedEvents.push(savedEvent);
         }
@@ -884,6 +889,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
         return {
           committedEvents,
+          deferredSettledSequences,
           lastSequence: lastSavedEvent.sequence,
           nextCommandReadModel,
         } as const;
@@ -935,6 +941,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         committedCommand.committedEvents,
         (event) =>
           Effect.gen(function* () {
+            // Settled inside the commit transaction; no deferred work remains.
+            if (committedCommand.deferredSettledSequences.has(event.sequence)) return;
             const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
             if (isDeferredProjectionDirty) {
               yield* scheduleDeferredProjectionCatchUp({
