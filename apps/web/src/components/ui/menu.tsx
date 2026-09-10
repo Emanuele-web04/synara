@@ -109,8 +109,9 @@ function MenuPopupBase({
           className={cn(
             "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
-            isComposerSurface ? className : null,
             popupSurfaceClassName,
+            // Last so a caller's className can override surface tokens (e.g. a rounder radius).
+            isComposerSurface ? className : null,
           )}
           data-slot="menu-popup"
           {...props}
@@ -401,6 +402,12 @@ function MenuSub({ keepOpenOnFocusOut: keepOpenOnFocusOutProp, ...props }: MenuS
   );
 }
 
+/** Unstyled submenu trigger for bespoke layouts (e.g. the effort slider card's stacked
+ *  model label). Prefer `MenuSubTrigger` for regular option rows. */
+function MenuSubTriggerBase(props: MenuPrimitive.SubmenuTrigger.Props) {
+  return <MenuPrimitive.SubmenuTrigger data-slot="menu-sub-trigger-base" {...props} />;
+}
+
 function MenuSubTrigger({
   className,
   inset,
@@ -483,5 +490,6 @@ export {
   MenuShortcut,
   MenuSub,
   MenuSubTrigger,
+  MenuSubTriggerBase,
   MenuSubPopup,
 };

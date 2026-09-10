@@ -295,6 +295,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show token-by-token output while a response is in progress. streaming",
   },
   {
+    id: "behavior:effort-slider",
+    section: "behavior",
+    title: "Effort slider",
+    keywords:
+      "Show reasoning effort as a slider in the composer model menu once a chat has started. fast mode reasoning thinking level picker",
+  },
+  {
     id: "behavior:auto-open-simulator",
     section: "behavior",
     title: "Automatically open simulator",
