@@ -25,12 +25,13 @@
  * and never thinks about it again - every later update loads live, because the
  * path is already there.
  */
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { verifyPrebuilt } from "./provisioning/prebuiltVerification.ts";
+import { withProvisioningFileLock } from "./provisioning/fileLock.ts";
 
 /**
  * The env script's name, which is also the uninstall instruction: this file and
@@ -241,7 +242,7 @@ export async function installPluginBinary(
 ): Promise<string> {
   await mkdir(pluginDirectory, { recursive: true });
   const destination = join(pluginDirectory, `${pluginId}.so`);
-  await copyFile(sourcePath, destination);
+  await copyFile(sourcePath, destination, constants.COPYFILE_EXCL);
   await chmod(destination, 0o755);
   return destination;
 }
@@ -331,6 +332,7 @@ export interface ProvisionResult {
 }
 
 export interface ProvisionDependencies {
+  readonly signal?: AbortSignal;
   readonly target: InstallTarget;
   readonly env?: NodeJS.ProcessEnv;
   /** Files already in the plugin directory, for the version suffix. */
@@ -368,6 +370,15 @@ export interface ProvisionDependencies {
  * two and give the two halves different ideas about which id is newest.
  */
 export async function provisionKWinPlugin(deps: ProvisionDependencies): Promise<ProvisionResult> {
+  return withProvisioningFileLock(
+    join(deps.target.pluginDirectory, ".synara-provision.lock"),
+    (signal) => provisionKWinPluginLocked({ ...deps, signal }),
+    deps.signal,
+  );
+}
+
+async function provisionKWinPluginLocked(deps: ProvisionDependencies): Promise<ProvisionResult> {
+  deps.signal?.throwIfAborted();
   const env = deps.env ?? process.env;
   // Written before anything else, and on every run. It is the piece that makes
   // the install visible to KWin at all, and it is cheap and idempotent, so there
@@ -412,8 +423,13 @@ export async function provisionKWinPlugin(deps: ProvisionDependencies): Promise<
     action = "installed-from-source";
   }
 
-  const pluginId = nextPluginId(await deps.listInstalled());
+  const pluginId = nextPluginId([
+    ...(await deps.listInstalled()),
+    ...(await readdir(deps.target.pluginDirectory)),
+  ]);
+  deps.signal?.throwIfAborted();
   const pluginPath = await installPluginBinary(source, deps.target.pluginDirectory, pluginId);
+  deps.signal?.throwIfAborted();
   await pruneSupersededPlugins(deps.target.pluginDirectory, pluginId);
   await writeInstallStamp(deps.stampPath, {
     pluginId,

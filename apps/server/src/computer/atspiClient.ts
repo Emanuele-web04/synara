@@ -10,6 +10,7 @@ import {
 
 import type { ComputerWindow } from "@synara/contracts";
 import type { AtspiWindowTree } from "./atspiTreeTargeting.ts";
+import { desktopOperationSignal } from "./DesktopOperationQueue.ts";
 
 const HELPER_READ_TREE_METHOD = "read-tree";
 const HELPER_SET_TEXT_METHOD = "set-text";
@@ -90,6 +91,8 @@ export class AtspiHelperClient implements AtspiTreeReader {
   private reconnectFailures = 0;
   private startPromise: Promise<void> | null = null;
   private disposed = false;
+  private requestTail: Promise<unknown> = Promise.resolve();
+  private queuedRequests = 0;
 
   constructor(private readonly options: AtspiHelperClientOptions = {}) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? HELPER_REQUEST_TIMEOUT_MS;
@@ -112,7 +115,7 @@ export class AtspiHelperClient implements AtspiTreeReader {
       path: [...write.path],
       text: write.text,
       ...(write.role ? { role: write.role } : {}),
-      ...(write.label ? { label: write.label } : {}),
+      ...(write.label !== undefined ? { label: write.label ?? "" } : {}),
     });
     return isRecord(result) && result.ok === true;
   }
@@ -141,7 +144,25 @@ export class AtspiHelperClient implements AtspiTreeReader {
     this.startPromise = null;
   }
 
-  private async request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (this.disposed) return Promise.reject(new Error("AT-SPI helper is disposed."));
+    if (this.queuedRequests >= 64)
+      return Promise.reject(new Error("AT-SPI request queue is full."));
+    this.queuedRequests += 1;
+    const signal = desktopOperationSignal();
+    const result = this.requestTail
+      .then(() => {
+        signal?.throwIfAborted();
+        return this.requestNow(method, params);
+      })
+      .finally(() => {
+        this.queuedRequests -= 1;
+      });
+    this.requestTail = result.catch(() => undefined);
+    return result;
+  }
+
+  private async requestNow(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (this.disposed) throw new Error("AT-SPI helper is disposed.");
     await this.ensureStarted();
     const registry = this.registry;

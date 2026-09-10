@@ -23,7 +23,7 @@ CACHE_ROOT="${SYNARA_KWIN_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/synara/kwi
 STATE_ROOT="${SYNARA_KWIN_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/synara/kwin-computer-use-plugin}"
 BUILD_DIR="${SYNARA_KWIN_BUILD_DIR:-$CACHE_ROOT/build}"
 STAMP_FILE="$STATE_ROOT/install.stamp"
-LOCK_FILE="$STATE_ROOT/install.lock"
+LOCK_FILE="$PLUGIN_DIR/.synara-provision.lock"
 BUILD_LOCK_FILE="$STATE_ROOT/build.lock"
 # Must match s_service in synaracomputeruseplugin.cpp and COMPUTER_SERVICE in
 # the server's kwinDbus.ts: it is the name the health check pins an owner for.
@@ -174,6 +174,7 @@ source_hash() {
             metadata.json \
             main.cpp \
             synaracomputeruseplugin.h \
+            computeruseauth.h \
             synaracomputeruseplugin.cpp \
             synaracomputerusebuildinfo.h.in |
             sha256sum |
@@ -182,16 +183,14 @@ source_hash() {
 }
 
 path_signature() {
-    local path
-    for path in \
-        /usr/lib64/libkwin.so* \
-        /usr/lib64/cmake/KWin/KWinConfig.cmake \
-        /usr/lib64/cmake/KWin/KWinConfigVersion.cmake \
-        /usr/lib64/cmake/KWin/KWinTargets.cmake
+    local path libdir
+    for libdir in /usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu; do
+    for path in "$libdir"/libkwin.so* "$libdir"/cmake/KWin/*.cmake
     do
         if [[ -e "$path" ]]; then
             stat -Lc '%n:%i:%s:%Y' "$path"
         fi
+    done
     done
 }
 
@@ -415,15 +414,8 @@ if [[ -n "$old_plugin_ids" ]]; then
     done <<< "$old_plugin_ids"
 fi
 
-# Whoever owns the well-known service name owns healthJson and every later
-# call, so the unique owner is pinned across the LoadPlugin boundary: a load
-# that left the previous registration in place - an unload race, or another
-# process holding the name - would make this script's own health check run
-# against the wrong build.
-service_owner_before=""
-if owner_response="$(busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetNameOwner s "$SERVICE_NAME" 2>/dev/null)"; then
-    service_owner_before="$owner_response"
-fi
+# Plugin generations share KWin's D-Bus connection. Verify the compiled build
+# identity below, rather than requiring a different connection owner.
 
 load_response=""
 if ! load_response="$(busctl --user call org.kde.KWin /Plugins org.kde.KWin.Plugins LoadPlugin s "$plugin_id" 2>&1)"; then
@@ -443,9 +435,6 @@ for _ in 1 2 3; do
 done
 if [[ -z "$service_owner_now" ]]; then
     die "$plugin_id loaded, but nothing owns $SERVICE_NAME on the session bus, so the plugin did not register its service."
-fi
-if [[ -n "$service_owner_before" && "$service_owner_before" == "$service_owner_now" ]]; then
-    die "$SERVICE_NAME is still owned by $service_owner_now from before $plugin_id was loaded, so the health check below would answer from the wrong process."
 fi
 
 health_response=""

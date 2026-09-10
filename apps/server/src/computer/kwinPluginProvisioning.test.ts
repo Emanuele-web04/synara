@@ -377,7 +377,7 @@ describe("provisioning", () => {
     expect(result.pluginId).toBe("SynaraComputerUsePluginV5");
     const remaining = await readdir(deps.target.pluginDirectory);
     expect(remaining.toSorted()).toEqual(
-      ["SynaraComputerUsePluginV5.so", "keep-me.txt"].toSorted(),
+      [".synara-provision.lock", "SynaraComputerUsePluginV5.so", "keep-me.txt"].toSorted(),
     );
   });
 

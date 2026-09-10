@@ -200,7 +200,7 @@ export function spawnClipboardCommand(
           return "";
         }
       };
-      resolve({ outcome, code, stdout: readStdout(), stderr: stderr.text() });
+      resolve({ outcome, code, stdout: readStdout(), stderr: stderr.diagnostic() });
     };
 
     child.on("error", (error) => {
@@ -257,6 +257,13 @@ class ChunkBuffer {
       );
     }
     return Buffer.concat(this.chunks).toString("utf8");
+  }
+
+  diagnostic(): string {
+    return (
+      Buffer.concat(this.chunks).toString("utf8") +
+      (this.overflowed ? " [diagnostic truncated]" : "")
+    );
   }
 }
 

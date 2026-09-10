@@ -7,6 +7,7 @@
 #pragma once
 
 #include "plugin.h"
+#include "computeruseauth.h"
 #include "scene/item.h"
 
 #include <QDBusContext>
@@ -86,6 +87,7 @@ class SynaraComputerUsePlugin : public Plugin, public QDBusContext
 public:
     explicit SynaraComputerUsePlugin();
     ~SynaraComputerUsePlugin() override;
+    Q_INVOKABLE QString authenticate(const QString &token);
 
     Q_INVOKABLE QString healthJson() const;
     Q_INVOKABLE QString stateJson() const;
@@ -116,6 +118,7 @@ Q_SIGNALS:
 
 private:
     struct CaptureRequest;
+    ComputerUseAuth m_auth;
 
     enum class StopReason {
         Request,

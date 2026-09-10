@@ -5,6 +5,9 @@ import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 
+import { StillFrameDedupe } from "./stillFrameDedupe.ts";
+import { COMPUTER_MODIFIER_KEY_NAMES } from "@synara/shared/computerKeyNames";
+import { assertDesktopOperationActive } from "./DesktopOperationQueue.ts";
 import {
   COMPUTER_KWIN_BACKEND,
   COMPUTER_RELEASE_CONTROL_HOTKEY,
@@ -320,9 +323,12 @@ export class KWinComputerBackend implements ComputerBackend {
   private reconnecting = false;
   private readonly healthState: ComputerHealthState;
   private disposed = false;
+  private readonly provisionAbort = new AbortController();
+  private refusedInstance: string | undefined;
   private streamListener: ComputerFrameListener | undefined;
   private streamTimer: ReturnType<typeof setInterval> | undefined;
   private stillInFlight = false;
+  private readonly stillDedupe = new StillFrameDedupe();
   private captureQueue: Promise<void> = Promise.resolve();
   private capturePending = 0;
   private startPromise: Promise<void> | undefined;
@@ -386,6 +392,7 @@ export class KWinComputerBackend implements ComputerBackend {
       options.provisionPlugin ??
       (({ allowPrebuilt, force }) =>
         provisionKWinPlugin({
+          signal: this.provisionAbort.signal,
           target: resolveInstallTarget(SYSTEM_QT_PLUGIN_ROOTS),
           force,
           // Numbering scans every root a plugin could live in, not just the
@@ -812,7 +819,10 @@ export class KWinComputerBackend implements ComputerBackend {
     const capsLockOn = (await this.readPluginState(plugin)).capsLockOn === true;
     const strokes = qwertyTextKeyStrokes(text, { capsLock: capsLockOn });
     const sink = this.inputSink(plugin);
-    for (const stroke of strokes) await pressKeyStroke({ sink, stroke });
+    for (const stroke of strokes) {
+      assertDesktopOperationActive();
+      await pressKeyStroke({ sink, stroke });
+    }
     return { value: text };
   }
 
@@ -824,6 +834,10 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   async hotkey(keys: readonly string[]): Promise<ComputerBackendActionResult> {
+    const modifiers: readonly string[] = COMPUTER_MODIFIER_KEY_NAMES;
+    if (keys.filter((key) => !modifiers.includes(key.toLowerCase())).length !== 1) {
+      throw new ComputerBackendError("A hotkey requires exactly one non-modifier key.");
+    }
     const strokes = keys.map(keyStrokeForKey);
     const plugin = await this.ensurePlugin();
     await pressHotkeyStrokes({ sink: this.inputSink(plugin), strokes });
@@ -929,6 +943,7 @@ export class KWinComputerBackend implements ComputerBackend {
     // newest attach's interval survives.
     if (this.streamTimer !== undefined) clearInterval(this.streamTimer);
     this.streamListener = listener;
+    this.stillDedupe.reset();
     await this.publishStillFrame();
     this.streamTimer = setInterval(() => {
       void this.publishStillFrame();
@@ -937,6 +952,7 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   async detachStream(): Promise<void> {
+    this.stillDedupe.reset();
     this.streamListener = undefined;
     if (this.streamTimer !== undefined) clearInterval(this.streamTimer);
     this.streamTimer = undefined;
@@ -944,6 +960,7 @@ export class KWinComputerBackend implements ComputerBackend {
 
   async requestKeyframe(): Promise<void> {
     if (!this.streamListener) return;
+    this.stillDedupe.deferForce();
     await this.publishStillFrame();
   }
 
@@ -1062,6 +1079,7 @@ export class KWinComputerBackend implements ComputerBackend {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.provisionAbort.abort();
     await this.connectPromise?.catch(() => undefined);
     await this.startPromise?.catch(() => undefined);
     await this.detachStream();
@@ -1179,6 +1197,12 @@ export class KWinComputerBackend implements ComputerBackend {
     // every pointer, key, and capture call this server sends, and could serve
     // forged state and screenshots an agent then acts on.
     const ownerBefore = await dbus.nameOwner(COMPUTER_SERVICE);
+    const instanceBefore = ownerBefore
+      ? await dbus
+          .connectPlugin()
+          .then((plugin) => plugin.instanceId)
+          .catch(() => undefined)
+      : undefined;
     let loaded: readonly string[];
     try {
       loaded = await dbus.listLoadedPluginIds();
@@ -1197,6 +1221,13 @@ export class KWinComputerBackend implements ComputerBackend {
       }
     }
     let plan = resolveSynaraPluginLoad({ loaded, installed: await this.installedPluginIds() });
+    if (ownerBefore && instanceBefore === undefined) {
+      const installed = await this.provisionOnce(false, true);
+      if (installed.requiresRelogin) throw new ComputerBackendError(installed.summary);
+      plan = resolveSynaraPluginLoad({ loaded: [], installed: await this.installedPluginIds() });
+      if (plan?.kind === "replace")
+        plan = { ...plan, unload: loaded.filter((id) => id.startsWith("SynaraComputerUsePlugin")) };
+    }
     if (!plan) {
       // Nothing to load: this is a machine that has the update but has never had
       // the plugin, which is the ordinary first-run case rather than an error.
@@ -1236,18 +1267,27 @@ export class KWinComputerBackend implements ComputerBackend {
         if (!accepted) throw new ComputerBackendError(await this.describeLoadRefusal(refusedId));
         plan = { kind: "replace", unload: plan.unload, pluginId: accepted };
       }
-      // A successful load must have moved the name to a *new* registration. If
-      // the owner is unchanged, whatever answered before still holds the name —
-      // an unload race or a squatter — and connecting would drive the wrong
-      // build. Retryable: a genuine race settles within moments, and the next
-      // attempt re-checks from scratch.
-      await assertFreshServiceOwner(await dbus.nameOwner(COMPUTER_SERVICE), ownerBefore);
+      // Reloads share KWin's D-Bus connection. The authenticated plugin instance
+      // below, rather than its connection owner, identifies a new generation.
+      assertServiceOwnerPresent(await dbus.nameOwner(COMPUTER_SERVICE));
     } else {
       // Nothing was (re)loaded, so the name may legitimately be held by the
       // generation already running — but something must hold it at all.
       assertServiceOwnerPresent(await dbus.nameOwner(COMPUTER_SERVICE));
     }
     const plugin = await dbus.connectPlugin();
+    if (
+      (plan.kind === "replace" &&
+        instanceBefore !== undefined &&
+        plugin.instanceId === instanceBefore) ||
+      (this.refusedInstance !== undefined && plugin.instanceId === this.refusedInstance)
+    ) {
+      this.refusedInstance = plugin.instanceId;
+      throw new ComputerBackendError(
+        "The compositor did not replace the previous computer plugin instance.",
+      );
+    }
+    this.refusedInstance = undefined;
     return await this.finishPluginConnection(plugin, plan.pluginId);
   }
 
@@ -1540,8 +1580,10 @@ export class KWinComputerBackend implements ComputerBackend {
       },
       button: (code, pressed, operation) =>
         this.pluginSuccess(operation, () => plugin.button(code, pressed)),
-      key: (code, pressed, operation) =>
-        this.pluginSuccess(operation, () => plugin.key(code, pressed)),
+      key: (code, pressed, operation) => {
+        if (pressed) assertDesktopOperationActive();
+        return this.pluginSuccess(operation, () => plugin.key(code, pressed));
+      },
     };
   }
 
@@ -1657,6 +1699,7 @@ export class KWinComputerBackend implements ComputerBackend {
       // the browser, where the only symptom is a blank pane.
       readPngDimensions(data, { source: CAPTURE_SOURCE });
       if (this.streamListener !== listener) return;
+      if (!this.stillDedupe.shouldPublish(data, this.stillDedupe.takeForce(false))) return;
       const frame = {
         sequence: this.nextSequence++,
         timestampMs: this.now(),
@@ -2081,27 +2124,6 @@ export function assertServiceOwnerPresent(owner: string | undefined): void {
     `Nothing owns ${COMPUTER_SERVICE} on the session bus even though KWin reports a Synara plugin loaded, ` +
       "so no computer-use plugin is answering. Retrying may help; if this persists, another process may be interfering with the session bus.",
   );
-}
-
-export function assertFreshServiceOwner(
-  owner: string | undefined,
-  previous: string | undefined,
-): void {
-  if (previous === undefined) {
-    assertServiceOwnerPresent(owner);
-    return;
-  }
-  if (owner === undefined) {
-    throw new ServiceOwnerMismatchError(
-      `Nobody owns ${COMPUTER_SERVICE} after LoadPlugin succeeded, so the plugin that was just loaded did not register its service.`,
-    );
-  }
-  if (owner === previous) {
-    throw new ServiceOwnerMismatchError(
-      `${COMPUTER_SERVICE} is still owned by ${previous}, its holder from before this server loaded a new plugin generation. ` +
-        "Connecting anyway would drive whichever process answered first rather than the one just loaded, so it was refused.",
-    );
-  }
 }
 
 function isMethodLevelDbusError(error: unknown): boolean {

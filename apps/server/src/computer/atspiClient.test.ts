@@ -26,6 +26,50 @@ const WINDOW: ComputerWindow = {
 };
 
 describe("AtspiHelperClient", () => {
+  it("starts the timeout only when the single-threaded helper can accept the next request", async () => {
+    vi.useFakeTimers();
+    const child = new FakeHelperProcess();
+    const ids: number[] = [];
+    child.stdin.on("data", (chunk) => ids.push(JSON.parse(chunk.toString()).id));
+    const client = new AtspiHelperClient({
+      requestTimeoutMs: 100,
+      spawnProcess: () => child as unknown as ChildProcessWithoutNullStreams,
+    });
+    try {
+      const first = client.readTrees([WINDOW]);
+      const second = client.readTrees([WINDOW]);
+      await vi.advanceTimersByTimeAsync(80);
+      expect(ids).toHaveLength(1);
+      child.stdout.write(
+        JSON.stringify({ jsonrpc: "2.0", id: ids[0], result: { trees: [] } }) + "\n",
+      );
+      await first;
+      await vi.advanceTimersByTimeAsync(80);
+      expect(ids).toHaveLength(2);
+      expect(child.kill).not.toHaveBeenCalled();
+      child.stdout.write(
+        JSON.stringify({ jsonrpc: "2.0", id: ids[1], result: { trees: [] } }) + "\n",
+      );
+      await second;
+    } finally {
+      await client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([null, ""])("transmits unlabeled node identity: %s", async (label) => {
+    const requests: Array<Record<string, unknown>> = [];
+    const child = scriptedHelper(requests, () => ({ ok: true }));
+    const client = new AtspiHelperClient({
+      spawnProcess: () => child as unknown as ChildProcessWithoutNullStreams,
+    });
+    try {
+      await client.setText({ window: WINDOW, path: [0], text: "value", label });
+      expect(requests[0]?.params).toMatchObject({ label: "" });
+    } finally {
+      await client.dispose();
+    }
+  });
   it("starts the first helper request without the reconnect backoff", async () => {
     vi.useFakeTimers();
     try {
@@ -45,7 +89,7 @@ describe("AtspiHelperClient", () => {
       });
       const request = client.readTrees([WINDOW]);
 
-      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(0);
       expect(spawned).toBe(true);
       await vi.runAllTicks();
       await expect(request).resolves.toEqual([]);

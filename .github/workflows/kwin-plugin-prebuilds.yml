@@ -208,7 +208,7 @@ jobs:
           path="$(bash apps/server/native/computer-use-kwin/scripts/install-and-load.sh --build-only | tail -n 1)"
           [ -f "$path" ] || { echo "::error::--build-only printed no usable path"; exit 1; }
           mkdir -p out
-          name="SynaraComputerUsePlugin-kwin${{ steps.kwin.outputs.version }}-${{ matrix.arch }}.so"
+          name="SynaraComputerUsePlugin-kwin${{ steps.kwin.outputs.version }}-${{ matrix.arch }}-${{ matrix.distro.id }}.so"
           cp "$path" "out/$name"
           # The entry the assemble job folds into manifest.json. Written here
           # because this is the only place that knows what was actually linked.

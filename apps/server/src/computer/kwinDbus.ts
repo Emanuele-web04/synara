@@ -5,6 +5,7 @@ import type dbusModule from "dbus-next";
 import type { ProxyObject as DbusProxyObject } from "dbus-next";
 
 import { unwrapDbusValue, withDbusTimeout } from "./dbusPlumbing.ts";
+import { COMPUTER_SERVER_OWNER, createComputerSessionAuth } from "./computerSessionAuth.ts";
 
 export const KWIN_SERVICE = "org.kde.KWin";
 export const KWIN_PLUGINS_PATH = "/Plugins";
@@ -33,6 +34,7 @@ export class KWinDbusTimeoutError extends Error {
 }
 
 export interface KWinComputerPluginApi {
+  readonly instanceId?: string;
   readonly healthJson: () => Promise<unknown>;
   readonly stateJson: () => Promise<unknown>;
   readonly windowsJson: () => Promise<unknown>;
@@ -148,6 +150,22 @@ export async function openComputerSessionBus(
     throw error;
   }
   const daemon = busDaemon.getInterface(DBUS_INTERFACE);
+  let authentication: Awaited<ReturnType<typeof createComputerSessionAuth>>;
+  try {
+    const ownership = unwrapDbusValue(
+      await invoke(daemon, "RequestName", COMPUTER_SERVER_OWNER, 4),
+    );
+    if (ownership !== 1)
+      throw new Error(
+        "Another Synara server owns this desktop. Stop its computer session before using this server.",
+      );
+    authentication = await createComputerSessionAuth(
+      String(unwrapDbusValue(await invoke(daemon, "GetId"))),
+    );
+  } catch (error) {
+    bus.disconnect();
+    throw error;
+  }
   const resolveNameOwner = async (name: string): Promise<string | undefined> => {
     try {
       const owner = await invoke(daemon, "GetNameOwner", name);
@@ -190,7 +208,12 @@ export async function openComputerSessionBus(
         "getProxyObject",
       );
       const plugin = object.getInterface(COMPUTER_INTERFACE);
-      return makePluginApi(plugin);
+      const instanceId = unwrapDbusValue(
+        await invoke(plugin, "authenticate", authentication.token),
+      );
+      if (typeof instanceId !== "string" || instanceId.length === 0)
+        throw new Error("Computer plugin authentication failed; rebuild the plugin.");
+      return { ...makePluginApi(plugin), instanceId };
     },
     onDisconnect: (listener) => {
       disconnectListeners.add(listener);
@@ -202,6 +225,7 @@ export async function openComputerSessionBus(
       disconnectListeners.clear();
       eventBus.off("disconnect", onDisconnectEvent);
       eventBus.off("error", onDisconnectEvent);
+      await authentication.close();
       bus.disconnect();
     },
   };

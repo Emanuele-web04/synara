@@ -104,6 +104,9 @@ describe("connectPlugin owner pinning", () => {
               }
               return Promise.resolve(name === COMPUTER_SERVICE ? options.owner : ":0.0");
             },
+            RequestName: async () => 1,
+            GetId: async () => `test-${process.pid}`,
+            authenticate: async () => "test-instance",
           }),
         });
       },

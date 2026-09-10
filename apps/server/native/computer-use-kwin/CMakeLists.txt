@@ -87,3 +87,9 @@ set_target_properties(SynaraComputerUsePlugin PROPERTIES
 )
 
 install(TARGETS SynaraComputerUsePlugin DESTINATION "${KDE_INSTALL_QTPLUGINDIR}/kwin/plugins")
+
+option(SYNARA_BUILD_AUTH_PROBE "Build the isolated D-Bus authentication test fixture" OFF)
+if(SYNARA_BUILD_AUTH_PROBE)
+    add_executable(SynaraComputerAuthProbe authprobe.cpp)
+    target_link_libraries(SynaraComputerAuthProbe PRIVATE Qt6::Core Qt6::DBus)
+endif()

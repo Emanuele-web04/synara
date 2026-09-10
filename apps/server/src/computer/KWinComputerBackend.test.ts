@@ -32,6 +32,7 @@ import {
   type KWinComputerPluginApi,
 } from "./kwinDbus.ts";
 import { GLIDE_FRAME_INTERVAL_MS } from "./pointerSequencing.ts";
+import { DesktopOperationQueue } from "./DesktopOperationQueue.ts";
 import { resolveInstallTarget } from "./kwinPluginProvisioning.ts";
 
 /** The same roots KWinComputerBackend feeds resolveInstallTarget. */
@@ -57,6 +58,7 @@ function pngOfSize(width: number, height: number): Uint8Array {
 }
 
 class FakePlugin implements KWinComputerPluginApi {
+  instanceId = "initial-instance";
   readonly calls: Array<{ readonly method: string; readonly args: readonly unknown[] }> = [];
   capture = true;
   captureBytes: Uint8Array = PNG_1X1;
@@ -226,6 +228,7 @@ class FakeDbus implements KWinComputerDbus {
   loadPlugin = async (pluginId: string) => {
     this.calls.push({ method: "LoadPlugin", args: [pluginId] });
     this.loaded = [pluginId];
+    this.plugin.instanceId = `instance-${pluginId}`;
     if (pluginId.startsWith("SynaraComputerUsePlugin")) {
       // A new registration takes a new unique name; that change across the
       // LoadPlugin boundary is exactly what the backend asserts on.
@@ -1298,8 +1301,7 @@ describe("KWinComputerBackend", () => {
     const availability = await backend.availability();
     expect(availability.kind).toBe("backend-unavailable");
     const message = availability.kind === "backend-unavailable" ? availability.message : "";
-    expect(message).toContain("still owned by");
-    expect(message).toContain("rather than the one just loaded");
+    expect(message).toContain("did not replace the previous computer plugin instance");
     await backend.dispose();
   });
 
@@ -1605,7 +1607,10 @@ describe("KWinComputerBackend", () => {
       expect(first.kind === "backend-unavailable" ? first.message : "").toMatch(
         /plugin is installed/,
       );
-      expect(await readdir(pluginDirectory)).toEqual(["SynaraComputerUsePluginV1.so"]);
+      expect(await readdir(pluginDirectory)).toEqual([
+        ".synara-provision.lock",
+        "SynaraComputerUsePluginV1.so",
+      ]);
 
       const second = await backend.availability();
       expect(second.kind === "backend-unavailable" ? second.message : "").toContain(
@@ -1613,7 +1618,10 @@ describe("KWinComputerBackend", () => {
       );
       // The fast path answered from the stamp: no second version suffix was
       // created, which is what a rebuild or reinstall would have done.
-      expect(await readdir(pluginDirectory)).toEqual(["SynaraComputerUsePluginV1.so"]);
+      expect(await readdir(pluginDirectory)).toEqual([
+        ".synara-provision.lock",
+        "SynaraComputerUsePluginV1.so",
+      ]);
       await backend.dispose();
     });
   });
@@ -1950,6 +1958,82 @@ describe("KWinComputerBackend", () => {
     });
     expect(dbus.plugin.calls.some((call) => call.method === "captureWindow")).toBe(false);
     await backend.dispose();
+  });
+
+  it("deduplicates idle frames but honors explicit keyframe requests", async () => {
+    vi.useFakeTimers();
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus, { stillIntervalMs: 100 });
+    const frames: unknown[] = [];
+    try {
+      await backend.attachStream((frame) => frames.push(frame));
+      await vi.advanceTimersByTimeAsync(350);
+      expect(frames).toHaveLength(1);
+      await backend.requestKeyframe();
+      expect(frames).toHaveLength(2);
+    } finally {
+      await backend.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([[], ["ctrl"], ["ctrl", "a", "b"]])(
+    "rejects malformed hotkeys before input: %j",
+    async (...keys) => {
+      const dbus = new FakeDbus();
+      const backend = makeBackend(dbus);
+      try {
+        await expect(backend.hotkey(keys as string[])).rejects.toThrow("exactly one");
+        expect(dbus.plugin.calls).toEqual([]);
+      } finally {
+        await backend.dispose();
+      }
+    },
+  );
+
+  it("releases the current key and refuses further synthesis after cancellation", async () => {
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus);
+    const controller = new AbortController();
+    const key = dbus.plugin.key;
+    dbus.plugin.key = async (code, pressed) => {
+      const result = await key(code, pressed);
+      if (pressed) controller.abort();
+      return result;
+    };
+    try {
+      await expect(
+        new DesktopOperationQueue().run(() => backend.typeText("abc"), controller.signal),
+      ).rejects.toThrow();
+      expect(
+        dbus.plugin.calls.filter((call) => call.method === "key").map((call) => call.args),
+      ).toEqual([
+        [30, true],
+        [30, false],
+      ]);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it("accepts a replaced plugin on the same compositor D-Bus connection", async () => {
+    const dbus = new FakeDbus();
+    dbus.loaded = ["SynaraComputerUsePluginV1"];
+    dbus.serviceOwner = ":1.42";
+    const load = dbus.loadPlugin;
+    dbus.loadPlugin = async (id) => {
+      await load(id);
+      dbus.serviceOwner = ":1.42";
+      return true;
+    };
+    const backend = makeBackend(dbus, {
+      installedPluginIds: async () => ["SynaraComputerUsePluginV2"],
+    });
+    try {
+      await expect(backend.availability()).resolves.toMatchObject({ kind: "available" });
+    } finally {
+      await backend.dispose();
+    }
   });
 
   /**

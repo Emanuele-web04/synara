@@ -141,6 +141,15 @@ class AtspiHelperTest(unittest.TestCase):
         self.assertIs(found, frame)
         self.assertEqual(HELPER.client_size_for(found), {"width": 640.0, "height": 480.0})
 
+    def test_refuses_identical_windows_even_in_separate_subtrees(self):
+        first = FakeAccessible("frame", "Terminal", 42, 640, 480)
+        second = FakeAccessible("frame", "Terminal", 42, 640, 480)
+        desktop = FakeAccessible("desktop", children=[
+            FakeAccessible("application", children=[first]),
+            FakeAccessible("application", children=[second]),
+        ])
+        self.assertIsNone(HELPER.find_window(desktop, {"title": "Terminal", "pid": 42}))
+
     def test_chooses_the_frame_with_matching_name_and_extents_for_one_pid(self):
         other = FakeAccessible("frame", "Other", 42, 400, 300)
         target = FakeAccessible("window", "Terminal", 42, 640, 480)
@@ -230,6 +239,11 @@ class AtspiSemanticWriteTest(unittest.TestCase):
         self.assertEqual(not_editable, {"ok": False, "reason": "not-editable"})
         self.assertEqual(missing_node, {"ok": False, "reason": "node-not-found"})
         self.assertEqual(missing_window, {"ok": False, "reason": "window-not-found"})
+        self.assertIsNone(self.field.text)
+
+    def test_refuses_a_labeled_node_at_an_unlabeled_address(self):
+        result = HELPER.set_text({"window": self.requested, "path": [2], "text": "wrong", "label": ""})
+        self.assertEqual(result, {"ok": False, "reason": "node-changed"})
         self.assertIsNone(self.field.text)
 
     def test_reports_a_toolkit_that_refuses_the_write(self):

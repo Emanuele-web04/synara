@@ -966,6 +966,7 @@ SynaraComputerUsePlugin::SynaraComputerUsePlugin()
     , m_pos(Cursors::self()->mouse()->pos())
     , m_ownsCompositor(readOwnsCompositor())
 {
+    m_auth.onRevoked = [this] { stopSession(StopReason::Request); };
     m_encodePool.setMaxThreadCount(1);
 
     m_lastActivity.start();
@@ -1063,8 +1064,16 @@ QString SynaraComputerUsePlugin::toJson(const QJsonArray &array)
     return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
 }
 
+QString SynaraComputerUsePlugin::authenticate(const QString &token)
+{
+    const QString instance = m_auth.authenticate(*this, token);
+    if (!instance.isEmpty()) stopSession(StopReason::Request);
+    return instance;
+}
+
 QString SynaraComputerUsePlugin::healthJson() const
 {
+    // Public diagnostics contain no captured pixels, window titles, or input API.
     QJsonObject health{
         {QStringLiteral("ok"), inputReady()},
         {QStringLiteral("running"), m_running},
@@ -1107,6 +1116,7 @@ QString SynaraComputerUsePlugin::healthJson() const
 
 QString SynaraComputerUsePlugin::stateJson() const
 {
+    if (!m_auth.permits(*this)) return {};
     QJsonObject state{
         {QStringLiteral("running"), m_running},
         {QStringLiteral("seat"), m_ownsCompositor ? QStringLiteral("seat0") : s_agentSeatName},
@@ -1179,6 +1189,7 @@ QString SynaraComputerUsePlugin::stateJson() const
 
 QString SynaraComputerUsePlugin::windowsJson() const
 {
+    if (!m_auth.permits(*this)) return {};
     QJsonArray windows;
     if (!Workspace::self()) {
         return toJson(windows);
@@ -1248,6 +1259,7 @@ QString SynaraComputerUsePlugin::windowsJson() const
 
 bool SynaraComputerUsePlugin::start()
 {
+    if (!m_auth.permits(*this)) return false;
     if (m_releasedByUser) {
         if (calledFromDBus()) {
             sendErrorReply(s_releasedErrorName,
@@ -1275,12 +1287,14 @@ bool SynaraComputerUsePlugin::start()
 
 bool SynaraComputerUsePlugin::stop()
 {
+    if (!m_auth.permits(*this)) return false;
     stopSession(StopReason::Request);
     return true;
 }
 
 bool SynaraComputerUsePlugin::setIdleTimeout(uint milliseconds)
 {
+    if (!m_auth.permits(*this)) return false;
     if (milliseconds != 0 && (milliseconds < s_minIdleTimeoutMs || milliseconds > s_maxIdleTimeoutMs)) {
         return false;
     }
@@ -1300,6 +1314,7 @@ bool SynaraComputerUsePlugin::setIdleTimeout(uint milliseconds)
  */
 bool SynaraComputerUsePlugin::setHumanActiveGuardMs(uint milliseconds)
 {
+    if (!m_auth.permits(*this)) return false;
     if (milliseconds != 0 && (milliseconds < s_minHumanActiveGuardMs || milliseconds > s_maxHumanActiveGuardMs)) {
         return false;
     }
@@ -1309,6 +1324,7 @@ bool SynaraComputerUsePlugin::setHumanActiveGuardMs(uint milliseconds)
 
 bool SynaraComputerUsePlugin::setAgentName(const QString &name)
 {
+    if (!m_auth.permits(*this)) return false;
     m_agentName = name.trimmed();
     if (m_cursorItem) {
         m_cursorItem->setAgentName(m_agentName);
@@ -1427,6 +1443,7 @@ qint64 SynaraComputerUsePlugin::idleMilliseconds() const
 
 bool SynaraComputerUsePlugin::focusWindow(const QString &windowId)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1451,6 +1468,7 @@ bool SynaraComputerUsePlugin::focusWindow(const QString &windowId)
 
 bool SynaraComputerUsePlugin::raiseWindow(const QString &windowId)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1467,6 +1485,7 @@ bool SynaraComputerUsePlugin::raiseWindow(const QString &windowId)
 
 bool SynaraComputerUsePlugin::clearFocusWindow()
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1479,6 +1498,7 @@ bool SynaraComputerUsePlugin::clearFocusWindow()
 
 bool SynaraComputerUsePlugin::movePointer(double x, double y)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1514,6 +1534,7 @@ bool SynaraComputerUsePlugin::movePointer(double x, double y)
 
 bool SynaraComputerUsePlugin::button(uint button, bool pressed)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1603,6 +1624,7 @@ static int scrollValue120(double pixels)
  */
 bool SynaraComputerUsePlugin::axis(double horizontal, double vertical)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1652,6 +1674,7 @@ bool SynaraComputerUsePlugin::axis(double horizontal, double vertical)
 
 bool SynaraComputerUsePlugin::key(uint keyCode, bool pressed)
 {
+    if (!m_auth.permits(*this)) return false;
     if (!requireRunning()) {
         return false;
     }
@@ -1750,6 +1773,7 @@ void SynaraComputerUsePlugin::sendKey(quint32 keyCode, bool pressed)
 
 QByteArray SynaraComputerUsePlugin::captureWindow(const QString &windowId, uint maxDimension)
 {
+    if (!m_auth.permits(*this)) return {};
     if (!calledFromDBus()) {
         return {};
     }
@@ -1777,6 +1801,7 @@ QByteArray SynaraComputerUsePlugin::captureWindow(const QString &windowId, uint 
 
 QByteArray SynaraComputerUsePlugin::captureRegion(int x, int y, uint width, uint height, uint maxDimension)
 {
+    if (!m_auth.permits(*this)) return {};
     if (!calledFromDBus()) {
         return {};
     }

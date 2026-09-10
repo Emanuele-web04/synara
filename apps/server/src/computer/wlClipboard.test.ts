@@ -17,6 +17,12 @@ function node(source: string, options: Partial<ClipboardCommandSpec> = {}) {
 }
 
 describe("spawnClipboardCommand", () => {
+  it("settles with bounded diagnostics when stderr exceeds its limit", async () => {
+    const result = await node("process.stderr.write('x'.repeat(20000)); process.exitCode=1");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("diagnostic truncated");
+    expect(result.stderr.length).toBeLessThan(8300);
+  });
   it("collects output and the exit status of a command that does not fork", async () => {
     await expect(
       node("process.stdout.write('paste me'); process.stderr.write('noise'); process.exit(3)"),

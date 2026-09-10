@@ -245,6 +245,10 @@ def find_window_match(accessible, requested, depth=0, budget=None, inherited_pid
             found = find_window_match(child, requested, depth + 1, budget, actual_pid)
             if found is not None and (best is None or found[0] > best[0]):
                 best = found
+            elif found is not None and best is not None and found[0] == best[0]:
+                # Retain the winning score but refuse a tied identity. A later
+                # strictly better match may still disambiguate this subtree.
+                best = (best[0], None)
     except Exception:
         pass
     return best
@@ -346,7 +350,7 @@ def matches_expected_node(accessible, expected_role, expected_label):
     if isinstance(expected_role, str) and expected_role:
         if role_name(accessible) != expected_role.strip().casefold():
             return False
-    if isinstance(expected_label, str) and expected_label:
+    if isinstance(expected_label, str):
         try:
             name = accessible.get_name() or ""
         except Exception:
