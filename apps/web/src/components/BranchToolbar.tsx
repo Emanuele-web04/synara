@@ -74,15 +74,15 @@ function WorktreeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon className={className} />;
 }
 
-/** Leading glyph treatment shared by every "Continue in" menu row (16px, muted). */
+/** Leading glyph treatment shared by every "Work in" menu row (16px, muted). */
 const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
 
 /**
- * One row of the "Continue in" menu: `[glyph] [label …grows] [✓ when selected]`.
+ * One row of the "Work in" menu: `[glyph] [label …grows] [✓ when selected]`.
  * Centralizes the icon/label/check treatment so the local, worktree, and handoff
  * entries stay on one grid instead of repeating the same class strings per row.
  */
-function ContinueInMenuItem({
+function WorkInMenuItem({
   icon,
   label,
   selected: selectedProp,
@@ -550,36 +550,36 @@ export default function BranchToolbar({
               className="w-60 min-w-60"
             >
               <MenuGroup>
-                <MenuGroupLabel>Continue in</MenuGroupLabel>
+                <MenuGroupLabel>Work in</MenuGroupLabel>
                 {environmentPresentation.mode === "local" ? (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.localOptionLabel}
                     selected
                   />
                 ) : (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.localOptionLabel}
                     onSelect={() => onEnvModeChange("local")}
                   />
                 )}
                 {canSwitchToWorktree ? (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
                     label="New worktree"
                     onSelect={() => onEnvModeChange("worktree")}
                   />
                 ) : null}
                 {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.worktreeOptionLabel}
                     selected
                   />
                 ) : null}
                 {canHandoffToWorktree && onHandoffToWorktree ? (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
                     label="Hand off to new worktree"
                     disabled={handoffBusy}
@@ -587,7 +587,7 @@ export default function BranchToolbar({
                   />
                 ) : null}
                 {canHandoffToLocal && onHandoffToLocal ? (
-                  <ContinueInMenuItem
+                  <WorkInMenuItem
                     icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
                     label="Hand off to local"
                     disabled={handoffBusy}
