@@ -1144,13 +1144,14 @@ label:has(> select#reasoning-effort) select {
 .editor-file-editor {
   min-height: 0;
   flex: 1;
+  min-width: 0;
   resize: none;
   overflow: auto;
   border: 0;
   border-radius: 0;
   outline: none;
   background: transparent;
-  padding: 1rem;
+  padding: 1rem 1rem 1rem 0.75rem;
   color: color-mix(in srgb, var(--foreground) 88%, transparent);
   font-family: var(--font-chat-code-family);
   font-size: var(--app-font-size-chat-code, 12px);
@@ -1161,6 +1162,61 @@ label:has(> select#reasoning-effort) select {
 
 .editor-file-editor:focus-visible {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
+/* Inline editor shell for the dock explorer: a plain textarea paired with a
+   line-number gutter column. The textarea keeps its own scroll container and
+   the gutter's inner column follows its scrollTop without a second clamped
+   scroll range (a horizontal scrollbar shortens only the textarea viewport).
+   Type metrics must stay identical to .editor-file-editor to keep rows aligned. */
+.editor-file-editor-wrap {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-file-editor__gutter {
+  flex: none;
+  overflow: hidden;
+  width: calc(4ch + 1.75rem);
+  padding: 1rem 0.5rem 1rem 1rem;
+  text-align: right;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.editor-file-editor__gutter-line {
+  display: block;
+  white-space: pre;
+}
+
+.editor-file-editor-wrap[hidden] {
+  display: none;
+}
+
+.editor-file-editor__pierre {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: transparent;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+}
+
+.editor-file-editor__pierre > diffs-container {
+  display: block;
+  min-height: 100%;
+  min-width: 100%;
+  width: max-content;
 }
 
 /* Line-number gutter for the read-only file preview. Rendered via CSS counters
