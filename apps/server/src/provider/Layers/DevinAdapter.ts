@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * DevinAdapterLive — Devin CLI (`devin acp`) via ACP.
  *
@@ -3073,7 +3074,7 @@ export function makeDevinAdapter(
         const ctx = yield* requireSession(threadId);
         return {
           threadId,
-          turns: ctx.turns,
+          turns: snapshotProviderTurns(ctx.turns),
           cwd: ctx.session.cwd ?? null,
         } satisfies ProviderThreadSnapshot;
       });

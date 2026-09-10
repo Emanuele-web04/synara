@@ -41,6 +41,11 @@ import {
   RuntimeMode,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import {
+  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+  collectErrorMessages,
+  describeErrorMessage,
+} from "@synara/shared/errorMessages";
 import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractions";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
@@ -249,7 +254,10 @@ import {
   createSidechatSummariesForSourceSelector,
   createThreadSelector,
 } from "../storeSelectors";
-import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import {
+  buildThreadSubscribeInput,
+  clearThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canExecuteSideSlashCommand,
@@ -289,6 +297,7 @@ import {
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useStore } from "../store";
 import { changeComputerPermission } from "../lib/changeComputerPermission";
 import { RenameThreadDialog } from "./RenameThreadDialog";
@@ -9303,11 +9312,31 @@ export default function ChatView({
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
           createdAt: new Date().toISOString(),
         })
-        .catch((err: unknown) => {
+        .catch(async (err: unknown) => {
+          if (
+            collectErrorMessages(err).some((message) =>
+              message.includes(APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER),
+            )
+          ) {
+            // The authoritative response won the race. Force a full detail
+            // snapshot so a stale local card cannot immediately submit again.
+            clearThreadDetailResumeCursor(activeThreadId);
+            await api.orchestration
+              .subscribeThread(buildThreadSubscribeInput(activeThreadId))
+              .catch(() => {
+                setStoreThreadError(
+                  activeThreadId,
+                  "Approval was already recorded, but the conversation could not be refreshed.",
+                );
+              });
+            return;
+          }
           setStoreThreadError(
             activeThreadId,
-            err instanceof Error ? err.message : "Failed to submit approval decision.",
+            describeErrorMessage(err, "Failed to submit approval decision."),
           );
+          setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
+          throw err;
         });
       setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
@@ -10338,6 +10367,9 @@ export default function ChatView({
   }, [scheduleComposerFocus, updateSettings]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      if (activeProject) {
+        useProjectEnvironmentStore.getState().setProjectEnvMode(activeProject.id, mode);
+      }
       const nextBranch =
         mode === "worktree"
           ? (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
@@ -10365,6 +10397,7 @@ export default function ChatView({
       scheduleComposerFocus();
     },
     [
+      activeProject,
       activeThread,
       activeRootBranch,
       draftThread?.branch,

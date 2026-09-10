@@ -89,7 +89,10 @@ import {
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
-import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import {
+  collectActiveTerminalThreadIds,
+  removeOrphanedTerminalRuntimes,
+} from "../lib/terminalStateCleanup";
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
@@ -1565,8 +1568,8 @@ function EventRouter() {
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
-      removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
+      removeOrphanedTerminalsForCurrentState();
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
       return true;
     };
@@ -1705,6 +1708,7 @@ function EventRouter() {
         activeThreadIds.add(dockTerminalThreadId(activeThreadId));
       }
       removeOrphanedTerminalStates(activeThreadIds);
+      removeOrphanedTerminalRuntimes(activeThreadIds);
     };
 
     const flushPendingDomainEvents = () => {
@@ -2008,8 +2012,8 @@ function EventRouter() {
         shellSnapshotSequence = item.snapshot.snapshotSequence;
         syncServerShellSnapshot(item.snapshot);
         reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        removeOrphanedTerminalsForCurrentState();
         flushShellBuffer(item.snapshot.snapshotSequence);
+        removeOrphanedTerminalsForCurrentState();
         reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
         return;
       }
@@ -2025,6 +2029,13 @@ function EventRouter() {
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
+      }
+      if (
+        item.kind === "thread-removed" ||
+        item.kind === "project-removed" ||
+        (item.kind === "thread-upserted" && item.thread.archivedAt != null)
+      ) {
+        removeOrphanedTerminalsForCurrentState();
       }
       if (
         item.kind === "thread-upserted" &&

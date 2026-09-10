@@ -8,7 +8,8 @@
 // Exports: ComposerPendingApprovalPanel
 
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
-import { type KeyboardEvent } from "react";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
+import { type KeyboardEvent, useRef } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
@@ -85,10 +86,28 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 }: ComposerPendingApprovalPanelProps) {
   const parsed = parseApprovalDetail(approval.detail);
   const requestId = approval.requestId;
+  const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
+  const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
+  const submittedRequestKeyRef = useRef<string | null>(null);
   const actions =
     approval.sessionApprovalAvailable === false
       ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
       : APPROVAL_ACTIONS;
+
+  const respondOnce = (decision: ProviderApprovalDecision) => {
+    if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
+    submittedRequestKeyRef.current = submissionKey;
+    void onRespond(requestId, decision, approval.lifecycleGeneration, approval.requestKind).catch(
+      () => {
+        // Immediate command failures remain retryable. A successful dispatch keeps
+        // the claim until the request disappears or a newer durable retry attempt
+        // changes `submissionKey`.
+        if (submittedRequestKeyRef.current === submissionKey) {
+          submittedRequestKeyRef.current = null;
+        }
+      },
+    );
+  };
 
   // Digit shortcuts bubble from focused controls inside this card only; a bare
   // number key elsewhere in the app must never approve a tool request.
@@ -107,7 +126,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     const action = actions[digit - 1];
     if (!action) return;
     event.preventDefault();
-    void onRespond(requestId, action.decision, approval.lifecycleGeneration, approval.requestKind);
+    respondOnce(action.decision);
   };
 
   return (
@@ -145,14 +164,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
             description={action.description}
             tone={action.tone}
             disabled={isResponding}
-            onSelect={() =>
-              void onRespond(
-                requestId,
-                action.decision,
-                approval.lifecycleGeneration,
-                approval.requestKind,
-              )
-            }
+            onSelect={() => respondOnce(action.decision)}
           />
         ))}
       </div>

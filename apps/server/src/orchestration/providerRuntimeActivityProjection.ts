@@ -752,6 +752,10 @@ export function projectProviderRuntimeActivities(
       // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
+      const isPiInfoNotification =
+        event.provider === "pi" &&
+        raw?.method === "extension/ui/notify" &&
+        asObject(event.payload.detail)?.type === "info";
       const message = truncateDetail(event.payload.message);
       return [
         {
@@ -759,12 +763,14 @@ export function projectProviderRuntimeActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: isBackgroundMove
-            ? "Moved to background"
-            : event.provider === "opencode" &&
-                (nativeType === "session.next.retried" || nativeType === "session.status")
-              ? "OpenCode retrying"
-              : "Runtime warning",
+          summary: isPiInfoNotification
+            ? "Pi extension"
+            : isBackgroundMove
+              ? "Moved to background"
+              : event.provider === "opencode" &&
+                  (nativeType === "session.next.retried" || nativeType === "session.status")
+                ? "OpenCode retrying"
+                : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,

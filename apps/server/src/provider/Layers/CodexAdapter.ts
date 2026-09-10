@@ -2476,7 +2476,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             turnWatchdogs.clear();
             manager.off("event", listener);
           });
-          yield* ingress.stop;
+          yield* ingress.abort;
           yield* Queue.shutdown(runtimeEventQueue);
         }),
     );

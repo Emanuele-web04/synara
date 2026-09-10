@@ -2633,12 +2633,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const activity = command.activity;
       const requestId =
-        typeof command.activity.payload === "object" &&
-        command.activity.payload !== null &&
-        "requestId" in command.activity.payload &&
-        typeof (command.activity.payload as { requestId?: unknown }).requestId === "string"
-          ? ((command.activity.payload as { requestId: string })
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        "requestId" in activity.payload &&
+        typeof (activity.payload as { requestId?: unknown }).requestId === "string"
+          ? ((activity.payload as { requestId: string })
               .requestId as OrchestrationEvent["metadata"]["requestId"])
           : undefined;
       return {
@@ -2652,7 +2653,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.activity-appended",
         payload: {
           threadId: command.threadId,
-          activity: command.activity,
+          activity,
         },
       };
     }

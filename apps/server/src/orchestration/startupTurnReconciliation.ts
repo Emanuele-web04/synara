@@ -35,12 +35,14 @@
  */
 import type {
   OrchestrationCommand,
+  OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
   OrchestrationSession,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
@@ -85,6 +87,14 @@ export interface ReconcilableThread {
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
+  readonly pendingInteractions?:
+    | ReadonlyArray<
+        Pick<
+          OrchestrationPendingInteraction,
+          "interactionKind" | "requestId" | "lifecycleGeneration" | "status" | "createdAt"
+        >
+      >
+    | undefined;
 }
 
 /**
@@ -109,7 +119,8 @@ function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
 /**
  * Plans one settlement per unanswerable human request on a thread.
  *
- * Two sources, deliberately unioned:
+ * Hydrated pending interactions are authoritative and retain their lifecycle
+ * generation. When that snapshot is unavailable, union two fallback sources:
  *
  *  - The thread's timeline activities, which is what the UI's own pending-request
  *    derivation reads.
@@ -123,7 +134,7 @@ function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
  *    Either way the row kept the question card up with nothing able to answer
  *    it.
  *
- * Timeline-derived commands win on collision: they carry no lifecycle
+ * In the fallback path, timeline-derived commands win on collision: they carry no lifecycle
  * generation, so they close every open instance of the request id rather than
  * just the row's generation.
  */
@@ -132,10 +143,39 @@ function planStalePendingRequestCommands(input: {
   readonly pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
 }): ReadonlyArray<ThreadActivityAppendCommand> {
+  const commands: ThreadActivityAppendCommand[] = [];
+  if (input.thread.pendingInteractions !== undefined) {
+    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
+    for (const interaction of input.thread.pendingInteractions) {
+      // A process restart loses every live provider callback. Pending,
+      // responding, and previously retryable rows are therefore no longer
+      // answerable. Uncertain user-input responses are also retryable unless
+      // their callback has already been explicitly invalidated.
+      if (
+        interaction.status === "confirmed" ||
+        (interaction.status === "uncertain" &&
+          (interaction.interactionKind === "approval" || isAlreadyStale(interaction)))
+      ) {
+        continue;
+      }
+      commands.push(
+        buildStalePendingRequestCommand({
+          threadId: input.thread.id,
+          now: input.now,
+          requestKind: interaction.interactionKind === "approval" ? "approval" : "user-input",
+          requestId: interaction.requestId,
+          ...(interaction.lifecycleGeneration !== null
+            ? { lifecycleGeneration: interaction.lifecycleGeneration }
+            : {}),
+        }),
+      );
+    }
+    return commands;
+  }
+
   const pendingRequestIds = derivePendingThreadRequestIds({
     activities: input.thread.activities ?? [],
   });
-  const commands: ThreadActivityAppendCommand[] = [];
   const plannedRequests = new Set<string>();
   const planRequest = (requestKind: PendingThreadRequestKind, requestId: string) => {
     const requestKey = `${requestKind}:${requestId}`;
@@ -201,6 +241,7 @@ function buildStalePendingRequestCommand(input: {
   readonly now: string;
   readonly requestKind: PendingThreadRequestKind;
   readonly requestId: string;
+  readonly lifecycleGeneration?: string;
 }): ThreadActivityAppendCommand {
   const commandKey = [
     "restart-reconcile",
@@ -214,6 +255,9 @@ function buildStalePendingRequestCommand(input: {
     commandId: CommandId.makeUnsafe(commandKey),
     requestKind: input.requestKind,
     requestId: input.requestId,
+    ...(input.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: input.lifecycleGeneration }
+      : {}),
     now: input.now,
   });
 }
