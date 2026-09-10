@@ -7,7 +7,7 @@ import {
   type PullRequestListEntry,
   type PullRequestsListResult,
 } from "@synara/contracts";
-import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
+import { coalescePullRequestListEntries } from "@synara/shared/pullRequestList";
 import { Effect, Layer, Scope, Semaphore } from "effect";
 
 import { ServerConfig } from "../../config";

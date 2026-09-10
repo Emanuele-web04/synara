@@ -6,7 +6,7 @@
 // Exports: PullRequestRow
 
 import type { PullRequestListEntry } from "@synara/contracts";
-import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
+import { pullRequestListProjectContexts } from "@synara/shared/pullRequestList";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
