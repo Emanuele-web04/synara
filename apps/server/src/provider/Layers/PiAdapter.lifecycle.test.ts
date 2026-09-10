@@ -9,13 +9,8 @@ import type {
   AgentSessionEvent,
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { Effect, Layer, Stream } from "effect";
-import {
-  ApprovalRequestId,
-  ThreadId,
-  type ProviderRuntimeEvent,
-  type TurnId,
-} from "@synara/contracts";
+import { Effect, Layer, Schema, Stream } from "effect";
+import { ApprovalRequestId, ThreadId, ProviderRuntimeEvent, type TurnId } from "@synara/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   AgentGatewayCredentials,
@@ -205,6 +200,63 @@ async function withAdapter(
 async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
+
+it.each([
+  { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
+  { toolName: "bash", args: { command: " \n" }, title: "bash" },
+  { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
+  { toolName: "grep", args: { pattern: "needle \n" }, title: "grep needle" },
+])(
+  "persists $toolName lifecycle titles without changing tool arguments: $title",
+  async ({ toolName, args, title }) => {
+    responses("until-abort");
+    await withAdapter(async (adapter, events) => {
+      const turn = await send(adapter);
+      const session = captured.sessions[0]!;
+      await waitFor(() => expect(session.isStreaming).toBe(true));
+      const emit = (event: AgentSessionEvent) =>
+        (session as unknown as { _emit(event: AgentSessionEvent): void })._emit(event);
+      emit({ type: "tool_execution_start", toolCallId: "title-tool", toolName, args });
+      emit({
+        type: "tool_execution_update",
+        toolCallId: "title-tool",
+        toolName,
+        args,
+        partialResult: { content: [{ type: "text", text: "working" }], details: {} },
+      });
+      emit({
+        type: "tool_execution_end",
+        toolCallId: "title-tool",
+        toolName,
+        result: { content: [{ type: "text", text: "done" }], details: {} },
+        isError: false,
+      });
+      const toolEvents = () =>
+        events.filter(
+          (event) =>
+            (event.type === "item.started" ||
+              event.type === "item.updated" ||
+              event.type === "item.completed") &&
+            event.itemId === "pi-tool-title-tool",
+        );
+      await waitFor(() => expect(toolEvents()).toHaveLength(3));
+      for (const event of toolEvents()) {
+        const encodable = await Effect.runPromise(
+          Schema.encodeEffect(Schema.fromJsonString(ProviderRuntimeEvent))(event).pipe(
+            Effect.match({ onFailure: () => false, onSuccess: () => true }),
+          ),
+        );
+        expect(encodable).toBe(true);
+        expect(event.payload).toMatchObject({ title });
+      }
+      const snapshot = await Effect.runPromise(adapter.readThread(threadId));
+      expect(snapshot.turns.find((entry) => entry.id === turn.turnId)?.items).toContainEqual(
+        expect.objectContaining({ callId: "title-tool", args }),
+      );
+      await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    });
+  },
+);
 
 it("retains only the latest cumulative tool snapshot while preserving final output", async () => {
   responses("until-abort");

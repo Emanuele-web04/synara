@@ -4824,15 +4824,9 @@ const make = Effect.gen(function* () {
   // serially in the same source but do not acquire delivery claims yet.
   const startProviderIntentSource = Effect.gen(function* () {
     const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
-    // Detach the engine from this reactor's processing latency. The engine
-    // publishes committed events into a bounded PubSub from an uninterruptible
-    // section of its single command worker, so a subscriber that stalls (a hung
-    // provider call, or just slow boot replay below) back-pressures the worker
-    // and then fails every dispatched command with a dispatch timeout. Draining
-    // into an unbounded queue immediately after subscribing keeps the engine
-    // free while boot work runs; ordering is preserved because the queue is FIFO
-    // and `processOrderedEvent` skips anything at or below the durable cursor.
-    const liveEventQueue = yield* Queue.unbounded<OrchestrationEvent, Cause.Done>();
+    // Preserve the source/consumer handoff without retaining an unbounded event
+    // mirror while startup or a provider call runs. The engine replays overflow.
+    const liveEventQueue = yield* Queue.bounded<OrchestrationEvent, Cause.Done>(1);
     yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
     const liveEvents = Stream.fromQueue(liveEventQueue);
     const consumerState = yield* deliveryRepository.getConsumerState(
