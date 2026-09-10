@@ -124,7 +124,7 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
     await editor.fill("export const value = 2;\n");
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
 
@@ -170,7 +170,7 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
 
     await expect.element(page.getByRole("alert")).toHaveTextContent(conflictMessage);
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit\n");
     expect(writeFile).toHaveBeenCalledTimes(1);
   } finally {
     restoreNativeApi();
@@ -206,7 +206,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
     await editor.fill("manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
@@ -217,7 +217,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     });
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit\n");
     await expect
       .element(page.getByText("This file changed on disk. Your unsaved edits are preserved."))
       .toBeVisible();
@@ -225,7 +225,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     const reloadButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(reloadButton).not.toBeNull();
     reloadButton?.click();
-    await expect.element(editor).toHaveValue("external edit\n");
+    await expect.element(editor).toHaveTextContent("external edit\n");
   } finally {
     restoreNativeApi();
   }
@@ -248,7 +248,7 @@ it("stops revalidation when a kept-mounted preview becomes hidden", async () => 
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveValue("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     await screen.rerender(
@@ -285,7 +285,7 @@ it("switches the watcher to a workspace path resolved by the file read", async (
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveValue("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;\n");
     await vi.waitFor(() =>
       expect(onFileChange).toHaveBeenLastCalledWith(
         { cwd: WORKSPACE_ROOT, relativePath: resolvedPath },
@@ -328,7 +328,7 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
     await editor.fill("manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     fileChangeSubscription.listener?.({
@@ -342,7 +342,7 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     await reloadButton.click();
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit\n");
     await expect.element(page.getByText("Transient read failure")).toBeVisible();
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
   } finally {
@@ -462,7 +462,7 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
       </QueryClientProvider>,
     );
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: 1 });
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
@@ -475,7 +475,7 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
     completeRead(loadedFile());
     await pendingRead;
     await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    await expect.element(editor).toHaveValue("saved contents\n");
+    await expect.element(editor).toHaveTextContent("saved contents\n");
     await editor.fill("next saved contents\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() =>
