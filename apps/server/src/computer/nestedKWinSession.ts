@@ -27,11 +27,13 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
+import { mkdtemp, chmod, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ComputerBackendError } from "./ComputerBackend.ts";
 import { AtspiHelperClient, type AtspiTreeReader } from "./atspiClient.ts";
 import { asRecord, parseJsonPayload } from "./computerGeometry.ts";
 import {
-  assertFreshServiceOwner,
   assertServiceOwnerPresent,
   resolveSynaraPluginLoad,
   scanInstalledPluginIds,
@@ -97,6 +99,7 @@ export interface NestedKWinSessionOptions {
 }
 
 export interface NestedKWinSession {
+  readonly runtimeDirectory?: string;
   readonly busAddress: string;
   readonly waylandDisplay: string;
   readonly size: NestedSize;
@@ -131,7 +134,8 @@ export async function startNestedKWinSession(
   const waitForBusName = options.waitForBusName ?? waitForSessionBusName;
   const installedPluginIds = options.installedPluginIds ?? (() => scanInstalledPluginIds());
   const mode = options.mode ?? "virtual";
-  const hostEnv = options.hostEnv ?? process.env;
+  const hostEnv = { ...(options.hostEnv ?? process.env) };
+  let privateRuntimeDirectory: string | undefined;
   const size = normalizeNestedSize(options.size);
   const waylandDisplay = options.socketName ?? generateSocketName();
   const children: SupervisedProcess[] = [];
@@ -139,9 +143,16 @@ export async function startNestedKWinSession(
     // Newest first: the compositor is torn down before the bus it announced
     // itself on, which keeps its exit from racing a dead bus.
     for (const child of children.toReversed()) await child.terminate();
+    if (privateRuntimeDirectory)
+      await rm(privateRuntimeDirectory, { recursive: true, force: true });
   };
 
   try {
+    if (!hostEnv.XDG_RUNTIME_DIR) {
+      privateRuntimeDirectory = await mkdtemp(join(tmpdir(), "synara-nested-runtime-"));
+      await chmod(privateRuntimeDirectory, 0o700);
+      hostEnv.XDG_RUNTIME_DIR = privateRuntimeDirectory;
+    }
     if (mode === "window" && !hostEnv.WAYLAND_DISPLAY) {
       throw new ComputerBackendError(
         "A windowed nested session needs a running Wayland session to nest into, and " +
@@ -194,6 +205,7 @@ export async function startNestedKWinSession(
       await dbus.close().catch(() => undefined);
     }
     return {
+      runtimeDirectory: hostEnv.XDG_RUNTIME_DIR,
       busAddress,
       waylandDisplay,
       size,
@@ -216,11 +228,13 @@ export async function startNestedKWinSession(
 
 /** Environment that puts a child process inside the nested session. */
 export function nestedSessionEnv(session: {
+  readonly runtimeDirectory?: string;
   readonly busAddress: string;
   readonly waylandDisplay: string;
   readonly xDisplay?: string | undefined;
 }): NodeJS.ProcessEnv {
   return {
+    ...(session.runtimeDirectory ? { XDG_RUNTIME_DIR: session.runtimeDirectory } : {}),
     WAYLAND_DISPLAY: session.waylandDisplay,
     DBUS_SESSION_BUS_ADDRESS: session.busAddress,
     // Always set, never merely omitted. A child inherits the server's own
@@ -383,6 +397,12 @@ async function loadNestedPlugin(
   // nested session owns its bus, so a mismatch here means an unload race
   // against this process's own previous generation.
   const ownerBefore = await dbus.nameOwner(COMPUTER_SERVICE);
+  const instanceBefore = ownerBefore
+    ? await dbus
+        .connectPlugin()
+        .then((plugin) => plugin.instanceId)
+        .catch(() => undefined)
+    : undefined;
   const plan = resolveSynaraPluginLoad({ loaded: await dbus.listLoadedPluginIds(), installed });
   if (!plan) {
     throw new ComputerBackendError(
@@ -398,7 +418,12 @@ async function loadNestedPlugin(
           `the exact KWin version it was built against. Rebuild it with ${INSTALL_SCRIPT_PATH}.`,
       );
     }
-    assertFreshServiceOwner(await dbus.nameOwner(COMPUTER_SERVICE), ownerBefore);
+    assertServiceOwnerPresent(await dbus.nameOwner(COMPUTER_SERVICE));
+    const instanceAfter = (await dbus.connectPlugin()).instanceId;
+    if (instanceBefore !== undefined && instanceBefore === instanceAfter)
+      throw new ComputerBackendError(
+        "The nested compositor did not replace the previous computer plugin instance.",
+      );
   } else {
     assertServiceOwnerPresent(await dbus.nameOwner(COMPUTER_SERVICE));
   }

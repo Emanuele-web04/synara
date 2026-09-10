@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { stat } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 
@@ -170,11 +171,13 @@ describe("startNestedKWinSession", () => {
       // The service owner is pinned across the LoadPlugin boundary, before and
       // after the load.
       "nameOwner:org.synara.ComputerUse",
+      "connectPlugin",
       "listLoadedPluginIds",
       "unloadPlugin:SynaraComputerUsePlugin",
       "unloadPlugin:SynaraComputerUsePluginV3",
       "loadPlugin:SynaraComputerUsePluginV3",
       "nameOwner:org.synara.ComputerUse",
+      "connectPlugin",
       "connectPlugin",
       "close",
     ]);
@@ -212,7 +215,12 @@ describe("startNestedKWinSession", () => {
     expect(harness.spawns[1]?.args[0]).toBe("--virtual");
     expect(harness.spawns[1]?.env.WAYLAND_DISPLAY).toBeUndefined();
     expect(harness.spawns[1]?.env.DISPLAY).toBeUndefined();
+    const runtime = session.runtimeDirectory!;
+    expect((await stat(runtime)).mode & 0o777).toBe(0o700);
+    expect(harness.spawns[1]?.env.XDG_RUNTIME_DIR).toBe(runtime);
+    expect(nestedSessionEnv(session).XDG_RUNTIME_DIR).toBe(runtime);
     await session.dispose();
+    await expect(stat(runtime)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("nests a windowed compositor into the host display and drops --virtual", async () => {

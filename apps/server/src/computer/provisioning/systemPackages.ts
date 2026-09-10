@@ -28,7 +28,7 @@ const execFileAsync = promisify(execFile);
 /** apt alone can sit on a slow mirror for a while; the dialog is already answered. */
 const PACKAGE_INSTALL_TIMEOUT_MS = 15 * 60 * 1_000;
 const PKEXEC_DISMISSED_EXIT = 126;
-const PKEXEC_NO_AGENT_EXIT = 127;
+const PKEXEC_AUTHORIZATION_ERROR_EXIT = 127;
 
 export interface SystemPackagePlan {
   /** The package manager binary, which is also how the distribution is named to the user. */
@@ -134,7 +134,7 @@ const pkexecRunner: PrivilegedRunner = (command, args) =>
  *
  * The two pkexec-specific exit codes are translated because they are the two
  * outcomes the user caused or can fix: 126 is the authorization dialog being
- * dismissed, 127 is no polkit agent to show one. Everything else is the
+ * dismissed, 127 is an authorization or other pkexec error. Everything else is the
  * package manager failing, and its own words are the most actionable message
  * available.
  */
@@ -173,11 +173,11 @@ function describeInstallFailure(plan: SystemPackagePlan, error: unknown): Comput
       { retryable: true, cause: error },
     );
   }
-  if (code === PKEXEC_NO_AGENT_EXIT) {
+  if (code === PKEXEC_AUTHORIZATION_ERROR_EXIT) {
     return new ComputerBackendError(
-      "No polkit authentication agent answered, so Synara could not ask for authorization. " +
-        `Install the packages yourself: sudo ${plan.manager} ${[...plan.args, ...plan.packages].join(" ")}`,
-      { cause: error },
+      "System authorization failed or could not be obtained. Click Set up to retry, or " +
+        `install the packages yourself: sudo ${plan.manager} ${[...plan.args, ...plan.packages].join(" ")}`,
+      { retryable: true, cause: error },
     );
   }
   const stderr = (error as { stderr?: unknown } | null)?.stderr;

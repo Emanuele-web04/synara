@@ -2992,6 +2992,34 @@ describe("KWinComputerBackend KWin crash recovery", () => {
 });
 
 describe("KWinComputerBackend dormant desktop", () => {
+  it("retries real use that joined an automatic dormant attempt", async () => {
+    vi.useFakeTimers();
+    const dbus = new FakeDbus();
+    let rejectAutomatic!: (reason: unknown) => void;
+    const modes: boolean[] = [];
+    const backend = makeBackend(dbus, {
+      dbusFactory: async ({ automatic }) => {
+        modes.push(automatic);
+        if (automatic)
+          return new Promise((_, reject) => {
+            rejectAutomatic = reject;
+          });
+        return dbus;
+      },
+    });
+    try {
+      await backend.listWindows();
+      dbus.disconnect();
+      await vi.advanceTimersByTimeAsync(1000);
+      const realUse = backend.listWindows();
+      rejectAutomatic(new ComputerBackendError("Dormant", { dormant: true, retryable: true }));
+      await expect(realUse).resolves.toMatchObject([{ id: "window-1" }]);
+      expect(modes).toEqual([true, false]);
+    } finally {
+      await backend.dispose();
+      vi.useRealTimers();
+    }
+  });
   it("stands the reconnect loop down when the factory refuses to boot for it", async () => {
     vi.useFakeTimers();
     try {

@@ -37,6 +37,8 @@
 import type { ComputerAvailability, ComputerCapabilities } from "@synara/contracts";
 import { COMPUTER_NESTED_KWIN_BACKEND } from "@synara/contracts";
 import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { readPrebuiltManifest, selectPrebuilt, verifyPrebuilt } from "./kwinPluginProvisioning.ts";
 
 import { NO_COMPUTER_CAPABILITIES, ComputerBackendError } from "./ComputerBackend.ts";
 import { AtspiHelperClient, type AtspiTreeReader } from "./atspiClient.ts";
@@ -114,6 +116,7 @@ export interface NestedComputerBackendOptions {
   readonly provisionPlugin?: KWinComputerBackendOptions["provisionPlugin"];
   readonly buildToolingPresent?: () => boolean;
   readonly prebuiltRoot?: () => string | undefined;
+  readonly verifiedPrebuiltAvailable?: () => Promise<boolean>;
   readonly planPackages?: () => SystemPackagePlan | undefined;
   readonly installPackages?: (plan: SystemPackagePlan) => Promise<string>;
 }
@@ -136,10 +139,12 @@ export class NestedComputerBackend extends KWinComputerBackend {
   private readonly installedPluginPresent: () => boolean;
   private readonly nestedBuildToolingPresent: () => boolean;
   private readonly nestedPrebuiltRoot: () => string | undefined;
+  private readonly verifiedPrebuiltAvailable: () => Promise<boolean>;
   private readonly planPackages: () => SystemPackagePlan | undefined;
   private readonly installPackages: (plan: SystemPackagePlan) => Promise<string>;
   private readonly listInstalledPluginIds: () => Promise<readonly string[]>;
   private sessionStart: Promise<NestedKWinSession> | undefined;
+  private sessionStarted = false;
   private provisionRun: Promise<string> | undefined;
 
   constructor(options: NestedComputerBackendOptions = {}) {
@@ -191,6 +196,8 @@ export class NestedComputerBackend extends KWinComputerBackend {
     this.installedPluginPresent = options.installedPluginPresent ?? anyPluginFileInstalled;
     this.nestedBuildToolingPresent = options.buildToolingPresent ?? localBuildToolingPresent;
     this.nestedPrebuiltRoot = options.prebuiltRoot ?? prebuiltPluginRoot;
+    this.verifiedPrebuiltAvailable =
+      options.verifiedPrebuiltAvailable ?? (() => this.hasVerifiedPrebuilt());
     this.planPackages = options.planPackages ?? (() => planSystemPackageInstall());
     this.installPackages = options.installPackages ?? installSystemPackages;
     this.listInstalledPluginIds = installedPluginIds;
@@ -220,6 +227,12 @@ export class NestedComputerBackend extends KWinComputerBackend {
     return availability.kind === "available"
       ? { kind: "available", backend: COMPUTER_NESTED_KWIN_BACKEND }
       : availability;
+  }
+
+  async statusAvailability(): Promise<ComputerAvailability> {
+    if (this.sessionStarted && (!this.ref.session || this.ref.session.exited() !== undefined))
+      return { kind: "backend-unavailable", message: desktopDormantMessage(this.mode) };
+    return this.probeAvailability();
   }
 
   /**
@@ -260,7 +273,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
 
   private async runProvision(): Promise<string> {
     const steps: string[] = [];
-    if (this.needsSystemPackages()) {
+    if (await this.needsSystemPackages()) {
       const plan = this.planPackages();
       if (!plan) {
         throw new ComputerBackendError(
@@ -271,9 +284,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
       }
       steps.push(await this.installPackages(plan));
     }
-    if (!(await this.pluginInstalled())) {
-      steps.push((await this.provisionOnce()).summary);
-    }
+    steps.push((await this.provisionOnce()).summary);
     let availability = await this.availability();
     if (availability.kind !== "available" && this.ref.session) {
       // A session whose processes exited was already reaped and replaced on
@@ -301,13 +312,18 @@ export class NestedComputerBackend extends KWinComputerBackend {
    * clear case; missing build tooling only matters on a machine that has no
    * installed plugin and no shipped binary to fall back to.
    */
-  private needsSystemPackages(): boolean {
+  private async needsSystemPackages(): Promise<boolean> {
     if (!this.hasCommand(KWIN_COMMAND)) return true;
-    return (
-      !this.installedPluginPresent() &&
-      this.nestedPrebuiltRoot() === undefined &&
-      !this.probeBuildToolingSafely()
-    );
+    return !(await this.verifiedPrebuiltAvailable()) && !this.probeBuildToolingSafely();
+  }
+
+  private async hasVerifiedPrebuilt(): Promise<boolean> {
+    const root = this.nestedPrebuiltRoot();
+    if (!root) return false;
+    const version = await this.probeRunningKwinVersion();
+    const manifest = await readPrebuiltManifest(join(root, "manifest.json"));
+    const build = manifest && version ? selectPrebuilt(manifest, version, process.arch) : undefined;
+    return build ? verifyPrebuilt(join(root, build.file), build.sha256) : false;
   }
 
   private probeBuildToolingSafely(): boolean {
@@ -380,6 +396,7 @@ export class NestedComputerBackend extends KWinComputerBackend {
       ...(this.size ? { size: this.size } : {}),
     });
     this.ref.session = session;
+    this.sessionStarted = true;
     // The manager caches capabilities until this event: pre-setup they were
     // reported empty so the settings card offered Set up, and the running
     // session is what makes the full set true.

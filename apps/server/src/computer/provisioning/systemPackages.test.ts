@@ -103,7 +103,7 @@ describe("installSystemPackages", () => {
       throw exitError(127);
     });
     await expect(failure).rejects.toThrow(
-      /polkit.*sudo pacman -S --needed --noconfirm kwin cmake/s,
+      /authorization failed.*sudo pacman -S --needed --noconfirm kwin cmake/s,
     );
   });
 

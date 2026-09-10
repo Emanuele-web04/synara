@@ -90,6 +90,7 @@ function makeHarness(
     readonly pluginInstalled?: boolean;
     readonly buildToolingPresent?: boolean;
     readonly prebuiltRoot?: string | undefined;
+    readonly verifiedPrebuilt?: boolean;
     readonly plan?: SystemPackagePlan | undefined;
     readonly startSession?: (
       sessionOptions: NestedKWinSessionOptions,
@@ -153,6 +154,7 @@ function makeHarness(
     installedPluginIds: async () => state.installedPlugins,
     buildToolingPresent: () => options.buildToolingPresent ?? true,
     prebuiltRoot: () => options.prebuiltRoot,
+    verifiedPrebuiltAvailable: async () => options.verifiedPrebuilt ?? false,
     planPackages: () => ("plan" in options ? options.plan : PACMAN_PLAN),
     installPackages:
       options.installPackages ??
@@ -351,8 +353,8 @@ describe("provision", () => {
     const harness = makeHarness();
     const summary = await harness.backend.provision();
     expect(harness.installedPlans).toHaveLength(0);
-    expect(harness.pluginProvisions).toHaveLength(0);
-    expect(summary).toBe("The agent's isolated desktop is running.");
+    expect(harness.pluginProvisions).toHaveLength(1);
+    expect(summary).toContain("The agent's isolated desktop is running.");
   });
 
   it("asks for packages when the plugin must be built and nothing can build it", async () => {
@@ -372,9 +374,23 @@ describe("provision", () => {
       pluginInstalled: false,
       buildToolingPresent: false,
       prebuiltRoot: "/opt/synara/prebuilt",
+      verifiedPrebuilt: true,
     });
     await harness.backend.provision();
     expect(harness.installedPlans).toHaveLength(0);
+    expect(harness.pluginProvisions).toHaveLength(1);
+  });
+
+  it("installs build packages when a bundled directory has no verified exact match", async () => {
+    const harness = makeHarness({
+      kwinInstalled: true,
+      pluginInstalled: true,
+      buildToolingPresent: false,
+      prebuiltRoot: "/opt/synara/prebuilt",
+      verifiedPrebuilt: false,
+    });
+    await harness.backend.provision();
+    expect(harness.installedPlans).toHaveLength(1);
     expect(harness.pluginProvisions).toHaveLength(1);
   });
 
@@ -423,6 +439,11 @@ describe("provision", () => {
       hasCommand: () => true,
       installedPluginPresent: () => true,
       installedPluginIds: async () => [PLUGIN_ID],
+      provisionPlugin: async () => ({
+        action: "already-current",
+        summary: "Current",
+        requiresRelogin: false,
+      }),
       startSession: async () => {
         const busAddress = `unix:abstract=fake-${sessions.length + 1}`;
         sessions.push(busAddress);
@@ -486,6 +507,13 @@ describe("provision", () => {
     harness.startedSessions[0]?.kill();
     harness.dbusHandles[0]?.fireDisconnect();
 
+    await expect(harness.backend.statusAvailability()).resolves.toMatchObject({
+      kind: "backend-unavailable",
+    });
+    await expect(harness.backend.statusAvailability()).resolves.toMatchObject({
+      kind: "backend-unavailable",
+    });
+    expect(harness.sessionStarts).toHaveLength(1);
     await expect(harness.backend.availability()).resolves.toMatchObject({ kind: "available" });
     expect(harness.sessionStarts).toHaveLength(2);
     expect(harness.disposedSessions).toEqual(["unix:abstract=fake-1"]);

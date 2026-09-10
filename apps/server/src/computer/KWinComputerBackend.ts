@@ -355,6 +355,7 @@ export class KWinComputerBackend implements ComputerBackend {
   private pluginHealth: KWinHealth | undefined;
   private disconnect: (() => void) | undefined;
   private connectPromise: Promise<KWinComputerPluginApi> | undefined;
+  private connectAutomatic = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectFailures = 0;
   /** A retry is pending or running, which is what `reconnecting` reports. */
@@ -1159,7 +1160,17 @@ export class KWinComputerBackend implements ComputerBackend {
     if (this.disposed) throw new ComputerBackendError("KWin computer backend is disposed.");
     const connected = this.connectedPlugin();
     if (connected) return connected;
-    if (this.connectPromise) return this.connectPromise;
+    if (this.connectPromise) {
+      const joinedAutomatic = this.connectAutomatic;
+      try {
+        return await this.connectPromise;
+      } catch (error) {
+        if (!automatic && joinedAutomatic && isDormantBackendError(error))
+          return this.ensureConnectedPlugin(false);
+        throw error;
+      }
+    }
+    this.connectAutomatic = automatic;
     this.connectPromise = this.connectWithBackoff(automatic)
       .catch((error) => {
         if (isDormantBackendError(error)) this.standDownReconnect();
@@ -1249,11 +1260,15 @@ export class KWinComputerBackend implements ComputerBackend {
     // every pointer, key, and capture call this server sends, and could serve
     // forged state and screenshots an agent then acts on.
     const ownerBefore = await dbus.nameOwner(COMPUTER_SERVICE);
+    let authenticationFailed = false;
     const instanceBefore = ownerBefore
       ? await dbus
           .connectPlugin()
           .then((plugin) => plugin.instanceId)
-          .catch(() => undefined)
+          .catch(() => {
+            authenticationFailed = true;
+            return undefined;
+          })
       : undefined;
     let loaded: readonly string[];
     try {
@@ -1273,7 +1288,7 @@ export class KWinComputerBackend implements ComputerBackend {
       }
     }
     let plan = resolveSynaraPluginLoad({ loaded, installed: await this.installedPluginIds() });
-    if (ownerBefore && instanceBefore === undefined) {
+    if (ownerBefore && authenticationFailed) {
       const installed = await this.provisionOnce(false, true);
       if (installed.requiresRelogin) throw new ComputerBackendError(installed.summary);
       plan = resolveSynaraPluginLoad({ loaded: [], installed: await this.installedPluginIds() });
@@ -1459,7 +1474,7 @@ export class KWinComputerBackend implements ComputerBackend {
     return { builtFor, running };
   }
 
-  private probeRunningKwinVersion(): Promise<string | undefined> {
+  protected probeRunningKwinVersion(): Promise<string | undefined> {
     // KWin cannot change under a live session, so probing once keeps the
     // connect retry loop from spawning a process per attempt.
     this.runningKwinVersionPromise ??= this.runningKwinVersion().catch(() => undefined);

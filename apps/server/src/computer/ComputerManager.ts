@@ -459,9 +459,10 @@ export class ComputerManager {
     // answers from the side-effect-free probe.
     let availability: ComputerAvailability;
     try {
-      availability = this.backendEngaged
-        ? await this.backend.availability()
-        : await this.backend.probeAvailability();
+      availability =
+        this.backendEngaged && !this.backend.statusAvailability
+          ? await this.backend.availability()
+          : await (this.backend.statusAvailability?.() ?? this.backend.probeAvailability());
     } catch (error) {
       availability = {
         kind: "backend-unavailable",
