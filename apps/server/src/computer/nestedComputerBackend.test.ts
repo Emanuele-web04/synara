@@ -437,6 +437,7 @@ describe("provision", () => {
       platform: "linux",
       hostEnv: { WAYLAND_DISPLAY: "wayland-0", PATH: "/usr/bin" },
       hasCommand: () => true,
+      buildToolingPresent: () => true,
       installedPluginPresent: () => true,
       installedPluginIds: async () => [PLUGIN_ID],
       provisionPlugin: async () => ({
