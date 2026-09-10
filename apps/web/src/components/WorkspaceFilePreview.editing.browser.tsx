@@ -179,6 +179,74 @@ it("renders a line-number gutter next to the inline editor", async () => {
   }
 });
 
+it("keeps gutter rows aligned at the bottom of horizontally overflowing files", async () => {
+  const lines = Array.from({ length: 100 }, (_, index) => `${index + 1} ${"x".repeat(300)}`);
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: lines.join("\n") }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <div style={{ width: 400, height: 320 }}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+        </div>
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const area = editor.element() as HTMLTextAreaElement;
+    expect(area.scrollWidth).toBeGreaterThan(area.clientWidth);
+    // Headless Chromium hides scrollbars. Extra bottom padding exercises the
+    // same unequal scroll ranges there; visible scrollbars need no emulation.
+    if (area.offsetHeight === area.clientHeight) {
+      area.style.paddingBottom = `${Number.parseFloat(getComputedStyle(area).paddingBottom) + 10}px`;
+    }
+    area.scrollTop = area.scrollHeight;
+    area.dispatchEvent(new Event("scroll"));
+
+    await vi.waitFor(() => {
+      const lastNumber = document.querySelector(".editor-file-editor__gutter-line:last-child");
+      if (!lastNumber) throw new Error("editor line-number gutter not found");
+      const metrics = getComputedStyle(area);
+      const lastTextLineTop =
+        area.getBoundingClientRect().top +
+        Number.parseFloat(metrics.paddingTop) +
+        (lines.length - 1) * Number.parseFloat(metrics.lineHeight) -
+        area.scrollTop;
+      expect(Math.abs(lastNumber.getBoundingClientRect().top - lastTextLineTop)).toBeLessThan(1);
+    });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps line one and the editor position stable when an empty buffer is edited", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "" }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const originalLeft = editor.element().getBoundingClientRect().left;
+    for (const contents of ["", "first character", ""]) {
+      await editor.fill(contents);
+      await vi.waitFor(() => {
+        expect(document.querySelector(".editor-file-editor__gutter")?.textContent).toBe("1");
+        expect(editor.element().getBoundingClientRect().left).toBe(originalLeft);
+      });
+    }
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("keeps the buffer dirty and shows guarded write failures", async () => {
   const conflictMessage =
     "This file changed on disk after it was opened. Reload it before saving to avoid overwriting those changes.";

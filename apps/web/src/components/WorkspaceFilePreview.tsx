@@ -673,7 +673,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     const area = editAreaRef.current;
     const gutter = editGutterRef.current;
     if (area && gutter) {
-      gutter.scrollTop = area.scrollTop;
+      gutter.style.transform = `translateY(${-area.scrollTop}px)`;
     }
   }, []);
 
@@ -1128,13 +1128,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         <FilePreviewLoadingState />
       ) : activeEditBuffer && editableDocument && !showMarkdownPreview ? (
         <div className="editor-file-editor-wrap">
-          {lineCount > 0 && lineCount <= MAX_PLAIN_NUMBERED_LINES ? (
-            <div ref={editGutterRef} className="editor-file-editor__gutter" aria-hidden="true">
-              {Array.from({ length: lineCount }, (_, index) => (
-                <span key={index + 1} className="editor-file-editor__gutter-line">
-                  {index + 1}
-                </span>
-              ))}
+          {lineCount <= MAX_PLAIN_NUMBERED_LINES ? (
+            <div className="editor-file-editor__gutter" aria-hidden="true">
+              <div ref={editGutterRef}>
+                {Array.from({ length: Math.max(1, lineCount) }, (_, index) => (
+                  <span key={index + 1} className="editor-file-editor__gutter-line">
+                    {index + 1}
+                  </span>
+                ))}
+              </div>
             </div>
           ) : null}
           <textarea
