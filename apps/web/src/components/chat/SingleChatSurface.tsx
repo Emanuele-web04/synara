@@ -828,9 +828,7 @@ export function SingleChatSurface(props: {
 
     await handleNewThread(
       projectId,
-      {
-        envMode: appSettings.defaultThreadEnvMode,
-      },
+      undefined,
       {
         search: (previous) => ({
           ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),

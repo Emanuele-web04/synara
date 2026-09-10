@@ -39,6 +39,7 @@ import {
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
 import { useLatestProjectStore } from "../latestProjectStore";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -2126,6 +2127,7 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
+    useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
       homeDir: null,
@@ -7233,7 +7235,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("offers New worktree from an empty draft thread", async () => {
+  it("remembers Local and New worktree choices for subsequent project chats", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -7279,6 +7281,40 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+      expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(
+        "worktree",
+      );
+
+      let previousDraftId = newThreadId;
+      for (const expectedMode of ["worktree", "local"] as const) {
+        await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+        useComposerDraftStore.getState().clearDraftThread(previousDraftId);
+        await newThreadButton.click();
+        const nextPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path) && path !== `/${previousDraftId}`,
+          "The next chat should open a fresh draft.",
+        );
+        previousDraftId = nextPath.slice(1) as ThreadId;
+        await vi.waitFor(() => {
+          expect(useComposerDraftStore.getState().getDraftThread(previousDraftId)).toMatchObject({
+            projectId: PROJECT_ID,
+            envMode: expectedMode,
+            worktreePath: null,
+          });
+        });
+
+        if (expectedMode === "worktree") {
+          const picker = await waitForEnvironmentModeButton("Worktree");
+          picker.click();
+          await page.getByRole("menuitem", { name: "Local project", exact: true }).click();
+          await vi.waitFor(() => {
+            expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(
+              "local",
+            );
+          });
+        }
+      }
     } finally {
       await mounted.cleanup();
     }
@@ -8319,16 +8355,20 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
+      useProjectEnvironmentStore.getState().setProjectEnvMode(PROJECT_ID, "worktree");
       await waitForNewThreadShortcutLabel();
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
       await waitForLayout();
-      await triggerChatNewShortcutUntilPath(
+      const nextPath = await triggerChatNewShortcutUntilPath(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the shortcut.",
       );
+      expect(
+        useComposerDraftStore.getState().getDraftThread(nextPath.slice(1) as ThreadId),
+      ).toMatchObject({ envMode: "worktree", worktreePath: null });
     } finally {
       await mounted.cleanup();
     }
