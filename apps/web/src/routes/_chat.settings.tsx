@@ -172,6 +172,7 @@ const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
 const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   updated_at: "Recently active",
   created_at: "Newest first",
+  manual: "Manual order",
 } as const;
 
 const FOLLOW_UP_BEHAVIOR_OPTIONS = [
@@ -582,7 +583,7 @@ function SettingsRouteView() {
 
         <SettingsRow
           title="Thread order"
-          description="Controls how threads are arranged inside each project in the main sidebar."
+          description="Controls how conversations are arranged in Projects, Chats, and Studio. Dragging a conversation switches this to Manual."
           resetAction={
             settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
               <SettingResetButton
@@ -599,7 +600,7 @@ function SettingsRouteView() {
             <SettingsSelectControl
               value={settings.sidebarThreadSortOrder}
               onValueChange={(value) => {
-                if (value !== "updated_at" && value !== "created_at") {
+                if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
                   return;
                 }
                 updateSettings({ sidebarThreadSortOrder: value });
@@ -612,6 +613,9 @@ function SettingsRouteView() {
               </SelectItem>
               <SelectItem hideIndicator value="created_at">
                 {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+              </SelectItem>
+              <SelectItem hideIndicator value="manual">
+                {SIDEBAR_THREAD_SORT_ORDER_LABELS.manual}
               </SelectItem>
             </SettingsSelectControl>
           }

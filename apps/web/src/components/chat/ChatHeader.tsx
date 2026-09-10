@@ -53,6 +53,7 @@ import { useAppSettings } from "../../appSettings";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
+import { useSidebarThreadOrderStore } from "../../sidebarThreadOrderStore";
 import {
   readEditorRailChatTabs,
   storeEditorRailChatTabs,
@@ -175,6 +176,7 @@ function EditorChatHistoryMenu(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
+  const manualThreadIds = useSidebarThreadOrderStore((state) => state.orderedThreadIds);
   const selectDisplayThreads = createSidebarDisplayThreadsSelector({
     hideAutomationRunThreads: !settings.showAutomationRunThreads,
   });
@@ -182,6 +184,7 @@ function EditorChatHistoryMenu(props: {
   const historyThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
     settings.sidebarThreadSortOrder,
+    manualThreadIds,
   ).slice(0, EDITOR_CHAT_HISTORY_LIMIT);
 
   return (
@@ -249,6 +252,7 @@ function EditorRailTabs(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
+  const manualThreadIds = useSidebarThreadOrderStore((state) => state.orderedThreadIds);
   const [openChatTabs, setOpenChatTabs] = useState<ReadonlyArray<EditorRailChatTab>>(() => {
     const storedTabs = readEditorRailChatTabs(props.projectId);
     return storedTabs.length > 0
@@ -341,6 +345,7 @@ function EditorRailTabs(props: {
   const sortedProjectThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
     settings.sidebarThreadSortOrder,
+    manualThreadIds,
   );
   const sidebarThreadById = new Map(
     sortedProjectThreads.map((thread) => [

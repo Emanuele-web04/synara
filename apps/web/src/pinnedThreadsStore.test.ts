@@ -27,4 +27,23 @@ describe("usePinnedThreadsStore", () => {
     usePinnedThreadsStore.getState().prunePinnedThreads(["thread-1" as ThreadId]);
     expect(usePinnedThreadsStore.getState().pinnedThreadIds).toEqual(["thread-1"]);
   });
+
+  it("reorders only the pinned ids in the current sidebar surface", () => {
+    usePinnedThreadsStore.setState({
+      pinnedThreadIds: ["studio-1", "thread-1", "thread-2"].map(ThreadId.makeUnsafe),
+    });
+
+    const changed = usePinnedThreadsStore.getState().movePinnedThread({
+      scopeThreadIds: ["thread-1", "thread-2"].map(ThreadId.makeUnsafe),
+      activeThreadId: ThreadId.makeUnsafe("thread-2"),
+      overThreadId: ThreadId.makeUnsafe("thread-1"),
+    });
+
+    expect(changed).toBe(true);
+    expect(usePinnedThreadsStore.getState().pinnedThreadIds).toEqual([
+      "studio-1",
+      "thread-2",
+      "thread-1",
+    ]);
+  });
 });

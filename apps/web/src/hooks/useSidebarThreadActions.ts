@@ -50,6 +50,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
+const EMPTY_MANUAL_THREAD_IDS: readonly ThreadId[] = [];
 /**
  * How long a confirmed settle override may outlive its projection push. Well
  * past normal push latency: the expiry is a last resort against a lost or
@@ -91,6 +92,7 @@ export function useSidebarThreadActions(input: {
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
+  readonly manualThreadIds?: readonly ThreadId[];
   readonly projectById: ReadonlyMap<ProjectId, Project>;
   readonly routeSplitViewId: string | null;
   readonly routeThreadId: ThreadId | null;
@@ -112,6 +114,7 @@ export function useSidebarThreadActions(input: {
     sidebarThreadSummaryById,
     threadsHydrated,
   } = input;
+  const manualThreadIds = input.manualThreadIds ?? EMPTY_MANUAL_THREAD_IDS;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -473,6 +476,7 @@ export function useSidebarThreadActions(input: {
             deletedThreadId: threadId,
             deletedThreadIds: opts.deletedThreadIds ?? new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
+            manualThreadIds,
           }),
           deletedPaneInActiveSplit: activeSplitView
             ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
@@ -531,6 +535,7 @@ export function useSidebarThreadActions(input: {
       clearTemporaryThread,
       clearTerminalState,
       handleNewChat,
+      manualThreadIds,
       navigate,
       removeThreadFromSplitViews,
       removeWorktreeMutation,
@@ -579,6 +584,7 @@ export function useSidebarThreadActions(input: {
             deletedThreadId: threadId,
             deletedThreadIds: new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
+            manualThreadIds,
           });
           if (fallbackThreadId) {
             await navigate({
@@ -596,7 +602,14 @@ export function useSidebarThreadActions(input: {
         pendingThreadIds.delete(threadId);
       });
     },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, routeThreadId, sidebarThreads, navigate],
+    [
+      appSettings.sidebarThreadSortOrder,
+      handleNewChat,
+      manualThreadIds,
+      routeThreadId,
+      sidebarThreads,
+      navigate,
+    ],
   );
 
   const restoreArchivedThreadFromToast = useCallback(

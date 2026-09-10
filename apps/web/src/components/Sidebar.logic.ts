@@ -12,6 +12,7 @@ import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
+import { compareSidebarThreadsByManualOrder } from "../sidebarThreadOrdering";
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
@@ -531,7 +532,7 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
  * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
  *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
  *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
+ * - The wider reserve that clears the hover reorder/pin/archive actions is applied only
  *   on hover/focus (mirroring the project header row), so the title gives up that
  *   width exactly when those actions appear and not a moment sooner.
  *
@@ -541,10 +542,10 @@ export function resolveThreadRowTrailingReserveClass(input: {
   metaChipCount: number;
   hasTrailingGlyph: boolean;
 }): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
+  // Hover/focus reveals the reorder/pin/archive actions; the meta chips + glyph fade out
   // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
+    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[5.5rem] group-focus-within/thread-row:pr-[5.5rem]";
   const { metaChipCount, hasTrailingGlyph } = input;
   if (metaChipCount <= 0) {
     return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
@@ -1228,7 +1229,7 @@ function getLatestUserMessageTimestamp(thread: SidebarThreadSortInput): number {
 
 function getThreadSortTimestamp(
   thread: SidebarThreadSortInput,
-  sortOrder: SidebarThreadSortOrder | Exclude<SidebarProjectSortOrder, "manual">,
+  sortOrder: Exclude<SidebarThreadSortOrder | SidebarProjectSortOrder, "manual">,
 ): number {
   if (sortOrder === "created_at") {
     return toSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY;
@@ -1267,18 +1268,31 @@ function threadSortAttentionRank(thread: SidebarThreadSortInput): number {
 export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarThreadSortInput>(
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,
+  manualThreadIds: readonly T["id"][] = [],
 ): T[] {
-  return threads.toSorted((left, right) => {
-    if (sortOrder !== "created_at") {
+  const rankById = new Map(manualThreadIds.map((threadId, index) => [threadId, index] as const));
+  const automaticSortOrder = sortOrder === "created_at" ? "created_at" : "updated_at";
+  const compareAutomatically = (left: T, right: T) => {
+    if (automaticSortOrder !== "created_at") {
       const byAttentionRank = threadSortAttentionRank(right) - threadSortAttentionRank(left);
       if (byAttentionRank !== 0) return byAttentionRank;
     }
-    const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
-    const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
+    const rightTimestamp = getThreadSortTimestamp(right, automaticSortOrder);
+    const leftTimestamp = getThreadSortTimestamp(left, automaticSortOrder);
     const byTimestamp =
       rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
     if (byTimestamp !== 0) return byTimestamp;
     return right.id.localeCompare(left.id);
+  };
+
+  return threads.toSorted((left, right) => {
+    if (sortOrder !== "manual") return compareAutomatically(left, right);
+    return compareSidebarThreadsByManualOrder({
+      leftId: left.id,
+      rightId: right.id,
+      rankById,
+      compareFallback: () => compareAutomatically(left, right),
+    });
   });
 }
 
@@ -1289,8 +1303,9 @@ export function getFallbackThreadIdAfterDelete<
   deletedThreadId: T["id"];
   sortOrder: SidebarThreadSortOrder;
   deletedThreadIds?: ReadonlySet<T["id"]>;
+  manualThreadIds?: readonly T["id"][];
 }): T["id"] | null {
-  const { deletedThreadId, deletedThreadIds, sortOrder, threads } = input;
+  const { deletedThreadId, deletedThreadIds, manualThreadIds, sortOrder, threads } = input;
   const deletedThread = threads.find((thread) => thread.id === deletedThreadId);
   if (!deletedThread) {
     return null;
@@ -1305,6 +1320,7 @@ export function getFallbackThreadIdAfterDelete<
           !deletedThreadIds?.has(thread.id),
       ),
       sortOrder,
+      manualThreadIds,
     )[0]?.id ?? null
   );
 }
