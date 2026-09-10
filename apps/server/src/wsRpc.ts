@@ -2101,26 +2101,28 @@ const makeWsRpcHandlersLayer = () =>
 
         ...computerHandlers,
         [COMPUTER_WS_METHODS.changePermission]: (input) =>
-          Effect.tryPromise({
-            try: () =>
-              computerService!.manager.permissions.change(
-                input.threadId,
-                input.enabled,
-                async () => {
-                  if (!providerService.stopRuntimeSession)
-                    throw new Error("Provider runtime stop is unavailable.");
-                  await Effect.runPromise(
-                    providerService.stopRuntimeSession({ threadId: input.threadId }),
-                  );
-                  await computerService!.manager.releaseDesktopControl(input.threadId);
-                },
-              ),
-            catch: (cause) =>
-              toWsRpcError(
-                cause,
-                "Computer permission change failed. Access remains blocked; try again.",
-              ),
-          }),
+          !computerService
+            ? Effect.fail(new WsRpcError({ message: "Computer service is unavailable." }))
+            : Effect.tryPromise({
+                try: () =>
+                  computerService.manager.permissions.change(
+                    input.threadId,
+                    input.enabled,
+                    async () => {
+                      if (!providerService.stopRuntimeSession)
+                        throw new Error("Provider runtime stop is unavailable.");
+                      await Effect.runPromise(
+                        providerService.stopRuntimeSession({ threadId: input.threadId }),
+                      );
+                      await computerService.manager.releaseDesktopControl(input.threadId);
+                    },
+                  ),
+                catch: (cause) =>
+                  toWsRpcError(
+                    cause,
+                    "Computer permission change failed. Access remains blocked; try again.",
+                  ),
+              }),
         [COMPUTER_WS_METHODS.getThreadState]: (input) =>
           Effect.gen(function* () {
             const connection = yield* CurrentWsConnectionSession;

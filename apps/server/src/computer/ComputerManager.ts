@@ -1862,6 +1862,8 @@ export class ComputerManager {
   }
 
   async handleThreadRemoved(threadId: string): Promise<void> {
+    // Gateway calls recheck the orchestration thread before accessing the
+    // backend. Deleted threads cannot use stale credentials after this cleanup.
     await this.permissions.forget(threadId);
     this.threads.delete(threadId);
     this.threadLabels.delete(threadId);
@@ -1873,6 +1875,7 @@ export class ComputerManager {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.permissions.close();
     this.cursorActivity.dispose();
     await this.operations.close();
     if (this.windowsPublishTimer !== undefined) clearTimeout(this.windowsPublishTimer);

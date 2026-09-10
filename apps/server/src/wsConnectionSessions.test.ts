@@ -7,10 +7,13 @@ import {
 } from "./managedAttachmentPrincipal.ts";
 import {
   CurrentWsSessionRole,
+  CurrentWsConnectionSession,
   makeWsConnectionSessions,
   provideWsConnectionSession,
   type WsConnectionSession,
 } from "./wsConnectionSessions.ts";
+import { ComputerEventInterests } from "./computer/computerEventInterests";
+import { ThreadId, type ComputerEvent } from "@synara/contracts";
 
 const OWNER_SESSION: WsConnectionSession = {
   role: "owner",
@@ -18,6 +21,39 @@ const OWNER_SESSION: WsConnectionSession = {
 };
 
 describe("WsConnectionSessions", () => {
+  it("propagates the same computer interest identity across handlers and separates reconnects", async () => {
+    const sessions = await Effect.runPromise(makeWsConnectionSessions);
+    const scope = await Effect.runPromise(Scope.make());
+    try {
+      const interests = new ComputerEventInterests();
+      const key = await Effect.runPromise(Scope.provide(sessions.register(OWNER_SESSION), scope));
+      const readIdentity = (key: string) =>
+        Effect.runPromise(
+          provideWsConnectionSession(Effect.service(CurrentWsConnectionSession), sessions.lookup(key)),
+        );
+      const original = (await readIdentity(key))!;
+      interests.watch(original, "thread");
+      for (let i = 0; i < 300; i++) {
+        const other = await Effect.runPromise(
+          Scope.provide(sessions.register(OWNER_SESSION), scope),
+        );
+        interests.watch((await readIdentity(other))!, "other");
+      }
+      const event = {
+        type: "computer.thread-state",
+        state: { threadId: ThreadId.makeUnsafe("thread") },
+      } as ComputerEvent;
+      expect(await readIdentity(key)).toBe(original);
+      expect(interests.accepts((await readIdentity(key))!, event)).toBe(true);
+      const reconnected = await Effect.runPromise(
+        Scope.provide(sessions.register(OWNER_SESSION), scope),
+      );
+      expect(await readIdentity(reconnected)).not.toBe(original);
+      expect(interests.accepts((await readIdentity(reconnected))!, event)).toBe(false);
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
+  });
   it("registers sessions for the connection scope and forgets them on close", async () => {
     const sessions = await Effect.runPromise(makeWsConnectionSessions);
     const scope = await Effect.runPromise(Scope.make());

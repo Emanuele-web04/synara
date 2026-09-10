@@ -57,7 +57,9 @@ export const makeWsConnectionSessions = Effect.sync(() => {
     register: (session: WsConnectionSession) =>
       Effect.gen(function* () {
         const key = randomUUID();
-        sessions.set(key, session);
+        // Each connection has a distinct identity even if a caller reuses the
+        // same role/principal object across upgrades.
+        sessions.set(key, { ...session });
         yield* Effect.addFinalizer(() => Effect.sync(() => sessions.delete(key)));
         return key;
       }),
