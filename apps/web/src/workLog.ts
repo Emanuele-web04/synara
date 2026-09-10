@@ -2435,27 +2435,37 @@ export function deriveTimelineEntries(
     messageOrder.set(message.id, order);
     if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);
   }
-  const orderByEntry = new Map<TimelineEntry, number>();
-  for (const entry of [...messageRows, ...proposedPlanRows, ...workRows]) {
-    const knownOrder =
-      entry.kind === "message" || entry.kind === "message-segment"
-        ? messageOrder.get(entry.message.id)
-        : turnOrder.get(
-            (entry.kind === "work" ? entry.entry.turnId : entry.proposedPlan.turnId) ?? "",
-          );
-    if (knownOrder !== undefined) {
-      orderByEntry.set(entry, knownOrder);
-      continue;
-    }
-    // Unattributed legacy activity keeps its chronological position.
+  // Unattributed legacy activity keeps its chronological position.
+  const chronologicalOrder = (createdAt: string): number => {
     let low = 0;
     let high = userStarts.length;
     while (low < high) {
       const mid = (low + high) >>> 1;
-      if (userStarts[mid]!.localeCompare(entry.createdAt) <= 0) low = mid + 1;
+      if (userStarts[mid]!.localeCompare(createdAt) <= 0) low = mid + 1;
       else high = mid;
     }
-    orderByEntry.set(entry, low);
+    return low;
+  };
+  const orderByEntry = new Map<TimelineEntry, number>();
+  for (const entry of [...messageRows, ...proposedPlanRows, ...workRows]) {
+    if (entry.kind === "message" || entry.kind === "message-segment") {
+      orderByEntry.set(
+        entry,
+        messageOrder.get(entry.message.id) ?? chronologicalOrder(entry.createdAt),
+      );
+      continue;
+    }
+    // A merged work/plan row can carry a newer turnId than its anchor (a
+    // background tool's update owns the new turn) while a late replay can carry
+    // an old turnId with a fresh timestamp. Anchor it at whichever is earlier.
+    const turnId =
+      (entry.kind === "work" ? entry.entry.turnId : entry.proposedPlan.turnId) ?? undefined;
+    const turnBlock = turnId === undefined ? undefined : turnOrder.get(turnId);
+    const chronological = chronologicalOrder(entry.createdAt);
+    orderByEntry.set(
+      entry,
+      turnBlock === undefined ? chronological : Math.min(turnBlock, chronological),
+    );
   }
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
