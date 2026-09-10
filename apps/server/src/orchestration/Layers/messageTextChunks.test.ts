@@ -341,6 +341,42 @@ it("preserves a legacy streaming prefix and cascades chunk deletion on hard purg
   }
 });
 
+it("gives a resumed legacy row without an ordering sequence this delta's sequence once", async () => {
+  const system = await openSystem();
+  try {
+    await system.seed();
+    // Rows imported or migrated before sequences existed carry none.
+    await system.run(
+      system.repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "legacy ",
+        source: "native",
+        isStreaming: true,
+        createdAt: at,
+        updatedAt: at,
+      }),
+    );
+    await system.delta("resume-legacy-1", "continued");
+    const readSequence = () =>
+      system.run(
+        system.sql<{ readonly sequence: number | null }>`
+          SELECT sequence FROM projection_thread_messages WHERE thread_id = ${threadId} AND message_id = ${messageId}
+        `,
+      );
+    const [first] = await readSequence();
+    expect(first?.sequence).toEqual(expect.any(Number));
+    // First writer wins: later deltas never move the ordering sequence.
+    await system.delta("resume-legacy-2", " more");
+    expect((await readSequence())[0]?.sequence).toBe(first?.sequence);
+    await assertReaders(system, "legacy continued more");
+  } finally {
+    await system.runtime.dispose();
+  }
+});
+
 it("preserves cached text on completion when the projection message row is missing", async () => {
   const system = await openSystem();
   try {

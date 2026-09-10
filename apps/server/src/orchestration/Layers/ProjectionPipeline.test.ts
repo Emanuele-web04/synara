@@ -5683,3 +5683,94 @@ it.layer(
     }),
   );
 });
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-deferred-"))(
+  "OrchestrationProjectionPipeline deferred cursor",
+  (it) => {
+    it.effect(
+      "settles the deferred cursor inside the hot transaction only when it is caught up",
+      () =>
+        Effect.gen(function* () {
+          const projectionPipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const now = new Date().toISOString();
+          const threadId = ThreadId.makeUnsafe("thread-deferred-settle");
+          const cursorOf = (projector: string) =>
+            Effect.map(
+              sql<{ readonly sequence: number }>`
+            SELECT last_applied_sequence AS sequence FROM projection_state WHERE projector = ${projector}
+          `,
+              (rows) => rows[0]?.sequence ?? null,
+            );
+          const streamedDelta = (index: number, text: string) =>
+            eventStore.append({
+              type: "thread.message-sent",
+              eventId: EventId.makeUnsafe(`evt-deferred-settle-${index}`),
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: now,
+              commandId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              causationEventId: null,
+              correlationId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              metadata: {},
+              payload: {
+                threadId,
+                messageId: MessageId.makeUnsafe("message-deferred-settle"),
+                role: "assistant",
+                text,
+                turnId: null,
+                streaming: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            });
+
+          yield* projectionPipeline.bootstrap;
+          // A full pass brings both phase cursors to the same sequence.
+          const first = yield* streamedDelta(1, "one ");
+          yield* projectionPipeline.projectEvent(first);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), first.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+
+          // Caught up: a streamed delta has no deferred projector, so the hot
+          // transaction moves the deferred cursor itself and reports it settled.
+          const second = yield* streamedDelta(2, "two ");
+          const settled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(second),
+          );
+          assert.isTrue(settled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), second.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            second.sequence,
+          );
+
+          // Lagging (a failed or in-flight deferred catch-up): the hot transaction
+          // must leave the deferred cursor alone so the catch-up still replays.
+          yield* sql`
+        UPDATE projection_state SET last_applied_sequence = ${first.sequence}
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+      `;
+          const third = yield* streamedDelta(3, "three");
+          const notSettled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(third),
+          );
+          assert.isFalse(notSettled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), third.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+          yield* projectionPipeline.projectDeferredEvent(third);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            third.sequence,
+          );
+        }),
+    );
+  },
+);

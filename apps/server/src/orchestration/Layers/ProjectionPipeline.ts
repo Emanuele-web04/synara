@@ -2290,12 +2290,44 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  // The deferred phase rejects every streamed assistant delta, so for those
+  // events its only work is moving its cursor (see advancePhaseCursorOnly). Do
+  // that inside the hot transaction, which already dirties the projection_state
+  // page, instead of paying a second commit per token chunk after it. Only a
+  // cursor that is caught up with the hot phase may be moved here: a lagging
+  // cursor belongs to a failed or in-flight deferred catch-up that must still
+  // replay the events it is behind on.
+  const settleDeferredPhaseInHotTransaction = (event: OrchestrationEvent) =>
+    Effect.gen(function* () {
+      if (selectProjectorsForEvent(event, "deferred").length > 0) return false;
+      const rows = yield* sql<{ readonly projector: string }>`
+        UPDATE projection_state
+        SET last_applied_sequence = ${event.sequence}, updated_at = ${event.occurredAt}
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+          AND last_applied_sequence < ${event.sequence}
+          AND last_applied_sequence >= (
+            SELECT last_applied_sequence FROM projection_state
+            WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.hot}
+          )
+        RETURNING projector
+      `.pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionPipeline.settleDeferredPhaseInHotTransaction:query"),
+        ),
+      );
+      return rows.length > 0;
+    });
+
   const projectHotEventInCurrentTransaction: OrchestrationProjectionPipelineShape["projectHotEventInCurrentTransaction"] =
     (event) =>
-      runProjectorsForHotEvent(
-        selectProjectorsForEvent(event, "hot"),
-        event,
-        ORCHESTRATION_PROJECTOR_NAMES.hot,
+      settleDeferredPhaseInHotTransaction(event).pipe(
+        Effect.flatMap((deferredPhaseSettled) =>
+          runProjectorsForHotEvent(
+            selectProjectorsForEvent(event, "hot"),
+            event,
+            ORCHESTRATION_PROJECTOR_NAMES.hot,
+          ).pipe(Effect.as({ deferredPhaseSettled })),
+        ),
       );
 
   const projectHotEventInOwnTransaction = (event: OrchestrationEvent) =>

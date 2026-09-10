@@ -30,6 +30,7 @@ import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/Pro
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
+  type PersistedProviderRuntimeEvent,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   ProviderService,
@@ -51,6 +52,7 @@ import {
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -72,8 +74,9 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(options?: { readonly persistedStream?: boolean }) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const persistedEventPubSub = Effect.runSync(PubSub.unbounded<PersistedProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -100,6 +103,11 @@ function createProviderServiceHarness() {
     compactThread: () => unsupported(),
     closeRuntimeEvents: Effect.void,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+    // Only the already-persisted path uses this; when present the ingestion
+    // ignores `streamEvents`, so ordinary harnesses must not provide it.
+    ...(options?.persistedStream === true
+      ? { streamPersistedEvents: Stream.fromPubSub(persistedEventPubSub) }
+      : {}),
   };
 
   const setSession = (session: ProviderSession): void => {
@@ -146,9 +154,14 @@ function createProviderServiceHarness() {
     );
   };
 
+  const emitPersisted = (persisted: PersistedProviderRuntimeEvent): void => {
+    Effect.runSync(PubSub.publish(persistedEventPubSub, persisted));
+  };
+
   return {
     service,
     emit,
+    emitPersisted,
     setSession,
   };
 }
@@ -226,7 +239,10 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProviderRuntimeEventRepository
+    | SqlClient.SqlClient,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -252,10 +268,15 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { readonly startIngestion?: boolean }) {
+  async function createHarness(options?: {
+    readonly startIngestion?: boolean;
+    readonly persistedStream?: boolean;
+  }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const provider = createProviderServiceHarness(
+      options?.persistedStream === true ? { persistedStream: true } : undefined,
+    );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -354,6 +375,7 @@ describe("ProviderRuntimeIngestion", () => {
     return {
       engine,
       emit: provider.emit,
+      emitPersisted: provider.emitPersisted,
       setProviderSession: provider.setSession,
       drain,
       startIngestion,
@@ -421,123 +443,160 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(persisted.sequence);
   });
 
-  it("quarantines a command identity collision without blocking later assistant output", async () => {
-    const harness = await createHarness({ startIngestion: false });
-    const threadId = asThreadId("thread-1");
-    const turnId = asTurnId("turn-after-command-collision");
-    const itemId = asItemId("assistant-after-command-collision");
-    const collisionEvent: ProviderRuntimeEvent = {
-      type: "runtime.warning",
-      eventId: asEventId("evt-command-identity-collision"),
-      provider: "cursor",
-      createdAt: "2026-07-14T00:00:00.000Z",
-      threadId,
-      payload: { message: "Current warning shape" },
-    };
-    const collisionCommandId = CommandId.makeUnsafe(
-      `provider:${collisionEvent.eventId}:thread-activity-append:${threadId}:runtime.warning:${collisionEvent.eventId}`,
-    );
-
-    // Model a crash/upgrade boundary: this event's command id was accepted
-    // under an older projection shape, but its runtime-journal row was never
-    // acknowledged. Replaying the current shape must collide deterministically.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: collisionCommandId,
-        threadId,
-        activity: {
-          id: collisionEvent.eventId,
-          tone: "info",
-          kind: "runtime.warning",
-          summary: "Legacy warning shape",
-          payload: { message: "Legacy warning shape" },
-          turnId: null,
-          createdAt: collisionEvent.createdAt,
-        },
-        createdAt: collisionEvent.createdAt,
-      }),
-    );
-
-    const collisionRow = await Effect.runPromise(
-      harness.runtimeEventRepository.append(collisionEvent),
-    );
-    await Effect.runPromise(
-      harness.runtimeEventRepository.append({
-        type: "turn.started",
-        eventId: asEventId("evt-turn-started-after-command-collision"),
+  it.each([false, true])(
+    "quarantines a command identity collision (preceding ack fails: %s)",
+    async (failPrefixAck) => {
+      const harness = await createHarness({ startIngestion: false });
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-after-command-collision");
+      const itemId = asItemId("assistant-after-command-collision");
+      const collisionEvent: ProviderRuntimeEvent = {
+        type: "runtime.warning",
+        eventId: asEventId("evt-command-identity-collision"),
         provider: "cursor",
-        createdAt: "2026-07-14T00:00:00.500Z",
+        createdAt: "2026-07-14T00:00:00.000Z",
         threadId,
-        turnId,
-        payload: {},
-      }),
-    );
-    await Effect.runPromise(
-      harness.runtimeEventRepository.append({
-        type: "content.delta",
-        eventId: asEventId("evt-assistant-after-command-collision"),
-        provider: "cursor",
-        createdAt: "2026-07-14T00:00:01.000Z",
-        threadId,
-        turnId,
-        itemId,
-        payload: {
-          streamKind: "assistant_text",
-          delta: "The journal kept moving.",
-        },
-      }),
-    );
-    await Effect.runPromise(
-      harness.runtimeEventRepository.append({
-        type: "item.completed",
-        eventId: asEventId("evt-assistant-complete-after-command-collision"),
-        provider: "cursor",
-        createdAt: "2026-07-14T00:00:02.000Z",
-        threadId,
-        turnId,
-        itemId,
-        payload: { itemType: "assistant_message", status: "completed" },
-      }),
-    );
-    const terminalRow = await Effect.runPromise(
-      harness.runtimeEventRepository.append({
-        type: "turn.completed",
-        eventId: asEventId("evt-turn-complete-after-command-collision"),
-        provider: "cursor",
-        createdAt: "2026-07-14T00:00:03.000Z",
-        threadId,
-        turnId,
-        payload: { state: "completed" },
-      }),
-    );
+        payload: { message: "Current warning shape" },
+      };
+      const collisionCommandId = CommandId.makeUnsafe(
+        `provider:${collisionEvent.eventId}:thread-activity-append:${threadId}:runtime.warning:${collisionEvent.eventId}`,
+      );
 
-    await harness.startIngestion();
-    await harness.drain();
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.messages.some(
-        (message) =>
-          message.id === `assistant:${itemId}` &&
-          message.text === "The journal kept moving." &&
-          message.streaming === false,
-      ),
-    );
-    expect(thread.messages.find((message) => message.id === `assistant:${itemId}`)?.text).toBe(
-      "The journal kept moving.",
-    );
-    expect(
-      thread.activities.find((activity) => activity.id === collisionEvent.eventId)?.summary,
-    ).toBe("Legacy warning shape");
-    expect(thread.session).toMatchObject({ status: "ready", activeTurnId: null });
-    expect(thread.latestTurn).toMatchObject({ turnId, state: "completed" });
-    expect(
+      // Model a crash/upgrade boundary: this event's command id was accepted
+      // under an older projection shape, but its runtime-journal row was never
+      // acknowledged. Replaying the current shape must collide deterministically.
       await Effect.runPromise(
-        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
-      ),
-    ).toBe(terminalRow.sequence);
-    expect(collisionRow.sequence).toBeLessThan(terminalRow.sequence);
-  });
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: collisionCommandId,
+          threadId,
+          activity: {
+            id: collisionEvent.eventId,
+            tone: "info",
+            kind: "runtime.warning",
+            summary: "Legacy warning shape",
+            payload: { message: "Legacy warning shape" },
+            turnId: null,
+            createdAt: collisionEvent.createdAt,
+          },
+          createdAt: collisionEvent.createdAt,
+        }),
+      );
+
+      const prefixRow = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          ...collisionEvent,
+          eventId: asEventId("evt-before-command-identity-collision"),
+          payload: { message: "Accepted before the collision" },
+        }),
+      );
+      const collisionRow = await Effect.runPromise(
+        harness.runtimeEventRepository.append(collisionEvent),
+      );
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "turn.started",
+          eventId: asEventId("evt-turn-started-after-command-collision"),
+          provider: "cursor",
+          createdAt: "2026-07-14T00:00:00.500Z",
+          threadId,
+          turnId,
+          payload: {},
+        }),
+      );
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "content.delta",
+          eventId: asEventId("evt-assistant-after-command-collision"),
+          provider: "cursor",
+          createdAt: "2026-07-14T00:00:01.000Z",
+          threadId,
+          turnId,
+          itemId,
+          payload: {
+            streamKind: "assistant_text",
+            delta: "The journal kept moving.",
+          },
+        }),
+      );
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.completed",
+          eventId: asEventId("evt-assistant-complete-after-command-collision"),
+          provider: "cursor",
+          createdAt: "2026-07-14T00:00:02.000Z",
+          threadId,
+          turnId,
+          itemId,
+          payload: { itemType: "assistant_message", status: "completed" },
+        }),
+      );
+      const terminalRow = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "turn.completed",
+          eventId: asEventId("evt-turn-complete-after-command-collision"),
+          provider: "cursor",
+          createdAt: "2026-07-14T00:00:03.000Z",
+          threadId,
+          turnId,
+          payload: { state: "completed" },
+        }),
+      );
+
+      if (failPrefixAck) {
+        const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+        // Only the completed prefix fails to ack: incorrectly skipping ahead
+        // through the rest of the page would succeed and hide this failure.
+        await Effect.runPromise(sql`
+        CREATE TRIGGER fail_prefix_ack BEFORE UPDATE ON provider_runtime_event_consumers
+        WHEN NEW.last_acked_sequence = ${sql.literal(String(prefixRow.sequence))}
+        BEGIN SELECT RAISE(ABORT, 'injected prefix ack failure'); END
+      `);
+        try {
+          await expect(harness.startIngestion()).rejects.toThrow();
+          expect(
+            await Effect.runPromise(
+              harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+            ),
+          ).toBe(0);
+          const snapshot = await Effect.runPromise(harness.engine.getReadModel());
+          expect(
+            snapshot.threads
+              .find((entry) => entry.id === threadId)
+              ?.messages.some((message) => message.id === `assistant:${itemId}`),
+          ).toBe(false);
+        } finally {
+          await Effect.runPromise(sql`DROP TRIGGER fail_prefix_ack`);
+        }
+      } else {
+        await harness.startIngestion();
+      }
+      await harness.drain();
+
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.messages.some(
+          (message) =>
+            message.id === `assistant:${itemId}` &&
+            message.text === "The journal kept moving." &&
+            message.streaming === false,
+        ),
+      );
+      expect(thread.messages.find((message) => message.id === `assistant:${itemId}`)?.text).toBe(
+        "The journal kept moving.",
+      );
+      expect(
+        thread.activities.find((activity) => activity.id === collisionEvent.eventId)?.summary,
+      ).toBe("Legacy warning shape");
+      expect(thread.session).toMatchObject({ status: "ready", activeTurnId: null });
+      expect(thread.latestTurn).toMatchObject({ turnId, state: "completed" });
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(terminalRow.sequence);
+      expect(collisionRow.sequence).toBeLessThan(terminalRow.sequence);
+    },
+  );
 
   it("quarantines a previously rejected command without blocking later assistant output", async () => {
     const harness = await createHarness({ startIngestion: false });
@@ -7577,5 +7636,164 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+  it.each(["sql-error", "cursor-not-moved", "bookkeeping-error"] as const)(
+    "retries a failed page acknowledgement without repeating buffered text (%s)",
+    async (failure) => {
+      const harness = await createHarness({ persistedStream: true });
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-ack-retry");
+      const itemId = asItemId("item-ack-retry");
+      const createdAt = "2026-09-10T00:00:00.000Z";
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("request-ack-retry"),
+          threadId,
+          message: {
+            messageId: asMessageId("request-ack-retry"),
+            role: "user",
+            text: "Buffer the answer",
+            attachments: [],
+          },
+          assistantDeliveryMode: "buffered",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "turn.started",
+          eventId: asEventId("start-ack-retry"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: {},
+        }),
+      );
+      await harness.drain();
+      const cursorBefore = await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      );
+      for (const [index, delta] of ["Hello ", "world"].entries()) {
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "content.delta",
+            eventId: asEventId(`text-ack-retry-${index}`),
+            provider: "codex",
+            threadId,
+            turnId,
+            itemId,
+            createdAt,
+            payload: { streamKind: "assistant_text", delta },
+          }),
+        );
+      }
+      // Fail inside the real acknowledgement transaction. The bookkeeping
+      // variant aborts after the cursor UPDATE, which must also roll back.
+      await Effect.runPromise(
+        failure === "bookkeeping-error"
+          ? sql`CREATE TRIGGER fail_page_ack BEFORE INSERT ON provider_runtime_open_turns
+              BEGIN SELECT RAISE(ABORT, 'injected ack bookkeeping failure'); END`
+          : failure === "cursor-not-moved"
+            ? sql`CREATE TRIGGER fail_page_ack BEFORE UPDATE ON provider_runtime_event_consumers
+                BEGIN SELECT RAISE(IGNORE); END`
+            : sql`CREATE TRIGGER fail_page_ack BEFORE UPDATE ON provider_runtime_event_consumers
+                BEGIN SELECT RAISE(ABORT, 'injected cursor failure'); END`,
+      );
+      try {
+        await expect(harness.drain()).rejects.toThrow();
+        await expect(harness.drain()).rejects.toThrow();
+        expect(
+          await Effect.runPromise(
+            harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+          ),
+        ).toBe(cursorBefore);
+      } finally {
+        await Effect.runPromise(sql`DROP TRIGGER fail_page_ack`);
+      }
+      await harness.drain();
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.completed",
+          eventId: asEventId("complete-ack-retry"),
+          provider: "codex",
+          threadId,
+          turnId,
+          itemId,
+          createdAt,
+          payload: { itemType: "assistant_message", status: "completed" },
+        }),
+      );
+      await harness.drain();
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const message = readModel.threads
+        .find((thread) => thread.id === threadId)
+        ?.messages.find((entry) => entry.id === `assistant:${itemId}`);
+      expect(message?.text).toBe("Hello world");
+      expect(message?.streaming).toBe(false);
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(await Effect.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
+    },
+  );
+
+  it("acknowledges a burst of live journal notifications in pages, not one per event", async () => {
+    const harness = await createHarness({ persistedStream: true });
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    await Effect.runPromise(
+      sql`CREATE TABLE cursor_acks (from_sequence INTEGER, to_sequence INTEGER)`,
+    );
+    await Effect.runPromise(sql`
+      CREATE TRIGGER capture_cursor_acks AFTER UPDATE ON provider_runtime_event_consumers
+      BEGIN
+        INSERT INTO cursor_acks VALUES (OLD.last_acked_sequence, NEW.last_acked_sequence);
+      END
+    `);
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    for (let index = 0; index < 32; index += 1) {
+      rows.push(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: "runtime.warning",
+            eventId: asEventId(`live-burst-${index}`),
+            provider: "codex",
+            threadId: asThreadId("thread-1"),
+            createdAt: "2026-09-10T00:00:00.000Z",
+            payload: { message: "burst" },
+          }),
+        ),
+      );
+    }
+    // Every notification arrives while the first one's drain is still in
+    // flight, so the rest must be picked up as pages by that drain.
+    for (const row of rows) harness.emitPersisted(row);
+    const target = rows.at(-1)!.sequence;
+    const deadline = Date.now() + 5_000;
+    while (
+      (await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      )) < target
+    ) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the live drain");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const acks = await Effect.runPromise(
+      sql<{ readonly fromSequence: number; readonly toSequence: number }>`
+        SELECT from_sequence AS "fromSequence", to_sequence AS "toSequence" FROM cursor_acks
+        ORDER BY to_sequence ASC
+      `,
+    );
+    expect(acks.at(-1)?.toSequence).toBe(target);
+    // One acknowledgement for the first notification, then the backlog in
+    // (at most) pages; never one transaction per event.
+    expect(acks.length).toBeLessThan(rows.length);
+    expect(acks.length).toBeLessThanOrEqual(4);
   });
 });
