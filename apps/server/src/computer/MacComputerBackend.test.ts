@@ -1762,6 +1762,33 @@ describe("MacComputerBackend", () => {
     await backend.dispose();
   });
 
+  it.each([1, 99])("waits for protocol %i validation before sending input", async (protocolVersion) => {
+    let resolveProbe!: (value: unknown) => void;
+    const probe = new Promise((resolve) => { resolveProbe = resolve; });
+    const helper = new FakeMacHelper({ capabilities: () => probe });
+    const backend = makeBackend(helper);
+    try {
+      const availability = backend.availability();
+      await vi.waitFor(() => expect(helper.callsFor("capabilities")).toHaveLength(1));
+      const click = backend.click({ x: 10, y: 10 }, "7").catch((error: unknown) => error);
+      await settle();
+      expect(helper.callsFor("click")).toHaveLength(0);
+      resolveProbe(capabilitiesResponse({ protocolVersion }));
+      await availability;
+      const result = await click;
+      if (protocolVersion === 1) {
+        expect(result).not.toBeInstanceOf(Error);
+        expect(helper.callsFor("click")).toHaveLength(1);
+      } else {
+        expect(result).toBeInstanceOf(ComputerBackendError);
+        expect(helper.callsFor("click")).toHaveLength(0);
+      }
+    } finally {
+      resolveProbe(capabilitiesResponse({ protocolVersion }));
+      await backend.dispose();
+    }
+  });
+
   it("leaves TCC alone when nothing has told it which app is responsible", async () => {
     const { backend, timeline } = makeAdhocBackend({
       missing: { accessibility: true },
