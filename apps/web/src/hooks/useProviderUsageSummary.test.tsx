@@ -170,41 +170,44 @@ describe("useProviderUsageSummary", () => {
   it.each([
     ["2099-04-08T18:05:00.000Z", 10],
     ["2099-04-08T17:55:00.000Z", 11],
-  ])("merges Fable telemetry at %s without replacing the weekly allowance", (updatedAt, remaining) => {
-    const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
-      snapshot({
-        updatedAt: "2099-04-08T18:00:00.000Z",
-        limits: [
-          { window: "5h", usedPercent: 0, windowDurationMins: 300 },
-          { window: "Weekly", usedPercent: 45, windowDurationMins: 10080 },
-          { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+  ])(
+    "merges Fable telemetry at %s without replacing the weekly allowance",
+    (updatedAt, remaining) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+        snapshot({
+          updatedAt: "2099-04-08T18:00:00.000Z",
+          limits: [
+            { window: "5h", usedPercent: 0, windowDurationMins: 300 },
+            { window: "Weekly", usedPercent: 45, windowDurationMins: 10080 },
+            { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          ],
+        }),
+      ]);
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt,
+            limits: [{ window: "seven_day_overage_included", usedPercent: 90 }],
+          },
         ],
-      }),
-    ]);
+      });
 
-    const summary = readProviderUsageSummary({
-      queryClient,
-      threadRateLimits: [
-        {
-          provider: "claudeAgent",
-          updatedAt,
-          limits: [{ window: "seven_day_overage_included", usedPercent: 90 }],
-        },
-      ],
-    });
-
-    expect(
-      deriveVisibleRateLimitRows(summary.rateLimits).map(({ label, remainingPercent }) => ({
-        label,
-        remainingPercent,
-      })),
-    ).toEqual([
-      { label: "5h", remainingPercent: 100 },
-      { label: "Weekly", remainingPercent: 55 },
-      { label: "Fable", remainingPercent: remaining },
-    ]);
-  });
+      expect(
+        deriveVisibleRateLimitRows(summary.rateLimits).map(({ label, remainingPercent }) => ({
+          label,
+          remainingPercent,
+        })),
+      ).toEqual([
+        { label: "5h", remainingPercent: 100 },
+        { label: "Weekly", remainingPercent: 55 },
+        { label: "Fable", remainingPercent: remaining },
+      ]);
+    },
+  );
 
   it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
     const queryClient = createQueryClient();
