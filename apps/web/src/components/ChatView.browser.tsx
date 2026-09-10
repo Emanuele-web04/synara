@@ -1,7 +1,12 @@
+import {
+  buildStalePendingRequestFailureDetail,
+  pendingRequestInstanceKey,
+} from "@synara/shared/threadSummary";
 // Production CSS is part of the behavior under test because row height depends on it.
 import "../index.css";
 
 import {
+  ApprovalRequestId,
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
@@ -40,6 +45,7 @@ import {
 } from "../chat-scroll";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { useSidebarThreadOrderStore } from "../sidebarThreadOrderStore";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -48,6 +54,7 @@ import {
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
+import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
@@ -2176,6 +2183,7 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
+    useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useSidebarThreadOrderStore.setState({ orderedThreadIds: [] });
     useWorkspacePathsStore.setState({
@@ -2232,6 +2240,245 @@ describe("ChatView transcript geometry (full app)", () => {
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
   });
+
+  it("refreshes the full conversation when an approval was already answered", async () => {
+    const requestId = ApprovalRequestId.makeUnsafe("approval-refresh-race");
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("msg-approval-refresh"),
+      targetText: "Run the requested command",
+    });
+    const thread = snapshot.threads[0]!;
+    const pendingThread = {
+      ...thread,
+      activities: [
+        {
+          id: EventId.makeUnsafe("approval-refresh-request"),
+          createdAt: NOW_ISO,
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          tone: "approval" as const,
+          turnId: null,
+          sequence: 1,
+          payload: { requestId, requestKind: "command", detail: "Command: git status" },
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionKind: "approval" as const,
+          requestId,
+          threadId: thread.id,
+          turnId: null,
+          lifecycleGeneration: null,
+          status: "pending" as const,
+          decision: null,
+          responseCommandId: null,
+          responseRequestedAt: null,
+          createdAt: NOW_ISO,
+          resolvedAt: null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [pendingThread] },
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const subscribeThread = vi.fn(api.orchestration.subscribeThread);
+    const dispatchCommand = vi.fn(async () => {
+      // Only the server fixture learns the winner. The client must fetch and
+      // apply this snapshot through its real subscription/EventRouter path.
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: [
+          {
+            ...pendingThread,
+            pendingInteractions: pendingThread.pendingInteractions.map((interaction) => ({
+              ...interaction,
+              status: "confirmed" as const,
+              decision: "accept" as const,
+              resolvedAt: NOW_ISO,
+            })),
+          },
+        ],
+      };
+      throw new Error(`Approval request ${requestId} was already answered.`);
+    });
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand, subscribeThread } },
+    });
+    try {
+      setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
+      await page.getByRole("button", { name: /Approve once/u }).click();
+      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await expect
+        .element(page.getByRole("button", { name: /Approve once/u }))
+        .not.toBeInTheDocument();
+      expect(dispatchCommand).toHaveBeenCalledTimes(1);
+      await expect.element(page.getByText(/was already answered/u)).not.toBeInTheDocument();
+    } finally {
+      if (previousNativeApi) {
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      } else {
+        Reflect.deleteProperty(window, "nativeApi");
+      }
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["manual", "auto-advance", "custom"] as const)(
+    "preserves three answers (%s) on transient failure and restores expired questions without sending a message",
+    async (navigation) => {
+      const requestId = ApprovalRequestId.makeUnsafe("question-recovery");
+      const generation = "question-generation";
+      const requestKey = pendingRequestInstanceKey(requestId, generation);
+      const questions = [1, 2, 3].map((id) => ({
+        id: String(id),
+        header: `Question ${id}`,
+        question: `Choose option ${id}?`,
+        ...(navigation !== "auto-advance" ? { multiSelect: true } : {}),
+        options: [{ label: `Choice ${id}`, description: "Selected answer" }],
+      }));
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-question-recovery"),
+        targetText: "Discuss the design",
+      });
+      const thread = snapshot.threads[0]!;
+      const request = { requestId, lifecycleGeneration: generation, createdAt: NOW_ISO, questions };
+      const pendingThread = {
+        ...thread,
+        activities: [
+          {
+            id: EventId.makeUnsafe("question-request"),
+            createdAt: NOW_ISO,
+            kind: "user-input.requested",
+            summary: "Questions",
+            tone: "info" as const,
+            turnId: null,
+            sequence: 900,
+            payload: { requestId, lifecycleGeneration: generation, questions },
+          },
+        ],
+        pendingInteractions: [
+          {
+            interactionKind: "userInput" as const,
+            requestId,
+            threadId: thread.id,
+            turnId: null,
+            lifecycleGeneration: generation,
+            status: "pending" as const,
+            decision: null,
+            responseCommandId: null,
+            responseRequestedAt: null,
+            createdAt: NOW_ISO,
+            resolvedAt: null,
+          },
+        ],
+      };
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Keep this existing draft.");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [pendingThread] },
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      let expire = false;
+      const dispatchCommand = vi.fn(async () => {
+        if (!expire) throw new Error("Temporary connection failure");
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [
+            {
+              ...pendingThread,
+              pendingInteractions: pendingThread.pendingInteractions.map((row) => ({
+                ...row,
+                status: "uncertain" as const,
+              })),
+              activities: [
+                ...pendingThread.activities,
+                {
+                  id: EventId.makeUnsafe("question-expired"),
+                  createdAt: NOW_ISO,
+                  kind: "provider.user-input.respond.failed",
+                  summary: "Expired",
+                  tone: "error" as const,
+                  turnId: null,
+                  sequence: 2,
+                  payload: {
+                    requestId,
+                    lifecycleGeneration: generation,
+                    detail: buildStalePendingRequestFailureDetail("user-input", requestId),
+                  },
+                },
+              ],
+            },
+          ],
+        };
+      });
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+      });
+      try {
+        for (const id of [1, 2, 3]) {
+          await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
+          if (id < 3)
+            await page.getByRole("button", { name: "Next question", exact: true }).first().click();
+        }
+        if (navigation === "custom") {
+          await userEvent.click(await waitForComposerEditor());
+          await userEvent.keyboard("Custom answer");
+        }
+        const submit = page.getByRole("button", { name: "Submit answers", exact: true });
+        await expect.element(submit).toBeEnabled();
+        const button = submit.element() as HTMLButtonElement;
+        button.click();
+        button.click();
+        await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(dispatchCommand).toHaveBeenCalledTimes(1);
+        await expect.element(submit).toBeEnabled();
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.pendingUserInputDrafts?.[
+            requestKey
+          ],
+        ).toEqual({
+          request,
+          answers: Object.fromEntries(
+            [1, 2, 3].map((id) => [
+              String(id),
+              navigation === "custom" && id === 3
+                ? { customAnswer: "Custom answer" }
+                : { customAnswer: "", selectedOptionLabels: [`Choice ${id}`] },
+            ]),
+          ),
+        });
+        expire = true;
+        await submit.click();
+        await expect.element(page.getByRole("button", { name: "Restore answers" })).toBeVisible();
+        await expect.element(submit).not.toBeInTheDocument();
+        await page.getByRole("button", { name: "Restore answers" }).click();
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          `Keep this existing draft.\n\nChoose option 1?\nChoice 1\n\nChoose option 2?\nChoice 2\n\nChoose option 3?\n${navigation === "custom" ? "Custom answer" : "Choice 3"}`,
+        );
+        expect(dispatchCommand).toHaveBeenCalledTimes(2);
+      } finally {
+        if (previousNativeApi)
+          Object.defineProperty(window, "nativeApi", {
+            configurable: true,
+            value: previousNativeApi,
+          });
+        else Reflect.deleteProperty(window, "nativeApi");
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("keeps near-cap composer work bounded while live activities arrive", async () => {
     const percentile = (samples: readonly number[], fraction: number): number => {
@@ -7342,7 +7589,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("offers New worktree from an empty draft thread", async () => {
+  it("remembers Local and New worktree choices for subsequent project chats", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -7388,6 +7635,38 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+      expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe("worktree");
+
+      let previousDraftId = newThreadId;
+      for (const expectedMode of ["worktree", "local"] as const) {
+        await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+        useComposerDraftStore.getState().clearDraftThread(previousDraftId);
+        await newThreadButton.click();
+        const nextPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path) && path !== `/${previousDraftId}`,
+          "The next chat should open a fresh draft.",
+        );
+        previousDraftId = nextPath.slice(1) as ThreadId;
+        await vi.waitFor(() => {
+          expect(useComposerDraftStore.getState().getDraftThread(previousDraftId)).toMatchObject({
+            projectId: PROJECT_ID,
+            envMode: expectedMode,
+            worktreePath: null,
+          });
+        });
+
+        if (expectedMode === "worktree") {
+          const picker = await waitForEnvironmentModeButton("Worktree");
+          picker.click();
+          await page.getByRole("menuitem", { name: "Local project", exact: true }).click();
+          await vi.waitFor(() => {
+            expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(
+              "local",
+            );
+          });
+        }
+      }
     } finally {
       await mounted.cleanup();
     }
@@ -8428,16 +8707,20 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
+      useProjectEnvironmentStore.getState().setProjectEnvMode(PROJECT_ID, "worktree");
       await waitForNewThreadShortcutLabel();
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
       await waitForLayout();
-      await triggerChatNewShortcutUntilPath(
+      const nextPath = await triggerChatNewShortcutUntilPath(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the shortcut.",
       );
+      expect(
+        useComposerDraftStore.getState().getDraftThread(nextPath.slice(1) as ThreadId),
+      ).toMatchObject({ envMode: "worktree", worktreePath: null });
     } finally {
       await mounted.cleanup();
     }

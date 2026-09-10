@@ -829,18 +829,12 @@ export function SingleChatSurface(props: {
       return;
     }
 
-    await handleNewThread(
-      projectId,
-      {
-        envMode: appSettings.defaultThreadEnvMode,
-      },
-      {
-        search: (previous) => ({
-          ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
-          view: "editor",
-        }),
-      },
-    );
+    await handleNewThread(projectId, undefined, {
+      search: (previous) => ({
+        ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
+        view: "editor",
+      }),
+    });
   };
   const handleSelectEditorProject = (projectId: ProjectId) => {
     void openEditorProject(projectId).catch((error: unknown) => {

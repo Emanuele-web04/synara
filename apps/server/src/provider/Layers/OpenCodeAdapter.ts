@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  forgetOpenCodeMessage,
+  forgetOpenCodePart,
+  openCodeSnapshotKey,
+  type OpenCodeMessageState,
+} from "../openCodeMessageState.ts";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
@@ -130,11 +137,6 @@ type OpenCodeSubscribedEvent =
     ? TEvent
     : never;
 
-interface OpenCodeTurnSnapshot {
-  readonly id: TurnId;
-  readonly items: Array<unknown>;
-}
-
 interface OpenCodeHarnessPolicyDelivery {
   readonly sessionId: string;
   readonly policyVersion: string;
@@ -147,7 +149,7 @@ interface OpenCodeResumeCursor {
   readonly harnessPolicyDelivery?: OpenCodeHarnessPolicyDelivery;
 }
 
-interface OpenCodeSessionContext {
+interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   harnessPolicyDelivered?: boolean;
   pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
@@ -166,18 +168,7 @@ interface OpenCodeSessionContext {
   /** Human replies settled from permission.list while their permission.replied echo is pending. */
   readonly locallyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
-  readonly pendingTextDeltasByPartId: Map<
-    string,
-    { readonly text: string; readonly bufferedAfterKnownSnapshot: boolean }
-  >;
-  readonly messageRoleById: Map<string, "user" | "assistant">;
-  readonly messageSnapshotKeyById: Map<string, string>;
-  readonly partById: Map<string, Part>;
-  readonly partSnapshotKeyById: Map<string, string>;
-  readonly emittedTextByPartId: Map<string, string>;
-  readonly completedAssistantPartIds: Set<string>;
   readonly relatedSessionIds: Set<string>;
-  readonly turns: Array<OpenCodeTurnSnapshot>;
   readonly modelContextLimitBySlug: Map<string, number>;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastEmittedTokenUsageKey: string | undefined;
@@ -372,39 +363,6 @@ function mapPermissionDecision(reply: "once" | "always" | "reject"): string {
   }
 }
 
-function resolveTurnSnapshot(
-  context: OpenCodeSessionContext,
-  turnId: TurnId,
-): OpenCodeTurnSnapshot {
-  const existing = context.turns.find((turn) => turn.id === turnId);
-  if (existing) {
-    return existing;
-  }
-
-  const created: OpenCodeTurnSnapshot = { id: turnId, items: [] };
-  context.turns.push(created);
-  return created;
-}
-
-function appendTurnItem(
-  context: OpenCodeSessionContext,
-  turnId: TurnId | undefined,
-  item: unknown,
-): void {
-  if (!turnId) {
-    return;
-  }
-  resolveTurnSnapshot(context, turnId).items.push(item);
-}
-
-function openCodeSnapshotKey(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
 function rememberOpenCodeMessageSnapshot(
   context: OpenCodeSessionContext,
   snapshot: OpenCodeMessageSnapshot,
@@ -589,6 +547,7 @@ export function appendOpenCodeAssistantTextDelta(
 function bufferPendingTextDelta(
   context: OpenCodeSessionContext,
   partId: string,
+  messageId: string,
   delta: string,
 ): void {
   if (delta.length === 0) {
@@ -597,6 +556,7 @@ function bufferPendingTextDelta(
   const previous = context.pendingTextDeltasByPartId.get(partId);
   const { nextText } = appendOpenCodeAssistantTextDelta(previous?.text ?? "", delta);
   context.pendingTextDeltasByPartId.set(partId, {
+    messageId,
     text: nextText,
     bufferedAfterKnownSnapshot:
       (previous?.bufferedAfterKnownSnapshot ?? false) || context.partById.has(partId),
@@ -736,6 +696,18 @@ const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function*
   }
   if (context.pendingHarnessPolicyTurnId === context.activeTurnId) {
     context.pendingHarnessPolicyTurnId = undefined;
+  }
+  if (context.activeTurnId) {
+    forgetOpenCodePart(context, openCodeNextTextItemId(context.activeTurnId));
+  }
+  // Child tool parts are only observed while the parent owns the related
+  // session. Release them before later child-removal events stop being routed.
+  for (const [partId, part] of context.partById) {
+    if (context.relatedSessionIds.has(part.sessionID)) {
+      forgetOpenCodePart(context, partId);
+      context.messageRoleById.delete(part.messageID);
+      context.messageSnapshotKeyById.delete(part.messageID);
+    }
   }
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
@@ -1055,6 +1027,8 @@ function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent)
     event.type === "question.asked" ||
     event.type === "question.replied" ||
     event.type === "question.rejected" ||
+    event.type === "message.removed" ||
+    event.type === "message.part.removed" ||
     event.type === "session.error"
   );
 }
@@ -2205,8 +2179,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "message.removed": {
-            context.messageRoleById.delete(event.properties.messageID);
-            context.messageSnapshotKeyById.delete(event.properties.messageID);
+            forgetOpenCodeMessage(context, event.properties.messageID);
+            break;
+          }
+
+          case "message.part.removed": {
+            forgetOpenCodePart(context, event.properties.partID);
             break;
           }
 
@@ -2217,7 +2195,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
             const existingPart = context.partById.get(event.properties.partID);
             if (!existingPart) {
-              bufferPendingTextDelta(context, event.properties.partID, delta);
+              bufferPendingTextDelta(
+                context,
+                event.properties.partID,
+                event.properties.messageID,
+                delta,
+              );
               break;
             }
             const resolvedPart = applyPendingTextDeltaToPart(context, existingPart);
@@ -2226,7 +2209,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
             const role = messageRoleForPart(context, resolvedPart);
             if (role !== "assistant") {
-              bufferPendingTextDelta(context, event.properties.partID, delta);
+              bufferPendingTextDelta(
+                context,
+                event.properties.partID,
+                event.properties.messageID,
+                delta,
+              );
               break;
             }
             if (!shouldProjectOpenCodeTextPart(resolvedPart)) {
@@ -2330,7 +2318,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       : "item.updated",
                 payload,
               };
-              appendTurnItem(context, turnId, part);
               yield* emit(context, runtimeEvent);
             }
 
@@ -3596,7 +3583,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   messageSnapshotKeyById: new Map(),
                   completedAssistantPartIds: new Set(),
                   relatedSessionIds: new Set(),
-                  turns: [],
                   modelContextLimitBySlug: started.modelContextLimitBySlug,
                   lastKnownTokenUsage: undefined,
                   lastEmittedTokenUsageKey: undefined,

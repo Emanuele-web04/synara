@@ -37,6 +37,9 @@ import {
 } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
 import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
   type ManagedAttachmentPrincipal,
@@ -105,6 +108,8 @@ interface EngineAdmissionState {
 
 type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
+  /** Sequences whose deferred phase was settled inside the commit transaction. */
+  readonly deferredSettledSequences: ReadonlySet<number>;
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
 };
@@ -157,6 +162,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const managedAttachments = yield* ManagedAttachmentRepository;
+  const messageRepository = yield* ProjectionThreadMessageRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
@@ -483,19 +489,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
     const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    const mergedThread =
-      existingThread && existingThread.messages.length > 0
-        ? {
-            ...thread,
-            messages: existingThread.messages,
-          }
-        : thread;
+    // The command cache may contain only deltas received since a restart.
+    // Durable detail includes the complete text, now including pending chunks.
+    // Overlaying that detail with a partial cache would truncate completion.
     const hasThread = existingThread !== undefined;
     return {
       ...model,
       threads: hasThread
-        ? model.threads.map((entry) => (entry.id === thread.id ? mergedThread : entry))
-        : [...model.threads, mergedThread],
+        ? model.threads.map((entry) => (entry.id === thread.id ? thread : entry))
+        : [...model.threads, thread],
     };
   };
 
@@ -538,11 +540,42 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           : Effect.succeed(commandReadModel);
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":
-      case "thread.message.assistant.complete":
       case "thread.approval.respond":
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.assistant.complete":
+        // Read the exact message, including a resumed message older than the
+        // transcript window. This avoids loading a whole thread to finalize it.
+        return messageRepository
+          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: `Failed to load the complete assistant message: ${error.message}`,
+                }),
+            ),
+            Effect.flatMap((message) => {
+              const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
+                ? Effect.succeed(commandReadModel)
+                : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+              return model.pipe(
+                Effect.map((readModel) => {
+                  const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+                  // A missing projection row must not discard text still in cache.
+                  // SQL failures stay errors; a present row remains authoritative.
+                  if (!thread || Option.isNone(message)) return readModel;
+                  return overlayThread(readModel, {
+                    ...thread,
+                    messages: [orchestrationMessageFromStoredMessage(message.value)],
+                  });
+                }),
+              );
+            }),
+          );
       default:
         return Effect.succeed(commandReadModel);
     }
@@ -791,6 +824,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         never
       > = Effect.gen(function* () {
         const committedEvents: OrchestrationEvent[] = [];
+        const deferredSettledSequences = new Set<number>();
         let nextCommandReadModel = commandReadModel;
 
         if (command.type === "thread.turn.start") {
@@ -820,7 +854,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (isShellMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
-            yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            const { deferredPhaseSettled } =
+              yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            if (deferredPhaseSettled) deferredSettledSequences.add(savedEvent.sequence);
           }
           committedEvents.push(savedEvent);
         }
@@ -853,6 +889,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
         return {
           committedEvents,
+          deferredSettledSequences,
           lastSequence: lastSavedEvent.sequence,
           nextCommandReadModel,
         } as const;
@@ -904,6 +941,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         committedCommand.committedEvents,
         (event) =>
           Effect.gen(function* () {
+            // Settled inside the commit transaction; no deferred work remains.
+            if (committedCommand.deferredSettledSequences.has(event.sequence)) return;
             const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
             if (isDeferredProjectionDirty) {
               yield* scheduleDeferredProjectionCatchUp({
@@ -1538,4 +1577,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 export const OrchestrationEngineLive = Layer.effect(
   OrchestrationEngineService,
   makeOrchestrationEngine,
-).pipe(Layer.provideMerge(ManagedAttachmentRepositoryLive));
+).pipe(
+  Layer.provide(ProjectionThreadMessageRepositoryLive),
+  Layer.provideMerge(ManagedAttachmentRepositoryLive),
+);
