@@ -823,9 +823,10 @@ describe("wsNativeApi", () => {
     );
   });
 
-  it("forwards cancellable GitHub project provisioning and its progress events", async () => {
+  it("forwards cancellable repository project provisioning and its progress events", async () => {
     const input = {
       operationId: "operation-1",
+      host: "github" as const,
       repository: "openai/codex",
       destinationParent: "/projects",
       directoryName: "codex",

@@ -1,5 +1,5 @@
 // FILE: PullRequestDetailPanel.tsx
-// Purpose: Orchestrator for the pull request detail surface — owns the queries, gh-backed
+// Purpose: Orchestrator for the pull request detail surface — owns the queries, host-backed
 //          actions (merge/ready/draft/close/reopen, fix findings, copy link), the header with
 //          its Summary/Timeline/Code tab switcher, the Code tab's diff viewport, and the
 //          confirm dialogs. Summary and Timeline rendering live in their own tab components.
@@ -11,6 +11,10 @@ import type {
   PullRequestDetailInput,
   PullRequestMergeMethod,
 } from "@synara/contracts";
+import {
+  gitHostDisplayName,
+  gitHostKindForRepository,
+} from "@synara/shared/gitHostRepository";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useRef, useState } from "react";
 
@@ -181,6 +185,7 @@ export function PullRequestDetailPanel({
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
+  const hostName = gitHostDisplayName(gitHostKindForRepository(input.repository) ?? "github");
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
   // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
   // invalidate exactly like every other prepare-thread flow in the app.
@@ -218,7 +223,7 @@ export function PullRequestDetailPanel({
         toastManager.add({
           type: "error",
           title: "Pull request action failed",
-          description: error instanceof Error ? error.message : "GitHub CLI action failed.",
+          description: error instanceof Error ? error.message : `${hostName} CLI action failed.`,
         });
       })
       .finally(() => {

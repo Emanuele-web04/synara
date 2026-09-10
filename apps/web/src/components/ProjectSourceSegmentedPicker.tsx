@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 
-import { GitHubIcon } from "~/lib/icons";
+import { GitHubIcon, GitLabIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
 
-export type ProjectSource = "local" | "github";
+export type ProjectSource = "local" | "github" | "gitlab";
 
 const PROJECT_SOURCES: ReadonlyArray<{
   readonly value: ProjectSource;
@@ -22,6 +22,11 @@ const PROJECT_SOURCES: ReadonlyArray<{
     label: "GitHub",
     icon: <GitHubIcon className="size-3.5" aria-hidden="true" />,
   },
+  {
+    value: "gitlab",
+    label: "GitLab",
+    icon: <GitLabIcon className="size-3.5" aria-hidden="true" />,
+  },
 ];
 
 /**
@@ -31,7 +36,7 @@ const PROJECT_SOURCES: ReadonlyArray<{
 export function ProjectSourceSegmentedPicker(props: {
   readonly value: ProjectSource;
   readonly disabled: boolean;
-  readonly githubAvailable: boolean;
+  readonly repositoryAvailable: boolean;
   readonly onValueChange: (value: ProjectSource) => void;
   readonly className?: string;
 }) {
@@ -56,7 +61,7 @@ export function ProjectSourceSegmentedPicker(props: {
         />
         {PROJECT_SOURCES.map((source, index) => {
           const active = source.value === props.value;
-          const sourceUnavailable = source.value === "github" && !props.githubAvailable;
+          const sourceUnavailable = source.value !== "local" && !props.repositoryAvailable;
           const labelShift = active
             ? `calc(${index === 0 ? "-1 * " : ""}(0.125rem + 1px + ${overhang}) / 2)`
             : "0px";
@@ -68,7 +73,7 @@ export function ProjectSourceSegmentedPicker(props: {
               aria-checked={active}
               disabled={props.disabled || sourceUnavailable}
               title={
-                sourceUnavailable ? "Update the Synara server to add GitHub projects." : undefined
+                sourceUnavailable ? "Update the Synara server to add repository projects." : undefined
               }
               className={cn(
                 "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors duration-200 disabled:opacity-50",

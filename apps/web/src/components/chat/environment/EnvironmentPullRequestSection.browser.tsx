@@ -99,7 +99,7 @@ function renderSection(queryClient: QueryClient, onClose = vi.fn()) {
         activeThreadId={threadId}
         // No project: Merge/Status stay hidden and View PR falls back to the URL handler.
         projectId={null}
-        configuredRepositories={[{ nameWithOwner: "example/synara" }]}
+        configuredRepositories={[{ reference: "example/synara" }]}
         onOpenUrl={vi.fn()}
         onClose={onClose}
       />

@@ -4691,7 +4691,7 @@ export default function ChatView({
     environmentEnabled,
     environmentPanelOpen,
   });
-  const githubRepositoryQuery = useQuery(
+  const repositoryQuery = useQuery(
     gitRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );
   const threadRecap = useThreadRecap({
@@ -11699,8 +11699,8 @@ export default function ChatView({
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
     gitCwd: threadWorkspaceCwd,
     openInTarget: threadWorkspaceCwd,
-    githubRepository: githubRepositoryQuery.data?.repository ?? null,
-    githubRepositories: githubRepositoryQuery.data?.repositories ?? [],
+    repository: repositoryQuery.data?.repository ?? null,
+    repositories: repositoryQuery.data?.repositories ?? [],
     isGitRepo,
     keybindings,
     availableEditors,
@@ -11734,7 +11734,7 @@ export default function ChatView({
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
     onOpenAutomation: (definition: AutomationDefinition) => onOpenAutomation(definition.id),
-    onOpenGithubRepository: openBrowserUrl,
+    onOpenRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
     onUnpinMessage: handleUnpinMessage,

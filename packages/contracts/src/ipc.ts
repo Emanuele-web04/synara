@@ -742,7 +742,7 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
-    githubRepository: (input: GitRepositoryInput) => Promise<GitRepositoryResult>;
+    repository: (input: GitRepositoryInput) => Promise<GitRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;

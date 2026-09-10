@@ -1,10 +1,15 @@
 // FILE: PullRequestsUnavailableState.tsx
-// Purpose: Actionable empty state for the pull requests surface when the GitHub CLI is missing,
-//          unauthenticated, or a request otherwise failed — each case gets a short explanation
-//          and a copyable terminal command instead of a dead end.
+// Purpose: Actionable empty state for the pull requests surface when the host CLI (gh or glab) is
+//          missing, unauthenticated, or a request otherwise failed — each case gets a short
+//          explanation and a copyable terminal command instead of a dead end.
 // Layer: Pull request presentation
 // Exports: PullRequestsUnavailableState, isPullRequestsUnavailableError
 
+import {
+  gitHostCliName,
+  gitHostDisplayName,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -34,13 +39,24 @@ export function isPullRequestsUnavailableError(
   );
 }
 
-function githubCliInstallCommand(platform: string): string | null {
-  if (/mac/i.test(platform)) return "brew install gh";
-  if (/win/i.test(platform)) return "winget install --id GitHub.cli";
+const CLI_INSTALL_COMMANDS: Record<GitHostKind, { mac: string; windows: string }> = {
+  github: { mac: "brew install gh", windows: "winget install --id GitHub.cli" },
+  gitlab: { mac: "brew install glab", windows: "winget install glab.glab" },
+};
+
+const CLI_INSTALL_URLS: Record<GitHostKind, string> = {
+  github: "https://cli.github.com/",
+  gitlab: "https://gitlab.com/gitlab-org/cli",
+};
+
+function hostCliInstallCommand(host: GitHostKind, platform: string): string | null {
+  const commands = CLI_INSTALL_COMMANDS[host];
+  if (/mac/i.test(platform)) return commands.mac;
+  if (/win/i.test(platform)) return commands.windows;
   return null;
 }
 
-/** A single copyable terminal command — the `brew install gh` / `gh auth login` affordances. */
+/** A single copyable terminal command — the install / `auth login` affordances. */
 function CommandLine({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   const mountedRef = useRef(true);
@@ -116,11 +132,15 @@ export function PullRequestsUnavailableState({
   onRetry?: () => void;
 }) {
   const unavailable = isPullRequestsUnavailableError(error) ? error : null;
-  const notInstalled = unavailable?.reason === "gh-not-installed";
-  const notAuthenticated = unavailable?.reason === "gh-not-authenticated";
+  // The reason encodes both the CLI and the failure: `gh-not-installed`, `glab-not-authenticated`.
+  const host: GitHostKind = unavailable?.reason.startsWith("glab") ? "gitlab" : "github";
+  const notInstalled = unavailable?.reason.endsWith("not-installed") === true;
+  const notAuthenticated = unavailable?.reason.endsWith("not-authenticated") === true;
+  const hostName = gitHostDisplayName(host);
+  const cliName = gitHostCliName(host);
   const installCommand =
     notInstalled && typeof navigator !== "undefined"
-      ? githubCliInstallCommand(navigator.platform)
+      ? hostCliInstallCommand(host, navigator.platform)
       : null;
 
   return (
@@ -131,16 +151,16 @@ export function PullRequestsUnavailableState({
         </EmptyMedia>
         <EmptyTitle>
           {notInstalled
-            ? "GitHub CLI is required"
+            ? `${hostName} CLI is required`
             : notAuthenticated
-              ? "Sign in to GitHub CLI"
+              ? `Sign in to ${hostName} CLI`
               : "Pull requests are unavailable"}
         </EmptyTitle>
         <EmptyDescription>
           {notInstalled
-            ? "Synara reads GitHub data only through the gh CLI. Install it, then reopen this view."
+            ? `Synara reads ${hostName} data only through the ${cliName} CLI. Install it, then reopen this view.`
             : notAuthenticated
-              ? "Authenticate the GitHub CLI in a terminal, then retry."
+              ? `Authenticate the ${hostName} CLI in a terminal, then retry.`
               : error instanceof Error
                 ? error.message
                 : "The pull request request failed."}
@@ -148,7 +168,7 @@ export function PullRequestsUnavailableState({
       </EmptyHeader>
       {notInstalled || notAuthenticated ? (
         <EmptyContent>
-          {notAuthenticated ? <CommandLine command="gh auth login" /> : null}
+          {notAuthenticated ? <CommandLine command={`${cliName} auth login`} /> : null}
           {installCommand ? <CommandLine command={installCommand} /> : null}
           <div className="flex w-full items-center gap-2">
             {notInstalled ? (
@@ -156,7 +176,9 @@ export function PullRequestsUnavailableState({
                 variant="outline"
                 size="sm"
                 className="flex-1"
-                onClick={() => void ensureNativeApi().shell.openExternal("https://cli.github.com/")}
+                onClick={() =>
+                  void ensureNativeApi().shell.openExternal(CLI_INSTALL_URLS[host])
+                }
               >
                 Install instructions
               </Button>
