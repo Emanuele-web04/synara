@@ -28,6 +28,11 @@ export interface WsConnectionSession {
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
 }
 
+export const CurrentWsConnectionSession = ServiceMap.Reference<WsConnectionSession | undefined>(
+  "synara/ws/CurrentConnectionSession",
+  { defaultValue: () => undefined },
+);
+
 /**
  * Synthetic header carrying the connection-session key. It is set server-side on
  * the upgrade request (never sent to clients), and Headers.set overrides any
@@ -77,6 +82,7 @@ export function provideWsConnectionSession<A, E, R>(
   return session
     ? effect.pipe(
         Effect.provideService(CurrentWsSessionRole, session.role),
+        Effect.provideService(CurrentWsConnectionSession, session),
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
       )
     : effect;

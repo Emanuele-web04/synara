@@ -29,6 +29,7 @@ export const COMPUTER_WS_METHODS = {
   setValue: "computer.setValue",
   performAction: "computer.performAction",
   getThreadState: "computer.getThreadState",
+  changePermission: "computer.changePermission",
   subscribeEvents: "computer.subscribeEvents",
   // User-driven input from the computer dock pane. Separate from the tool
   // surface above because it must work with no agent turn in flight, and

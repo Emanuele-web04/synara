@@ -178,6 +178,7 @@ export interface RuntimeUsageControlsProps {
   computerControlEnabled?: boolean | undefined;
   computerControlAvailable?: boolean | undefined;
   computerControlSupported?: boolean | undefined;
+  computerControlPending?: boolean | undefined;
   computerControlDisabledReason?: string | undefined;
   onComputerControlChange?: ((enabled: boolean) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
@@ -200,6 +201,7 @@ export function RuntimeUsageControls({
   computerControlEnabled = false,
   computerControlAvailable = false,
   computerControlSupported = computerControlAvailable,
+  computerControlPending = false,
   computerControlDisabledReason = "Checking computer availability.",
   onComputerControlChange,
   className,
@@ -301,7 +303,7 @@ export function RuntimeUsageControls({
                 <MenuCheckboxItem
                   variant="switch"
                   checked={computerControlEnabled}
-                  disabled={!computerControlSupported}
+                  disabled={!computerControlSupported || computerControlPending}
                   onCheckedChange={(checked) => onComputerControlChange(checked === true)}
                   title={computerControlAvailable ? undefined : computerControlDisabledReason}
                 >
@@ -313,9 +315,11 @@ export function RuntimeUsageControls({
                       </Badge>
                     </span>
                     <span className="text-[11px] leading-4 text-muted-foreground">
-                      {computerControlAvailable
-                        ? "Lets the agent see and control the desktop with a separate cursor."
-                        : computerControlDisabledReason}
+                      {computerControlPending
+                        ? "Stopping the previous session and changing its desktop permission…"
+                        : computerControlAvailable
+                          ? "Lets the agent see and control the desktop. Changing this stops the current session."
+                          : computerControlDisabledReason}
                     </span>
                   </span>
                 </MenuCheckboxItem>

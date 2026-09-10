@@ -71,6 +71,7 @@ import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
 import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
 import { ComputerService } from "./computer/Services/ComputerService";
 import { ComputerEventInterests } from "./computer/computerEventInterests.ts";
+import { CurrentWsConnectionSession } from "./wsConnectionSessions";
 import { makeWsComputerHandlers } from "./computer/wsComputerHandlers";
 import { makeComputerFrameRouteLayer } from "./computer/computerFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
@@ -2099,10 +2100,33 @@ const makeWsRpcHandlersLayer = () =>
           ),
 
         ...computerHandlers,
-        [COMPUTER_WS_METHODS.getThreadState]: (input, { clientId }) => {
-          computerInterests.watch(clientId, input.threadId);
-          return computerHandlers[COMPUTER_WS_METHODS.getThreadState](input);
-        },
+        [COMPUTER_WS_METHODS.changePermission]: (input) =>
+          Effect.tryPromise({
+            try: () =>
+              computerService!.manager.permissions.change(
+                input.threadId,
+                input.enabled,
+                async () => {
+                  if (!providerService.stopRuntimeSession)
+                    throw new Error("Provider runtime stop is unavailable.");
+                  await Effect.runPromise(
+                    providerService.stopRuntimeSession({ threadId: input.threadId }),
+                  );
+                  await computerService!.manager.releaseDesktopControl(input.threadId);
+                },
+              ),
+            catch: (cause) =>
+              toWsRpcError(
+                cause,
+                "Computer permission change failed. Access remains blocked; try again.",
+              ),
+          }),
+        [COMPUTER_WS_METHODS.getThreadState]: (input) =>
+          Effect.gen(function* () {
+            const connection = yield* CurrentWsConnectionSession;
+            if (connection) computerInterests.watch(connection, input.threadId);
+            return yield* computerHandlers[COMPUTER_WS_METHODS.getThreadState](input);
+          }),
         [COMPUTER_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -2112,15 +2136,16 @@ const makeWsRpcHandlersLayer = () =>
               : bufferLiveUiStream(
                   Stream.callback<ComputerEvent>((queue) =>
                     Effect.gen(function* () {
+                      const connection = yield* CurrentWsConnectionSession;
                       const unsubscribe = computerService.manager.onEvent((event) => {
-                        if (!computerInterests.accepts(clientId, event)) return;
+                        if (!connection || !computerInterests.accepts(connection, event)) return;
                         Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
                       });
                       yield* Effect.addFinalizer(() =>
                         Effect.sync(() => {
                           unsubscribe();
                           // Interests survive stream retries on the same socket.
-                          // The bounded cache expires disconnected clients.
+                          // Weak keys expire with the connection session.
                         }),
                       );
                     }),

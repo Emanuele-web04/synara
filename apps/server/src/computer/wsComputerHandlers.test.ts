@@ -21,9 +21,11 @@ describe("computer WebSocket handlers", () => {
   it("handles every request method in the RPC group", () => {
     const { handlers } = setup();
 
-    // The stream method is wired in wsRpc where the admission guard lives.
+    // Streams and provider runtime permission changes are wired in wsRpc.
     const expected = Object.values(COMPUTER_WS_METHODS).filter(
-      (method) => method !== COMPUTER_WS_METHODS.subscribeEvents,
+      (method) =>
+        method !== COMPUTER_WS_METHODS.subscribeEvents &&
+        method !== COMPUTER_WS_METHODS.changePermission,
     );
     expect(Object.keys(handlers).toSorted()).toEqual(expected.toSorted());
   });

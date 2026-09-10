@@ -1,6 +1,7 @@
 import { CursorActivity } from "./cursorActivity.ts";
 import { waitForWindow } from "./waitForWindow.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { ComputerPermissionGate } from "./computerPermissionGate.ts";
 import {
   ComputerId,
   ComputerPoint,
@@ -226,6 +227,7 @@ export class ComputerLeaseError extends ComputerBackendError {
 
 /** Thread state, targeting, action dispatch, and stream ownership for a computer. */
 export class ComputerManager {
+  readonly permissions = new ComputerPermissionGate();
   readonly computerId: ComputerId;
 
   private readonly backend: ComputerBackend;
@@ -1564,7 +1566,9 @@ export class ComputerManager {
     action: () => Promise<A>,
     signal?: AbortSignal,
   ): Promise<A> {
-    return this.operations.run(() => this.trackAgentActivity(threadId, action), signal);
+    return this.permissions.run(threadId, signal, (activeSignal) =>
+      this.operations.run(() => this.trackAgentActivity(threadId, action), activeSignal),
+    );
   }
 
   withAgentReadActivity<A>(
@@ -1572,7 +1576,9 @@ export class ComputerManager {
     action: () => Promise<A>,
     signal?: AbortSignal,
   ): Promise<A> {
-    return this.operations.read(() => this.trackAgentActivity(threadId, action), signal);
+    return this.permissions.run(threadId, signal, (activeSignal) =>
+      this.operations.read(() => this.trackAgentActivity(threadId, action), activeSignal),
+    );
   }
 
   private async trackAgentActivity<A>(threadId: string, action: () => Promise<A>): Promise<A> {
@@ -1856,6 +1862,7 @@ export class ComputerManager {
   }
 
   async handleThreadRemoved(threadId: string): Promise<void> {
+    await this.permissions.forget(threadId);
     this.threads.delete(threadId);
     this.threadLabels.delete(threadId);
     // Deleted after the thread state, so the resulting publish cannot recreate

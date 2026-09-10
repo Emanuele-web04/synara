@@ -290,6 +290,7 @@ import {
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { useStore } from "../store";
+import { changeComputerPermission } from "../lib/changeComputerPermission";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -365,7 +366,7 @@ import {
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
-import { readNativeApi } from "~/nativeApi";
+import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
 import {
@@ -5193,15 +5194,28 @@ export default function ChatView({
     },
     [persistRuntimeModeChange],
   );
+  const computerPermissionChange = useMutation({
+    mutationFn: (enabled: boolean) =>
+      changeComputerPermission({
+        threadId,
+        enabled,
+        establishedThread: serverThread !== undefined,
+        change: (input) => ensureNativeApi().computer.changePermission(input),
+        persist: setComposerDraftComputerControl,
+      }),
+    onSuccess: () => scheduleComposerFocus(),
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: "Computer permission change failed",
+        description: `${error.message} Access may remain blocked. Retry the change.`,
+      }),
+  });
   const handleComputerControlChange = useCallback(
     (enabled: boolean) => {
-      // A per-chat override only. It never rewrites the machine-wide default —
-      // that sticky write is what silently disabled computer control for every
-      // later chat after a single per-chat "off".
-      setComposerDraftComputerControl(threadId, enabled);
-      scheduleComposerFocus();
+      if (!computerPermissionChange.isPending) computerPermissionChange.mutate(enabled);
     },
-    [scheduleComposerFocus, setComposerDraftComputerControl, threadId],
+    [computerPermissionChange],
   );
   // "Enable" on a computer-control denial card: switch control on for this chat
   // and suggest a retry message when the composer is empty, so the user can just
@@ -5209,11 +5223,7 @@ export default function ChatView({
   // goes back to the agent.
   const handleEnableComputerControlFromDenial = useCallback(() => {
     handleComputerControlChange(true);
-    if (promptRef.current.trim().length === 0) {
-      promptRef.current = "Computer control is on now. Try again.";
-      setPrompt(promptRef.current);
-    }
-  }, [handleComputerControlChange, setPrompt]);
+  }, [handleComputerControlChange]);
 
   useEffect(() => {
     if (
@@ -11628,6 +11638,7 @@ export default function ChatView({
     computerControlEnabled: enableComputerControl,
     computerControlAvailable,
     computerControlSupported: computerAvailability?.kind !== "unsupported-platform",
+    computerControlPending: computerPermissionChange.isPending,
     computerControlDisabledReason,
     onComputerControlChange: handleComputerControlChange,
     contextWindow: runtimeUsageContextWindow,

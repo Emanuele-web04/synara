@@ -34,6 +34,7 @@ import { ComputerService } from "../Services/ComputerService";
  * the same state without a terminal turn event.
  */
 export function releasesDesktopControl(event: ProviderRuntimeEvent): boolean {
+  if (event.providerRefs?.providerParentThreadId) return false;
   return (
     event.type === "turn.completed" ||
     event.type === "turn.aborted" ||

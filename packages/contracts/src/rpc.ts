@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ThreadId } from "./baseSchemas";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -836,6 +837,12 @@ export const WsComputerGetThreadStateRpc = Rpc.make(COMPUTER_WS_METHODS.getThrea
   error: WsRpcError,
 });
 
+export const WsComputerChangePermissionRpc = Rpc.make(COMPUTER_WS_METHODS.changePermission, {
+  payload: Schema.Struct({ threadId: ThreadId, enabled: Schema.Boolean }),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsComputerInputClickRpc = Rpc.make(COMPUTER_WS_METHODS.inputClick, {
   payload: ComputerInputClickInput,
   success: ComputerActionResult,
@@ -881,6 +888,7 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerSetValueRpc,
   WsComputerPerformActionRpc,
   WsComputerGetThreadStateRpc,
+  WsComputerChangePermissionRpc,
   WsComputerInputClickRpc,
   WsComputerInputScrollRpc,
   WsComputerInputKeyRpc,

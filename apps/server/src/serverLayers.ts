@@ -137,6 +137,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const threadDeletionReactorLayer = provideThreadDeletionReactorDeviceService(
     ThreadDeletionReactorLive.pipe(
+      Layer.provideMerge(ComputerServiceLive),
       Layer.provideMerge(profileStatsArchiveLayer),
       Layer.provideMerge(OrchestrationLayerLive),
       Layer.provideMerge(TerminalLayerLive),

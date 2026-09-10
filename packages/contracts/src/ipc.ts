@@ -974,6 +974,7 @@ export interface NativeApi {
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
   };
   computer: {
+    changePermission: (input: { threadId: ThreadId; enabled: boolean }) => Promise<void>;
     /** Thread-independent backend status for surfaces outside any conversation. */
     getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
     /** Read-only observation used to check a paused window before resuming. */

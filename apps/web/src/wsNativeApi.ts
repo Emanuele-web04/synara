@@ -860,6 +860,8 @@ export function createWsNativeApi(): NativeApi {
       onEvent: deviceEventListeners.subscribe,
     },
     computer: {
+      changePermission: (input) =>
+        transport.request(COMPUTER_WS_METHODS.changePermission, input, { timeoutMs: null }),
       getStatus: (input) => transport.request(COMPUTER_WS_METHODS.getStatus, input),
       getState: (input) => transport.request(COMPUTER_WS_METHODS.getState, input),
       provision: (input) =>

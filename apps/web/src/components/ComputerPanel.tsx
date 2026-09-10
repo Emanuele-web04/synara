@@ -35,6 +35,7 @@ import {
 } from "./ComputerPanel.logic";
 import { Badge } from "./ui/badge";
 import { createComputerInputQueue } from "./computer/computerInputQueue";
+import { createComputerClickSequence } from "./computer/computerClickSequence";
 import { ComputerStatusBadge } from "./computer/ComputerStatusBadge";
 import { useComputerImageStream } from "./computer/useComputerImageStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -169,6 +170,7 @@ export default function ComputerPanel(props: {
       }),
     [],
   );
+  const clickSequence = useMemo(() => createComputerClickSequence(), []);
 
   const sendInput = useCallback(
     (send: () => Promise<ComputerActionResult>) => {
@@ -210,9 +212,18 @@ export default function ComputerPanel(props: {
     if (interactive) canvasRef.current?.focus();
     // Stopping control means stop: input the desktop has not seen yet is
     // forgotten rather than trickling out after the user let go.
-    else inputQueue.clear();
-  }, [interactive, inputQueue]);
-  useEffect(() => () => inputQueue.clear(), [inputQueue]);
+    else {
+      clickSequence.clear();
+      inputQueue.clear();
+    }
+  }, [interactive, inputQueue, clickSequence]);
+  useEffect(
+    () => () => {
+      clickSequence.clear();
+      inputQueue.clear();
+    },
+    [inputQueue, clickSequence, threadId],
+  );
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -228,14 +239,13 @@ export default function ComputerPanel(props: {
       if (!interactive) return;
       const point = desktopPointFromEvent(event.nativeEvent);
       if (!point) return;
-      // One press per DOM click, including the second click of a double. The
-      // browser already sent the first click as its own event, so upgrading this
-      // one to the backend's double-click would put three presses on the desktop
-      // and read as a triple click. Two plain presses land inside the toolkit's
-      // pairing interval on their own, and that is what makes the double.
-      sendInput(() => ensureNativeApi().computer.inputClick({ x: point.x, y: point.y }));
+      clickSequence.click(event.detail, (clickCount) =>
+        sendInput(() =>
+          ensureNativeApi().computer.inputClick({ x: point.x, y: point.y, clickCount }),
+        ),
+      );
     },
-    [desktopPointFromEvent, interactive, sendInput],
+    [clickSequence, desktopPointFromEvent, interactive, sendInput],
   );
 
   const handleContextMenu = useCallback(

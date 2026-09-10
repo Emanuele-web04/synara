@@ -95,6 +95,15 @@ describe("ComputerLeaseReactor", () => {
   it("treats terminal turns and dead sessions as the end of desktop control", () => {
     for (const type of ["turn.completed", "turn.aborted", "session.exited"] as const) {
       expect(releasesDesktopControl(event(type, OWNER))).toBe(true);
+      expect(
+        releasesDesktopControl({
+          ...event(type, OWNER),
+          providerRefs: {
+            providerParentThreadId: "parent-runtime",
+            providerThreadId: "child-runtime",
+          },
+        }),
+      ).toBe(false);
     }
     for (const type of ["turn.started", "item.completed", "content.delta"] as const) {
       expect(releasesDesktopControl(event(type, OWNER))).toBe(false);
