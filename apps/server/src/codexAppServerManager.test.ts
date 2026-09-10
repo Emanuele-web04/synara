@@ -42,6 +42,7 @@ import {
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
+  resolveCodexAppServerRequestTimeoutMs,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
 import {
@@ -1673,6 +1674,15 @@ describe("resolveCodexThreadOpenMinimumVersion", () => {
         MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
       );
     }
+  });
+});
+
+describe("resolveCodexAppServerRequestTimeoutMs", () => {
+  it("allows historical opens to outlive the ordinary request deadline", () => {
+    expect(resolveCodexAppServerRequestTimeoutMs("thread/resume")).toBe(30_000);
+    expect(resolveCodexAppServerRequestTimeoutMs("thread/fork")).toBe(30_000);
+    expect(resolveCodexAppServerRequestTimeoutMs("thread/start")).toBe(20_000);
+    expect(resolveCodexAppServerRequestTimeoutMs("account/read")).toBe(20_000);
   });
 });
 

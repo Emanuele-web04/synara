@@ -88,6 +88,18 @@ import {
 
 const log = createLogger("codex");
 
+const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 20_000;
+// Historical opens may need longer than ordinary requests, but this deadline
+// plus worst-case process-tree teardown must stay materially below the
+// ProviderService whole-start timeout.
+const CODEX_HISTORICAL_THREAD_OPEN_TIMEOUT_MS = 30_000;
+
+export function resolveCodexAppServerRequestTimeoutMs(method: string): number {
+  return method === "thread/resume" || method === "thread/fork"
+    ? CODEX_HISTORICAL_THREAD_OPEN_TIMEOUT_MS
+    : CODEX_APP_SERVER_REQUEST_TIMEOUT_MS;
+}
+
 type PendingRequestKey = string;
 
 interface PendingRequest {
@@ -3601,7 +3613,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs = resolveCodexAppServerRequestTimeoutMs(method),
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;

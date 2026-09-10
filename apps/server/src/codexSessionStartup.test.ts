@@ -33,7 +33,11 @@ class FakeCodexChild extends EventEmitter {
   }
 }
 
-function createStartupHarness(failingMethod?: string, failure: "error" | "exit" = "error") {
+function createStartupHarness(
+  failingMethod?: string,
+  failure: "error" | "exit" | "delayed-response" = "error",
+  resumeExistingThread = true,
+) {
   const child = new FakeCodexChild();
   const requests: string[] = [];
   const transportError = new Error("Codex pipe failed during startup: ECONNRESET");
@@ -41,10 +45,18 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     const request = JSON.parse(chunk.toString()) as { id?: number; method: string };
     requests.push(request.method);
     if (request.method === failingMethod) {
-      queueMicrotask(() => {
-        if (failure === "exit") child.exit();
-        else child.emit("error", transportError);
-      });
+      if (failure === "delayed-response" && request.id !== undefined) {
+        setTimeout(() => {
+          child.stdout.write(
+            `${JSON.stringify({ id: request.id, result: { thread: { id: "native-thread" } } })}\n`,
+          );
+        }, 25_000);
+      } else {
+        queueMicrotask(() => {
+          if (failure === "exit") child.exit();
+          else child.emit("error", transportError);
+        });
+      }
     } else if (request.id !== undefined) {
       queueMicrotask(() => {
         const result =
@@ -76,7 +88,7 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
-    resumeCursor: { threadId: "codex-existing-thread" },
+    ...(resumeExistingThread ? { resumeCursor: { threadId: "codex-existing-thread" } } : {}),
   };
   const expectedErrorMessage =
     failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;
@@ -96,9 +108,58 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("Codex session startup failures", () => {
+  it("allows a slow historical resume to outlive the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    const { manager, input, requests } = createStartupHarness("thread/resume", "delayed-response");
+    const result = manager.startSession(input);
+    let settled = false;
+    void result.finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(requests).toContain("thread/resume"));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(result).resolves.toMatchObject({
+      status: "ready",
+      resumeCursor: { threadId: "native-thread" },
+    });
+    await manager.stopAll();
+  });
+
+  it("keeps fresh thread starts on the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    const { manager, input, requests } = createStartupHarness(
+      "thread/start",
+      "delayed-response",
+      false,
+    );
+    const result = manager.startSession(input).catch((error: unknown) => error);
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(requests).toContain("thread/start"));
+    // vi.waitFor advances fake time while the async startup reaches thread/start.
+    // Stay comfortably below the ordinary deadline before crossing it.
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(result).resolves.toMatchObject({ message: "Timed out waiting for thread/start." });
+    expect(settled).toBe(true);
+    expect(manager.listSessions()).toEqual([]);
+  });
+
   it.each([
     ["initialize", "error"],
     ["account/read", "error"],
