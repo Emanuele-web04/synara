@@ -87,6 +87,7 @@ import {
   classifyProviderAttemptOutcome,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
+  withProviderMessageStartCheckpointBudget,
 } from "./ProviderCommandReactor.ts";
 import {
   OrchestrationEngineService,
@@ -103,6 +104,7 @@ import { resolveProviderAttachmentPath } from "../../provider/providerAttachment
 import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import { CheckpointInvariantError } from "../../checkpointing/Errors.ts";
 import {
   CheckpointStore,
   type CheckpointStoreShape,
@@ -6226,6 +6228,39 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("interrupts checkpoint work that exceeds the provider-start budget", async () => {
+    let finalized = false;
+    const startedAt = Date.now();
+    const result = await Effect.runPromise(
+      withProviderMessageStartCheckpointBudget(
+        Effect.never.pipe(
+          Effect.ensuring(
+            Effect.sleep("100 millis").pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  finalized = true;
+                }),
+              ),
+            ),
+          ),
+        ),
+        5,
+        10,
+      ).pipe(Effect.result),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        _tag: "CheckpointInvariantError",
+        detail: "Provider turn checkpoint exceeded its 5ms start budget.",
+      });
+    }
+    expect(Date.now() - startedAt).toBeLessThan(80);
+    expect(finalized).toBe(false);
+    await waitFor(() => finalized);
+  });
+
   it("waits for the message-start checkpoint before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
     const captureGate = new Promise<void>((resolve) => {
@@ -6271,6 +6306,43 @@ describe("ProviderCommandReactor", () => {
       cwd: "/tmp/provider-project",
     });
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
+  });
+
+  it("continues provider delivery when the message-start checkpoint is safely skipped", async () => {
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+      Effect.fail(
+        new CheckpointInvariantError({
+          operation: "CheckpointStore.captureCheckpoint",
+          detail: "workspace exceeded the safe scan budget",
+        }),
+      ),
+    );
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
+        captureCheckpoint,
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-skipped-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-skipped-checkpoint"),
+          role: "user",
+          text: "continue despite an unsafe checkpoint scan",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(captureCheckpoint).toHaveBeenCalledTimes(1);
   });
 
   it("waits for the Studio output baseline before sending the provider turn", async () => {

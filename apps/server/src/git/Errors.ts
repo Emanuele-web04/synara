@@ -8,6 +8,9 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   command: Schema.String,
   cwd: Schema.String,
   detail: Schema.String,
+  reason: Schema.optional(
+    Schema.Literals(["timeout", "output-limit", "non-zero-exit", "spawn", "stream"]),
+  ),
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {

@@ -743,14 +743,15 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
+  it("keeps session updates responsive and replays every event when a subscriber falls behind", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const projectId = asProjectId("project-slow-subscriber");
+    const threadId = ThreadId.makeUnsafe("thread-slow-subscriber");
     // Overflow by more than one durable replay page (500 events).
     const count = ORCHESTRATION_EVENT_PUBSUB_CAPACITY + 510;
     try {
-      const initial = await system.run(
+      await system.run(
         engine.dispatch({
           type: "project.create",
           commandId: CommandId.makeUnsafe("cmd-slow-subscriber-create"),
@@ -761,11 +762,29 @@ describe("OrchestrationEngine", () => {
           createdAt: now(),
         }),
       );
+      const initial = await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-slow-subscriber-thread-create"),
+          threadId,
+          projectId,
+          title: "Slow subscriber thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: now(),
+        }),
+      );
       const result = await system.run(
         Effect.gen(function* () {
           // Attach before loading/processing work, as startup and reactors do.
           const live = yield* engine.subscribeDomainEvents;
-          for (let i = 0; i < count; i++) {
+          for (let i = 0; i < count - 1; i++) {
             yield* engine.dispatch({
               type: "project.meta.update",
               commandId: CommandId.makeUnsafe(`cmd-slow-subscriber-${i}`),
@@ -773,6 +792,22 @@ describe("OrchestrationEngine", () => {
               title: `Update ${i}`,
             });
           }
+          const updatedAt = now();
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("cmd-slow-subscriber-session-set"),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt,
+            },
+            createdAt: updatedAt,
+          });
           return Array.from(yield* Stream.runCollect(Stream.take(live, count)));
         }).pipe(Effect.scoped, Effect.timeoutOption("8 seconds")),
       );
@@ -781,7 +816,10 @@ describe("OrchestrationEngine", () => {
       expect(events.map((event) => event.sequence)).toEqual(
         Array.from({ length: count }, (_, i) => initial.sequence + i + 1),
       );
-      expect(events.at(-1)?.payload).toMatchObject({ title: `Update ${count - 1}` });
+      expect(events.at(-1)).toMatchObject({
+        type: "thread.session-set",
+        payload: { threadId, session: { status: "ready" } },
+      });
     } finally {
       await system.dispose();
     }

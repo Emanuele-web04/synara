@@ -36,6 +36,7 @@ import {
   Effect,
   Equal,
   Exit,
+  Fiber,
   Layer,
   Option,
   Queue,
@@ -69,6 +70,7 @@ import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
+import { CheckpointInvariantError } from "../../checkpointing/Errors.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -147,6 +149,42 @@ import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
+
+const PROVIDER_MESSAGE_START_CHECKPOINT_TIMEOUT_MS = 10_000;
+const PROVIDER_MESSAGE_START_CHECKPOINT_CLEANUP_GRACE_MS = 1_000;
+
+export function withProviderMessageStartCheckpointBudget<E, R>(
+  capture: Effect.Effect<void, E, R>,
+  timeoutMs = PROVIDER_MESSAGE_START_CHECKPOINT_TIMEOUT_MS,
+  cleanupGraceMs = PROVIDER_MESSAGE_START_CHECKPOINT_CLEANUP_GRACE_MS,
+): Effect.Effect<void, E | CheckpointInvariantError, R> {
+  return Effect.gen(function* () {
+    // Detach the capture so a stuck resource finalizer cannot keep the provider
+    // command fiber beyond the explicit cleanup grace period. The timeout path
+    // still requests interruption immediately; cleanup may finish in the
+    // global scope after provider delivery resumes.
+    const captureFiber = yield* capture.pipe(Effect.forkDetach({ startImmediately: true }));
+    const requestInterrupt = Fiber.interrupt(captureFiber);
+    const completed = yield* Fiber.await(captureFiber).pipe(
+      Effect.timeoutOption(timeoutMs),
+      Effect.onInterrupt(() =>
+        requestInterrupt.pipe(Effect.forkDetach({ startImmediately: true }), Effect.asVoid),
+      ),
+    );
+    if (Option.isSome(completed)) {
+      if (Exit.isFailure(completed.value)) {
+        return yield* Effect.failCause(completed.value.cause);
+      }
+      return;
+    }
+
+    yield* requestInterrupt.pipe(Effect.timeoutOption(cleanupGraceMs));
+    return yield* new CheckpointInvariantError({
+      operation: "ProviderCommandReactor.captureMessageStartCheckpoint",
+      detail: `Provider turn checkpoint exceeded its ${timeoutMs}ms start budget.`,
+    });
+  });
+}
 
 type ProviderQueueDrainEvent = Extract<
   ProviderRuntimeEvent,
@@ -2379,33 +2417,35 @@ const make = Effect.gen(function* () {
         ...(messageText ? { input: messageText } : {}),
       });
 
-    const captureMessageStartCheckpoint = Effect.gen(function* () {
-      if ((input.dispatchMode ?? "queue") === "steer") {
-        return;
-      }
+    const captureMessageStartCheckpoint = withProviderMessageStartCheckpointBudget(
+      Effect.gen(function* () {
+        if ((input.dispatchMode ?? "queue") === "steer") {
+          return;
+        }
 
-      const currentThread = yield* resolveThread(input.threadId);
-      if (!currentThread) {
-        return;
-      }
+        const currentThread = yield* resolveThread(input.threadId);
+        if (!currentThread) {
+          return;
+        }
 
-      const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
-      if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
-        return;
-      }
+        const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
+        if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+          return;
+        }
 
-      // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not early provider edits. skipIfExists keeps
-      // a backup baseline from CheckpointReactor as the first-writer winner.
-      yield* checkpointStore.captureCheckpoint({
-        cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-        skipIfExists: true,
-      });
-    }).pipe(
+        // Capture before provider dispatch so the later turn diff is bounded by
+        // the user's submit moment, not early provider edits. skipIfExists keeps
+        // a backup baseline from CheckpointReactor as the first-writer winner.
+        yield* checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef: checkpointRefForThreadMessageStart(
+            input.threadId,
+            MessageId.makeUnsafe(input.messageId),
+          ),
+          skipIfExists: true,
+        });
+      }),
+    ).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to capture provider turn start checkpoint", {
           threadId: input.threadId,

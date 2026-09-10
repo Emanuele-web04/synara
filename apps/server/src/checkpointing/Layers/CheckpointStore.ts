@@ -11,15 +11,42 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Cause, Deferred, Effect, Exit, Layer, FileSystem, Option, Path, Semaphore } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  FileSystem,
+  Option,
+  Path,
+  Semaphore,
+} from "effect";
 
 import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointRef } from "@synara/contracts";
+import { localPathComparisonKey } from "@synara/shared/path";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+
+// Without a working index Git has no stat cache to reuse, so `git add -A`
+// must discover and hash the workspace from scratch. Bound that cold path
+// before it can saturate the server on an accidentally broad repository root.
+const CHECKPOINT_UNSEEDED_LIST_MAX_OUTPUT_BYTES = 1_000_000;
+const CHECKPOINT_UNSEEDED_LIST_TIMEOUT_MS = 5_000;
+const CHECKPOINT_UNSEEDED_BUDGET_DETAIL =
+  "Checkpoint capture was skipped because this repository has no reusable Git index and its workspace could not be enumerated within the safe scan budget.";
+
+// A failed capture used to be retried independently by every domain/runtime
+// event. Keep the failure local to checkpointing and let provider delivery
+// continue without repeatedly launching the same expensive Git scan.
+const CHECKPOINT_CAPTURE_FAILURE_COOLDOWN_MS = 60_000;
+const CHECKPOINT_RECENT_FAILURE_MAX_ENTRIES = 64;
+const CHECKPOINT_ADD_MAX_OUTPUT_BYTES = 64 * 1_024;
 
 // Individual git commands are already bounded by GitCore's default timeout;
 // this aggregate cap exists to unstick the shared in-flight capture slot if a
@@ -28,17 +55,71 @@ const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 // per-command timeouts would allow.
 const CHECKPOINT_CAPTURE_TIMEOUT_MS = 180_000;
 
+function shouldCoolDownCapture(error: CheckpointStoreError): boolean {
+  return (
+    (error._tag === "CheckpointInvariantError" &&
+      (error.detail === CHECKPOINT_UNSEEDED_BUDGET_DETAIL ||
+        error.detail.startsWith("Checkpoint capture timed out"))) ||
+    (error._tag === "GitCommandError" &&
+      (error.reason === "output-limit" || error.reason === "timeout"))
+  );
+}
+
+function captureKey(cwdKey: string, checkpointRef: CheckpointRef): string {
+  return `${cwdKey}\0${checkpointRef}`;
+}
+
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitCore;
   const captureLock = yield* Semaphore.make(1);
   const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
+  const captureLanes = new Map<
+    string,
+    { readonly semaphore: Semaphore.Semaphore; users: number }
+  >();
+  const recentCaptureFailures = new Map<
+    string,
+    { readonly retryAtMillis: number; readonly error: CheckpointStoreError }
+  >();
 
-  // Normalize the cwd so captures for the same repo reached via differently
-  // written paths (trailing slash, relative segments) share one in-flight slot.
-  const captureKey = (input: { readonly cwd: string; readonly checkpointRef: CheckpointRef }) =>
-    `${path.resolve(input.cwd)}\0${input.checkpointRef}`;
+  // Resolve filesystem aliases when possible, then apply the same Windows
+  // separator/case rules used by the shared local-path helpers. A safe lexical
+  // fallback keeps synthetic/nonexistent test paths deterministic.
+  const resolveCaptureCwdKey = (cwd: string) => {
+    const resolved = path.resolve(cwd);
+    return fs.realPath(resolved).pipe(
+      Effect.catch(() => Effect.succeed(resolved)),
+      Effect.map(localPathComparisonKey),
+    );
+  };
+
+  const pruneRecentCaptureFailures = (nowMillis: number) => {
+    for (const [key, failure] of recentCaptureFailures) {
+      if (failure.retryAtMillis <= nowMillis) {
+        recentCaptureFailures.delete(key);
+      }
+    }
+  };
+
+  const rememberRecentCaptureFailure = (
+    cwdKey: string,
+    error: CheckpointStoreError,
+    failedAtMillis: number,
+  ) => {
+    pruneRecentCaptureFailures(failedAtMillis);
+    recentCaptureFailures.delete(cwdKey);
+    recentCaptureFailures.set(cwdKey, {
+      retryAtMillis: failedAtMillis + CHECKPOINT_CAPTURE_FAILURE_COOLDOWN_MS,
+      error,
+    });
+    while (recentCaptureFailures.size > CHECKPOINT_RECENT_FAILURE_MAX_ENTRIES) {
+      const oldestKey = recentCaptureFailures.keys().next().value;
+      if (oldestKey === undefined) break;
+      recentCaptureFailures.delete(oldestKey);
+    }
+  };
 
   const resolveHeadCommit = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
     git
@@ -96,6 +177,28 @@ const makeCheckpointStore = Effect.gen(function* () {
       yield* fs.copyFile(indexPath, tempIndexPath);
       return indexInfo;
     });
+
+  const preflightUnseededCapture = (cwd: string): Effect.Effect<void, CheckpointStoreError> =>
+    git
+      .execute({
+        operation: "CheckpointStore.preflightUnseededCapture",
+        cwd,
+        args: ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        timeoutMs: CHECKPOINT_UNSEEDED_LIST_TIMEOUT_MS,
+        maxOutputBytes: CHECKPOINT_UNSEEDED_LIST_MAX_OUTPUT_BYTES,
+      })
+      .pipe(
+        Effect.asVoid,
+        Effect.mapError((error) =>
+          error.reason === "timeout" || error.reason === "output-limit"
+            ? new CheckpointInvariantError({
+                operation: "CheckpointStore.captureCheckpoint",
+                detail: CHECKPOINT_UNSEEDED_BUDGET_DETAIL,
+                cause: error,
+              })
+            : error,
+        ),
+      );
 
   const resolveCheckpointCommit = (
     cwd: string,
@@ -160,13 +263,17 @@ const makeCheckpointStore = Effect.gen(function* () {
             };
 
             const workingIndexInfo = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
-            if (workingIndexInfo === null && (yield* hasHeadCommit(input.cwd))) {
-              yield* git.execute({
-                operation,
-                cwd: input.cwd,
-                args: ["read-tree", "HEAD"],
-                env: commitEnv,
-              });
+            if (workingIndexInfo === null) {
+              const headExists = yield* hasHeadCommit(input.cwd);
+              yield* preflightUnseededCapture(input.cwd);
+              if (headExists) {
+                yield* git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["read-tree", "HEAD"],
+                  env: commitEnv,
+                });
+              }
             }
             if (workingIndexInfo !== null) {
               // A copied index can describe a rapid same-size rewrite as clean
@@ -200,8 +307,10 @@ const makeCheckpointStore = Effect.gen(function* () {
             yield* git.execute({
               operation,
               cwd: input.cwd,
-              args: ["add", "-A", "--", "."],
+              args: ["add", "--no-warn-embedded-repo", "-A", "--", "."],
               env: commitEnv,
+              maxOutputBytes: CHECKPOINT_ADD_MAX_OUTPUT_BYTES,
+              outputMode: "truncate",
             });
 
             const writeTreeResult = yield* git.execute({
@@ -260,7 +369,8 @@ const makeCheckpointStore = Effect.gen(function* () {
 
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
-      const key = captureKey(input);
+      const cwdKey = yield* resolveCaptureCwdKey(input.cwd);
+      const key = captureKey(cwdKey, input.checkpointRef);
       const registration = yield* captureLock.withPermits(1)(
         Effect.gen(function* () {
           const existing = inFlightCaptures.get(key);
@@ -269,7 +379,13 @@ const makeCheckpointStore = Effect.gen(function* () {
           }
           const deferred = yield* Deferred.make<void, CheckpointStoreError>();
           inFlightCaptures.set(key, deferred);
-          return { owner: true as const, deferred };
+          let lane = captureLanes.get(cwdKey);
+          if (!lane) {
+            lane = { semaphore: yield* Semaphore.make(1), users: 0 };
+            captureLanes.set(cwdKey, lane);
+          }
+          lane.users += 1;
+          return { owner: true as const, deferred, lane };
         }),
       );
 
@@ -283,18 +399,50 @@ const makeCheckpointStore = Effect.gen(function* () {
         Effect.gen(function* () {
           const exit = yield* Effect.exit(
             restore(
-              captureCheckpointOnce(input).pipe(
-                Effect.timeoutOption(CHECKPOINT_CAPTURE_TIMEOUT_MS),
-                Effect.flatMap((completed) =>
-                  Option.isSome(completed)
-                    ? Effect.void
-                    : Effect.fail(
-                        new CheckpointInvariantError({
-                          operation: "CheckpointStore.captureCheckpoint",
-                          detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
-                        }),
-                      ),
-                ),
+              registration.lane.semaphore.withPermits(1)(
+                Effect.gen(function* () {
+                  const now = yield* Clock.currentTimeMillis;
+                  pruneRecentCaptureFailures(now);
+                  const recentFailure = recentCaptureFailures.get(cwdKey);
+                  if (recentFailure && recentFailure.retryAtMillis > now) {
+                    rememberRecentCaptureFailure(cwdKey, recentFailure.error, now);
+                    return yield* new CheckpointInvariantError({
+                      operation: "CheckpointStore.captureCheckpoint",
+                      detail: `Checkpoint capture is temporarily paused for this workspace after a recent failure (${CHECKPOINT_CAPTURE_FAILURE_COOLDOWN_MS}ms remaining): ${recentFailure.error.message}`,
+                      cause: recentFailure.error,
+                    });
+                  }
+
+                  yield* captureCheckpointOnce(input).pipe(
+                    Effect.timeoutOption(CHECKPOINT_CAPTURE_TIMEOUT_MS),
+                    Effect.flatMap((completed) =>
+                      Option.isSome(completed)
+                        ? Effect.void
+                        : Effect.fail(
+                            new CheckpointInvariantError({
+                              operation: "CheckpointStore.captureCheckpoint",
+                              detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
+                            }),
+                          ),
+                    ),
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        recentCaptureFailures.delete(cwdKey);
+                      }),
+                    ),
+                    Effect.tapError((error) =>
+                      shouldCoolDownCapture(error)
+                        ? Clock.currentTimeMillis.pipe(
+                            Effect.tap((failedAtMillis) =>
+                              Effect.sync(() => {
+                                rememberRecentCaptureFailure(cwdKey, error, failedAtMillis);
+                              }),
+                            ),
+                          )
+                        : Effect.void,
+                    ),
+                  );
+                }),
               ),
             ),
           );
@@ -311,7 +459,15 @@ const makeCheckpointStore = Effect.gen(function* () {
                 )
               : exit;
           yield* Deferred.done(registration.deferred, waiterExit);
-          yield* captureLock.withPermits(1)(Effect.sync(() => inFlightCaptures.delete(key)));
+          yield* captureLock.withPermits(1)(
+            Effect.sync(() => {
+              inFlightCaptures.delete(key);
+              registration.lane.users -= 1;
+              if (registration.lane.users === 0) {
+                captureLanes.delete(cwdKey);
+              }
+            }),
+          );
           if (Exit.isFailure(exit)) {
             return yield* Effect.failCause(exit.cause);
           }

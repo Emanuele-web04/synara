@@ -332,6 +332,25 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("classifies output overflow without parsing the error message", () =>
+      Effect.gen(function* () {
+        const result = yield* Effect.result(
+          collectGitOutput(
+            { operation: "test output limit", cwd: process.cwd(), args: ["status"] },
+            Stream.make(new TextEncoder().encode("too much output")),
+            4,
+            undefined,
+            "error",
+          ),
+        );
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure.reason).toBe("output-limit");
+        }
+      }),
+    );
+
     it.effect("preserves NUL-delimited paths across byte chunks beyond the capture limit", () =>
       Effect.gen(function* () {
         const records = ["R100", "old\r\nname", "new é\tname"];
