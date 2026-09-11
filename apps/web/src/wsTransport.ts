@@ -546,10 +546,12 @@ export const MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS = 12;
 
 /**
  * Duplicate rejections arrive marked `retryable: false` because one socket may
- * not hold two leases for the same stream. A cancel→fast-resubscribe still
- * races the server-side lease release (the lease frees only when the server
- * stream scope closes), so a bounded in-place retry is required to let the
- * stale lease drain instead of leaving the stream permanently dead.
+ * not hold two leases for the same stream. The race this bounded is now closed
+ * twice over: unsubscribe requests send a real RPC that resolves only after
+ * the server released the lease, and an identical same-key resubscribe reuses
+ * the held lease instead of being rejected. The bounded retry remains as a
+ * backstop for the residual window where a canceled stream's Interrupt has not
+ * yet finalized its server-side release.
  */
 export function getStreamDuplicateRetryDelayMs(
   cause: Cause.Cause<unknown>,
@@ -818,7 +820,17 @@ export class WsTransport {
     try {
       if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
         this.shellSubscribed = false;
+        // Stop the local stream first so its Interrupt is already in flight,
+        // then carry the unsubscribe over the wire: the server now releases
+        // the lease for this connection+key, so an awaited unsubscribe orders
+        // a fast resubscribe after the release instead of racing the old
+        // stream's scope finalization. Best-effort — the lease still drains
+        // via the stream's Interrupt if the send fails.
         await awaitWithAbort(this.stopStream("orchestration.shell"), abortScope.signal);
+        await awaitWithAbort(
+          this.sendUnsubscribeRequest(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
+          abortScope.signal,
+        ).catch(() => undefined);
         return undefined as T;
       }
       if (method === ORCHESTRATION_WS_METHODS.unsubscribeThread) {
@@ -828,6 +840,10 @@ export class WsTransport {
           this.stopStream(`orchestration.thread:${threadId}`),
           abortScope.signal,
         );
+        await awaitWithAbort(
+          this.sendUnsubscribeRequest(ORCHESTRATION_WS_METHODS.unsubscribeThread, params ?? {}),
+          abortScope.signal,
+        ).catch(() => undefined);
         return undefined as T;
       }
 
@@ -842,16 +858,38 @@ export class WsTransport {
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
         const threadId = (params as { threadId: string }).threadId;
-        this.resetStreamCapacityRetry(`orchestration.thread:${threadId}`);
-        this.resetStreamCompletionRetry(`orchestration.thread:${threadId}`);
+        const key = `orchestration.thread:${threadId}`;
         // Preserve the stored input identity across explicit refreshes so stale
         // restart callbacks cannot supersede the newly requested stream.
         const existingInput = this.threadSubscriptions.get(threadId);
         const wasSubscribed = existingInput !== undefined;
         const input = threadStreamInputsEqual(existingInput, params) ? existingInput : params;
         this.threadSubscriptions.set(threadId, input);
+        // A thread whose lease is already held is never re-requested: the live
+        // stream (or its armed retry) already covers everything a
+        // cursor-resume subscribe could deliver, and each re-request pays a
+        // stream teardown + snapshot replay on the server. A request without
+        // a resume cursor is different — the caller discarded its cached
+        // detail and is demanding a fresh snapshot, which only a restarted
+        // stream can deliver.
+        const hasResumeCursor =
+          typeof (params as { afterSequence?: unknown } | undefined)?.afterSequence === "number";
+        const streamActive =
+          this.streamCleanups.has(key) ||
+          this.streamCapacityRetryTimers.has(key) ||
+          this.streamCompletionRetryTimers.has(key);
+        if (wasSubscribed && hasResumeCursor && streamActive) {
+          return undefined as T;
+        }
+        this.resetStreamCapacityRetry(key);
+        this.resetStreamCompletionRetry(key);
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
-        await this.startThreadStream(client, threadId, input as never, wasSubscribed);
+        await this.startThreadStream(
+          client,
+          threadId,
+          input as never,
+          wasSubscribed && !hasResumeCursor,
+        );
         return undefined as T;
       }
 
@@ -1961,6 +1999,26 @@ export class WsTransport {
     this.streamCleanups.delete(key);
     cleanup();
     return settled;
+  }
+
+  /**
+   * Sends a stream-unsubscribe RPC so the server releases the caller's lease
+   * for the connection+key now, instead of waiting for the interrupted
+   * stream's scope to finalize. Resolves after the server processed the
+   * release, so an awaited unsubscribe orders a fast resubscribe after it.
+   * Callers wrap this best-effort: on send failure the lease still drains via
+   * the stream's Interrupt.
+   */
+  private async sendUnsubscribeRequest(method: string, input: unknown): Promise<void> {
+    const client = await this.getClient();
+    const call = (
+      client as unknown as Record<
+        string,
+        (input: unknown) => Effect.Effect<unknown, WsTransportRpcError, never>
+      >
+    )[method];
+    if (!call) return;
+    await this.getClientRuntime(client).runPromise(call(input));
   }
 
   private async runGitActionStream(
