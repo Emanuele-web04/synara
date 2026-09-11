@@ -98,8 +98,12 @@ describe("browser saved logins", () => {
         </SafariAccessOnboarding>,
       );
       await page.getByRole("button", { name: "Open System Settings" }).click();
-      await expect.element(page.getByRole("status")).toHaveTextContent("Access is not verified");
-      await page.getByRole("button", { name: "Continue to Synara" }).click();
+      await expect
+        .element(page.getByRole("status"))
+        .toHaveTextContent(
+          "System Settings is open. Once Synara is switched on, quit and reopen it.",
+        );
+      await page.getByRole("button", { name: "Not now" }).click();
       await page.getByRole("button", { name: "Import browser cookies" }).click();
       await page.getByRole("button", { name: "Import for this site" }).click();
       await expect.element(page.getByRole("status")).toHaveTextContent("macOS denied access");

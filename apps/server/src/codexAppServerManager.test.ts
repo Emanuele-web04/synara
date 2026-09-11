@@ -2986,39 +2986,61 @@ describe("thread checkpoint control", () => {
     });
   });
 
-  it.skipIf(!process.env.CODEX_BINARY_PATH)("forks a provider thread via thread/fork", async () => {
+  it("forks a provider thread with an explicitly selected Standard tier", async () => {
+    const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-tier-"));
+    writeFileSync(path.join(homePath, "app-server"), "process.stdin.resume();\n");
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = path.join(homePath, "synara-home");
     const { manager, sendRequest } = createThreadControlHarness();
+    vi.spyOn(
+      manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
+      "assertSupportedCodexCliVersion",
+    ).mockResolvedValue(undefined);
     sendRequest.mockResolvedValue({
       thread: {
         id: "thread_forked",
       },
     });
 
-    const result = await manager.forkThread({
-      sourceThreadId: asThreadId("thread_1"),
-      sourceResumeCursor: {
-        threadId: "thread_1",
-      },
-      threadId: asThreadId("thread_2"),
-      runtimeMode: "full-access",
-    });
+    try {
+      const result = await manager.forkThread({
+        sourceThreadId: asThreadId("thread_1"),
+        sourceResumeCursor: {
+          threadId: "thread_1",
+        },
+        threadId: asThreadId("thread_2"),
+        cwd: homePath,
+        providerOptions: { codex: { binaryPath: process.execPath, homePath } },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { fastMode: false },
+        },
+        runtimeMode: "full-access",
+      });
 
-    expect(sendRequest).toHaveBeenNthCalledWith(
-      3,
-      expect.anything(),
-      "thread/fork",
-      expect.objectContaining({
+      const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");
+      expect(forkRequest?.[2]).toMatchObject({
         threadId: "thread_1",
+        serviceTier: "default",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
-      }),
-    );
-    expect(result).toEqual({
-      threadId: "thread_2",
-      resumeCursor: {
-        threadId: "thread_forked",
-      },
-    });
+      });
+      expect(result).toEqual({
+        threadId: "thread_2",
+        resumeCursor: {
+          threadId: "thread_forked",
+        },
+      });
+    } finally {
+      await manager.stopAll();
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
+      } else {
+        process.env.SYNARA_HOME = previousSynaraHome;
+      }
+      rmSync(homePath, { recursive: true, force: true });
+    }
   });
 
   it("rolls back turns via thread/rollback and resets session running state", async () => {
