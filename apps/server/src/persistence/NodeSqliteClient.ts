@@ -174,7 +174,29 @@ const makeWithDatabase = (
         },
         executeUnprepared(sql, params, rowTransform) {
           const effect = run(sql, params ?? []);
-          return rowTransform ? Effect.map(effect, rowTransform) : effect;
+          // SQLite auto-rolls-back a transaction when a statement inside it
+          // fails (disk full, busy). The driver's ROLLBACK then fails with
+          // "cannot rollback - no transaction is active", and effect's
+          // withTransaction surfaces that failure instead of the real cause —
+          // masking SQLITE_FULL as a transaction error and hot-looping retries.
+          // A rollback that finds no active transaction already has its desired
+          // end state: treat it as done so the original error propagates.
+          const recovered = /^[\s;]*rollback[\s;]*$/i.test(sql)
+            ? effect.pipe(
+                Effect.catchTag("SqlError", (error) =>
+                  /cannot rollback|no transaction is active/i.test(
+                    String(
+                      (error.cause as { readonly message?: string } | undefined)?.message ??
+                        error.cause ??
+                        "",
+                    ),
+                  )
+                    ? Effect.succeed([] as ReadonlyArray<unknown>)
+                    : Effect.fail(error),
+                ),
+              )
+            : effect;
+          return rowTransform ? Effect.map(recovered, rowTransform) : recovered;
         },
         executeStream(_sql, _params) {
           return Stream.die("executeStream not implemented");
