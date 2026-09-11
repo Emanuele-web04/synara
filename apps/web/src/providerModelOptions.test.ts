@@ -299,6 +299,34 @@ describe("mergeDynamicModelOptions", () => {
     ).toEqual(["claude-opus-6", "claude-fable-5", "claude-opus-5"]);
   });
 
+  it("normalizes Devin family labels to canonical brand casing", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "devin",
+        staticOptions: [
+          { slug: "adaptive", name: "Adaptive" },
+          { slug: "swe-1-6", name: "SWE 1.6" },
+          { slug: "swe-1-7", name: "SWE 1.7" },
+        ],
+        dynamicModels: [
+          { slug: "swe-1.7", name: "SWE-1.7" },
+          { slug: "swe-1.7-lightning", name: "SWE-1.7 Lightning" },
+          { slug: "swe-2", name: "SWE-2" },
+          { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+          { slug: "glm-5.2", name: "GLM-5.2" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+      }).map((option) => ({ slug: option.slug, name: option.name })),
+    ).toEqual([
+      { slug: "swe-1-7", name: "SWE 1.7" },
+      { slug: "swe-1.7-lightning", name: "SWE 1.7 Lightning" },
+      { slug: "swe-2", name: "SWE 2" },
+      { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+      { slug: "glm-5.2", name: "GLM 5.2" },
+      { slug: "claude-opus-5", name: "Claude Opus 5" },
+    ]);
+  });
+
   it("treats the live Grok CLI catalog as authoritative", () => {
     expect(
       mergeDynamicModelOptions({

@@ -1283,6 +1283,9 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  // Mirrors the aliases `devin models list` declares (swe→SWE-2, opus→Claude
+  // Opus 5, gpt→GPT-6 Astra, ...). Dotted SWE spellings stay mapped to the
+  // canonical dashed slugs used by the static catalog.
   devin: {
     adaptive: "adaptive",
     auto: "adaptive",
@@ -1290,12 +1293,17 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "swe-1.6-fast": "swe-1-6",
     "swe-1.6": "swe-1-6",
     "swe-1.7": "swe-1-7",
-    swe: "swe-1-6",
+    swe: "swe-2",
     "swe-1-6": "swe-1-6",
     "swe-1-7": "swe-1-7",
-    opus: "claude-opus-4-8",
+    claude: "claude-sonnet-5",
     sonnet: "claude-sonnet-5",
+    opus: "claude-opus-5",
+    haiku: "claude-haiku-4.5",
     fable: "claude-fable-5",
+    gemini: "gemini-3.8-flash",
+    gpt: "gpt-6-astra",
+    codex: "gpt-5.3-codex",
   },
 };
 

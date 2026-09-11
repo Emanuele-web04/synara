@@ -1617,6 +1617,24 @@ describe("Devin CLI model discovery", () => {
     });
   });
 
+  it("humanizes family slugs when the CLI omits a label", () => {
+    const [model] = mergeDevinModelDescriptors([
+      parseDevinCliModelList(
+        JSON.stringify({
+          families: [
+            {
+              family_uid: "swe-1-7",
+              slug: "swe-1-7",
+              variants: [{ model_uid: "swe-1-7" }],
+            },
+          ],
+        }),
+      ),
+    ]);
+
+    expect(model?.name).toBe("SWE 1.7");
+  });
+
   it("exposes thinking and long-context toggles for Claude-style variants", () => {
     const models = parseDevinCliModelList(
       JSON.stringify({
