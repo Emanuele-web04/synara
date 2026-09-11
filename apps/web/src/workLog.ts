@@ -2433,7 +2433,16 @@ export function deriveTimelineEntries(
     ? messages
     : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const message of orderedMessages) {
-    if (message.role === "user") userStarts.push(message.createdAt);
+    // Effective dispatch semantics are recorded before an emulated steer waits
+    // for interruption/promotion. Fall back to turn binding for events written
+    // before startsNewTurn existed; native steers remain continuations.
+    const startsNewTurn =
+      message.startsNewTurn ??
+      (message.dispatchMode !== "steer" ||
+        (message.turnId !== null && message.turnId !== undefined));
+    if (message.role === "user" && startsNewTurn) {
+      userStarts.push(message.createdAt);
+    }
     const order = userStarts.length;
     messageOrder.set(message.id, order);
     if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);

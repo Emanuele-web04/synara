@@ -8812,6 +8812,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
@@ -8821,6 +8822,11 @@ describe("ProviderCommandReactor", () => {
     const steerInput = harness.steerTurn.mock.calls[0]?.[0] as { readonly input?: string };
     expect(steerInput.input).toContain("pivot now");
     expect(steerInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
+    const message = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-codex");
+    expect(message?.turnId).toBeNull();
+    expect(message?.startsNewTurn).toBe(false);
   });
 
   it("dispatches a codex steer as a queued turn when the live provider turn already settled", async () => {
@@ -8872,12 +8878,18 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
     expect(harness.steerTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "steer but nothing is running",
     });
+    const message = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-codex-stale");
+    expect(message?.turnId).toBe("turn-1");
+    expect(message?.startsNewTurn).toBe(true);
   });
 
   it("steers a running claude turn natively without interrupting it", async () => {
@@ -9002,6 +9014,29 @@ describe("ProviderCommandReactor", () => {
     expect(harness.steerTurn).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn.mock.calls.length).toBe(1);
+    const queuedMessage = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-cursor");
+    expect(queuedMessage).toMatchObject({
+      dispatchMode: "steer",
+      startsNewTurn: true,
+      turnId: null,
+    });
+    const queuedProjectedMessages = await Effect.runPromise(
+      harness.sql<{
+        readonly turnId: string | null;
+        readonly dispatchMode: string | null;
+        readonly startsNewTurn: number | null;
+      }>`
+        SELECT turn_id AS "turnId", dispatch_mode AS "dispatchMode",
+          starts_new_turn AS "startsNewTurn"
+        FROM projection_thread_messages
+        WHERE thread_id = 'thread-1' AND message_id = 'msg-steer-cursor'
+      `,
+    );
+    expect(queuedProjectedMessages).toEqual([
+      { turnId: null, dispatchMode: "steer", startsNewTurn: 1 },
+    ]);
 
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
@@ -9018,10 +9053,41 @@ describe("ProviderCommandReactor", () => {
     } as ProviderRuntimeEvent);
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "switch directions",
     });
+    const message = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-cursor");
+    expect(message).toMatchObject({ turnId: "turn-1", startsNewTurn: true });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.user.bind-turn",
+        commandId: CommandId.makeUnsafe("cmd-bind-steer-cursor-same-turn-again"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("msg-steer-cursor"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const projectedMessages = await Effect.runPromise(
+      harness.sql<{
+        readonly turnId: string | null;
+        readonly dispatchMode: string | null;
+        readonly startsNewTurn: number | null;
+      }>`
+        SELECT turn_id AS "turnId", dispatch_mode AS "dispatchMode",
+          starts_new_turn AS "startsNewTurn"
+        FROM projection_thread_messages
+        WHERE thread_id = 'thread-1' AND message_id = 'msg-steer-cursor'
+      `,
+    );
+    expect(projectedMessages).toEqual([
+      { turnId: "turn-1", dispatchMode: "steer", startsNewTurn: 1 },
+    ]);
   });
 
   it("forwards codex model options through session start and turn send", async () => {

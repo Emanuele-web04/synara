@@ -116,6 +116,7 @@ export interface ChatMessage {
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   dispatchOrigin?: MessageDispatchOrigin;
+  startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;

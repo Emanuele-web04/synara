@@ -646,6 +646,10 @@ function mergeStreamingMessage(
     incomingMessage.dispatchOrigin !== undefined
       ? incomingMessage.dispatchOrigin
       : existingMessage.dispatchOrigin;
+  const nextStartsNewTurn =
+    incomingMessage.startsNewTurn !== undefined
+      ? incomingMessage.startsNewTurn
+      : existingMessage.startsNewTurn;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
@@ -658,6 +662,7 @@ function mergeStreamingMessage(
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
     existingMessage.dispatchOrigin === nextDispatchOrigin &&
+    existingMessage.startsNewTurn === nextStartsNewTurn &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -673,6 +678,7 @@ function mergeStreamingMessage(
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
     ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
+    ...(nextStartsNewTurn !== undefined ? { startsNewTurn: nextStartsNewTurn } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -698,6 +704,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       text: payload.text,
       dispatchMode: payload.dispatchMode,
       dispatchOrigin: payload.dispatchOrigin,
+      startsNewTurn: payload.startsNewTurn,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       ...(payload.skills !== undefined ? { skills: payload.skills } : {}),

@@ -142,6 +142,52 @@ function withEventBase(
   };
 }
 
+function userMessageUpsertEvent(input: {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly threadId: OrchestrationThread["id"];
+  readonly message: OrchestrationThread["messages"][number];
+  readonly turnId: OrchestrationThread["messages"][number]["turnId"];
+  readonly startsNewTurn?: boolean;
+  readonly occurredAt: string;
+}): Omit<OrchestrationEvent, "sequence"> {
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.threadId,
+      occurredAt: input.occurredAt,
+      commandId: input.commandId,
+    }),
+    type: "thread.message-sent",
+    payload: {
+      threadId: input.threadId,
+      messageId: input.message.id,
+      role: "user",
+      text: input.message.text,
+      ...(input.message.attachments !== undefined
+        ? { attachments: input.message.attachments }
+        : {}),
+      ...(input.message.skills !== undefined ? { skills: input.message.skills } : {}),
+      ...(input.message.mentions !== undefined ? { mentions: input.message.mentions } : {}),
+      ...(input.message.dispatchMode !== undefined
+        ? { dispatchMode: input.message.dispatchMode }
+        : {}),
+      ...(input.message.dispatchOrigin !== undefined
+        ? { dispatchOrigin: input.message.dispatchOrigin }
+        : {}),
+      ...(input.startsNewTurn !== undefined
+        ? { startsNewTurn: input.startsNewTurn }
+        : input.message.startsNewTurn !== undefined
+          ? { startsNewTurn: input.message.startsNewTurn }
+          : {}),
+      turnId: input.turnId,
+      streaming: false,
+      source: input.message.source,
+      createdAt: input.message.createdAt,
+      updatedAt: input.message.updatedAt,
+    },
+  };
+}
+
 function checkpointRevertSucceededEvent(input: {
   readonly commandId: OrchestrationCommand["commandId"];
   readonly threadId: Extract<OrchestrationCommand, { type: "thread.revert.complete" }>["threadId"];
@@ -1683,6 +1729,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
+      const activeProvider =
+        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
+      const isThreadRunning =
+        targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      // Subagent threads never queue: their messages steer the running child task
+      // through the parent session, so deferring until the turn settles would
+      // deliver the message only after the subagent already finished.
+      // Steers ride the live turn natively only on providers whose runtime can
+      // inject mid-turn input; everywhere else they queue and interrupt below.
+      const shouldQueue =
+        targetThread.parentThreadId === null &&
+        isThreadRunning &&
+        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1706,6 +1765,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // originally dispatched by an automation/agent must overwrite the
           // stale origin instead of inheriting it.
           dispatchOrigin: command.dispatchOrigin ?? "user",
+          startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
           source: "native",
@@ -1729,19 +1789,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;
-      const activeProvider =
-        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
-      const isThreadRunning =
-        targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
-      // Subagent threads never queue: their messages steer the running child task
-      // through the parent session, so deferring until the turn settles would
-      // deliver the message only after the subagent already finished.
-      // Steers ride the live turn natively only on providers whose runtime can
-      // inject mid-turn input; everywhere else they queue and interrupt below.
-      const shouldQueue =
-        targetThread.parentThreadId === null &&
-        isThreadRunning &&
-        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -2350,6 +2397,64 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.message.user.bind-turn": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        message.turnId !== null &&
+        message.turnId !== undefined &&
+        message.turnId !== command.turnId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' is already bound to turn '${message.turnId}'.`,
+        });
+      }
+      // The command engine requires at least one event per accepted command.
+      // Re-emit the canonical upsert when already bound to this exact turn so
+      // recovery retries with a fresh command id remain safely idempotent.
+      return userMessageUpsertEvent({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        message,
+        turnId: command.turnId,
+        occurredAt: command.createdAt,
+      });
+    }
+
+    case "thread.message.user.set-turn-boundary": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return userMessageUpsertEvent({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        message,
+        turnId: message.turnId,
+        startsNewTurn: command.startsNewTurn,
+        occurredAt: command.createdAt,
+      });
     }
 
     case "thread.proposed-plan.upsert": {
