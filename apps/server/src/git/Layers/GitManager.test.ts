@@ -425,6 +425,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("refuses to summarize a working-tree patch whose capture was truncated", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-truncated-summary-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "oversized.txt"), "generated line\n".repeat(100_000));
+      });
+      let generationCalls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateDiffSummary: () => {
+            generationCalls += 1;
+            return Effect.succeed({ summary: "## Summary\n- Partial input" });
+          },
+        },
+      });
+
+      const captured = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir,
+        scope: "workingTree",
+      });
+      expect(captured.truncated).toBe(true);
+
+      const result = yield* Effect.result(
+        manager.summarizeDiff({ cwd: repoDir, scope: "workingTree" }),
+      );
+
+      expect(result._tag).toBe("Failure");
+      expect(generationCalls).toBe(0);
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "GitManagerError",
+          operation: "summarizeDiff",
+        });
+        expect(result.failure.message).toContain("truncated diff");
+      }
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");

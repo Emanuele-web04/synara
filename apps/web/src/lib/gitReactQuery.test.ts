@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 const { readWorkingTreeDiff } = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
+    truncated: false,
   })),
 }));
 vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
@@ -36,9 +37,15 @@ describe("file-scoped working tree diffs", () => {
   it("keeps each file separate from other files and the repository-wide cache", async () => {
     const client = new QueryClient();
     const query = (filePath?: string) => gitWorkingTreeDiffQueryOptions({ cwd: "/repo", filePath });
-    expect(await client.fetchQuery(query())).toEqual({ patch: "all" });
-    expect(await client.fetchQuery(query("src/a.ts"))).toEqual({ patch: "src/a.ts" });
-    expect(await client.fetchQuery(query("src/b.ts"))).toEqual({ patch: "src/b.ts" });
+    expect(await client.fetchQuery(query())).toEqual({ patch: "all", truncated: false });
+    expect(await client.fetchQuery(query("src/a.ts"))).toEqual({
+      patch: "src/a.ts",
+      truncated: false,
+    });
+    expect(await client.fetchQuery(query("src/b.ts"))).toEqual({
+      patch: "src/b.ts",
+      truncated: false,
+    });
     expect(readWorkingTreeDiff).toHaveBeenCalledWith({
       cwd: "/repo",
       scope: "workingTree",

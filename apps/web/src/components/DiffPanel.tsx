@@ -95,6 +95,7 @@ import { DiffLineBlamePopover, type DiffLineBlameTarget } from "./DiffLineBlameP
 import { DiffPanelCompareRefMenuSection } from "./DiffPanelCompareRefMenuSection";
 import { DiffPanelPatchViewport } from "./DiffPanelPatchViewport";
 import { DiffPanelToolbar } from "./DiffPanelToolbar";
+import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { ReviewFileTreePanel } from "./ReviewFileTreePanel";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { closestThroughShadow } from "./chat/chatSelectionActions";
@@ -154,7 +155,7 @@ function EditorDiffOptionsMenu(props: {
   diffWordWrap: boolean;
   diffIgnoreWhitespace: boolean;
   diffCopyText: string | null;
-  isDiffCopied: boolean;
+  diffCopyLabel: string;
   allFilesCollapsed: boolean;
   changeMarkersEnabled: boolean;
   diffRenderMode: DiffRenderMode;
@@ -324,7 +325,7 @@ function EditorDiffOptionsMenu(props: {
               }}
             >
               <CopyIcon className={EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME} />
-              <span>{props.isDiffCopied ? "Copied diff" : "Copy diff"}</span>
+              <span>{props.diffCopyLabel}</span>
             </MenuItem>
           ) : null}
           {props.renderableFiles.length > 0 ? (
@@ -358,7 +359,7 @@ function EditorDiffControls(props: {
   diffWordWrap: boolean;
   diffIgnoreWhitespace: boolean;
   diffCopyText: string | null;
-  isDiffCopied: boolean;
+  diffCopyLabel: string;
   allFilesCollapsed: boolean;
   changeMarkersEnabled: boolean;
   changeNavigation: DiffPanelChangeNavigation;
@@ -394,7 +395,7 @@ function EditorDiffControls(props: {
         diffWordWrap={props.diffWordWrap}
         diffIgnoreWhitespace={props.diffIgnoreWhitespace}
         diffCopyText={props.diffCopyText}
-        isDiffCopied={props.isDiffCopied}
+        diffCopyLabel={props.diffCopyLabel}
         allFilesCollapsed={props.allFilesCollapsed}
         changeMarkersEnabled={props.changeMarkersEnabled}
         diffRenderMode={props.diffRenderMode}
@@ -801,6 +802,7 @@ export default function DiffPanel({
     [diffViewKind, repoDiffScope, selectedTurnId],
   );
   const activeReviewPatch = diffViewKind === "repo" ? repoPatch : selectedPatch;
+  const activeReviewTruncated = diffViewKind === "repo" && repoDiffQuery.data?.truncated === true;
   const activeReviewError = diffViewKind === "repo" ? repoDiffError : checkpointDiffError;
   const activeReviewIsLoading =
     diffViewKind === "repo" ? repoDiffQuery.isLoading : isLoadingCheckpointDiff;
@@ -816,7 +818,17 @@ export default function DiffPanel({
   // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
   // avoids re-parsing the whole patch on every light/dark toggle.
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
-  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
+  const diffCopyText = useMemo(
+    () => resolveDiffCopyText(activeReviewPatch, activeReviewTruncated),
+    [activeReviewPatch, activeReviewTruncated],
+  );
+  const diffCopyLabel = isDiffCopied
+    ? activeReviewTruncated
+      ? "Copied partial diff"
+      : "Copied diff"
+    : activeReviewTruncated
+      ? "Copy partial diff"
+      : "Copy diff";
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];
@@ -1283,7 +1295,7 @@ export default function DiffPanel({
           diffWordWrap={diffWordWrap}
           diffIgnoreWhitespace={diffIgnoreWhitespace}
           diffCopyText={diffCopyText}
-          isDiffCopied={isDiffCopied}
+          diffCopyLabel={diffCopyLabel}
           allFilesCollapsed={allFilesCollapsed}
           changeMarkersEnabled={changeMarkersEnabled}
           changeNavigation={changeNavigation}
@@ -1307,12 +1319,12 @@ export default function DiffPanel({
       changeNavigation,
       copyDiff,
       diffCopyText,
+      diffCopyLabel,
       diffIgnoreWhitespace,
       diffRenderMode,
       diffWordWrap,
       hideHeader,
       inferredCheckpointTurnCountByTurnId,
-      isDiffCopied,
       orderedTurnDiffSummaries,
       renderableFiles,
       repoDiffCompareRef,
@@ -1373,7 +1385,7 @@ export default function DiffPanel({
           diffWordWrap={diffWordWrap}
           diffIgnoreWhitespace={diffIgnoreWhitespace}
           diffCopyText={diffCopyText}
-          isDiffCopied={isDiffCopied}
+          diffCopyLabel={diffCopyLabel}
           reloading={activeDiffIsFetching}
           allFilesCollapsed={allFilesCollapsed}
           changeMarkersEnabled={changeMarkersEnabled}
@@ -1422,13 +1434,13 @@ export default function DiffPanel({
       changeNavigation,
       copyDiff,
       diffCopyText,
+      diffCopyLabel,
       diffIgnoreWhitespace,
       diffRenderMode,
       diffWordWrap,
       fileTreeOpen,
       hideHeader,
       inferredCheckpointTurnCountByTurnId,
-      isDiffCopied,
       handleScopePickerOpenChange,
       handleDiffReload,
       onClosePanel,
@@ -1484,6 +1496,7 @@ export default function DiffPanel({
             className="diff-panel-viewport relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
             onMouseUp={diffSelectionAction.onContainerMouseUp}
           >
+            {activeReviewTruncated ? <DiffTruncationWarning className="m-2 mb-0" /> : null}
             <DiffPanelPatchViewport
               renderablePatch={renderablePatch}
               renderableFiles={renderableFiles}

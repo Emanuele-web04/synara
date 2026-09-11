@@ -88,7 +88,7 @@ afterEach(async () => {
 it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {
   const resolvedPath = "packages/app/src/app.ts";
   const readFile = vi.fn().mockResolvedValue(loadedFile({ relativePath: resolvedPath }));
-  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "" });
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "", truncated: false });
   const subscription: { listener?: (event: ProjectFileChangeEvent) => void } = {};
   const onFileChange = vi.fn(
     (_input: ProjectWatchFileInput, listener: (event: ProjectFileChangeEvent) => void) => {
@@ -121,6 +121,31 @@ it("requests only the resolved preview file for gutters and refreshes it on file
       filePath: resolvedPath,
     });
     await view.unmount();
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("warns when a file's working-tree change markers come from a partial diff", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({
+    patch: "diff --git a/src/app.ts b/src/app.ts\n+partial\n",
+    truncated: true,
+  });
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange: () => () => undefined },
+    git: { readWorkingTreeDiff },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} />
+      </QueryClientProvider>,
+    );
+
+    await expect.element(page.getByText("Partial diff", { exact: true })).toBeVisible();
+    await expect.element(page.getByText(/change markers may be incomplete/i)).toBeVisible();
   } finally {
     restoreNativeApi();
   }

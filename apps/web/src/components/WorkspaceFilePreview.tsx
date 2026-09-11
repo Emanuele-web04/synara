@@ -86,6 +86,7 @@ import { cn } from "~/lib/utils";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import ChatMarkdown from "./ChatMarkdown";
+import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { useFileLineCommenting } from "./chat/useFileLineCommenting";
@@ -1269,6 +1270,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
               ? fileReadError.message
               : "Could not refresh file."}
         </div>
+      ) : null}
+      {changeGutterEnabled && workingTreeDiffQuery.data?.truncated === true ? (
+        <DiffTruncationWarning className="rounded-none border-x-0 border-t-0">
+          Only part of this file&apos;s working-tree diff is available. Change markers may be
+          incomplete.
+        </DiffTruncationWarning>
       ) : null}
       {locatingOutOfRootFile ? (
         <FilePreviewLoadingState />
