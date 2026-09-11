@@ -6413,6 +6413,87 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("keeps a failed selection send queued without a stale optimistic message", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: true });
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-selection-composer-failed-send" as MessageId,
+      targetText: "Selection composer failed send test",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => ({
+          ...thread,
+          messages: thread.messages.slice(-2),
+        })),
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Keep the source draft");
+      await waitForLayout();
+      const source = page.getByText("assistant filler 21", { exact: true });
+      await expect.element(source).toBeVisible();
+      await source.click();
+      const sourceNode = source.element();
+      const range = document.createRange();
+      range.selectNodeContents(sourceNode);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      const rect = range.getBoundingClientRect();
+      sourceNode.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          clientX: rect.right,
+          clientY: rect.bottom,
+        }),
+      );
+
+      await page.getByRole("button", { name: "Add to new Chat", exact: true }).click();
+      const prompt = "Retry this selected passage";
+      await page.getByRole("textbox", { name: "Message for new chat" }).fill(prompt);
+      wsRequests.length = 0;
+      await page.getByRole("button", { name: "Send to new chat", exact: true }).click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "A failed selection send should remain on its fresh draft.",
+      );
+      const newThreadId = ThreadId.makeUnsafe(newThreadPath.slice(1));
+      await vi.waitFor(
+        () => {
+          const draft = useComposerDraftStore.getState().draftsByThreadId[newThreadId];
+          expect(draft?.queuedTurns).toHaveLength(1);
+          expect(draft?.queuedTurns[0]).toMatchObject({
+            kind: "chat",
+            prompt,
+            assistantSelections: [{ text: "assistant filler 21" }],
+          });
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "Keep the source draft",
+          );
+          expect(
+            wsRequests
+              .map(readDispatchedCommand)
+              .filter((command) => command?.type === "thread.turn.start").length,
+          ).toBeGreaterThanOrEqual(1);
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+          const staleOptimisticRows = Array.from(
+            document.querySelectorAll<HTMLElement>('[data-message-role="user"]'),
+          ).filter((row) => row.textContent?.includes(prompt));
+          expect(staleOptimisticRows).toHaveLength(0);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      window.getSelection()?.removeAllRanges();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("keeps the new thread selected after clicking the new-thread button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

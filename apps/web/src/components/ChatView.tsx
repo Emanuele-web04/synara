@@ -9014,6 +9014,15 @@ export default function ChatView({
             );
         }
       }
+      if (queuedChatTurn !== null && !turnStartSucceeded) {
+        // The queued snapshot remains available for retry/edit after a rejected
+        // dispatch. Drop only this attempt's optimistic transcript row; its
+        // attachment preview URLs still belong to the queued snapshot.
+        setOptimisticUserMessages((existing) => {
+          const next = existing.filter((message) => message.id !== messageIdForSend);
+          return next.length === existing.length ? existing : next;
+        });
+      }
       if (
         queuedChatTurn === null &&
         !turnStartSucceeded &&
