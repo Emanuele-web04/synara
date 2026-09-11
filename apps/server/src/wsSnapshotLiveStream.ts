@@ -5,6 +5,7 @@ export const ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT = 4_096;
 
 export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
+  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> }
   | { readonly kind: "event"; readonly event: OrchestrationEvent };
 
 export interface ResnapshotReport {
@@ -133,12 +134,26 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
           input.resnapshotEscalation?.tracker.recordHealthyStart(
             input.resnapshotEscalation.streamKey,
           );
-          const replay = input.replay(resumeFromSequence, highWaterSequence).pipe(
-            Stream.filter(
-              (event) => event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+          // The gap ships as one batch, not one frame per event: the client
+          // applies it atomically so catching up on a busy thread lands as a
+          // single render instead of a visible progressive stream of history.
+          const replay = Stream.fromEffect(
+            Stream.runCollect(
+              input
+                .replay(resumeFromSequence, highWaterSequence)
+                .pipe(
+                  Stream.filter(
+                    (event) =>
+                      event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+                  ),
+                ),
+            ).pipe(
+              Effect.map((events) => ({
+                kind: "replay" as const,
+                events: Array.from(events) as ReadonlyArray<OrchestrationEvent>,
+              })),
             ),
-            Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-          );
+          ).pipe(Stream.filter((item) => item.events.length > 0));
           const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
             Stream.filter((event) => event.sequence > highWaterSequence),
             Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
@@ -183,12 +198,22 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
       }
       input.resnapshotEscalation?.tracker.recordHealthyStart(input.resnapshotEscalation.streamKey);
 
-      const replay = input.replay(snapshotSequence, highWaterSequence).pipe(
-        Stream.filter(
-          (event) => event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
+      const replay = Stream.fromEffect(
+        Stream.runCollect(
+          input
+            .replay(snapshotSequence, highWaterSequence)
+            .pipe(
+              Stream.filter(
+                (event) => event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
+              ),
+            ),
+        ).pipe(
+          Effect.map((events) => ({
+            kind: "replay" as const,
+            events: Array.from(events) as ReadonlyArray<OrchestrationEvent>,
+          })),
         ),
-        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-      );
+      ).pipe(Stream.filter((item) => item.events.length > 0));
       const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
         Stream.filter((event) => event.sequence > highWaterSequence),
         Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),

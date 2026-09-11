@@ -1023,16 +1023,27 @@ const makeWsRpcHandlersLayer = () =>
                     ),
                   ),
             }).pipe(
-              Stream.mapEffect((item) =>
-                item.kind === "snapshot"
-                  ? Effect.succeed(
-                      Option.some<OrchestrationShellStreamItem>({
-                        kind: "snapshot",
-                        snapshot: item.snapshot,
-                      }),
-                    )
-                  : toShellStreamEvent(item.event),
-              ),
+              Stream.mapEffect((item) => {
+                if (item.kind === "snapshot") {
+                  return Effect.succeed(
+                    Option.some<OrchestrationShellStreamItem>({
+                      kind: "snapshot",
+                      snapshot: item.snapshot,
+                    }),
+                  );
+                }
+                if (item.kind === "replay") {
+                  return Effect.forEach(item.events, toShellStreamEvent).pipe(
+                    Effect.map((mapped) => mapped.filter(Option.isSome).map((some) => some.value)),
+                    Effect.map((events) =>
+                      events.length > 0
+                        ? Option.some<OrchestrationShellStreamItem>({ kind: "replay", events })
+                        : Option.none(),
+                    ),
+                  );
+                }
+                return toShellStreamEvent(item.event);
+              }),
               Stream.flatMap((item) =>
                 Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
               ),
@@ -1129,6 +1140,12 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "event",
                     event: item.event,
+                  });
+                }
+                if (item.kind === "replay") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "replay",
+                    events: item.events,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
