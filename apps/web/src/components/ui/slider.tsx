@@ -6,6 +6,7 @@
 // Exports: Slider
 
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
+import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -20,12 +21,22 @@ type SliderProps = {
   size?: "default" | "large";
   /** Draw one dot per step so discrete scales (effort levels, sizes) read as a ladder. */
   showStepMarks?: boolean;
+  /** Animate the thumb and fill between stops with a short overshooting ease so a
+   *  stepped slider feels like it snaps to a magnet instead of teleporting. Leave
+   *  off for continuous scales, where the lag would fight the pointer. */
+  magnetic?: boolean;
   className?: string;
   "aria-label": string;
   /** Spoken value for assistive tech; defaults to the numeric value. */
   getAriaValueText?: (value: number) => string;
   onValueChange: (value: number) => void;
 };
+
+// Snap motion: quick, with a touch of overshoot so the thumb visibly "lands" on the
+// stop. Base UI positions the thumb via `inset-inline-start` and sizes the fill via
+// `width`, so those are the transitioned properties.
+const MAGNETIC_MOTION_CLASS =
+  "transition-[inset-inline-start,width] duration-180 ease-[cubic-bezier(0.22,1.1,0.36,1)] motion-reduce:transition-none";
 
 function stepMarkPercents(min: number, max: number, step: number): number[] {
   if (!(max > min) || !(step > 0)) return [];
@@ -34,6 +45,21 @@ function stepMarkPercents(min: number, max: number, step: number): number[] {
     marks.push(((value - min) / (max - min)) * 100);
   }
   return marks;
+}
+
+// The pointer can leave the slider mid-drag (Base UI captures the pointer, but the
+// cursor shown still follows the element under it), so the closed hand is forced
+// document-wide for the duration of the press.
+function useGrabbingCursor(active: boolean): void {
+  useEffect(() => {
+    if (!active) return;
+    const root = document.documentElement;
+    const previous = root.style.cursor;
+    root.style.cursor = "grabbing";
+    return () => {
+      root.style.cursor = previous;
+    };
+  }, [active]);
 }
 
 /**
@@ -49,6 +75,7 @@ function Slider({
   disabled,
   size: sizeProp,
   showStepMarks: showStepMarksProp,
+  magnetic: magneticProp,
   className,
   "aria-label": ariaLabel,
   getAriaValueText,
@@ -57,8 +84,22 @@ function Slider({
   const step = stepProp ?? 1;
   const size = sizeProp ?? "default";
   const showStepMarks = showStepMarksProp ?? false;
+  const magnetic = magneticProp ?? false;
   const marks = showStepMarks ? stepMarkPercents(min, max, step) : [];
   const valuePercent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const [pressed, setPressed] = useState(false);
+  useGrabbingCursor(pressed);
+
+  useEffect(() => {
+    if (!pressed) return;
+    const release = () => setPressed(false);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [pressed]);
 
   return (
     <SliderPrimitive.Root
@@ -72,21 +113,31 @@ function Slider({
         if (typeof nextValue === "number") onValueChange(nextValue);
       }}
       className={cn(
-        "relative flex w-full touch-none select-none items-center data-disabled:cursor-not-allowed data-disabled:opacity-64",
+        "group/slider relative flex w-full touch-none select-none items-center data-disabled:cursor-not-allowed data-disabled:opacity-64",
         size === "large"
           ? "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(6)] [--slider-track-size:--spacing(5)]"
           : "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3)]",
         className,
       )}
       data-slot="slider"
+      {...(pressed ? { "data-pressed": "" } : {})}
     >
-      <SliderPrimitive.Control className="flex w-full cursor-pointer items-center py-0.5 data-disabled:cursor-not-allowed">
+      <SliderPrimitive.Control
+        className="flex w-full cursor-grab items-center py-0.5 group-data-pressed/slider:cursor-grabbing data-disabled:cursor-not-allowed"
+        onPointerDown={(event) => {
+          if (disabled || event.button !== 0) return;
+          setPressed(true);
+        }}
+      >
         <SliderPrimitive.Track
           className="relative h-[var(--slider-track-size)] w-full overflow-visible rounded-full bg-[color-mix(in_srgb,var(--color-text-foreground)_14%,transparent)]"
           data-slot="slider-track"
         >
           <SliderPrimitive.Indicator
-            className="rounded-full bg-[var(--color-text-accent)]"
+            className={cn(
+              "rounded-full bg-[var(--color-text-accent)]",
+              magnetic && MAGNETIC_MOTION_CLASS,
+            )}
             data-slot="slider-indicator"
           />
           {marks.length > 0 ? (
@@ -98,7 +149,7 @@ function Slider({
                 <span
                   key={percent}
                   className={cn(
-                    "absolute top-1/2 size-[var(--slider-mark-size)] -translate-x-1/2 -translate-y-1/2 rounded-full",
+                    "absolute top-1/2 size-[var(--slider-mark-size)] -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-180 motion-reduce:transition-none",
                     percent <= valuePercent + Number.EPSILON
                       ? "bg-white/55"
                       : "bg-[color-mix(in_srgb,var(--color-text-foreground)_28%,transparent)]",
@@ -113,7 +164,12 @@ function Slider({
             {...(getAriaValueText
               ? { getAriaValueText: (_formatted: string, next: number) => getAriaValueText(next) }
               : {})}
-            className="size-[var(--slider-thumb-size)] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.35),0_0_0_1px_rgba(0,0,0,0.06)] outline-none transition-[scale] duration-100 has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/60 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background data-dragging:scale-105"
+            className={cn(
+              "size-[var(--slider-thumb-size)] cursor-grab rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.35),0_0_0_1px_rgba(0,0,0,0.06)] outline-none has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/60 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing group-data-pressed/slider:scale-110 group-data-pressed/slider:shadow-[0_2px_6px_rgba(0,0,0,0.4),0_0_0_1px_rgba(0,0,0,0.06)]",
+              magnetic
+                ? "transition-[inset-inline-start,scale,box-shadow] duration-180 ease-[cubic-bezier(0.22,1.1,0.36,1)] motion-reduce:transition-none"
+                : "transition-[scale,box-shadow] duration-100",
+            )}
             data-slot="slider-thumb"
           />
         </SliderPrimitive.Track>

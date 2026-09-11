@@ -15,7 +15,15 @@ import {
 
 export const SAFARI_ACCESS_STORAGE_KEY = "synara:safari-access-onboarding:v1";
 const OPEN_EVENT = "synara:safari-access-setup";
+/** "continued" is a legacy value from the earlier two-button intro; treat it like "later". */
 const Decision = Schema.Literals(["unseen", "later", "continued"]);
+const SAFARI_ICON_SRC = "/app-icons/safari.png";
+
+const STATUS = {
+  settingsOpened: "System Settings is open. Once Synara is switched on, quit and reopen it.",
+  appRevealed: "Synara is selected in Finder. Drag it into the Full Disk Access list.",
+  openFailed: "Couldn't open it automatically. It lives in System Settings › Privacy & Security.",
+} as const;
 
 function useSafariAccessInfo() {
   const [info, setInfo] = useState<DesktopSafariAccessInfo | null>(null);
@@ -71,12 +79,12 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
     };
   }, []);
 
-  const close = (next: "later" | "continued") => {
+  const close = () => {
     generation.current++;
     setBusy(false);
     setStatus(null);
     setRevisit(false);
-    setDecision(next);
+    setDecision("later");
   };
   const run = async (action: "openSettings" | "revealApp") => {
     if (busy) return;
@@ -88,15 +96,12 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
       setStatus(
         opened
           ? action === "openSettings"
-            ? "Settings opened. Access is not verified. After enabling the app, fully quit and reopen Synara before importing."
-            : "The running app is selected in Finder. Use this copy when adding Full Disk Access."
-          : "Could not open the system window. Open System Settings > Privacy & Security > Full Disk Access manually.",
+            ? STATUS.settingsOpened
+            : STATUS.appRevealed
+          : STATUS.openFailed,
       );
     } catch {
-      if (request === generation.current)
-        setStatus(
-          "Could not open the system window. Open System Settings > Privacy & Security > Full Disk Access manually.",
-        );
+      if (request === generation.current) setStatus(STATUS.openFailed);
     } finally {
       if (request === generation.current) setBusy(false);
     }
@@ -108,74 +113,71 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
       <Dialog
         open={open}
         onOpenChange={(value) => {
-          if (!value) close("later");
+          if (!value) close();
         }}
       >
-        <DialogPopup showCloseButton={false} initialFocus={sheetRef} className="max-w-[480px]">
-          <div
-            ref={sheetRef}
-            tabIndex={-1}
-            className="min-h-0 space-y-4 overflow-y-auto p-5 outline-none"
-          >
-            <DialogHeader className="gap-2 p-0">
-              <DialogTitle>Set up Safari import</DialogTitle>
-              <DialogDescription>
-                To import signed-in Safari sessions, allow Synara Full Disk Access in macOS. This is
-                optional. Chats, coding tasks and signing in directly work without it.
+        <DialogPopup showCloseButton={false} initialFocus={sheetRef} className="max-w-[400px]">
+          <div ref={sheetRef} tabIndex={-1} className="min-h-0 overflow-y-auto outline-none">
+            <DialogHeader className="items-center gap-3 px-6 pt-7 pb-0 text-center">
+              <img
+                src={SAFARI_ICON_SRC}
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="size-16 select-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.18)]"
+              />
+              <DialogTitle className="mt-1">Bring your Safari logins along?</DialogTitle>
+              <DialogDescription className="text-balance leading-relaxed">
+                Synara's browser can pick up sites you're already signed into in Safari, so you
+                don't have to log in twice. It's optional, and nothing is copied until you ask.
               </DialogDescription>
             </DialogHeader>
-            <p className="text-sm text-muted-foreground">
-              Full Disk Access is a broad macOS permission that allows access to protected files,
-              not just Safari cookies. No cookies are imported during setup. Each import still
-              requires your consent.
-            </p>
+
             {info?.supported ? (
-              <div className="space-y-2 text-sm">
-                <p>
-                  In System Settings &gt; Privacy &amp; Security &gt; Full Disk Access, enable{" "}
-                  <strong>{info.appName}</strong>. If it is missing, use the + button to add this
-                  app.
-                </p>
-                {info.appPath ? (
-                  <>
-                    <p className="break-all text-xs text-muted-foreground">{info.appPath}</p>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        void run("revealApp");
-                      }}
-                    >
-                      Show app in Finder
-                    </Button>
-                  </>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Use the installed Synara app, not a terminal or helper process.
-                  </p>
-                )}
-                <p>
-                  Use your installed copy in Applications, not a copy on the installation disk
-                  image. After changing access, fully quit and reopen Synara.
-                </p>
-              </div>
+              <ol className="mx-6 mt-5 space-y-3 text-sm leading-relaxed">
+                <Step n={1}>
+                  Open <span className="font-medium text-foreground">System Settings</span> ›
+                  Privacy &amp; Security › Full Disk Access.
+                </Step>
+                <Step n={2}>
+                  Switch on <span className="font-medium text-foreground">{info.appName}</span>.
+                  {info.appPath ? (
+                    <>
+                      {" "}
+                      Not listed?{" "}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        title={info.appPath}
+                        onClick={() => {
+                          void run("revealApp");
+                        }}
+                        className="rounded-sm underline decoration-muted-foreground/40 underline-offset-[3px] transition-colors hover:text-foreground hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
+                      >
+                        Show app in Finder
+                      </button>{" "}
+                      and drag it in.
+                    </>
+                  ) : null}
+                </Step>
+                <Step n={3}>Quit and reopen Synara.</Step>
+              </ol>
             ) : null}
-            <p className="text-xs text-muted-foreground">
-              Access is checked only when you import. You can revisit this in Settings &gt; General
-              &gt; Safari import setup.
+
+            <p className="mx-6 mt-5 text-xs leading-relaxed text-muted-foreground/80">
+              Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
+              rather not, that's fine. You can find this again under Settings › General.
             </p>
+
             {status ? (
-              <p role="status" className="text-sm text-muted-foreground">
+              <p role="status" className="mx-6 mt-3 text-xs leading-relaxed text-muted-foreground">
                 {status}
               </p>
             ) : null}
-            <DialogFooter className="flex-wrap gap-2 p-0">
-              <Button variant="ghost" onClick={() => close("later")}>
-                Set up later
-              </Button>
-              <Button variant="outline" onClick={() => close("continued")}>
-                Continue to Synara
+
+            <DialogFooter className="mt-5 px-6 pb-6 pt-0">
+              <Button variant="ghost" onClick={close}>
+                Not now
               </Button>
               <Button
                 disabled={busy}
@@ -190,5 +192,19 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
         </DialogPopup>
       </Dialog>
     </>
+  );
+}
+
+function Step({ n, children }: { n: number; children: ReactNode }) {
+  return (
+    <li className="flex gap-3 text-muted-foreground">
+      <span
+        aria-hidden
+        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-foreground/70"
+      >
+        {n}
+      </span>
+      <span className="min-w-0">{children}</span>
+    </li>
   );
 }

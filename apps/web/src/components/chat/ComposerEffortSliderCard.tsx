@@ -151,6 +151,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           step={1}
           size="large"
           showStepMarks
+          magnetic
           disabled={ultrathinkPromptControlled}
           aria-label="Reasoning effort"
           getAriaValueText={(index) => effortLevels[index]?.label ?? String(index)}
