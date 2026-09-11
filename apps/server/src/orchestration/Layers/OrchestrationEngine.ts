@@ -10,6 +10,7 @@ import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contract
 import {
   Cause,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   Layer,
@@ -17,6 +18,7 @@ import {
   PubSub,
   Queue,
   Ref,
+  Schedule,
   Schema,
   Semaphore,
   Scope,
@@ -111,6 +113,14 @@ const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
  * otherwise accrues one row per dispatched command forever.
  */
 const COMMAND_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+/**
+ * Slack between the lowest projection watermark and the journal floor. Live
+ * subscribers and cursor resumes only ever reach back as far as the snapshot
+ * replay limit, so keeping that much journal under the watermark preserves
+ * every legitimate gap replay while bounding the table's growth.
+ */
+const JOURNAL_PRUNE_CURSOR_MARGIN = 4_096;
+const JOURNAL_PRUNE_INTERVAL = Duration.hours(24);
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
 /**
@@ -1181,6 +1191,46 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       Effect.forkScoped,
     );
 
+  // Journal retention. Events at or below every projector's watermark are
+  // already folded into the durable projections — bootstrap never reads them
+  // again — so the journal prefix below (min watermark - cursor margin) is
+  // dead weight that otherwise grows unbounded (this table was ~1.4GB after
+  // a few weeks). The floor stays contiguous: `getLowWaterSequence` is
+  // `MIN(sequence)`, and cursor resumes below it take the snapshot path
+  // instead of replaying a gap with holes. Delivery rows are pruned with
+  // their events so dead/uncertain evidence does not outlive its event.
+  const pruneJournalPrefix = Effect.gen(function* () {
+    const watermarkRows = yield* sql<{ readonly minApplied: number | null }>`
+      SELECT MIN(last_applied_sequence) AS "minApplied" FROM projection_state
+    `;
+    const minWatermark = watermarkRows[0]?.minApplied ?? null;
+    if (minWatermark === null) return;
+    const floor = minWatermark - JOURNAL_PRUNE_CURSOR_MARGIN;
+    if (floor <= 0) return;
+    const eventsDeleted = yield* eventStore.pruneThroughSequence(floor);
+    const deliveriesDeleted = yield* sql<{ readonly eventSequence: number }>`
+      DELETE FROM orchestration_event_deliveries
+      WHERE event_sequence <= ${floor}
+      RETURNING event_sequence
+    `.pipe(Effect.map((rows) => rows.length));
+    if (eventsDeleted > 0 || deliveriesDeleted > 0) {
+      yield* Effect.log("pruned orchestration journal prefix").pipe(
+        Effect.annotateLogs({ floor, eventsDeleted, deliveriesDeleted }),
+      );
+    }
+  });
+
+  yield* Effect.forkScoped(
+    pruneJournalPrefix.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("orchestration journal prune failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.repeat(Schedule.spaced(JOURNAL_PRUNE_INTERVAL)),
+    ),
+  );
+
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
     return [
@@ -1344,6 +1394,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       eventTypes,
     );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
+  const getEventLowWaterSequence = eventStore.getLowWaterSequence();
   const getThreadTitleHighWaterSequence = (threadId: string) =>
     eventStore.getThreadTitleHighWaterSequence(threadId);
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
@@ -1668,6 +1719,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readThreadEvents,
     readThreadEventsThrough,
     getEventHighWaterSequence,
+    getEventLowWaterSequence,
     getThreadTitleHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

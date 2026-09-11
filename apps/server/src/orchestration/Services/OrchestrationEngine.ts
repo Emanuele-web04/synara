@@ -97,6 +97,13 @@ export interface OrchestrationEngineShape {
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 
+  /**
+   * Oldest surviving journal sequence (0 when empty). Cursor resumes whose
+   * next needed event is below this floor can never replay the pruned prefix —
+   * they must take the snapshot path.
+   */
+  readonly getEventLowWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
+
   /** Capture the latest durable event sequence that assigned one thread's title. */
   readonly getThreadTitleHighWaterSequence: (
     threadId: string,
