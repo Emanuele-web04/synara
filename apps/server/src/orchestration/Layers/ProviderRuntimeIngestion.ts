@@ -3210,13 +3210,11 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       return Effect.gen(function* () {
-        const headRow = (
-          yield* runtimeEvents.readAfter({
-            sequenceExclusive: headBlock.cursor,
-            throughSequenceInclusive: yield* runtimeEvents.getHighWaterSequence,
-            limit: 1,
-          })
-        )[0];
+        const headRow = (yield* runtimeEvents.readAfter({
+          sequenceExclusive: headBlock.cursor,
+          throughSequenceInclusive: yield* runtimeEvents.getHighWaterSequence,
+          limit: 1,
+        }))[0];
         yield* Effect.logError("provider runtime ingestion stalled on one journal event", {
           cursor: headBlock.cursor,
           stalledForMs: nowMs - headBlock.sinceMs,
@@ -3293,10 +3291,7 @@ const make = Effect.gen(function* () {
             // evidence: the command may still commit late and the receipt
             // deduplicates its replay, so that head retries until the command
             // durably lands rather than being dead-lettered.
-            if (
-              !runtimeJournalPageBlockedByUncertainDispatch &&
-              (yield* deadLetterPoisonHeadRow)
-            ) {
+            if (!runtimeJournalPageBlockedByUncertainDispatch && (yield* deadLetterPoisonHeadRow)) {
               continue;
             }
             yield* logRuntimeJournalHeadStall(headBlock);

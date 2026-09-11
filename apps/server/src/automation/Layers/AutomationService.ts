@@ -708,9 +708,7 @@ export const AutomationServiceLive = Layer.effect(
                   type: "thread.activity.append",
                   // Stable per run id: a retried dispatch is idempotent instead
                   // of appending a duplicate disable notice.
-                  commandId: CommandId.makeUnsafe(
-                    `automation:${definition.id}:disabled:${run.id}`,
-                  ),
+                  commandId: CommandId.makeUnsafe(`automation:${definition.id}:disabled:${run.id}`),
                   threadId,
                   activity: {
                     id: EventId.makeUnsafe(randomUUID()),

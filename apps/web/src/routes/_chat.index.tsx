@@ -12,10 +12,7 @@ import {
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import {
-  readPromotedThreadRouteMarkers,
-  useComposerDraftStore,
-} from "../composerDraftStore";
+import { readPromotedThreadRouteMarkers, useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
 import { collectStudioProjectIds } from "../lib/studioProjects";

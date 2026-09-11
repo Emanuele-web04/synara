@@ -744,9 +744,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         (state) => [state === "caller-timed-out", "in-flight"] as const,
       );
       if (callerTimedOut) {
-        yield* Effect.log(
-          "executing queued orchestration command after its caller timed out",
-        ).pipe(
+        yield* Effect.log("executing queued orchestration command after its caller timed out").pipe(
           Effect.annotateLogs({
             commandId: envelope.command.commandId,
             commandType: envelope.command.type,
@@ -1036,10 +1034,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Option.match(outcome, {
           onNone: () =>
             Effect.fail(
-              makeCommandTimeoutError(
-                envelope.command,
-                ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS,
-              ),
+              makeCommandTimeoutError(envelope.command, ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS),
             ),
           onSome: Effect.succeed,
         }),

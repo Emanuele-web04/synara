@@ -201,10 +201,7 @@ export function isPromotedThreadRoutePending(threadId: ThreadId): boolean {
 }
 
 /** Fresh markers only — expired entries are swept before the map is handed out. */
-export function readPromotedThreadRouteMarkers(): ReadonlyMap<
-  ThreadId,
-  PromotedThreadRouteMarker
-> {
+export function readPromotedThreadRouteMarkers(): ReadonlyMap<ThreadId, PromotedThreadRouteMarker> {
   prunePromotedThreadRouteMarkers(Date.now());
   return promotedThreadRouteMarkers;
 }

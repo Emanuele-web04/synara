@@ -331,10 +331,7 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
 
       // Each config scope gets its own pooled server: no request is folded
       // into another cwd's in-flight server, and no throwaway process spawns.
-      expect(runtimeMock.state.startCalls.slice(baselineStarts)).toEqual([
-        "opencode",
-        "opencode",
-      ]);
+      expect(runtimeMock.state.startCalls.slice(baselineStarts)).toEqual(["opencode", "opencode"]);
       expect(runtimeMock.state.startCwds.slice(baselineStarts)).toEqual([
         "/repo/gamma",
         "/repo/delta",

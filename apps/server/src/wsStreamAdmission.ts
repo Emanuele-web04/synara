@@ -152,8 +152,7 @@ export const makeWsStreamAdmission = (
                 {
                   ...ledger,
                   clients: nextClients,
-                  replacedDuplicateTotal:
-                    ledger.replacedDuplicateTotal + evictedLeases.length,
+                  replacedDuplicateTotal: ledger.replacedDuplicateTotal + evictedLeases.length,
                 },
               ];
             }

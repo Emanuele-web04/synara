@@ -122,9 +122,7 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
         ? {
             raw: {
               source: normalized.raw.source,
-              ...(normalized.raw.method !== undefined
-                ? { method: normalized.raw.method }
-                : {}),
+              ...(normalized.raw.method !== undefined ? { method: normalized.raw.method } : {}),
               ...(normalized.raw.messageType !== undefined
                 ? { messageType: normalized.raw.messageType }
                 : {}),
