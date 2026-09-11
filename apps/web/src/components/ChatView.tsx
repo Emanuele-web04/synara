@@ -34,8 +34,6 @@ import {
   ThreadMarkerId,
   type ThreadGoalAchievement,
   type ThreadMarker,
-  type ThreadMarkerColor,
-  type ThreadMarkerStyle,
   type TurnId,
   type EditorId,
   type KeybindingCommand,
@@ -571,9 +569,8 @@ import {
   scrollTranscriptToSettledEnd,
   stopTranscriptScrollAtCurrentOffset,
 } from "./chat/transcriptScroll";
-import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
+import { addSelectionToSide, startSelectionChat } from "../lib/selectionChat";
 import {
-  dispatchThreadMarkerAdd,
   dispatchThreadMarkerDoneSet,
   dispatchThreadMarkerLabelSet,
   dispatchThreadMarkerRemove,
@@ -5683,6 +5680,9 @@ export default function ChatView({
       window.cancelAnimationFrame(frameId);
     };
   }, [activeThread?.id, scrollToEnd, transcriptAutoFollowSignal]);
+  const selectionChatEnvMode = useProjectEnvironmentStore((state) =>
+    activeProject ? state.envModeByProjectId[activeProject.id] : undefined,
+  );
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -5702,6 +5702,7 @@ export default function ChatView({
     enabled:
       Boolean(activeThread) &&
       !isInactiveSplitPane &&
+      !isSidechatExpired &&
       pendingUserInputs.length === 0 &&
       !isComposerApprovalState,
     composerImagesRef,
@@ -5721,92 +5722,6 @@ export default function ChatView({
     onMessagesTouchStartBase,
     onMessagesWheelBase,
   });
-  const createMarkerFromPendingSelection = useCallback(
-    (style: ThreadMarkerStyle, color: ThreadMarkerColor) => {
-      const pendingSelection = pendingTranscriptSelectionAction;
-      if (!pendingSelection || !activeThreadId) {
-        return;
-      }
-      const messageId = MessageId.makeUnsafe(pendingSelection.selection.assistantMessageId);
-      if (isPendingSetupBubbleId(messageId)) {
-        // Don't mark an ephemeral automation-setup bubble; it disappears when setup ends.
-        dismissTranscriptSelectionAction();
-        window.getSelection()?.removeAllRanges();
-        return;
-      }
-      const message = timelineMessages.find((candidate) => candidate.id === messageId);
-      if (!message) {
-        toastManager.add({
-          type: "warning",
-          title: "Could not find the selected message.",
-        });
-        return;
-      }
-      const range = resolveTranscriptMarkerRange({
-        messageText: message.text,
-        selectedText: pendingSelection.selection.text,
-      });
-      if (!range) {
-        toastManager.add({
-          type: "warning",
-          title: "Select a unique phrase to mark it.",
-          description: "Try including a few more words so Synara can find the exact place.",
-        });
-        return;
-      }
-      dismissTranscriptSelectionAction();
-      window.getSelection()?.removeAllRanges();
-      const sameStyleOverlappingMarkers = threadMarkers.filter(
-        (marker) =>
-          marker.messageId === messageId &&
-          marker.style === style &&
-          marker.startOffset < range.endOffset &&
-          range.startOffset < marker.endOffset,
-      );
-      if (sameStyleOverlappingMarkers.length > 0) {
-        for (const marker of sameStyleOverlappingMarkers) {
-          void dispatchThreadMarkerRemove(activeThreadId, marker.id).catch((error) => {
-            console.error("Failed to remove thread marker", error);
-            toastManager.add({
-              type: "error",
-              title: "Could not remove marker.",
-            });
-          });
-        }
-        return;
-      }
-      void dispatchThreadMarkerAdd({
-        threadId: activeThreadId,
-        markerId: ThreadMarkerId.makeUnsafe(crypto.randomUUID()),
-        messageId,
-        startOffset: range.startOffset,
-        endOffset: range.endOffset,
-        selectedText: message.text.slice(range.startOffset, range.endOffset),
-        style,
-        color,
-      }).catch((error) => {
-        console.error("Failed to create thread marker", error);
-        toastManager.add({
-          type: "error",
-          title: "Could not create marker.",
-        });
-      });
-    },
-    [
-      activeThreadId,
-      dismissTranscriptSelectionAction,
-      isPendingSetupBubbleId,
-      pendingTranscriptSelectionAction,
-      threadMarkers,
-      timelineMessages,
-    ],
-  );
-  const createHighlightFromPendingSelection = useCallback(() => {
-    createMarkerFromPendingSelection("highlight", "yellow");
-  }, [createMarkerFromPendingSelection]);
-  const createUnderlineFromPendingSelection = useCallback(() => {
-    createMarkerFromPendingSelection("underline", "blue");
-  }, [createMarkerFromPendingSelection]);
 
   useLayoutEffect(() => {
     if (isInactiveSplitPane) return;
@@ -9864,7 +9779,8 @@ export default function ChatView({
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
-        phase,
+        // A mini-composer submission queues the first turn before the draft has a session.
+        phase: isLocalDraftThread ? "ready" : phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -9923,6 +9839,7 @@ export default function ChatView({
     activeThread?.session,
     dispatchQueuedComposerTurn,
     isConnecting,
+    isLocalDraftThread,
     localDispatch,
     pendingUserInputs.length,
     phase,
@@ -13028,14 +12945,40 @@ export default function ChatView({
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />
-      {isInactiveSplitPane ? null : (
+      {!isInactiveSplitPane && activeProject && !isSidechatExpired ? (
         <TranscriptSelectionActionLayer
+          key={threadId}
           action={pendingTranscriptSelectionAction}
-          onHighlight={createHighlightFromPendingSelection}
-          onUnderline={createUnderlineFromPendingSelection}
+          defaultEnvMode={selectionChatEnvMode ?? settings.defaultThreadEnvMode}
+          canUseWorktree={isGitRepo && !isContainerLandingProject}
+          canAddToSide={isServerThread && !activeThread.sidechatSourceThreadId}
+          onDismiss={dismissTranscriptSelectionAction}
           onAddToChat={commitTranscriptAssistantSelection}
+          onAddToSide={(selection) =>
+            addSelectionToSide({
+              selection,
+              project: activeProject,
+              sourceThread: activeThread,
+              selectedModelSelection,
+            })
+          }
+          onNewChat={(selection, prompt, envMode, intent) =>
+            startSelectionChat({
+              selection,
+              prompt,
+              envMode,
+              intent,
+              projectId: activeProject.id,
+              projectCwd: activeProject.cwd,
+              modelSelection: selectedModelSelection,
+              selectedPromptEffort,
+              providerOptionsForDispatch,
+              runtimeMode,
+              createThread: handleNewThread,
+            })
+          }
         />
-      )}
+      ) : null}
       <ExpandedImageOverlay
         expandedImage={expandedImage}
         onClose={closeExpandedImage}

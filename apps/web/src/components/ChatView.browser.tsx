@@ -6278,6 +6278,141 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([
+    { envMode: "local", intent: "send" },
+    { envMode: "worktree", intent: "send" },
+    { envMode: "local", intent: "compose" },
+    { envMode: "worktree", intent: "compose" },
+  ] as const)(
+    "moves a selected quote through the mini composer ($envMode, $intent)",
+    async ({ envMode, intent }) => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-selection-composer" as MessageId,
+        targetText: "Selection composer test",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            messages: thread.messages.slice(-2),
+          })),
+        },
+      });
+      try {
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, "Keep the current draft");
+        const composerEditor = await waitForComposerEditor();
+        await vi.waitFor(() =>
+          expect(composerEditor.textContent).toContain("Keep the current draft"),
+        );
+        await waitForLayout();
+        const source = page.getByText("assistant filler 21", { exact: true });
+        await expect.element(source).toBeVisible();
+        expect(source.element().closest("[data-assistant-message-id]")).not.toBeNull();
+        await source.click();
+        const sourceNode = source.element();
+        const range = document.createRange();
+        range.selectNodeContents(sourceNode);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+        const rect = range.getBoundingClientRect();
+        sourceNode.dispatchEvent(
+          new MouseEvent("mouseup", {
+            bubbles: true,
+            clientX: rect.right,
+            clientY: rect.bottom,
+          }),
+        );
+        await expect
+          .element(page.getByRole("button", { name: "Add to new Chat", exact: true }))
+          .toBeVisible();
+        await page.getByRole("button", { name: "Add to new Chat", exact: true }).click();
+        const miniInput = page.getByRole("textbox", { name: "Message for new chat" });
+        await expect.element(miniInput).toHaveFocus();
+        await miniInput.fill("Explain this selected passage");
+        const miniComposer = page.getByRole("dialog", { name: "New chat from selection" });
+        const environmentChip = miniComposer.getByRole("button", { name: /^(Local|Worktree)$/ });
+        await environmentChip.click();
+        await page
+          .getByRole("menuitem", {
+            name: envMode === "local" ? "Local project" : "New worktree",
+            exact: true,
+          })
+          .click();
+        wsRequests.length = 0;
+        await page
+          .getByRole("button", {
+            name: intent === "send" ? "Send to new chat" : "Open in chat",
+            exact: true,
+          })
+          .click();
+        if (intent === "compose") {
+          const path = await waitForURL(
+            mounted.router,
+            (path) => UUID_ROUTE_RE.test(path),
+            "Open in chat should select a fresh draft.",
+          );
+          const draftId = ThreadId.makeUnsafe(path.slice(1));
+          const editor = await waitForComposerEditor();
+          await vi.waitFor(() => {
+            expect(editor.textContent).toBe("Explain this selected passage");
+            expect(document.activeElement).toBe(editor);
+            const drafts = useComposerDraftStore.getState();
+            expect(drafts.draftsByThreadId[draftId]?.assistantSelections[0]?.text).toBe(
+              "assistant filler 21",
+            );
+            expect(drafts.getDraftThread(draftId)?.envMode).toBe(envMode);
+            expect(drafts.draftsByThreadId[draftId]?.queuedTurns).toHaveLength(0);
+          });
+          expect(
+            wsRequests
+              .map(readDispatchedCommand)
+              .some((command) => command?.type === "thread.turn.start"),
+          ).toBe(false);
+        } else
+          await vi.waitFor(
+            () => {
+              const commands = wsRequests
+                .map(readDispatchedCommand)
+                .filter((command) => command !== null);
+              const create = commands.find((command) => command.type === "thread.create");
+              const send = commands.find((command) => command.type === "thread.turn.start");
+              expect(create).toMatchObject({ projectId: PROJECT_ID, envMode });
+              expect(create?.threadId).not.toBe(THREAD_ID);
+              expect(send).toMatchObject({ threadId: create?.threadId });
+              const message = send?.message as { text?: string } | undefined;
+              const text = String(message?.text ?? "");
+              expect(text).toContain("Explain this selected passage");
+              expect(text).toContain("assistant filler 21");
+              expect(text).toContain("<assistant_selection>");
+              expect(
+                commands.filter((command) => command.type === "thread.turn.start"),
+              ).toHaveLength(1);
+              expect(
+                wsRequests.some((request) => request._tag === WS_METHODS.gitCreateDetachedWorktree),
+              ).toBe(envMode === "worktree");
+              if (envMode === "worktree") {
+                expect(create?.worktreePath).toContain("/repo/.codex/worktrees/");
+              } else {
+                expect(create?.worktreePath).toBeNull();
+              }
+            },
+            { timeout: 15_000 },
+          );
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          "Keep the current draft",
+        );
+        expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(envMode);
+      } finally {
+        window.getSelection()?.removeAllRanges();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
+
   it("keeps the new thread selected after clicking the new-thread button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
