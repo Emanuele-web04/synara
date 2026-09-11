@@ -96,6 +96,11 @@ describe("mergeDynamicModelOptions", () => {
     (provider) => {
       const dynamicModels = [
         { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash", expected: "GLM 5.3 Flash" },
+        {
+          slug: "anthropic/claude-opus-4-9-20260715",
+          name: "claude-opus-4-9-20260715",
+          expected: "Claude Opus 4.9 20260715",
+        },
         { slug: "zai/glm-5.3-fast", name: "GLM-5.3 Highspeed", expected: "GLM 5.3 Highspeed" },
         {
           slug: "deepseek/deepseek-v4-flash",
@@ -311,7 +316,6 @@ describe("mergeDynamicModelOptions", () => {
         dynamicModels: [
           { slug: "swe-1.7", name: "SWE-1.7" },
           { slug: "swe-1.7-lightning", name: "SWE-1.7 Lightning" },
-          { slug: "swe-1.6-fast", name: "SWE-1.6 Fast" },
           { slug: "swe-2", name: "SWE-2" },
           { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
           { slug: "glm-5.2", name: "GLM-5.2" },
@@ -321,7 +325,6 @@ describe("mergeDynamicModelOptions", () => {
     ).toEqual([
       { slug: "swe-1-7", name: "SWE 1.7" },
       { slug: "swe-1.7-lightning", name: "SWE 1.7 Lightning" },
-      { slug: "swe-1.6-fast", name: "SWE 1.6 Fast" },
       { slug: "swe-2", name: "SWE 2" },
       { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
       { slug: "glm-5.2", name: "GLM 5.2" },

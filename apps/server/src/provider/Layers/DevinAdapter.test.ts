@@ -1617,8 +1617,8 @@ describe("Devin CLI model discovery", () => {
     });
   });
 
-  it("humanizes family slugs when the CLI omits a label", () => {
-    const [model] = mergeDevinModelDescriptors([
+  it("humanizes family slugs when the CLI omits labels", () => {
+    const models = mergeDevinModelDescriptors([
       parseDevinCliModelList(
         JSON.stringify({
           families: [
@@ -1627,12 +1627,17 @@ describe("Devin CLI model discovery", () => {
               slug: "swe-1-7",
               variants: [{ model_uid: "swe-1-7" }],
             },
+            {
+              family_uid: "claude-opus-4-9-20260715",
+              slug: "claude-opus-4-9-20260715",
+              variants: [{ model_uid: "claude-opus-4-9-20260715" }],
+            },
           ],
         }),
       ),
     ]);
 
-    expect(model?.name).toBe("SWE 1.7");
+    expect(models.map(({ name }) => name)).toEqual(["SWE 1.7", "Claude Opus 4.9 20260715"]);
   });
 
   it("exposes thinking and long-context toggles for Claude-style variants", () => {

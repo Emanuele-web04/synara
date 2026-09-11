@@ -119,11 +119,12 @@ function humanizeModelToken(token: string): string {
   return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
 }
 
+const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
+
 // Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
 // preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
-// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens stay
-// separate: they are date/build suffixes (grok-code-fast-1-0825,
-// deepseek-v4-flash-0731), never version minors.
+// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
+// eight-digit provider date/build stamps stay separate, never version minors.
 function joinModelVersionTokens(tokens: string[]): string[] {
   const merged: string[] = [];
   for (const token of tokens) {
@@ -131,6 +132,7 @@ function joinModelVersionTokens(tokens: string[]): string[] {
     if (
       /^\d+$/u.test(token) &&
       (token === "0" || !token.startsWith("0")) &&
+      !MODEL_DATE_OR_BUILD_TOKEN_PATTERN.test(token) &&
       previous !== undefined &&
       /\d$/u.test(previous)
     ) {

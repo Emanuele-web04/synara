@@ -22,6 +22,7 @@ import {
   getDefaultModel,
   getModelCapabilities,
   getModelOptions,
+  humanizeModelSlug,
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
@@ -173,20 +174,13 @@ describe("normalizeModelSlug", () => {
   it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
     expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
     expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1.6-fast");
+    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
     expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
-  });
-
-  it("mirrors the family aliases declared by `devin models list`", () => {
-    expect(normalizeModelSlug("swe", "devin")).toBe("swe-2");
-    expect(normalizeModelSlug("opus", "devin")).toBe("claude-opus-5");
-    expect(normalizeModelSlug("claude", "devin")).toBe("claude-sonnet-5");
+    expect(normalizeModelSlug("swe", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("opus", "devin")).toBe("claude-opus-4-8");
     expect(normalizeModelSlug("sonnet", "devin")).toBe("claude-sonnet-5");
-    expect(normalizeModelSlug("haiku", "devin")).toBe("claude-haiku-4.5");
     expect(normalizeModelSlug("fable", "devin")).toBe("claude-fable-5");
-    expect(normalizeModelSlug("gemini", "devin")).toBe("gemini-3.8-flash");
-    expect(normalizeModelSlug("gpt", "devin")).toBe("gpt-6-astra");
-    expect(normalizeModelSlug("codex", "devin")).toBe("gpt-5.3-codex");
+    expect(normalizeModelSlug("gpt", "devin")).toBe("gpt");
   });
 });
 
@@ -781,9 +775,11 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("deepseek-v4-1-flash")).toBe("DeepSeek V4.1 Flash");
   });
 
-  it("keeps zero-prefixed date and build suffixes separate", () => {
+  it("keeps provider date and build suffixes separate", () => {
     expect(formatModelDisplayName("grok-code-fast-1-0825")).toBe("Grok Code Fast 1 0825");
     expect(formatModelDisplayName("deepseek-v4-flash-0731")).toBe("DeepSeek V4 Flash 0731");
+    expect(formatModelDisplayName("claude-opus-4-9-20260715")).toBe("Claude Opus 4.9 20260715");
+    expect(humanizeModelSlug("claude-opus-4-5-20251101")).toBe("Claude Opus 4.5 20251101");
   });
 
   it("humanizes model tokens that match inherited object properties", () => {
@@ -814,6 +810,7 @@ describe("normalizeModelDisplayName", () => {
   it("rejoins digit fragments into versions", () => {
     expect(normalizeModelDisplayName("Swe 1 6")).toBe("SWE 1.6");
     expect(normalizeModelDisplayName("Claude Opus 4 8")).toBe("Claude Opus 4.8");
+    expect(normalizeModelDisplayName("Claude Opus 4 9 20260715")).toBe("Claude Opus 4.9 20260715");
   });
 
   it("leaves already-canonical and unknown names unchanged", () => {
