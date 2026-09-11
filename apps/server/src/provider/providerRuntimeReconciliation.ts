@@ -235,7 +235,14 @@ export function planProviderRuntimeReconciliation(input: {
     const projectedTurnId = projectedInFlightTurnId(thread);
     const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
-    if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
+    if (liveSession?.status === "running" && liveTurnId !== null) {
+      // The live runtime and the projection agree on the in-flight turn, so
+      // there is no divergence to reconcile — even once `abandoned` is true.
+      // Silence is not evidence of a dead turn: a blocking tool call (sleep,
+      // watch, wait-for-thread) legitimately emits nothing for longer than
+      // maxTurnAgeMs, and settling here manufactures an interruption plus a
+      // respawn the work never needed. The provider adapter owns real wedge
+      // detection for its own process; this layer only fixes divergence.
       if (liveTurnId === projectedTurnId) continue;
       plans.push({
         action: "align-running-turn",
