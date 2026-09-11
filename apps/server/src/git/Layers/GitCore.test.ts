@@ -287,6 +287,26 @@ it.layer(TestLayer)("git integration", (it) => {
       );
     }
 
+    it.effect("truncates an oversized unstaged patch instead of failing", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const original = "x\n".repeat(400_000);
+        const updated = "y\n".repeat(400_000);
+        yield* writeTextFile(path.join(tmp, "generated.ts"), original);
+        yield* git(tmp, ["add", "generated.ts"]);
+        yield* git(tmp, ["commit", "-m", "add generated"]);
+        yield* writeTextFile(path.join(tmp, "generated.ts"), updated);
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(result.patch.length).toBeLessThanOrEqual(1_000_000 * 2);
+        expect(result.truncated).toBe(true);
+        expect(result.patch).toContain("diff --git a/generated.ts b/generated.ts");
+      }),
+    );
+
     it.effect("keeps an ignored renamed symbolic link as a link in ref comparisons", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;
@@ -315,7 +335,7 @@ it.layer(TestLayer)("git integration", (it) => {
     it.effect("keeps progress lines after the retained prefix fills across chunks", () =>
       Effect.gen(function* () {
         const lines: string[] = [];
-        const output = yield* collectGitOutput(
+        const { text, truncated } = yield* collectGitOutput(
           { operation: "test output", cwd: process.cwd(), args: ["clone"] },
           Stream.fromIterable(
             ["first\nsecond\n", "third\nfourth\n"].map((text) => new TextEncoder().encode(text)),
@@ -327,7 +347,8 @@ it.layer(TestLayer)("git integration", (it) => {
             }),
           "truncate",
         );
-        expect(output).toBe("first\nse");
+        expect(text).toBe("first\nse");
+        expect(truncated).toBe(true);
         expect(lines).toEqual(["first", "second", "third", "fourth"]);
       }),
     );
@@ -337,7 +358,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const records = ["R100", "old\r\nname", "new é\tname"];
         const bytes = new TextEncoder().encode(records.join("\0") + "\0");
         const received: string[] = [];
-        const output = yield* collectGitOutput(
+        const { text, truncated } = yield* collectGitOutput(
           { operation: "test paths", cwd: process.cwd(), args: ["diff"] },
           Stream.fromIterable(Array.from(bytes, (byte) => Uint8Array.of(byte))),
           16,
@@ -348,7 +369,8 @@ it.layer(TestLayer)("git integration", (it) => {
           "truncate",
           "\0",
         );
-        expect(output).toBe(new TextDecoder().decode(bytes).slice(0, 16));
+        expect(text).toBe(new TextDecoder().decode(bytes).slice(0, 16));
+        expect(truncated).toBe(true);
         expect(received).toEqual(records);
       }),
     );
@@ -2797,37 +2819,32 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect(
-      "reads large committed additions against a ref without changing other scope limits",
-      () =>
-        Effect.gen(function* () {
-          const core = yield* GitCore;
-          const tmp = yield* makeTmpDir();
-          yield* initRepoWithCommit(tmp);
-          const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
-          const contents = "0123456789abcdef".repeat(75_000) + "\n";
-          yield* writeTextFile(path.join(tmp, "large.txt"), contents);
+    it.effect("truncates large untracked additions and still reads the committed ref patch", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const contents = "0123456789abcdef".repeat(75_000) + "\n";
+        yield* writeTextFile(path.join(tmp, "large.txt"), contents);
 
-          const unstaged = yield* Effect.result(core.readUnstagedPatch(tmp));
-          expect(unstaged._tag).toBe("Failure");
-          if (unstaged._tag === "Failure") {
-            expect(unstaged.failure.detail).toContain("output exceeded 1000000 bytes");
-          }
+        const unstaged = yield* core.readUnstagedPatch(tmp);
+        expect(unstaged.truncated).toBe(true);
+        expect(unstaged.patch.length).toBeLessThan(1_000_000 * 2);
 
-          yield* git(tmp, ["add", "large.txt"]);
-          yield* git(tmp, ["commit", "-m", "add large tracked text"]);
-          const indexBefore = yield* Effect.promise(() =>
-            fs.readFile(path.join(tmp, ".git/index")),
-          );
-          const result = yield* core.readRefPatch(tmp, baseSha);
-          expect(result.patch).toContain("new file mode 100644");
-          expect(result.patch).toContain(`+${contents}`);
-          const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
-          expect(indexAfter).toEqual(indexBefore);
-        }),
+        yield* git(tmp, ["add", "large.txt"]);
+        yield* git(tmp, ["commit", "-m", "add large tracked text"]);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const result = yield* core.readRefPatch(tmp, baseSha);
+        expect(result.truncated).toBe(false);
+        expect(result.patch).toContain("new file mode 100644");
+        expect(result.patch).toContain(`+${contents}`);
+        const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        expect(indexAfter).toEqual(indexBefore);
+      }),
     );
 
-    it.effect("keeps reference addition patch capture finite and rejects overflow", () =>
+    it.effect("keeps reference addition patch capture finite by truncating overflow", () =>
       Effect.gen(function* () {
         const realCore = yield* GitCore;
         const tmp = yield* makeTmpDir();
@@ -2842,21 +2859,16 @@ it.layer(TestLayer)("git integration", (it) => {
           if (input.operation === "GitCore.readRefPatch.untrackedPatch") {
             requestedLimit = input.maxOutputBytes;
             requestedMode = input.outputMode;
-            // Exercise the real collector's overflow path with a small fixture.
+            // Exercise the real collector's truncate path with a small fixture.
             return realCore.execute({ ...input, maxOutputBytes: 128 });
           }
           return realCore.execute(input);
         });
-        const result = yield* Effect.result(core.readRefPatch(tmp, baseSha));
+        const result = yield* core.readRefPatch(tmp, baseSha);
         expect(requestedLimit).toBe(10_000_000);
-        expect(requestedMode).not.toBe("truncate");
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({
-            operation: "GitCore.readRefPatch.untrackedPatch",
-            detail: expect.stringContaining("output exceeded 128 bytes"),
-          });
-        }
+        expect(requestedMode).toBe("truncate");
+        expect(result.truncated).toBe(true);
+        expect(result.patch.length).toBeLessThan(1_000_000);
       }),
     );
 
