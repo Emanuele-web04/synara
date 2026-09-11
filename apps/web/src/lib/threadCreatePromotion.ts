@@ -1,10 +1,17 @@
 // FILE: threadCreatePromotion.ts
 // Purpose: Makes draft-to-server thread promotion idempotent across racing UI callers.
 // Layer: Web orchestration helper
-// Exports: promoteThreadCreate, isDuplicateThreadCreateError
+// Exports: promoteThreadCreate, isDuplicateThreadCreateError, plus the pending/recent
+//          promotion predicates the thread route guard and temporary-thread lifecycle
+//          use to survive the draft-cleared-before-shell-row window.
 
 import type { ClientOrchestrationCommand, NativeApi, ThreadId } from "@synara/contracts";
-import { markPromotedDraftThreads } from "../composerDraftStore";
+import {
+  PROMOTED_THREAD_ROUTE_GRACE_MS,
+  isPromotedThreadRoutePending,
+  markPromotedDraftThreads,
+  readPromotedThreadRouteMarkers,
+} from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
@@ -92,4 +99,70 @@ export async function promoteThreadCreate(
   });
   inFlightThreadCreateById.set(command.threadId, promise);
   return promise;
+}
+
+/** True while a `thread.create` dispatch for `threadId` is still in flight. */
+export function isThreadCreateInFlight(threadId: ThreadId): boolean {
+  return inFlightThreadCreateById.has(threadId);
+}
+
+/**
+ * True while a promotion for `threadId` is in flight or recently completed —
+ * exactly the window where the draft record may be gone while the thread's
+ * shell row has not landed yet. Route guards must treat the route as valid
+ * (hold a loading fallback) rather than redirect to "/".
+ */
+export function isThreadPromotionPendingOrRecent(threadId: ThreadId): boolean {
+  return inFlightThreadCreateById.has(threadId) || isPromotedThreadRoutePending(threadId);
+}
+
+/**
+ * Resolves once a promotion for `threadId` is no longer route-fragile — the
+ * in-flight create settled and the shell row exists — or the route grace
+ * elapsed, whichever comes first. Returns immediately when no promotion is
+ * pending, so never-promoted thread ids (e.g. a bad URL) pay nothing.
+ */
+export async function waitForPromotedThreadRouteReady(threadId: ThreadId): Promise<void> {
+  if (!isThreadPromotionPendingOrRecent(threadId)) {
+    return;
+  }
+  // Anchor the deadline to the promotion stamp so the total hold stays inside
+  // the route grace no matter when a caller starts waiting.
+  const marker = readPromotedThreadRouteMarkers().get(threadId);
+  const deadlineAt = (marker?.promotedAt ?? Date.now()) + PROMOTED_THREAD_ROUTE_GRACE_MS;
+  const inFlight = inFlightThreadCreateById.get(threadId);
+  if (inFlight) {
+    await Promise.race([
+      inFlight.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, Math.max(0, deadlineAt - Date.now()));
+      }),
+    ]);
+  }
+
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0 || useStore.getState().threadShellById?.[threadId] !== undefined) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      globalThis.clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const unsubscribe = useStore.subscribe((state) => {
+      if (state.threadShellById?.[threadId] !== undefined) {
+        finish();
+      }
+    });
+    const timer = globalThis.setTimeout(finish, remainingMs);
+  });
 }
