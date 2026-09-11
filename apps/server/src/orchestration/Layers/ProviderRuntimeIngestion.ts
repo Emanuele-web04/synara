@@ -69,8 +69,10 @@ import {
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
+  OrchestrationCommandAdmissionError,
   OrchestrationCommandIdentityCollisionError,
   OrchestrationCommandPreviouslyRejectedError,
+  OrchestrationCommandTimeoutError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
@@ -115,6 +117,19 @@ const PROVIDER_RUNTIME_INGESTION_CAPACITY = 1_024;
 const PROVIDER_RUNTIME_REPLAY_PAGE_SIZE = 128;
 const PROVIDER_RUNTIME_REPLAY_POLL_MIN_MS = 250;
 const PROVIDER_RUNTIME_REPLAY_POLL_MAX_MS = 5_000;
+// A blocked journal head row is retried by every drain trigger — the durable
+// safety poll and each live-append wakeup. Without a backoff those drivers
+// reprocess the same failing row as fast as events arrive (~15ms under a
+// streaming provider). Bounded exponential backoff keeps the retry hot enough
+// to recover quickly without burning CPU/log volume.
+const PROVIDER_RUNTIME_BLOCKED_HEAD_BACKOFF_MIN_MS = 50;
+const PROVIDER_RUNTIME_BLOCKED_HEAD_BACKOFF_MAX_MS = 2_000;
+// One row pinning the single global consumer cursor stalls projection for
+// every provider and every thread. Once the same head has blocked this long,
+// surface it as an ingestion health signal, then keep reporting once per
+// interval while it stays blocked.
+const PROVIDER_RUNTIME_STALLED_HEAD_WARN_AFTER_MS = 60_000;
+const PROVIDER_RUNTIME_STALLED_HEAD_LOG_INTERVAL_MS = 60_000;
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 2_048;
 const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(60);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 1_024;
@@ -163,6 +178,33 @@ export function nextRuntimeJournalSafetyPollDelayMs(
   );
 }
 
+/**
+ * Exponential backoff between retries of the same blocked journal head row.
+ * The drain loop applies this delay before yielding, so every retry driver —
+ * live-append wakeups and the durable safety poll alike — is serialized onto
+ * one bounded cadence by the drain lock.
+ */
+export function nextRuntimeJournalBlockedHeadDelayMs(currentDelayMs: number): number {
+  return Math.min(
+    PROVIDER_RUNTIME_BLOCKED_HEAD_BACKOFF_MAX_MS,
+    Math.max(PROVIDER_RUNTIME_BLOCKED_HEAD_BACKOFF_MIN_MS, currentDelayMs * 2),
+  );
+}
+
+/**
+ * A dispatch that timed out or was refused for queue overload has no durable
+ * outcome: the command may still be queued and can commit late, and a replay
+ * of the same commandId is deduplicated by its stored command receipt. That
+ * failure is therefore not evidence that the journal head event is poison —
+ * the row must be retried until the command durably lands, not dead-lettered.
+ */
+function isUncertainDispatchFailure(error: unknown): boolean {
+  return (
+    error instanceof OrchestrationCommandTimeoutError ||
+    (error instanceof OrchestrationCommandAdmissionError && error.reason === "overloaded")
+  );
+}
+
 type RuntimeIngestionDomainEvent = Extract<
   OrchestrationEvent,
   {
@@ -206,6 +248,17 @@ type ProviderDiffPlaceholder = {
 type NativeChildSlotState = {
   initialized: boolean;
   readonly childIds: Set<string>;
+};
+/**
+ * Retry state for the journal head row that currently blocks the consumer.
+ * Keyed by the durable cursor — the first stored row after it is the blocked
+ * head — so cursor progress or a different failing row resets the backoff.
+ */
+type RuntimeJournalHeadBlock = {
+  readonly cursor: number;
+  readonly sinceMs: number;
+  readonly delayMs: number;
+  readonly lastStallLogMs: number;
 };
 
 /**
@@ -2968,6 +3021,26 @@ const make = Effect.gen(function* () {
   // A failed journal row blocks later runtime rows in the same page. Domain
   // inputs still drain, and the durable poll retries from the exact cursor.
   let runtimeJournalPageBlocked = false;
+  // A dispatch-level failure (timeout, admission overload) has no durable
+  // outcome — the command may still be queued and commit late. Such a head
+  // row is retried until the command lands instead of dead-lettered.
+  let runtimeJournalPageBlockedByUncertainDispatch = false;
+  let runtimeJournalHeadBlock: RuntimeJournalHeadBlock | null = null;
+
+  const noteRuntimeJournalHeadBlock = (cursor: number, nowMs: number): RuntimeJournalHeadBlock => {
+    const current = runtimeJournalHeadBlock;
+    const next: RuntimeJournalHeadBlock =
+      current !== null && current.cursor === cursor
+        ? { ...current, delayMs: nextRuntimeJournalBlockedHeadDelayMs(current.delayMs) }
+        : {
+            cursor,
+            sinceMs: nowMs,
+            delayMs: PROVIDER_RUNTIME_BLOCKED_HEAD_BACKOFF_MIN_MS,
+            lastStallLogMs: 0,
+          };
+    runtimeJournalHeadBlock = next;
+    return next;
+  };
 
   const quarantineUnreplayableCommand = Effect.fnUntraced(function* (
     input: Extract<RuntimeIngestionInput, { source: "runtime" }>,
@@ -3059,6 +3132,7 @@ const make = Effect.gen(function* () {
             }
             if (input.source === "runtime") {
               runtimeJournalPageBlocked = true;
+              runtimeJournalPageBlockedByUncertainDispatch = isUncertainDispatchFailure(error);
             }
             return Effect.logWarning("provider runtime ingestion failed to process event", {
               source: input.source,
@@ -3121,6 +3195,50 @@ const make = Effect.gen(function* () {
     return advanced;
   });
 
+  // A head row that keeps the global cursor pinned degrades ingestion for
+  // every provider, not just its own thread — surface it as a health signal
+  // once the block outlives the poison gate's wall-clock floor, then once per
+  // interval while it stays blocked. The head row is read only when a warning
+  // is due; a read failure downgrades the signal rather than the drain.
+  const logRuntimeJournalHeadStall = (headBlock: RuntimeJournalHeadBlock) =>
+    Effect.suspend(() => {
+      const nowMs = Date.now();
+      if (
+        nowMs - headBlock.sinceMs < PROVIDER_RUNTIME_STALLED_HEAD_WARN_AFTER_MS ||
+        nowMs - headBlock.lastStallLogMs < PROVIDER_RUNTIME_STALLED_HEAD_LOG_INTERVAL_MS
+      ) {
+        return Effect.void;
+      }
+      return Effect.gen(function* () {
+        const headRow = (
+          yield* runtimeEvents.readAfter({
+            sequenceExclusive: headBlock.cursor,
+            throughSequenceInclusive: yield* runtimeEvents.getHighWaterSequence,
+            limit: 1,
+          })
+        )[0];
+        yield* Effect.logError("provider runtime ingestion stalled on one journal event", {
+          cursor: headBlock.cursor,
+          stalledForMs: nowMs - headBlock.sinceMs,
+          retryDelayMs: headBlock.delayMs,
+          sequence: headRow?.sequence,
+          eventId: headRow?.event.eventId,
+          eventType: headRow?.event.type,
+          threadId: headRow?.event.threadId,
+          provider: headRow?.event.provider,
+        });
+        runtimeJournalHeadBlock = { ...headBlock, lastStallLogMs: nowMs };
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("provider runtime ingestion stall check failed", {
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      );
+    });
+
   const drainRuntimeJournalThrough = (throughSequenceInclusive?: number) =>
     runtimeJournalDrainLock.withPermits(1)(
       Effect.gen(function* () {
@@ -3134,7 +3252,11 @@ const make = Effect.gen(function* () {
           const cursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
           );
-          if (cursor >= replayFence) return hadBacklog;
+          if (cursor >= replayFence) {
+            // Caught up: any blocked-head backoff belongs to a stale head.
+            runtimeJournalHeadBlock = null;
+            return hadBacklog;
+          }
           hadBacklog = true;
 
           const page = yield* runtimeEvents.readAfter({
@@ -3149,6 +3271,7 @@ const make = Effect.gen(function* () {
           }
 
           runtimeJournalPageBlocked = false;
+          runtimeJournalPageBlockedByUncertainDispatch = false;
           yield* Effect.forEach(page, (entry) =>
             worker.enqueue({
               source: "runtime",
@@ -3159,13 +3282,33 @@ const make = Effect.gen(function* () {
           yield* worker.drain;
           yield* flushRuntimeCursor;
           if (runtimeJournalPageBlocked) {
-            // Either the poison threshold was reached and the head row was
-            // skipped (loop again from the fresh cursor), or the drain yields
-            // to the durable poller, which retries from the exact cursor.
-            if (yield* deadLetterPoisonHeadRow) continue;
+            // The post-flush cursor names the blocked head row — the first
+            // stored row after it — so the backoff grows only while the same
+            // event keeps failing and resets on any progress.
+            const headBlock = noteRuntimeJournalHeadBlock(
+              yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+              Date.now(),
+            );
+            // A dispatch timeout or admission overload is not poison
+            // evidence: the command may still commit late and the receipt
+            // deduplicates its replay, so that head retries until the command
+            // durably lands rather than being dead-lettered.
+            if (
+              !runtimeJournalPageBlockedByUncertainDispatch &&
+              (yield* deadLetterPoisonHeadRow)
+            ) {
+              continue;
+            }
+            yield* logRuntimeJournalHeadStall(headBlock);
+            // Throttle this head's retry. Sleeping inside the drain lock
+            // coalesces every driver — live-append wakeups and the safety
+            // poll — onto one bounded cadence instead of one failed
+            // reprocess (and one failure log) per incoming event.
+            yield* Effect.sleep(Duration.millis(headBlock.delayMs));
             return hadBacklog;
           }
 
+          runtimeJournalHeadBlock = null;
           const advancedCursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
           );
