@@ -47,41 +47,44 @@ describe("Safari access onboarding", () => {
     await render(<Harness />);
     await expect.element(page.getByRole("dialog")).toBeVisible();
     await expect.element(page.getByText("Next welcome")).not.toBeInTheDocument();
-    await expect.element(page.getByRole("dialog")).toHaveTextContent("This is optional");
+    await expect.element(page.getByRole("dialog")).toHaveTextContent("It's optional");
     await expect.element(page.getByRole("dialog")).toHaveTextContent("broad macOS permission");
+    await expect.element(page.getByRole("dialog")).toHaveTextContent("Synara (Dev)");
     await expect
-      .element(page.getByRole("dialog"))
-      .toHaveTextContent("/Applications/Synara (Dev).app");
+      .element(page.getByRole("button", { name: "Show app in Finder" }))
+      .toHaveAttribute("title", "/Applications/Synara (Dev).app");
     expect(api.openSettings).not.toHaveBeenCalled();
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
   });
 
-  it.each(["Set up later", "Continue to Synara"])(
-    "persists %s across remounts and allows revisiting",
-    async (name) => {
-      const mounted = await render(<Harness />);
-      await page.getByRole("button", { name, exact: true }).click();
-      await expect.element(page.getByText("Next welcome")).toBeVisible();
-      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe(
-        name === "Set up later" ? "later" : "continued",
-      );
-      await mounted.unmount();
-      await render(<Harness />);
-      await expect.element(page.getByText("Next welcome")).toBeVisible();
-      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-      await page.getByRole("button", { name: "Safari import setup" }).click();
-      await expect.element(page.getByRole("dialog")).toBeVisible();
-    },
-  );
+  it("persists Not now across remounts and allows revisiting", async () => {
+    const mounted = await render(<Harness />);
+    await page.getByRole("button", { name: "Not now", exact: true }).click();
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+    await mounted.unmount();
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Safari import setup" }).click();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+  });
+
+  it("still honors the legacy continued decision", async () => {
+    localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("continued"));
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  });
 
   it("opening Settings is not permission approval or an acknowledged intro", async () => {
     await render(<Harness />);
     await page.getByRole("button", { name: "Open System Settings" }).click();
-    await expect.element(page.getByRole("status")).toHaveTextContent("Access is not verified");
+    await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
     await page.getByRole("button", { name: "Show app in Finder" }).click();
     expect(api.revealApp).toHaveBeenCalledOnce();
-    await expect.element(page.getByRole("status")).toHaveTextContent("running app");
+    await expect.element(page.getByRole("status")).toHaveTextContent("selected in Finder");
   });
 
   it.each([false, "reject"])(
@@ -91,9 +94,9 @@ describe("Safari access onboarding", () => {
       else api.openSettings.mockRejectedValueOnce(new Error("private failure"));
       await render(<Harness />);
       await page.getByRole("button", { name: "Open System Settings" }).click();
-      await expect.element(page.getByRole("status")).toHaveTextContent("manually");
+      await expect.element(page.getByRole("status")).toHaveTextContent("Couldn't open");
       await expect.element(page.getByRole("status")).not.toHaveTextContent("private failure");
-      await page.getByRole("button", { name: "Set up later" }).click();
+      await page.getByRole("button", { name: "Not now" }).click();
       await expect.element(page.getByText("Next welcome")).toBeVisible();
     },
   );
@@ -134,7 +137,7 @@ describe("Safari access onboarding", () => {
     );
     await render(<Harness />);
     await page.getByRole("button", { name: "Open System Settings" }).click();
-    await page.getByRole("button", { name: "Set up later" }).click();
+    await page.getByRole("button", { name: "Not now" }).click();
     resolve(true);
     await expect.element(page.getByText("Next welcome")).toBeVisible();
     await expect.element(page.getByRole("status")).not.toBeInTheDocument();
