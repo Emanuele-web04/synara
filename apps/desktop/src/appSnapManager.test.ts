@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import { SYNARA_DEVELOPMENT_BUNDLE_ID } from "@synara/shared/desktopIdentity";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   DesktopAppSnapManager,
@@ -909,5 +909,389 @@ describe("AppSnap capture path guard", () => {
     expect(isPathInsideDirectory("/tmp/appsnap", "/tmp/appsnap/capture.png")).toBe(true);
     expect(isPathInsideDirectory("/tmp/appsnap", "/tmp/appsnap")).toBe(false);
     expect(isPathInsideDirectory("/tmp/appsnap", "/tmp/other/capture.png")).toBe(false);
+  });
+});
+
+describe("AppSnap window picker requests", () => {
+  async function createEnabledManager(): Promise<{
+    manager: DesktopAppSnapManager;
+    watchChild: FakeChildProcess;
+    captureDirectory: string;
+    onCaptured: Mock;
+    onError: Mock;
+    dispose: () => void;
+  }> {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-picker-"));
+    const checkChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(checkChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const onCaptured = vi.fn();
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn,
+      onState: vi.fn(),
+      onCaptured,
+      onError,
+    });
+    const enable = manager.setEnabled(true);
+    await flushPromises();
+    checkChild.stdout.end(
+      `${JSON.stringify({ type: "permissions", inputMonitoring: "granted", screenRecording: "granted" })}\n`,
+    );
+    checkChild.stderr.end();
+    checkChild.emit("close", 0, null);
+    await enable;
+    return {
+      manager,
+      watchChild,
+      captureDirectory,
+      onCaptured,
+      onError,
+      dispose: () => {
+        manager.dispose();
+        rmSync(captureDirectory, { recursive: true, force: true });
+      },
+    };
+  }
+
+  function lastStdinLine(child: FakeChildProcess): string {
+    return child.stdin.read()?.toString().trimEnd() ?? "";
+  }
+
+  it("lists windows through a correlated request", async () => {
+    const { manager, watchChild, dispose } = await createEnabledManager();
+    try {
+      const listing = manager.listWindows();
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("list-windows ".length);
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "windows",
+          requestId,
+          windows: [
+            {
+              windowId: 42,
+              appName: "Ghostty",
+              bundleIdentifier: "com.mitchellh.ghostty",
+              windowTitle: "dev",
+            },
+          ],
+        })}\n`,
+      );
+      expect(await listing).toEqual([
+        {
+          windowId: 42,
+          appName: "Ghostty",
+          bundleIdentifier: "com.mitchellh.ghostty",
+          windowTitle: "dev",
+          appIconDataUrl: null,
+        },
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("times out listWindows when the helper never answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { manager, dispose } = await createEnabledManager();
+      try {
+        const listing = manager.listWindows();
+        const assertion = expect(listing).rejects.toThrow(
+          "Timed out while listing capturable windows.",
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+        await assertion;
+      } finally {
+        dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("captures a specific window and keeps a pending record until acknowledged", async () => {
+    const { manager, watchChild, captureDirectory, dispose } = await createEnabledManager();
+    try {
+      const capturing = manager.captureWindow(77);
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+      expect(requestId).toMatch(/^picker-[a-f0-9-]+$/);
+      const capturePath = join(captureDirectory, "req-capture.png");
+      const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+      writeFileSync(capturePath, captureBytes);
+      watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "captured",
+          id: requestId,
+          path: capturePath,
+          name: "req-capture.png",
+          sourceAppName: "Safari",
+        })}\n`,
+      );
+      const capture = await capturing;
+      expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
+      expect(FS.existsSync(capturePath)).toBe(false);
+      expect(await manager.listPendingCaptures()).toHaveLength(1);
+      await manager.acknowledgeCapture(capture.id);
+      expect(await manager.listPendingCaptures()).toHaveLength(0);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("rejects values outside the macOS window id range before writing to the helper", async () => {
+    const { manager, watchChild, dispose } = await createEnabledManager();
+    try {
+      await expect(manager.captureWindow(0x1_0000_0000)).rejects.toThrow(
+        "captureWindow requires a valid macOS window id.",
+      );
+      expect(lastStdinLine(watchChild)).toBe("");
+    } finally {
+      dispose();
+    }
+  });
+
+  it("drops a late capture that arrives after the captureWindow timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { manager, watchChild, captureDirectory, onCaptured, onError, dispose } =
+        await createEnabledManager();
+      try {
+        const capturing = manager.captureWindow(77);
+        await flushPromises();
+        const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+        const assertion = expect(capturing).rejects.toThrow(
+          "Timed out while capturing the requested window.",
+        );
+        await vi.advanceTimersByTimeAsync(20_000);
+        await assertion;
+        const capturePath = join(captureDirectory, "late-capture.png");
+        writeFileSync(
+          capturePath,
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]),
+        );
+        watchChild.stdout.write(
+          `${JSON.stringify({
+            type: "captured",
+            id: requestId,
+            path: capturePath,
+            name: "late-capture.png",
+            sourceAppName: "Safari",
+          })}\n`,
+        );
+        watchChild.stdout.write(
+          `${JSON.stringify({
+            type: "error",
+            id: requestId,
+            code: "capture-failed",
+            message: "late helper error",
+          })}\n`,
+        );
+        await vi.waitFor(() => expect(FS.existsSync(capturePath)).toBe(false));
+        await flushPromises();
+        expect(onCaptured).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+        expect(await manager.listPendingCaptures()).toHaveLength(0);
+      } finally {
+        dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes a capture whose request times out while durable persistence is in flight", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { manager, watchChild, captureDirectory, onCaptured, dispose } =
+      await createEnabledManager();
+    const originalRename = FS.promises.rename;
+    let markRenameStarted!: () => void;
+    const renameStarted = new Promise<void>((resolve) => {
+      markRenameStarted = resolve;
+    });
+    let releaseRename!: () => void;
+    const renameRelease = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
+    const renameSpy = vi
+      .spyOn(FS.promises, "rename")
+      .mockImplementationOnce(async (oldPath, newPath) => {
+        markRenameStarted();
+        await renameRelease;
+        return originalRename(oldPath, newPath);
+      });
+
+    try {
+      const capturing = manager.captureWindow(77);
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+      const capturePath = join(captureDirectory, `appsnap-${requestId}.png`);
+      writeFileSync(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]));
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "captured",
+          id: requestId,
+          path: capturePath,
+          name: `appsnap-${requestId}.png`,
+        })}\n`,
+      );
+      await renameStarted;
+
+      const assertion = expect(capturing).rejects.toThrow(
+        "Timed out while capturing the requested window.",
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await assertion;
+      releaseRename();
+      for (let index = 0; index < 6; index += 1) await flushPromises();
+
+      expect(onCaptured).not.toHaveBeenCalled();
+      expect(await manager.listPendingCaptures()).toHaveLength(0);
+      expect(FS.existsSync(capturePath)).toBe(false);
+    } finally {
+      releaseRename();
+      renameSpy.mockRestore();
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not recover an interrupted picker request as an unsolicited capture", async () => {
+    const { manager, watchChild, captureDirectory, dispose } = await createEnabledManager();
+    try {
+      const capturing = manager.captureWindow(77);
+      const assertion = expect(capturing).rejects.toThrow(
+        "AppSnap stopped listening while a request was in flight.",
+      );
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+      await manager.setEnabled(false);
+      await assertion;
+
+      const orphanedPickerPath = join(captureDirectory, `appsnap-${requestId}.png`);
+      writeFileSync(
+        orphanedPickerPath,
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]),
+      );
+      manager.dispose();
+
+      const restoredManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+      });
+      expect(await restoredManager.listPendingCaptures()).toHaveLength(0);
+      expect(FS.existsSync(orphanedPickerPath)).toBe(false);
+      restoredManager.dispose();
+    } finally {
+      dispose();
+    }
+  });
+
+  it("recovers an unacknowledged request-driven capture after a manager restart", async () => {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-request-restart-"));
+    const firstCheckChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(firstCheckChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const firstManager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    try {
+      const enable = firstManager.setEnabled(true);
+      await flushPromises();
+      firstCheckChild.stdout.end(
+        `${JSON.stringify({
+          type: "permissions",
+          inputMonitoring: "granted",
+          screenRecording: "granted",
+        })}\n`,
+      );
+      firstCheckChild.stderr.end();
+      firstCheckChild.emit("close", 0, null);
+      await enable;
+
+      const capturing = firstManager.captureWindow(77);
+      await flushPromises();
+      const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+      const capturePath = join(captureDirectory, "req-capture.png");
+      const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+      writeFileSync(capturePath, captureBytes);
+      watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "captured",
+          id: requestId,
+          path: capturePath,
+          name: "req-capture.png",
+          sourceAppName: "Safari",
+        })}\n`,
+      );
+      const capture = await capturing;
+      firstManager.dispose();
+
+      const restoredManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        spawn,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+      });
+      const restored = await restoredManager.listPendingCaptures();
+      expect(restored).toHaveLength(1);
+      expect(restored[0]).toMatchObject({
+        id: requestId,
+        name: "req-capture.png",
+        sourceAppName: "Safari",
+      });
+      expect(Buffer.from(restored[0]!.bytes)).toEqual(captureBytes);
+
+      await restoredManager.acknowledgeCapture(capture.id);
+      expect(await restoredManager.listPendingCaptures()).toHaveLength(0);
+      restoredManager.dispose();
+
+      const finalManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        spawn,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+      });
+      expect(await finalManager.listPendingCaptures()).toHaveLength(0);
+      finalManager.dispose();
+    } finally {
+      firstManager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
   });
 });

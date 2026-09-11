@@ -186,6 +186,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     listPendingCaptures: () => ipcRenderer.invoke(IPC.appSnap.listPendingCaptures),
     acknowledgeCapture: (captureId) =>
       ipcRenderer.invoke(IPC.appSnap.acknowledgeCapture, captureId),
+    listWindows: () => ipcRenderer.invoke(IPC.appSnap.listWindows),
+    captureWindow: (input) => ipcRenderer.invoke(IPC.appSnap.captureWindow, input),
     onCaptured: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
         if (typeof capture !== "object" || capture === null) return;

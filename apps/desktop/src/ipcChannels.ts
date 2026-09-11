@@ -52,6 +52,8 @@ export const DESKTOP_IPC_CHANNELS = {
     requestPermissions: "desktop:appsnap-request-permissions",
     listPendingCaptures: "desktop:appsnap-list-pending-captures",
     acknowledgeCapture: "desktop:appsnap-acknowledge-capture",
+    listWindows: "desktop:appsnap-list-windows",
+    captureWindow: "desktop:appsnap-capture-window",
     captured: "desktop:appsnap-captured",
     error: "desktop:appsnap-error",
     state: "desktop:appsnap-state",
