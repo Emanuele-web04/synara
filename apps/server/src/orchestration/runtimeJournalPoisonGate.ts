@@ -21,7 +21,11 @@
  * @module runtimeJournalPoisonGate
  */
 
-export const RUNTIME_JOURNAL_POISON_DRAIN_LIMIT = 240;
+// The drain loop backs off exponentially (up to ~2s per attempt) on a blocked
+// head, so attempts now arrive at a bounded cadence rather than per incoming
+// event. 40 attempts ≈ ~70s at steady cadence — with the 60s wall-clock floor
+// the dead-letter lands in roughly the same window as before the backoff.
+export const RUNTIME_JOURNAL_POISON_DRAIN_LIMIT = 40;
 export const RUNTIME_JOURNAL_POISON_MIN_BLOCKED_MS = 60_000;
 
 export interface RuntimeJournalPoisonGate {

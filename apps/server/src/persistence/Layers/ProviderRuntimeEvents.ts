@@ -166,9 +166,9 @@ const make = Effect.gen(function* () {
               event_id, thread_id, turn_id, lifecycle_generation, event_type,
               event_json, persisted_at
             ) VALUES (
-              ${event.eventId}, ${event.threadId}, ${event.turnId ?? null},
-              ${event.lifecycleGeneration ?? null},
-              ${event.type}, ${eventJson}, ${new Date().toISOString()}
+              ${persistedEvent.eventId}, ${persistedEvent.threadId}, ${persistedEvent.turnId ?? null},
+              ${persistedEvent.lifecycleGeneration ?? null},
+              ${persistedEvent.type}, ${eventJson}, ${new Date().toISOString()}
             )
             ON CONFLICT(event_id) DO NOTHING
             RETURNING sequence
@@ -180,7 +180,7 @@ const make = Effect.gen(function* () {
             const existing = yield* sql<Record<string, unknown>>`
               SELECT sequence, event_json AS "eventJson"
               FROM provider_runtime_events
-              WHERE event_id = ${event.eventId}
+              WHERE event_id = ${persistedEvent.eventId}
           `;
             return { inserted: false as const, row: existing[0] };
           }),
@@ -197,7 +197,7 @@ const make = Effect.gen(function* () {
       if (persisted.eventJson !== eventJson) {
         return yield* new PersistenceDecodeError({
           operation: "ProviderRuntimeEvent.append",
-          issue: `Provider event '${event.eventId}' was reused with different content.`,
+          issue: `Provider event '${persistedEvent.eventId}' was reused with different content.`,
         });
       }
       return {
