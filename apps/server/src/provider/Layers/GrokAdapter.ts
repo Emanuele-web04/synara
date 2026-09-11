@@ -24,6 +24,7 @@ import {
 import {
   getDefaultEffort,
   getModelCapabilities,
+  humanizeModelSlug,
   normalizeGrokModelOptions,
 } from "@synara/shared/model";
 import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
@@ -451,7 +452,7 @@ function formatGrokModelName(slug: string): string {
   if (slug === "grok-build") {
     return "Grok 4.3";
   }
-  return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return humanizeModelSlug(slug);
 }
 
 function isGrokBuildApiModelSlug(slug: string): boolean {
