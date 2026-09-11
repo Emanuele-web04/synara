@@ -2352,6 +2352,57 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.message.user.bind-turn": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (message.turnId === command.turnId) {
+        return [];
+      }
+      if (message.turnId !== null && message.turnId !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' is already bound to turn '${message.turnId}'.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: message.id,
+          role: "user",
+          text: message.text,
+          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+          ...(message.skills !== undefined ? { skills: message.skills } : {}),
+          ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+          ...(message.dispatchMode !== undefined ? { dispatchMode: message.dispatchMode } : {}),
+          ...(message.dispatchOrigin !== undefined
+            ? { dispatchOrigin: message.dispatchOrigin }
+            : {}),
+          turnId: command.turnId,
+          streaming: false,
+          source: message.source,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        },
+      };
+    }
+
     case "thread.proposed-plan.upsert": {
       yield* requireThread({
         readModel,
