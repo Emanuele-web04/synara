@@ -31,6 +31,15 @@ export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
+/**
+ * How long a turn may sit silent while the live runtime still claims it is
+ * running before agreement stops suppressing settlement. Matches the longest
+ * adapter-level wedge fuse (Devin's 6h silent tool-call bound): any turn that
+ * reaches this clock belongs to an adapter with no stall detection of its own,
+ * and a live `running` claim is then more likely a wedge than a blocking call.
+ */
+export const RUNTIME_RECONCILIATION_AGREEMENT_SETTLE_MS = 6 * 60 * 60_000;
+
 export type ProviderRuntimeReconciliationPlan =
   | {
       readonly action: "align-running-turn";
@@ -242,19 +251,28 @@ export function planProviderRuntimeReconciliation(input: {
       // watch, wait-for-thread) legitimately emits nothing for longer than
       // maxTurnAgeMs, and settling here manufactures an interruption plus a
       // respawn the work never needed. The provider adapter owns real wedge
-      // detection for its own process; this layer only fixes divergence.
-      if (liveTurnId === projectedTurnId) continue;
-      plans.push({
-        action: "align-running-turn",
-        threadId: thread.id,
-        provider,
-        projectedTurnId,
-        runtimeTurnId: liveTurnId,
-        reason:
-          `The live provider owns turn '${liveTurnId}', while the projection still points to ` +
-          `'${projectedTurnId ?? "none"}'.${detail}`,
-      });
-      continue;
+      // detection for its own process; this layer only fixes divergence. Past
+      // the agreement bound, though, a still-agreeing `running` claim belongs
+      // to an adapter with no fuse of its own — the evidence flips from
+      // "probably blocking" to "probably wedged", and the projection settles.
+      const agreementExpired =
+        lifecycleAgeMs >= RUNTIME_RECONCILIATION_AGREEMENT_SETTLE_MS &&
+        threadActivityAgeMs(thread, input.nowMs) >= RUNTIME_RECONCILIATION_AGREEMENT_SETTLE_MS;
+      if (liveTurnId === projectedTurnId) {
+        if (!agreementExpired) continue;
+      } else {
+        plans.push({
+          action: "align-running-turn",
+          threadId: thread.id,
+          provider,
+          projectedTurnId,
+          runtimeTurnId: liveTurnId,
+          reason:
+            `The live provider owns turn '${liveTurnId}', while the projection still points to ` +
+            `'${projectedTurnId ?? "none"}'.${detail}`,
+        });
+        continue;
+      }
     }
 
     // Every plan below settles the projection on the absence of runtime
