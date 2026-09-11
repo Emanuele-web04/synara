@@ -238,13 +238,18 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  * call because the hook is installed globally with `matcher: "*"` (#490).
  * "ask" preserves the permission flow the user would have without the hook.
  *
- * PreInvocation fires immediately before an LLM invocation and is a veto
- * point with the same decision semantics: an empty object is treated as a
- * denial that aborts the invocation. The CLI raises a PreInvocation for the
- * subagent's first model call when the parent agent invokes a subagent, so
- * `{}` there denies the subagent launch and the parent CLI exits with code 1
- * ("Antigravity CLI exited with code 1."). Synara-managed sessions spawn
- * subagents deliberately, so pre-invocation must answer "allow".
+ * PreInvocation does NOT share those decision semantics. The CLI decodes its
+ * hook output with protojson into a message that has no `decision` field, so
+ * any decision fails to unmarshal:
+ *
+ *   prehooks.go:43] failed to call custom pre-invocation hook
+ *   jsonhook__synara-capture_PreInvocation_0_0: ... via protojson:
+ *   {"decision":"allow"}: proto: (line 1:2): unknown field "decision"
+ *
+ * A failed PreInvocation aborts the invocation it gates and the parent CLI
+ * exits with code 1 ("Antigravity CLI exited with code 1."), which surfaces in
+ * Synara as a failed turn even though the assistant reply already streamed in.
+ * `{}` is the neutral answer that lets the invocation proceed.
  *
  * `{}` stays correct for the other hook points, including Stop, where an
  * inactive hook must not force a decision over Antigravity's default.
@@ -257,7 +262,6 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  */
 function inactiveHookOutput(event: string): string {
   if (event === "pre-tool") return '{"decision":"ask"}';
-  if (event === "pre-invocation") return '{"decision":"allow"}';
   return "{}";
 }
 
@@ -293,16 +297,10 @@ process.stdin.on("end", () => {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
   if (!target) {
     // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry a
-    // decision or Antigravity denies the tool call with an empty reason, and
-    // PreInvocation must carry "allow" or the subagent launch it gates is
-    // denied and the parent CLI exits with code 1.
-    process.stdout.write(
-      (event === "pre-tool"
-        ? '{"decision":"ask"}'
-        : event === "pre-invocation"
-          ? '{"decision":"allow"}'
-          : "{}") + "\\n",
-    );
+    // decision or Antigravity denies the tool call with an empty reason.
+    // Every other hook point stays neutral with an empty object, including
+    // PreInvocation, whose output has no decision field to carry.
+    process.stdout.write((event === "pre-tool" ? '{"decision":"ask"}' : "{}") + "\\n");
     return;
   }
   let capturedPayload = payload.trim();
@@ -350,15 +348,14 @@ process.stdin.on("end", () => {
   if (event === "pre-tool") {
     const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
-  } else if (event === "pre-invocation") {
-    // PreInvocation vetoes the upcoming LLM invocation; Synara-managed
-    // sessions run subagents deliberately, so never block them here. An
-    // empty object would deny the launch and the parent CLI exits 1.
-    process.stdout.write('{"decision":"allow"}\\n');
   } else {
-    // Stop and other non-tool hooks: empty object allows the agent to exit.
-    // Do not emit decision:"stop" — it is not a recognized stop decision and
-    // can hang the print process after the reply is already visible (#465).
+    // PreInvocation, Stop and the other non-tool hooks: an empty object is the
+    // neutral answer. PreInvocation output is decoded by protojson into a
+    // message with no decision field, so emitting one fails to unmarshal,
+    // aborts the invocation and makes the parent CLI exit 1.
+    // Stop likewise stays neutral: do not emit decision:"stop" — it is not a
+    // recognized stop decision and can hang the print process after the reply
+    // is already visible (#465).
     process.stdout.write("{}\\n");
   }
 });
