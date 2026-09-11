@@ -1261,7 +1261,11 @@ describe("CheckpointReactor", () => {
     ]);
   });
 
-  it("appends capture failure activity when turn diff summary cannot be derived", async () => {
+  it("captures a partial checkpoint without failure activity when the turn start was never observed", async () => {
+    // Resumed sessions and turns that started outside this process emit
+    // turn.completed without a preceding turn.started, so no baseline can ever
+    // have been captured. The completion still records a checkpoint marked
+    // "missing" but must not surface a per-turn error activity.
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
 
@@ -1291,6 +1295,71 @@ describe("CheckpointReactor", () => {
       createdAt: new Date().toISOString(),
       threadId: ThreadId.makeUnsafe("thread-1"),
       turnId: asTurnId("turn-missing-baseline"),
+      payload: { state: "completed" },
+    });
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.activities.some((activity) => activity.kind === "checkpoint.captured"),
+    );
+
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(thread.checkpoints[0]?.status).toBe("missing");
+    expect(
+      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(false);
+  });
+
+  it("appends capture failure activity when an observed turn loses its baseline", async () => {
+    // turn.started ran against a git workspace, so a baseline was expected:
+    // deleting the ref before turn.completed is a real anomaly and still
+    // surfaces the failure activity.
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-observed-missing-baseline");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-observed-missing-baseline"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-observed-missing-baseline"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
+    const turnStartRef = checkpointRefForThreadTurnStart(threadId, turnId);
+    await waitForGitRefExists(harness.cwd, turnStartRef);
+    runGit(harness.cwd, ["update-ref", "-d", turnStartRef]);
+    expect(gitRefExists(harness.cwd, turnStartRef)).toBe(false);
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-observed-missing-baseline"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
       payload: { state: "completed" },
     });
 

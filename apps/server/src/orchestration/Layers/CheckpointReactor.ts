@@ -147,6 +147,12 @@ const make = Effect.gen(function* () {
   // repo mid-turn, so the completion capture finds no turn-start baseline. That
   // is expected for such turns and must not surface as a capture failure.
   const turnsStartedWithoutGitWorkspace = new Map<ThreadId, TurnId>();
+  // Turns whose pre-turn baseline capture ran against a usable git workspace in
+  // this process. A missing baseline at turn completion is only a real anomaly
+  // for these; resumed sessions, agent-dispatched turns, and turns whose
+  // turn.started raced the thread projection legitimately have none, so
+  // reporting each of their completions as a failure would be noise.
+  const turnsWithBaselineCaptureAttempt = new Map<ThreadId, TurnId>();
 
   // Providers that stream their own unified diff (e.g. Codex) update the live
   // turn diff through ProviderRuntimeIngestion. For providers without that
@@ -393,6 +399,35 @@ const make = Effect.gen(function* () {
     return workspace?.isGitRepository ? workspace.cwd : undefined;
   });
 
+  // Lazily aliases the message-start baseline onto the turn-start ref when the
+  // runtime turn.started path never captured one. message-start snapshots are
+  // taken before the provider executes, so the copy is still a true pre-turn
+  // baseline — unlike any capture attempted at or after turn completion.
+  const recoverTurnStartBaselineFromMessageStart = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly thread: {
+      readonly messages: ReadonlyArray<{
+        readonly id: MessageId;
+        readonly role: string;
+        readonly turnId: TurnId | null;
+      }>;
+    };
+    readonly cwd: string;
+  }) {
+    const userMessageId = input.thread.messages.find(
+      (entry) => entry.role === "user" && entry.turnId === input.turnId,
+    )?.id;
+    if (userMessageId === undefined) {
+      return false;
+    }
+    return yield* checkpointStore.copyCheckpointRef({
+      cwd: input.cwd,
+      fromCheckpointRef: checkpointRefForThreadMessageStart(input.threadId, userMessageId),
+      toCheckpointRef: checkpointRefForThreadTurnStart(input.threadId, input.turnId),
+    });
+  });
+
   // Shared tail for both capture paths: creates the git checkpoint ref, diffs
   // it against the previous turn, then dispatches the domain events to update
   // the orchestration read model.
@@ -414,18 +449,35 @@ const make = Effect.gen(function* () {
     // The workspace only became a git repository while this turn ran, so no
     // turn-start baseline could have been captured.
     readonly workspaceInitializedDuringTurn: boolean;
+    // This process saw the turn start on a usable git workspace, so a baseline
+    // was expected to be captured. Turns that started outside this process
+    // (resumed sessions, projection races, agent dispatches without a
+    // resolvable workspace) never had one, which is not an anomaly.
+    readonly baselineCaptureObserved: boolean;
   }) {
     const fromCheckpointRef = checkpointRefForThreadTurnStart(input.threadId, input.turnId);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
 
-    const fromCheckpointExists = yield* checkpointStore.hasCheckpointRef({
+    let fromCheckpointExists = yield* checkpointStore.hasCheckpointRef({
       cwd: input.cwd,
       checkpointRef: fromCheckpointRef,
     });
     if (!fromCheckpointExists) {
-      if (input.workspaceInitializedDuringTurn) {
+      fromCheckpointExists = yield* recoverTurnStartBaselineFromMessageStart({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        thread: input.thread,
+        cwd: input.cwd,
+      });
+    }
+    const baselineAbsenceIsExpected =
+      input.workspaceInitializedDuringTurn || !input.baselineCaptureObserved;
+    if (!fromCheckpointExists) {
+      if (baselineAbsenceIsExpected) {
         yield* Effect.logDebug(
-          "checkpoint capture has no pre-turn baseline: workspace became a git repository during the turn",
+          input.workspaceInitializedDuringTurn
+            ? "checkpoint capture has no pre-turn baseline: workspace became a git repository during the turn"
+            : "checkpoint capture has no pre-turn baseline: turn start was not observed in this process",
           {
             threadId: input.threadId,
             turnId: input.turnId,
@@ -480,7 +532,7 @@ const make = Effect.gen(function* () {
               }).pipe(Effect.as([])),
             ),
           )
-      : input.workspaceInitializedDuringTurn
+      : baselineAbsenceIsExpected
         ? []
         : yield* appendCaptureFailureActivity({
             threadId: input.threadId,
@@ -658,6 +710,8 @@ const make = Effect.gen(function* () {
     const workspaceInitializedDuringTurn =
       turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
     turnsStartedWithoutGitWorkspace.delete(thread.id);
+    const baselineCaptureObserved = turnsWithBaselineCaptureAttempt.get(thread.id) === turnId;
+    turnsWithBaselineCaptureAttempt.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
       threadId: thread.id,
@@ -669,6 +723,7 @@ const make = Effect.gen(function* () {
       assistantMessageId: undefined,
       createdAt: event.createdAt,
       workspaceInitializedDuringTurn,
+      baselineCaptureObserved,
     });
   });
 
@@ -720,10 +775,20 @@ const make = Effect.gen(function* () {
     }
 
     const fromCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
-    const baselineExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: checkpointCwd,
-      checkpointRef: fromCheckpointRef,
-    });
+    const baselineExists =
+      (yield* checkpointStore.hasCheckpointRef({
+        cwd: checkpointCwd,
+        checkpointRef: fromCheckpointRef,
+      })) ||
+      // The turn-start baseline may legitimately be absent when turn.started
+      // raced the thread projection; the message-start ref is still a true
+      // pre-turn snapshot, so alias it lazily instead of skipping the preview.
+      (yield* recoverTurnStartBaselineFromMessageStart({
+        threadId: thread.id,
+        turnId,
+        thread,
+        cwd: checkpointCwd,
+      }));
     if (!baselineExists) {
       // No baseline yet: the terminal capture on turn.completed still produces
       // the authoritative diff, so skip the live preview rather than guess.
@@ -841,6 +906,10 @@ const make = Effect.gen(function* () {
       return;
     }
     turnsStartedWithoutGitWorkspace.delete(thread.id);
+    // Recorded before the capture below: a baseline that is still missing at
+    // turn completion despite this attempt is a real anomaly worth surfacing,
+    // unlike turns this process never saw start.
+    turnsWithBaselineCaptureAttempt.set(thread.id, turnId);
     const checkpointCwd = workspace.cwd;
 
     const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
