@@ -667,6 +667,36 @@ it("rejects a send to a turn whose interrupt is pending while still committing",
   });
 });
 
+it("starts a new turn instead of steering into an untracked draining run", async () => {
+  responses("success", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const session = captured.sessions[0]!;
+    // Simulate the drain tail: the turn is complete but the SDK still reports
+    // streaming (queued continuations draining after prompt() resolved).
+    const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const realPrompt = session.prompt.bind(session);
+    const promptSpy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      // prompt() must see the real flag — only the adapter's check is mocked.
+      streamingSpy.mockRestore();
+      return realPrompt(text, options);
+    });
+    const second = await Effect.runPromise(
+      adapter.steerTurn!({ threadId, input: "Fresh turn during drain tail" }),
+    );
+    expect(second.turnId).not.toBe(turn.turnId);
+    expect(steerSpy).not.toHaveBeenCalled();
+    expect(promptSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(completions(events)[1]).toMatchObject({
+      turnId: second.turnId,
+      payload: { state: "completed" },
+    });
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
   const calls = responses("success", "overflow", "success", "success");
   await withAdapter(async (adapter, events) => {

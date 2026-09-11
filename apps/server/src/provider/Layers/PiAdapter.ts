@@ -2846,17 +2846,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             });
           }
           const providerText = buildProviderText(context, payload.text);
-          const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
-          if (!context.activeTurnId) {
+          const joinedTurnId = context.activeTurnId;
+          const turnId = joinedTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+          if (joinedTurnId === undefined) {
             context.activeTurnId = turnId;
             context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
           }
           if (
-            context.runtime.session.isStreaming ||
-            context.promptCommitting === context.activeTurnId
+            joinedTurnId !== undefined &&
+            (context.runtime.session.isStreaming || context.promptCommitting === joinedTurnId)
           ) {
             yield* steerPiTurn(context, providerText, payload.images);
           } else {
+            // Fresh turn while an untracked run drains: startPrompt's
+            // streamingBehavior:"followUp" queues it behind the run and its own
+            // prompt() promise completes this turn — steer() would orphan it.
             startPrompt(context, turnId, providerText, payload.images);
           }
           return dispatchResult(context, turnId);
