@@ -81,9 +81,20 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
       ),
     );
 
+  const deleteAcceptedBefore: OrchestrationCommandReceiptRepositoryShape["deleteAcceptedBefore"] = (
+    input,
+  ) =>
+    sql`DELETE FROM orchestration_command_receipts WHERE accepted_at < ${input.before} RETURNING command_id`.pipe(
+      Effect.map((rows) => rows.length),
+      Effect.mapError(
+        toPersistenceSqlError("OrchestrationCommandReceiptRepository.deleteAcceptedBefore:query"),
+      ),
+    );
+
   return {
     insert,
     getByCommandId,
+    deleteAcceptedBefore,
   } satisfies OrchestrationCommandReceiptRepositoryShape;
 });
 

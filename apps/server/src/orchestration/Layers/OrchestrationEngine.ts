@@ -104,6 +104,13 @@ const ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS = 300_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
 /** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
 const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
+/**
+ * Receipts answer same-commandId retries, which can only arrive while the
+ * original caller is still holding the command open. Thirty days exceeds any
+ * plausible retry window by orders of magnitude, and bounds a table that
+ * otherwise accrues one row per dispatched command forever.
+ */
+const COMMAND_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
 /**
@@ -1149,6 +1156,30 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
   lastPublishedSequence = yield* eventStore.getHighWaterSequence();
+
+  // Receipts exist only to answer same-id retries; a row past every plausible
+  // retry window is dead weight that otherwise grows unbounded (one row per
+  // dispatched command, forever). One sweep per boot is enough — nothing can
+  // age in between.
+  yield* commandReceiptRepository
+    .deleteAcceptedBefore({
+      before: new Date(Date.now() - COMMAND_RECEIPT_RETENTION_MS).toISOString(),
+    })
+    .pipe(
+      Effect.tap((deleted) =>
+        deleted > 0
+          ? Effect.log("swept expired orchestration command receipts").pipe(
+              Effect.annotateLogs({ deleted }),
+            )
+          : Effect.void,
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("orchestration command receipt sweep failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.forkScoped,
+    );
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
