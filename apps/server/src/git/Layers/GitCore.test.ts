@@ -377,6 +377,24 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("accepts an untracked patch when Git emits a line-ending warning", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.autocrlf", "true"]);
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "first line\nsecond line\n");
+
+        const stats = yield* core.readDiffStats(tmp, "unstaged");
+        const result = yield* core.readUnstagedPatch(tmp);
+
+        expect(stats).toEqual({ additions: 2, deletions: 0, fileCount: 1 });
+        expect(result.truncated).toBe(false);
+        expect(result.patch).toContain("diff --git a/untracked.txt b/untracked.txt");
+        expect(result.patch).toContain("+first line");
+      }),
+    );
+
     it.effect("keeps an ignored renamed symbolic link as a link in ref comparisons", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;

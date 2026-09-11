@@ -413,6 +413,13 @@ function createGitCommandError(
   });
 }
 
+function isSuccessfulNoIndexDiff(result: ExecuteGitResult): boolean {
+  // `--no-index` uses code 1 both for a normal difference and for some read errors.
+  // A produced diff record distinguishes the normal case. Stderr is not decisive because
+  // Git may emit advisory warnings (for example, line-ending conversion) alongside it.
+  return result.code === 0 || (result.code === 1 && result.stdout.length > 0);
+}
+
 const DIRTY_WORKTREE_PATTERN =
   /Your local changes to the following files would be overwritten by (?:checkout|merge):\s*([\s\S]*?)Please commit your changes or stash them/;
 const UNTRACKED_OVERWRITE_PATTERN =
@@ -1804,10 +1811,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 outputMode: "truncate",
               });
               const stderr = result.stderr.trim();
-              if (
-                result.code !== 0 &&
-                !(result.code === 1 && stderr.length === 0 && result.stdout.length > 0)
-              ) {
+              if (!isSuccessfulNoIndexDiff(result)) {
                 return yield* createGitCommandError(
                   operation,
                   cwd,
@@ -1833,7 +1837,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     // `git diff --no-index` exits 1 both when it found differences (the expected
     // outcome for an untracked file vs /dev/null) and when it could not read the
     // path (e.g. the file vanished between `ls-files` and the diff). Only the former
-    // may be treated as success: it produces a numstat record and no stderr.
+    // may be treated as success: it produces a numstat record.
     const readUntrackedNumstats = (
       cwd: string,
       operationPrefix: string,
@@ -1855,10 +1859,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               }).pipe(
                 Effect.flatMap((result) => {
                   const stderr = result.stderr.trim();
-                  if (
-                    result.code === 0 ||
-                    (result.code === 1 && stderr.length === 0 && result.stdout.length > 0)
-                  ) {
+                  if (isSuccessfulNoIndexDiff(result)) {
                     return Effect.succeed(result.stdout);
                   }
                   return Effect.fail(
