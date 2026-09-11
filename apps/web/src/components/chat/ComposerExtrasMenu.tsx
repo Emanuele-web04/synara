@@ -35,6 +35,7 @@ import {
 } from "../ui/menu";
 
 const APP_SNAP_MAX_WINDOWS_HEIGHT_CLASS = "max-h-80 overflow-y-auto";
+const APP_SNAP_WINDOW_LIST_ATTEMPT_LIMIT = 2;
 
 function appSnapUnavailableMessage(state: DesktopAppSnapState): string {
   if (!state.enabled || state.status === "disabled") return "Enable AppSnap in Settings";
@@ -98,22 +99,28 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
 
     let disposed = false;
     let listedForReadyState = false;
+    let windowListAttempts = 0;
 
     const applyState = (state: DesktopAppSnapState) => {
       if (disposed) return;
       setAppSnapState(state);
-      setAppSnapError(null);
 
       if (state.status !== "ready") {
         listedForReadyState = false;
+        windowListAttempts = 0;
         appSnapRequestIdRef.current += 1;
+        setAppSnapError(null);
         setAppSnapWindows([]);
         return;
       }
-      if (listedForReadyState) return;
+      if (listedForReadyState || windowListAttempts >= APP_SNAP_WINDOW_LIST_ATTEMPT_LIMIT) {
+        return;
+      }
       listedForReadyState = true;
+      windowListAttempts += 1;
 
       const requestId = ++appSnapRequestIdRef.current;
+      setAppSnapError(null);
       setAppSnapWindows(null);
       void appSnapBridge
         .listWindows()
@@ -124,6 +131,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
         })
         .catch((error) => {
           if (!disposed && appSnapRequestIdRef.current === requestId) {
+            listedForReadyState = false;
             setAppSnapError(error instanceof Error ? error.message : "Could not list windows.");
           }
         });

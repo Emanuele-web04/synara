@@ -332,4 +332,68 @@ describe("ComposerExtrasMenu", () => {
     await menu.cleanup();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
+
+  it("retries a failed window list once on a later ready state", async () => {
+    let emitState: ((state: DesktopAppSnapState) => void) | undefined;
+    const listWindows = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Could not list windows."))
+      .mockResolvedValueOnce([
+        {
+          windowId: 42,
+          appName: "Ghostty",
+          bundleIdentifier: "com.mitchellh.ghostty",
+          windowTitle: "dev",
+          appIconDataUrl: null,
+        },
+      ]);
+    setDesktopBridge(
+      appSnapBridge({
+        listWindows,
+        onState: (listener) => {
+          emitState = listener;
+          return () => undefined;
+        },
+      }),
+    );
+    await using _ = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+    await page.getByText("Attach window").click();
+    await expect.element(page.getByText("Could not list windows.")).toBeVisible();
+
+    emitState?.(READY_STATE);
+
+    await expect.element(page.getByText("Ghostty")).toBeVisible();
+    expect(listWindows).toHaveBeenCalledTimes(2);
+    emitState?.(READY_STATE);
+    expect(listWindows).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the list error after the bounded ready-state retry is exhausted", async () => {
+    let emitState: ((state: DesktopAppSnapState) => void) | undefined;
+    const listWindows = vi.fn(() => Promise.reject(new Error("Could not list windows.")));
+    setDesktopBridge(
+      appSnapBridge({
+        listWindows,
+        onState: (listener) => {
+          emitState = listener;
+          return () => undefined;
+        },
+      }),
+    );
+    await using _ = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+    await page.getByText("Attach window").click();
+    await expect.element(page.getByText("Could not list windows.")).toBeVisible();
+
+    emitState?.(READY_STATE);
+    await vi.waitFor(() => expect(listWindows).toHaveBeenCalledTimes(2));
+    await expect.element(page.getByText("Could not list windows.")).toBeVisible();
+
+    emitState?.(READY_STATE);
+    expect(listWindows).toHaveBeenCalledTimes(2);
+    await expect.element(page.getByText("Could not list windows.")).toBeVisible();
+  });
 });
