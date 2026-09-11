@@ -484,6 +484,8 @@ function makeHarnessLayer(
   const eventStoreLayer = Layer.succeed(OrchestrationEventStore, {
     append: () => Effect.die("append is not used by the gateway harness"),
     getHighWaterSequence: () => Effect.succeed(0),
+    getLowWaterSequence: () => Effect.succeed(0),
+    pruneThroughSequence: () => Effect.succeed(0),
     getThreadHighWaterSequence: (threadId: string) =>
       Effect.succeed(
         Math.max(
