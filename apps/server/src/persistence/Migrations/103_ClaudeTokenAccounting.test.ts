@@ -27,16 +27,23 @@ it.layer(NodeSqliteClient.layerMemory())("Claude accounting migration", (it) => 
             output_tokens: 59,
           },
         ],
+        ["tail-empty", "claudeAgent", {}],
         ["other", "codex", { input_tokens: 999 }],
         ["missing", "claudeAgent", undefined],
       ] as const) {
         yield* sql`
           INSERT INTO provider_runtime_events
             (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
-          VALUES (${id}, 'root', ${id === "first" || id === "final" ? "turn" : id},
+          VALUES (${id}, 'root',
+            ${id === "first" || id === "final" || id === "tail-empty" ? "turn" : id},
             'turn.completed', ${JSON.stringify({ provider, payload: { usage } })}, '2026-09-10')
         `;
       }
+      yield* sql`
+        INSERT INTO provider_runtime_events
+          (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
+        VALUES ('malformed', 'root', 'malformed', 'turn.completed', 'not-json', '2026-09-10')
+      `;
       const journal = yield* sql`SELECT * FROM provider_runtime_events`;
       yield* migration;
       yield* migration;

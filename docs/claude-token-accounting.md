@@ -19,11 +19,19 @@ corrections; missing or zeroed error results retain the observed estimate.
 | SDK `result.modelUsage`               | Cumulative query-pipeline usage, including subagents and compaction |
 | Projected `turn.completed.modelUsage` | Difference from the preceding native result                         |
 
-Compact projected `inputTokens` already includes cache reads and writes.
-`thinkingTokens` is already included in output. Neither subset is added twice.
+The SDK's raw per-model shape has no `totalTokens`: its four disjoint counters
+are uncached `inputTokens`, `cacheReadInputTokens`,
+`cacheCreationInputTokens`, and `outputTokens`. `thinkingTokens` is already
+included in output. The compact projected shape adds those counters once,
+stores that value as `totalTokens`, and folds both cache counters into its
+`inputTokens`. Profile Stats accepts both shapes: an explicit positive total is
+authoritative for compact rows; otherwise it sums the four raw SDK counters.
+This prevents cache and thinking tokens from being added twice.
+
 Profile Stats uses versioned completed model totals, counts mirrored children
-only through the parent, and attributes usage to the completion date. Interrupted
-turns without a usable model breakdown fall back to observed main-loop usage.
+only through the parent, and attributes usage to the completion date. Completed
+turns without any usable positive model row fall back to verified main-loop
+usage, including when a malformed nonempty breakdown is present.
 
 ## Historical limits
 
@@ -45,6 +53,13 @@ against a matching database/WAL backup, bind requests to native sessions and
 turns, deduplicate copied requests across files, and distinguish process resets
 from continuation. It must store provenance and uncovered ranges separately;
 neither dividing old counters by two nor summing old modelUsage is a repair.
+
+## Migration lineage
+
+Migration 101 removes transcript markers, migration 102 adds persisted message
+turn boundaries, and Claude accounting follows them at migration 103. Keep the
+numeric `migrationEntries` values literal because the lineage checker parses
+that source.
 
 ## Input and cache behavior
 

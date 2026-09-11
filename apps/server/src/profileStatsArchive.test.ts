@@ -414,7 +414,15 @@ describe("ProfileStatsArchive", () => {
               provider: "claudeAgent",
               tokenAccountingVersion: 1,
               modelUsage: {
-                "claude-fable-5": { totalTokens: 1000, inputTokens: 900, outputTokens: 100 },
+                "claude-fable-5": {
+                  inputTokens: 100,
+                  outputTokens: 40,
+                  cacheReadInputTokens: 800,
+                  cacheCreationInputTokens: 60,
+                  costUSD: 0.01,
+                  contextWindow: 200_000,
+                  maxOutputTokens: 32_000,
+                },
               },
             },
           ],

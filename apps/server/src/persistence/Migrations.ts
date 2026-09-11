@@ -236,6 +236,7 @@ export const migrationEntries = [
   [100, "MessageTextChunks", Migration0100],
   [101, "RemoveTranscriptMarkers", Migration0101],
   [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
+  // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
 ] as const;
 

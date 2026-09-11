@@ -95,13 +95,24 @@ describe("ProfileStatsQuery", () => {
           mainLoopTokens: 27_326,
           modelUsage: {
             "claude-fable-5": {
-              inputTokens: 27_267,
+              inputTokens: 32,
               outputTokens: 59,
-              totalTokens: 27_326,
               cacheReadInputTokens: 26_816,
               cacheCreationInputTokens: 419,
+              webSearchRequests: 0,
+              costUSD: 0.031,
+              contextWindow: 200_000,
+              maxOutputTokens: 32_000,
             },
-            "claude-opus-4-8": { inputTokens: 900, outputTokens: 100, totalTokens: 1_000 },
+            "claude-opus-4-8": {
+              inputTokens: 900,
+              outputTokens: 100,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              costUSD: 0.02,
+              contextWindow: 200_000,
+              maxOutputTokens: 32_000,
+            },
           },
         };
         yield* addActivity("1", "root", "first", versioned);
@@ -109,6 +120,28 @@ describe("ProfileStatsQuery", () => {
         yield* addActivity("3", "child", "mirrored", versioned);
         yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
         yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
+        // An earlier private build emitted a compact shape whose input already
+        // included cache tokens. Its explicit total remains authoritative.
+        yield* addActivity("6", "root", "compact", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 1_000,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 900,
+              outputTokens: 100,
+              totalTokens: 1_000,
+              cacheReadInputTokens: 800,
+              cacheCreationInputTokens: 60,
+            },
+          },
+        });
+        // A malformed nonempty breakdown must not suppress the verified
+        // main-loop fallback or make SQLite JSON functions fail.
+        yield* addActivity("7", "root", "fallback", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 250,
+          modelUsage: { "claude-fable-5": "unusable" },
+        });
         // Successful main-loop usage survives even though old compact model totals
         // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
@@ -144,9 +177,9 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(55_652);
+        expect(result.lifetimeTotalTokens).toBe(56_902);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 54_652 },
+          { model: "claude-fable-5", tokens: 55_902 },
           { model: "claude-opus-4-8", tokens: 1_000 },
         ]);
       }),
