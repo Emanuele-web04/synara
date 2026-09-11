@@ -56,6 +56,7 @@ function resolveHold(overrides: {
   session?: Thread["session"] | null;
   messages?: readonly ChatMessage[];
   queuedTurnCount?: number;
+  threadError?: string | null;
   now?: number;
 }): boolean {
   return resolveQueuedComposerAutoDispatchHold({
@@ -70,7 +71,7 @@ function resolveHold(overrides: {
     hasPendingProgress: false,
     hasPendingUserInput: false,
     queuedTurnCount: overrides.queuedTurnCount ?? 1,
-    threadError: null,
+    threadError: overrides.threadError ?? null,
     ...(overrides.now === undefined ? {} : { now: overrides.now }),
   });
 }
@@ -82,6 +83,7 @@ describe("shouldHoldQueuedComposerAutoDispatch", () => {
     isSendBusy: false,
     isConnecting: false,
     isAwaitingTurnStart: false,
+    hasThreadError: false,
     queuedSteerGate: null,
     hasPendingApproval: false,
     hasPendingProgress: false,
@@ -99,6 +101,15 @@ describe("shouldHoldQueuedComposerAutoDispatch", () => {
         ...idleRelease,
         isSendBusy: false,
         isAwaitingTurnStart: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("holds a failed queue head until an explicit retry clears the thread error", () => {
+    expect(
+      shouldHoldQueuedComposerAutoDispatch({
+        ...idleRelease,
+        hasThreadError: true,
       }),
     ).toBe(true);
   });
@@ -181,6 +192,17 @@ describe("resolveQueuedComposerAutoDispatchHold", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("holds a rejected draft send while its error remains visible", () => {
+    expect(
+      resolveHold({
+        localDispatch: null,
+        latestTurn: null,
+        session: null,
+        threadError: "Turn start failed for test.",
+      }),
+    ).toBe(true);
   });
 
   it("fails open after the awaiting-turn timeout so a stuck start cannot wedge the queue", () => {

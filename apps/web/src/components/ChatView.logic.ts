@@ -1504,6 +1504,7 @@ export function shouldHoldQueuedComposerAutoDispatch(input: {
   isSendBusy: boolean;
   isConnecting: boolean;
   isAwaitingTurnStart: boolean;
+  hasThreadError: boolean;
   queuedSteerGate: QueuedSteerGate | null;
   hasPendingApproval: boolean;
   hasPendingProgress: boolean;
@@ -1516,6 +1517,7 @@ export function shouldHoldQueuedComposerAutoDispatch(input: {
     input.isSendBusy ||
     input.isConnecting ||
     input.isAwaitingTurnStart ||
+    input.hasThreadError ||
     input.queuedSteerGate !== null ||
     input.hasPendingApproval ||
     input.hasPendingProgress ||
@@ -1568,6 +1570,7 @@ export function resolveQueuedComposerAutoDispatchHold(input: {
     isSendBusy,
     isConnecting: input.isConnecting,
     isAwaitingTurnStart: input.localDispatch !== null && !turnTakenOver,
+    hasThreadError: Boolean(input.threadError),
     queuedSteerGate: input.queuedSteerGate,
     hasPendingApproval: input.hasPendingApproval,
     hasPendingProgress: input.hasPendingProgress,

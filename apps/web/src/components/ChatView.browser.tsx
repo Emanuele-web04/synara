@@ -6477,8 +6477,8 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(
             wsRequests
               .map(readDispatchedCommand)
-              .filter((command) => command?.type === "thread.turn.start").length,
-          ).toBeGreaterThanOrEqual(1);
+              .filter((command) => command?.type === "thread.turn.start"),
+          ).toHaveLength(1);
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
           const staleOptimisticRows = Array.from(
             document.querySelectorAll<HTMLElement>('[data-message-role="user"]'),
@@ -6487,6 +6487,12 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+      expect(
+        wsRequests
+          .map(readDispatchedCommand)
+          .filter((command) => command?.type === "thread.turn.start"),
+      ).toHaveLength(1);
     } finally {
       window.getSelection()?.removeAllRanges();
       await mounted.cleanup();
