@@ -1,11 +1,39 @@
-import type { ProjectId } from "@synara/contracts";
+import type {
+  GitPullRequestSnapshotResult,
+  GitResolvedPullRequest,
+  GitStatusResult,
+  NativeApi,
+  ProjectId,
+} from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { gitQueryKeys } from "./gitReactQuery";
+const { getGitStatus, getPullRequestSnapshot } = vi.hoisted(() => ({
+  getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
+  getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+}));
+
+vi.mock("../nativeApi", () => ({
+  ensureNativeApi: () => ({
+    git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
+  }),
+}));
+
+import {
+  gitPullRequestSnapshotQueryOptions,
+  gitQueryKeys,
+  gitStatusQueryOptions,
+} from "./gitReactQuery";
+import { activePullRequestActionPatch } from "./pullRequestMutationCoordinator";
 import { pullRequestActionMutationOptions, pullRequestQueryKeys } from "./pullRequestReactQuery";
+import { deferred } from "./pullRequestReactQuery.testUtils";
 
 describe("pullRequestActionMutationOptions", () => {
+  beforeEach(() => {
+    getGitStatus.mockReset();
+    getPullRequestSnapshot.mockReset();
+  });
+
   it.each(["ready", "draft"] as const)(
     "immediately applies %s to Environment caches across worktrees and rolls back only its fields",
     async (action) => {
@@ -74,6 +102,139 @@ describe("pullRequestActionMutationOptions", () => {
         expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
       }
       expect(queryClient.getQueryState(unrelatedStatusKey)?.isInvalidated).toBe(false);
+      queryClient.clear();
+    },
+  );
+
+  it.each([
+    ["git-status", "success"],
+    ["git-snapshot", "success"],
+    ["git-status", "failure"],
+    ["git-snapshot", "failure"],
+  ] as const)(
+    "fences a %s refetch launched during the action and reconciles %s",
+    async (cache, outcome) => {
+      const queryClient = new QueryClient();
+      const cwd = "/worktree";
+      const input = {
+        projectId: "project-a" as ProjectId,
+        repository: "acme/widgets",
+        number: 42,
+        action: "ready",
+      } as const;
+      const pullRequest = {
+        number: 42,
+        title: "Keep optimistic status stable",
+        url: "https://github.com/acme/widgets/pull/42",
+        baseBranch: "main",
+        headBranch: "fix/status",
+        state: "open",
+        isDraft: true,
+        mergeability: "unknown",
+        additions: null,
+        deletions: null,
+        changedFiles: null,
+      } satisfies GitResolvedPullRequest;
+      const initialStatus = {
+        branch: pullRequest.headBranch,
+        hasWorkingTreeChanges: false,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+        hasUpstream: true,
+        upstreamBranch: `origin/${pullRequest.headBranch}`,
+        aheadCount: 0,
+        behindCount: 0,
+        pr: pullRequest,
+      } satisfies GitStatusResult;
+      const initialSnapshot = {
+        pullRequest,
+        checks: [],
+        comments: [],
+        commentsTruncated: false,
+        commentsError: null,
+      } satisfies GitPullRequestSnapshotResult;
+      const statusQuery = gitStatusQueryOptions(cwd);
+      const snapshotQuery = gitPullRequestSnapshotQueryOptions({
+        cwd,
+        reference: pullRequest.url,
+      });
+      const queryKey = cache === "git-status" ? statusQuery.queryKey : snapshotQuery.queryKey;
+      const fetchCurrentQuery = () =>
+        cache === "git-status"
+          ? queryClient.fetchQuery({ ...statusQuery, staleTime: 0 })
+          : queryClient.fetchQuery({ ...snapshotQuery, staleTime: 0 });
+      queryClient.setQueryData(queryKey, cache === "git-status" ? initialStatus : initialSnapshot);
+      const action = pullRequestActionMutationOptions(queryClient);
+      const context = await Reflect.apply(action.onMutate!, undefined, [input, undefined]);
+
+      getGitStatus.mockResolvedValue({ ...initialStatus, aheadCount: 2 });
+      getPullRequestSnapshot.mockResolvedValue({
+        ...initialSnapshot,
+        checks: [{ name: "In-flight check", status: "pending", url: null }],
+      });
+      await fetchCurrentQuery();
+      const inFlightCache = queryClient.getQueryData<
+        GitStatusResult | GitPullRequestSnapshotResult
+      >(queryKey);
+      const inFlightPullRequest =
+        inFlightCache &&
+        ("pullRequest" in inFlightCache ? inFlightCache.pullRequest : inFlightCache.pr);
+      expect(inFlightPullRequest?.isDraft).toBe(false);
+
+      const statusRequest = deferred<GitStatusResult>();
+      const snapshotRequest = deferred<GitPullRequestSnapshotResult>();
+      getGitStatus.mockReturnValue(statusRequest.promise);
+      getPullRequestSnapshot.mockReturnValue(snapshotRequest.promise);
+      const callsBeforeLateRefetch =
+        cache === "git-status"
+          ? getGitStatus.mock.calls.length
+          : getPullRequestSnapshot.mock.calls.length;
+      const refetch = fetchCurrentQuery();
+      await vi.waitFor(() =>
+        expect(
+          cache === "git-status"
+            ? getGitStatus.mock.calls.length
+            : getPullRequestSnapshot.mock.calls.length,
+        ).toBe(callsBeforeLateRefetch + 1),
+      );
+
+      const mutationError = new Error("GitHub rejected the action");
+      if (outcome === "success") {
+        await Reflect.apply(action.onSuccess!, undefined, [
+          { workspaceRoot: cwd },
+          input,
+          context,
+          undefined,
+        ]);
+      } else {
+        await Reflect.apply(action.onError!, undefined, [mutationError, input, context, undefined]);
+      }
+      Reflect.apply(action.onSettled!, undefined, [
+        outcome === "success" ? { workspaceRoot: cwd } : undefined,
+        outcome === "failure" ? mutationError : null,
+        input,
+        context,
+        undefined,
+      ]);
+
+      statusRequest.resolve({ ...initialStatus, aheadCount: 3 });
+      snapshotRequest.resolve({
+        ...initialSnapshot,
+        checks: [{ name: "Fresh check", status: "success", url: null }],
+      });
+      await refetch;
+
+      const cached = queryClient.getQueryData<GitStatusResult | GitPullRequestSnapshotResult>(
+        queryKey,
+      );
+      const cachedPullRequest =
+        cached && ("pullRequest" in cached ? cached.pullRequest : cached.pr);
+      expect(cachedPullRequest?.isDraft).toBe(outcome === "failure");
+      if (cache === "git-status") {
+        expect(cached).toMatchObject({ aheadCount: 3 });
+      } else {
+        expect(cached).toMatchObject({ checks: [{ name: "Fresh check" }] });
+      }
+      expect(activePullRequestActionPatch(queryClient, input)).toEqual({});
       queryClient.clear();
     },
   );

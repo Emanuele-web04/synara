@@ -10,6 +10,8 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
+import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache";
+import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -381,10 +383,15 @@ export function refreshGitQueriesScoped(
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.status(cwd),
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git status is unavailable.");
-      return api.git.status({ cwd });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.status({ cwd }),
+        readFence,
+      );
     },
     enabled: enabled && cwd !== null,
     staleTime: GIT_STATUS_STALE_TIME_MS,
@@ -490,12 +497,17 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request snapshot is unavailable.");
       }
-      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference }),
+        readFence,
+      );
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,

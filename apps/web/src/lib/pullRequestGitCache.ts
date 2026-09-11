@@ -9,6 +9,11 @@ import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/sh
 import type { QueryClient, QueryFilters, QueryKey } from "@tanstack/react-query";
 
 import type { PullRequestActionListPatch } from "./pullRequestCache";
+import {
+  activePullRequestActionPatch,
+  hasPullRequestActionReadProtection,
+  type PullRequestActionReadFence,
+} from "./pullRequestMutationCoordinator";
 
 type GitPullRequestCache = GitStatusResult | GitPullRequestSnapshotResult;
 type GitPullRequest = NonNullable<GitStatusResult["pr"]>;
@@ -63,6 +68,26 @@ function patchCachedPullRequest(
 ): GitPullRequestCache {
   if ("pullRequest" in data) return { ...data, pullRequest: { ...data.pullRequest, ...patch } };
   return data.pr ? { ...data, pr: { ...data.pr, ...patch } } : data;
+}
+
+/** Keep action-owned fields optimistic when a Git poll/focus refetch starts after onMutate's
+ * cancellation. The complete remote payload still refreshes every field not owned by the action. */
+export function preserveActivePullRequestActionGitFields<T extends GitPullRequestCache>(
+  queryClient: QueryClient,
+  data: T,
+  readFence?: PullRequestActionReadFence,
+): T {
+  if (!hasPullRequestActionReadProtection(queryClient, readFence)) return data;
+  const pr = cachedPullRequest(data);
+  const repository = pr ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url) : null;
+  if (!pr || !repository) return data;
+
+  const patch = activePullRequestActionPatch(
+    queryClient,
+    { repository, number: pr.number },
+    readFence,
+  );
+  return Object.keys(patch).length > 0 ? (patchCachedPullRequest(data, patch) as T) : data;
 }
 
 // Called after cancelling matching reads so their old response cannot erase the optimistic state.

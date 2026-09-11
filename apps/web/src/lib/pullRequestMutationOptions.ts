@@ -211,11 +211,14 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           protection,
         };
       } catch (error) {
-        finishPullRequestActionProtection(queryClient, protection);
+        finishPullRequestActionProtection(queryClient, protection, "failed");
         throw error;
       }
     },
     onError: async (_error, input, context) => {
+      // Failed intent must stop winning query-result overlays before rollback/refetch restores
+      // the last cache value and then converges on remote truth. finish is idempotent in settled.
+      if (context) finishPullRequestActionProtection(queryClient, context.protection, "failed");
       const patch = optimisticPullRequestActionPatch(input.action);
       if (patch && context) {
         const previousDetailFields = context.previousDetailFields;
@@ -257,8 +260,14 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
-    onSettled: (_result, _error, _input, context) => {
-      if (context) finishPullRequestActionProtection(queryClient, context.protection);
+    onSettled: (_result, error, _input, context) => {
+      if (context) {
+        finishPullRequestActionProtection(
+          queryClient,
+          context.protection,
+          error ? "failed" : "succeeded",
+        );
+      }
     },
   });
 }
