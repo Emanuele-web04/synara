@@ -156,6 +156,7 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import {
   makeCursorSafeSnapshotLiveStream,
   makeResnapshotEscalationTracker,
+  ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
@@ -937,7 +938,26 @@ const makeWsRpcHandlersLayer = () =>
                   THREAD_DETAIL_EVENT_TYPES,
                 );
           return rpcEffect(
-            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
+            Effect.gen(function* () {
+              // Same bound as the cursor-resume stream: a stale cursor can
+              // otherwise pull a thread's entire history in one request. The
+              // caller treats this failure as transient and falls back to the
+              // full snapshot reconcile.
+              const collected = yield* Stream.runCollect(
+                replay.pipe(Stream.take(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 1)),
+              );
+              const events = Array.from(collected);
+              if (events.length > ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+                return yield* new WsRpcError({
+                  message:
+                    `Replay gap exceeds ${ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT} events; ` +
+                    "refresh the detail snapshot instead.",
+                  code: "ORCHESTRATION_REPLAY_OVERFLOW",
+                  retryable: true,
+                });
+              }
+              return events;
+            }),
             "Failed to replay orchestration events",
           );
         },

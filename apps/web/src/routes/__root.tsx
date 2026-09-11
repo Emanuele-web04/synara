@@ -1829,7 +1829,25 @@ function EventRouter() {
       // rejection propagate to callers exactly as the try/finally did.
       return await api.orchestration
         .replayEvents(fromSequence, threadId)
+        .catch((error) => {
+          // A gap past the server replay limit can never satisfy this poll;
+          // repair through the authoritative snapshot instead of retrying a
+          // replay that fails the same way forever.
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ORCHESTRATION_REPLAY_OVERFLOW"
+          ) {
+            void reconcileThreadProjection(threadId).catch(() => undefined);
+            return null;
+          }
+          throw error;
+        })
         .then((replayedEvents) => {
+          if (replayedEvents === null) {
+            return null;
+          }
           let appliedEventCount = 0;
           for (const event of replayedEvents
             .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
