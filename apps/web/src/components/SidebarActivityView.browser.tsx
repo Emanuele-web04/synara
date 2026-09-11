@@ -205,6 +205,126 @@ describe("SidebarActivityView", () => {
     document.body.innerHTML = "";
   });
 
+  it("reveals the active thread from collapsed Earlier with current-page semantics", async () => {
+    const completedAt = "2000-01-02T10:00:00.000Z";
+    const active = makeThread(490, {
+      title: "المحادثة الحالية https://example.com/a/very/long/path",
+      updatedAt: completedAt,
+      lastVisitedAt: "2000-01-02T11:00:00.000Z",
+      latestTurn: {
+        turnId: "activity-turn-active-earlier",
+        state: "completed",
+        requestedAt: completedAt,
+        startedAt: completedAt,
+        completedAt,
+        assistantMessageId: null,
+      } as SidebarThreadSummary["latestTurn"],
+    });
+    const leadingRows = Array.from({ length: 5 }, (_, index) =>
+      makeRunningThread(600 + index, `activity-turn-leading-${index}`),
+    );
+    const activity = renderActivity({
+      threads: [...leadingRows, active],
+      activeThreadId: active.id,
+    });
+    const mounted = await render(
+      <>
+        <button type="button" data-testid="focus-sentinel">
+          Keep focus
+        </button>
+        <div data-slot="scroll-area-viewport" className="h-32 overflow-y-auto">
+          {activity}
+        </div>
+      </>,
+    );
+    const focusSentinel = page.getByTestId("focus-sentinel").element();
+    focusSentinel.focus();
+
+    await vi.waitFor(() => {
+      const row = document.querySelector<HTMLElement>(
+        `[data-testid='activity-thread-${active.id}']`,
+      );
+      const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      expect(row).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      expect(row?.getAttribute("aria-current")).toBe("page");
+      expect(row?.getBoundingClientRect().height).toBeGreaterThan(0);
+      expect(row!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        viewport!.getBoundingClientRect().top - 1,
+      );
+      expect(row!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        viewport!.getBoundingClientRect().bottom + 1,
+      );
+      expect(viewport!.scrollTop).toBeGreaterThan(0);
+    });
+    expect(document.activeElement).toBe(focusSentinel);
+
+    await page.getByRole("button", { name: "Earlier", exact: true }).click();
+    await mounted.rerender(
+      <>
+        <button type="button" data-testid="focus-sentinel">
+          Keep focus
+        </button>
+        <div data-slot="scroll-area-viewport" className="h-32 overflow-y-auto">
+          {activity}
+        </div>
+      </>,
+    );
+    expect(
+      page
+        .getByRole("button", { name: "Earlier", exact: true })
+        .element()
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    await mounted.unmount();
+  });
+
+  it("retains a deep active project row without mounting the skipped middle page", async () => {
+    const threads = Array.from({ length: 25 }, (_, index) => makeThread(700 + index));
+    const active = threads[24]!;
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads,
+        activeThreadId: active.id,
+        onVisibleThreadIdsChange,
+      }),
+    );
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Project" }).click();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => {
+      const renderedIds = renderedActivityThreadIds();
+      expect(renderedIds).toHaveLength(21);
+      expect(renderedIds.at(-1)).toBe(active.id);
+      expect(new Set(renderedIds).size).toBe(renderedIds.length);
+      expect(onVisibleThreadIdsChange.mock.lastCall?.[0]).toEqual(renderedIds);
+      expect(
+        page.getByTestId(`activity-thread-${active.id}`).element().getAttribute("aria-current"),
+      ).toBe("page");
+    });
+    await mounted.unmount();
+  });
+
+  it("opens Done when it owns the active thread", async () => {
+    const active = makeThread(750, { settledAt: "2026-08-02T12:30:00.000Z" });
+    const mounted = await render(renderActivity({ threads: [active], activeThreadId: active.id }));
+
+    await vi.waitFor(() => {
+      expect(
+        page
+          .getByRole("button", { name: "Done", exact: true })
+          .element()
+          .getAttribute("aria-expanded"),
+      ).toBe("true");
+      expect(
+        page.getByTestId(`activity-thread-${active.id}`).element().getAttribute("aria-current"),
+      ).toBe("page");
+    });
+    await mounted.unmount();
+  });
+
   it("keeps an opened unread completion ahead of running work until another thread opens", async () => {
     const unread = makeThread(500, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const running = makeRunningThread(501, "activity-turn-running");

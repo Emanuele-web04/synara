@@ -14,8 +14,10 @@ import {
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
+  resolveActiveActivityThreadOwner,
   resolveActivityOrderingStatusGroup,
   resolveActivityStatusGroup,
+  retainActiveActivityThreadInPreview,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
@@ -804,6 +806,87 @@ describe("collectVisibleActivityThreadIds", () => {
         settled: [],
       }),
     ).toEqual([duplicated.id]);
+  });
+});
+
+describe("active Activity row retention", () => {
+  it("keeps a deep active row in a bounded preview without mutating source order", () => {
+    const threads = Array.from({ length: 23 }, (_, index) => makeThread({ id: `thread-${index}` }));
+    const sourceIds = threads.map((thread) => thread.id);
+    const activeThreadId = threads[22]!.id;
+
+    const preview = retainActiveActivityThreadInPreview(threads, 20, activeThreadId);
+
+    expect(preview.map((thread) => thread.id)).toEqual([...sourceIds.slice(0, 20), activeThreadId]);
+    expect(preview).toHaveLength(21);
+    expect(threads.map((thread) => thread.id)).toEqual(sourceIds);
+  });
+
+  it("does not duplicate an active row already in the preview and ignores missing ids", () => {
+    const threads = Array.from({ length: 3 }, (_, index) => makeThread({ id: `thread-${index}` }));
+
+    expect(retainActiveActivityThreadInPreview(threads, 2, threads[1]!.id)).toEqual(
+      threads.slice(0, 2),
+    );
+    expect(retainActiveActivityThreadInPreview(threads, 2, ThreadId.makeUnsafe("missing"))).toEqual(
+      threads.slice(0, 2),
+    );
+    expect(retainActiveActivityThreadInPreview(threads, 2, null)).toEqual(threads.slice(0, 2));
+  });
+
+  it("resolves the active row's real owner and lets an explicit scope exclude it", () => {
+    const pinned = makeThread({ id: "pinned" });
+    const earlier = makeThread({ id: "earlier" });
+    const project = makeThread({ id: "project" });
+    const settled = makeThread({ id: "settled" });
+    const common = {
+      pinned: [pinned],
+      priority: [],
+      recent: [],
+      today: [],
+      yesterday: [],
+      earlier: [earlier],
+      projectGroups: [
+        { kind: "project" as const, key: "project:one", projectId: PROJECT_ID, threads: [project] },
+      ],
+      settled: [settled],
+    };
+
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: pinned.id,
+      }),
+    ).toEqual({ kind: "pinned" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: earlier.id,
+      }),
+    ).toEqual({ kind: "earlier" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "project",
+        activeThreadId: project.id,
+      }),
+    ).toEqual({ kind: "project", groupKey: "project:one" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: settled.id,
+      }),
+    ).toEqual({ kind: "settled" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: ThreadId.makeUnsafe("outside-scope"),
+      }),
+    ).toBeNull();
   });
 });
 

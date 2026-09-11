@@ -511,6 +511,69 @@ export function splitRecentActivityThreads(
   };
 }
 
+/** The semantic Activity section that owns the route-active thread. */
+export type ActiveActivityThreadOwner =
+  | { kind: "pinned" }
+  | { kind: "priority" }
+  | { kind: "recent" }
+  | { kind: ActivityDateBucket }
+  | { kind: "project"; groupKey: string }
+  | { kind: "settled" };
+
+/**
+ * Resolves the route-active row against the already scoped and partitioned
+ * presentation model. A missing result is intentional when an explicit scope
+ * excludes the open thread.
+ */
+export function resolveActiveActivityThreadOwner(input: {
+  activeThreadId: ThreadId | null;
+  groupMode: ActivityGroupMode;
+  pinned: readonly SidebarThreadSummary[];
+  priority: readonly SidebarThreadSummary[];
+  recent: readonly SidebarThreadSummary[];
+  today: readonly SidebarThreadSummary[];
+  yesterday: readonly SidebarThreadSummary[];
+  earlier: readonly SidebarThreadSummary[];
+  projectGroups: readonly ActivityProjectGroup[];
+  settled: readonly SidebarThreadSummary[];
+}): ActiveActivityThreadOwner | null {
+  const { activeThreadId } = input;
+  if (activeThreadId === null) return null;
+  const includesActive = (threads: readonly SidebarThreadSummary[]) =>
+    threads.some((thread) => thread.id === activeThreadId);
+
+  if (includesActive(input.pinned)) return { kind: "pinned" };
+  if (input.groupMode === "project") {
+    const projectGroup = input.projectGroups.find((group) => includesActive(group.threads));
+    if (projectGroup) return { kind: "project", groupKey: projectGroup.key };
+  } else {
+    if (includesActive(input.priority)) return { kind: "priority" };
+    if (includesActive(input.recent)) return { kind: "recent" };
+    if (includesActive(input.today)) return { kind: "today" };
+    if (includesActive(input.yesterday)) return { kind: "yesterday" };
+    if (includesActive(input.earlier)) return { kind: "earlier" };
+  }
+  return includesActive(input.settled) ? { kind: "settled" } : null;
+}
+
+/**
+ * Keeps paging bounded while guaranteeing that its section can mount the
+ * route-active row. The normal prefix stays untouched; at most one extra row
+ * is appended when the active thread lies beyond it.
+ */
+export function retainActiveActivityThreadInPreview(
+  threads: readonly SidebarThreadSummary[],
+  previewLimit: number,
+  activeThreadId: ThreadId | null,
+): SidebarThreadSummary[] {
+  const preview = threads.slice(0, Math.max(0, previewLimit));
+  if (activeThreadId === null || preview.some((thread) => thread.id === activeThreadId)) {
+    return preview;
+  }
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  return activeThread ? [...preview, activeThread] : preview;
+}
+
 /**
  * Computes the rows that are actually mounted in Activity render order. The
  * Sidebar consumes this same list for jump shortcuts, next/previous navigation,

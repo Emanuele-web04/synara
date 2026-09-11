@@ -11,6 +11,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
   type ReactNode,
 } from "react";
 
@@ -57,7 +58,9 @@ import {
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
+  resolveActiveActivityThreadOwner,
   resolveActivityScope,
+  retainActiveActivityThreadInPreview,
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
   splitRecentActivityThreads,
@@ -123,6 +126,7 @@ function ActivityThreadRow({
   onRenamePointerUp,
   onContextMenu,
   renderHoverCard,
+  rowRef,
 }: {
   thread: SidebarThreadSummary;
   project: Project | undefined;
@@ -140,6 +144,7 @@ function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
+  rowRef?: Ref<HTMLButtonElement>;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const branch = resolveThreadDisplayBranch(thread);
@@ -182,8 +187,10 @@ function ActivityThreadRow({
         }
       >
         <button
+          ref={rowRef}
           type="button"
           onClick={onOpen}
+          aria-current={isActive ? "page" : undefined}
           data-testid={`activity-thread-${thread.id}`}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
@@ -678,6 +685,39 @@ export function SidebarActivityView({
       ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
       : EMPTY_PROJECT_GROUPS;
 
+  const activeThreadOwner = resolveActiveActivityThreadOwner({
+    activeThreadId,
+    groupMode,
+    pinned: scopedPinnedThreads,
+    priority: priorityThreads,
+    recent: recentThreads,
+    today: dateBuckets.today,
+    yesterday: dateBuckets.yesterday,
+    earlier: dateBuckets.earlier,
+    projectGroups,
+    settled: model.settled,
+  });
+  const activeDisclosureKind =
+    activeThreadOwner?.kind === "pinned" ||
+    activeThreadOwner?.kind === "earlier" ||
+    activeThreadOwner?.kind === "settled"
+      ? activeThreadOwner.kind
+      : null;
+  const lastAutoRevealKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeThreadId === null) {
+      lastAutoRevealKeyRef.current = null;
+      return;
+    }
+    const revealKey = `${activeThreadId}:${activeDisclosureKind ?? "visible"}`;
+    if (lastAutoRevealKeyRef.current === revealKey) return;
+    lastAutoRevealKeyRef.current = revealKey;
+    if (activeDisclosureKind === null) return;
+    if (activeDisclosureKind === "pinned") setPinnedOpen(true);
+    else if (activeDisclosureKind === "earlier") setEarlierOpen(true);
+    else setSettledOpen(true);
+  }, [activeDisclosureKind, activeThreadId]);
+
   const earlierPaging = resolveSidebarThreadListPaging({
     totalCount: dateBuckets.earlier.length,
     baseLimit: ACTIVITY_LIST_BASE_LIMIT,
@@ -690,6 +730,16 @@ export function SidebarActivityView({
     pageSize: ACTIVITY_LIST_PAGE_SIZE,
     requestedExtraPages: settledExtraPages,
   });
+  const visibleEarlierThreads = retainActiveActivityThreadInPreview(
+    dateBuckets.earlier,
+    earlierPaging.previewLimit,
+    activeThreadOwner?.kind === "earlier" ? activeThreadId : null,
+  );
+  const visibleSettledThreads = retainActiveActivityThreadInPreview(
+    model.settled,
+    settledPaging.previewLimit,
+    activeThreadOwner?.kind === "settled" ? activeThreadId : null,
+  );
   const pagedProjectGroups = projectGroups.map((group) => {
     const paging = resolveSidebarThreadListPaging({
       totalCount: group.threads.length,
@@ -700,7 +750,13 @@ export function SidebarActivityView({
     return {
       group,
       paging,
-      threads: group.threads.slice(0, paging.previewLimit),
+      threads: retainActiveActivityThreadInPreview(
+        group.threads,
+        paging.previewLimit,
+        activeThreadOwner?.kind === "project" && activeThreadOwner.groupKey === group.key
+          ? activeThreadId
+          : null,
+      ),
     };
   });
 
@@ -715,26 +771,24 @@ export function SidebarActivityView({
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
-        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
+        earlier: visibleEarlierThreads,
         projectGroups: pagedProjectGroups.map((group) => group.threads),
         settledOpen,
-        settled: model.settled.slice(0, settledPaging.previewLimit),
+        settled: visibleSettledThreads,
       }),
     [
-      dateBuckets.earlier,
       dateBuckets.today,
       dateBuckets.yesterday,
       earlierOpen,
-      earlierPaging.previewLimit,
       groupMode,
-      model.settled,
       pagedProjectGroups,
       pinnedOpen,
       priorityThreads,
       recentThreads,
       scopedPinnedThreads,
       settledOpen,
-      settledPaging.previewLimit,
+      visibleEarlierThreads,
+      visibleSettledThreads,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -749,6 +803,37 @@ export function SidebarActivityView({
     },
     [onVisibleThreadIdsChange],
   );
+
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
+  const lastActiveScrollKeyRef = useRef<string | null>(null);
+  const activeScrollKey =
+    activeThreadId !== null && activeThreadOwner !== null
+      ? `${activeThreadId}:${groupMode}:${activeScope ?? "all"}`
+      : null;
+  useEffect(() => {
+    if (activeScrollKey === null || lastActiveScrollKeyRef.current === activeScrollKey) return;
+    if (
+      (activeThreadOwner?.kind === "pinned" && !pinnedOpen) ||
+      (activeThreadOwner?.kind === "earlier" && !earlierOpen) ||
+      (activeThreadOwner?.kind === "settled" && !settledOpen)
+    ) {
+      return;
+    }
+    const activeRow = activeRowRef.current;
+    if (activeRow === null) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const row = activeRowRef.current;
+      const viewport = row?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      if (!row || !viewport) return;
+      lastActiveScrollKeyRef.current = activeScrollKey;
+      const rowBounds = row.getBoundingClientRect();
+      const viewportBounds = viewport.getBoundingClientRect();
+      if (rowBounds.top < viewportBounds.top || rowBounds.bottom > viewportBounds.bottom) {
+        row.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeScrollKey, activeThreadOwner?.kind, earlierOpen, pinnedOpen, settledOpen]);
 
   const markAllRead = () => {
     setReadOrderHoldState(null);
@@ -822,6 +907,7 @@ export function SidebarActivityView({
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
+      {...(activeThreadId === thread.id ? { rowRef: activeRowRef } : {})}
     />
   );
   const renderActiveRow = (thread: SidebarThreadSummary) =>
@@ -965,7 +1051,7 @@ export function SidebarActivityView({
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
             >
-              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
+              {visibleEarlierThreads.map(renderActiveRow)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
@@ -985,9 +1071,7 @@ export function SidebarActivityView({
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
         >
-          {model.settled
-            .slice(0, settledPaging.previewLimit)
-            .map((thread) => renderRow(thread, true))}
+          {visibleSettledThreads.map((thread) => renderRow(thread, true))}
           <ActivityShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
