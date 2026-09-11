@@ -33,6 +33,7 @@ export class DesktopPermissionSetup {
       appName: options.appName,
       appPath: options.appPath,
       message: null,
+      recoveryAdvice: `Switch already on? Remove only ${options.appName} with the minus button, then drag this app back in and enable it. macOS may be using a previous build's grant. Reopen the app if asked.`,
     };
   }
 

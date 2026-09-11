@@ -6,7 +6,11 @@
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
-import type { ComputerToolName } from "./computerToolPresentation";
+import {
+  COMPUTER_TOOL_TITLES,
+  computerToolName,
+  type ComputerToolName,
+} from "./computerToolPresentation";
 import { basenameOfPath } from "../file-icons";
 import { extractToolArgumentField } from "./toolArgumentSummary";
 
@@ -174,6 +178,10 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "double-clicking the desktop",
     "double-clicked the desktop",
   ),
+  synara_computer_triple_click: presentComputerTool(
+    "triple-clicking the desktop",
+    "triple-clicked the desktop",
+  ),
   synara_computer_right_click: presentComputerTool(
     "right-clicking the desktop",
     "right-clicked the desktop",
@@ -190,6 +198,8 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "activated a control",
   ),
   synara_computer_launch_app: presentComputerTool("opening an app", "opened an app"),
+  synara_computer_activate_window: presentComputerTool("activating a window", "activated a window"),
+  synara_computer_wait: presentComputerTool("waiting for the desktop", "waited for the desktop"),
   synara_computer_read_clipboard: presentComputerTool(
     "reading the clipboard",
     "read the clipboard",
@@ -550,12 +560,10 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
-    return normalizedTitle;
-  }
-
-  // Use verbal requestKind label before falling back to raw descriptors
-  if (requestKindLabel) {
-    return requestKindLabel;
+    return (input.itemType === "mcp_tool_call" || input.itemType === "dynamic_tool_call") &&
+      /[_-]/.test(normalizedTitle)
+      ? (normalizeToolDescriptor(normalizedTitle) ?? normalizedTitle)
+      : normalizedTitle;
   }
 
   if (commandLike && commandLabel) {
@@ -565,6 +573,12 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
   if (descriptor && !isGenericToolTitle(descriptor)) {
     return descriptor;
+  }
+
+  // A generic request kind describes the transport, while the payload can name
+  // the actual tool. Only use it after the provider metadata has been checked.
+  if (requestKindLabel) {
+    return requestKindLabel;
   }
 
   if (normalizedFallback.length > 0 && !isGenericToolTitle(normalizedFallback)) {
@@ -630,6 +644,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (!value) {
     return null;
   }
+  const computerTool = computerToolName(value);
+  if (computerTool) {
+    return COMPUTER_TOOL_TITLES[computerTool];
+  }
   const mcpIdentifier = humanizeMcpToolIdentifier(value);
   if (mcpIdentifier) {
     return mcpIdentifier;
@@ -656,7 +674,8 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
     return "Search";
   }
-  return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
+  const readable = /[_-]/.test(value) ? humanizeMcpToken(collapsed) : collapsed;
+  return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}...` : readable;
 }
 
 function humanizeMcpToken(value: string | undefined): string {
@@ -727,7 +746,17 @@ function extractMcpServerToolDescriptor(value: unknown, depth: number): string |
   if (typeof record.server === "string" && typeof record.tool === "string") {
     return humanizeMcpServerTool(record.server, record.tool);
   }
-  for (const nestedKey of ["item", "data", "event", "payload", "result", "input", "call"]) {
+  for (const nestedKey of [
+    "item",
+    "data",
+    "event",
+    "payload",
+    "result",
+    "input",
+    "call",
+    "invocation",
+    "source",
+  ]) {
     const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
     if (nested) {
       return nested;

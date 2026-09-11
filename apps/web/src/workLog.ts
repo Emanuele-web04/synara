@@ -36,6 +36,7 @@ import {
   type SynaraMcpToolStatus,
 } from "./lib/toolCallLabel";
 import { toolArgumentSummaryToolName } from "./lib/toolArgumentSummary";
+import { computerToolName, describeComputerToolCall } from "./lib/computerToolPresentation";
 import {
   deriveWorkLogToolDetails,
   mergeWorkLogToolDetails,
@@ -762,8 +763,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.providerContextLifecycle = providerContextLifecycle;
     }
   }
+  const computerToolDescription = deriveComputerToolDescription({
+    activity,
+    payload,
+    toolName,
+    title: commandActionDisplay?.title ?? title,
+  });
   const readableTitle =
     extractCollabActionTitle(payload) ??
+    computerToolDescription?.summary ??
     deriveSynaraMcpToolTitle({
       toolName,
       title: commandActionDisplay?.title ?? title,
@@ -2135,12 +2143,19 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemInput = asRecord(item?.input);
+  const dataInvocation = asRecord(data?.invocation);
+  const itemInvocation = asRecord(item?.invocation);
   const candidates = [
     payload?.toolName,
     data?.toolName,
     data?.tool,
+    dataInvocation?.tool,
+    dataInvocation?.toolName,
     item?.toolName,
+    item?.tool,
     item?.name,
+    itemInvocation?.tool,
+    itemInvocation?.toolName,
     itemInput?.toolName,
   ];
   for (const candidate of candidates) {
@@ -2150,6 +2165,120 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
     }
   }
   return null;
+}
+
+function deriveComputerToolDescription(input: {
+  activity: OrchestrationThreadActivity;
+  payload: Record<string, unknown> | null;
+  toolName: string | null;
+  title: string | null;
+}) {
+  if (input.payload?.approvalScope === "computer-task") {
+    return {
+      summary:
+        input.activity.kind === "approval.requested"
+          ? "Computer task approval requested"
+          : input.payload.decision === "accept"
+            ? "Computer task approved"
+            : input.payload.decision === "decline"
+              ? "Computer task declined"
+              : "Computer task approval cancelled",
+    };
+  }
+  if (!computerToolName(input.toolName)) {
+    return null;
+  }
+  const explicitTitle = normalizeCompactToolLabel(input.title ?? "");
+  if (
+    explicitTitle.length > 0 &&
+    !isGenericToolTitle(explicitTitle) &&
+    !computerToolName(explicitTitle)
+  ) {
+    return null;
+  }
+  const progressTitle = normalizeCompactToolLabel(input.activity.summary);
+  if (
+    input.activity.kind === "tool.updated" &&
+    progressTitle.length > 0 &&
+    !isGenericToolTitle(progressTitle) &&
+    !computerToolName(progressTitle)
+  ) {
+    return { summary: progressTitle };
+  }
+  return describeComputerToolCall({
+    toolName: input.toolName,
+    args: extractComputerToolArgs(input.payload) ?? undefined,
+  });
+}
+
+function extractComputerToolArgs(
+  payload: Record<string, unknown> | null,
+): Readonly<Record<string, unknown>> | null {
+  if (!payload) {
+    return null;
+  }
+  const data = asRecord(payload.data);
+  const item = asRecord(data?.item);
+  const dataInvocation = asRecord(data?.invocation);
+  const itemInvocation = asRecord(item?.invocation);
+  const dataInput = asRecord(data?.input);
+  const itemInput = asRecord(item?.input);
+  const candidates = [
+    item?.arguments,
+    itemInput?.arguments,
+    itemInput?.args,
+    item?.input,
+    itemInvocation?.arguments,
+    itemInvocation?.input,
+    dataInvocation?.arguments,
+    dataInvocation?.input,
+    data?.arguments,
+    dataInput?.arguments,
+    dataInput?.args,
+    data?.input,
+    data?.rawInput,
+    payload.arguments,
+    payload.input,
+  ];
+  for (const candidate of candidates) {
+    const args = asArgumentRecord(candidate);
+    if (args) {
+      return args;
+    }
+  }
+  return parseHistoricalToolParamsDisplay(payload.toolParamsDisplay);
+}
+
+function asArgumentRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return asArgumentRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseHistoricalToolParamsDisplay(value: unknown): Record<string, unknown> | null {
+  const record = asArgumentRecord(value);
+  if (record) {
+    return record;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const entry of value) {
+    const row = asRecord(entry);
+    const name = asTrimmedString(row?.name ?? row?.display_name ?? row?.displayName);
+    if (name) {
+      result[name] = row?.value;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {

@@ -22,6 +22,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_list_windows: "List windows",
   computer_click: "Click",
   computer_double_click: "Double-click",
+  computer_triple_click: "Triple-click",
   computer_right_click: "Right-click",
   computer_move_cursor: "Move the cursor",
   computer_drag: "Drag",
@@ -32,6 +33,8 @@ export const COMPUTER_TOOL_TITLES = {
   computer_set_value: "Set a field",
   computer_perform_action: "Activate a control",
   computer_launch_app: "Open an app",
+  computer_activate_window: "Activate a window",
+  computer_wait: "Wait",
   computer_read_clipboard: "Read the clipboard",
   computer_write_clipboard: "Write to the clipboard",
 } as const;
@@ -85,7 +88,12 @@ export function describeComputerToolCall(input: {
   if (tool === null) return null;
   const args = input.args ?? {};
   const verb = COMPUTER_TOOL_TITLES[tool];
-  const where = describeTarget(args, input.windows);
+  const where =
+    tool === "computer_launch_app"
+      ? ""
+      : tool === "computer_drag"
+        ? describeDragTarget(args, input.windows)
+        : describeTarget(args, input.windows, tool === "computer_wait" ? "for" : "on");
   const what = describePayload(tool, args);
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
@@ -96,30 +104,50 @@ export function describeComputerToolCall(input: {
 function describeTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
+  labelPreposition: "on" | "for" = "on",
 ): string {
   const parts: string[] = [];
   const label = readString(args.label);
   const x = readNumber(args.x);
   const y = readNumber(args.y);
   if (label) {
-    parts.push(`on “${label}”`);
+    parts.push(`${labelPreposition} “${label}”`);
   } else if (x !== null && y !== null) {
     parts.push(`at (${x}, ${y})`);
   }
   const window = resolveWindow(args.window_id, windows);
-  if (window) parts.push(`in ${window}`);
+  const app = readString(args.app_name) ?? readString(args.application) ?? readString(args.app);
+  if (window) {
+    parts.push(`in ${window}`);
+  } else if (app) {
+    parts.push(`in ${app}`);
+  }
   return parts.join(" ");
+}
+
+function describeDragTarget(
+  args: Readonly<Record<string, unknown>>,
+  windows: readonly ComputerWindow[] | undefined,
+): string {
+  const from = readRecord(args.from);
+  const to = readRecord(args.to);
+  if (!from || !to) return "";
+  const fromTarget = describeTarget(from, windows).replace(/^on /, "");
+  const toTarget = describeTarget(to, windows).replace(/^on /, "");
+  return fromTarget && toTarget ? `from ${fromTarget} to ${toTarget}` : "";
 }
 
 /** The thing being typed, pressed, or scrolled — the part that is not a target. */
 function describePayload(tool: ComputerToolName, args: Readonly<Record<string, unknown>>): string {
-  if (tool === "computer_type_text" || tool === "computer_set_value") {
-    const text = readString(args.text) ?? readString(args.value);
-    return text === null ? "" : `“${truncate(text, 60)}”`;
-  }
-  if (tool === "computer_write_clipboard") {
-    const text = readString(args.text) ?? readString(args.value);
-    return text === null ? "" : `“${truncate(text, 60)}”`;
+  // Values typed into a field or copied to the clipboard can be credentials or
+  // other private data. The expanded parameter list may show the exact action
+  // being approved, but transcript summaries must never repeat that content.
+  if (
+    tool === "computer_type_text" ||
+    tool === "computer_set_value" ||
+    tool === "computer_write_clipboard"
+  ) {
+    return "";
   }
   if (tool === "computer_press_key") {
     const key = readString(args.key);
@@ -139,6 +167,13 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   if (tool === "computer_launch_app") {
     const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
     return app ?? "";
+  }
+  if (tool === "computer_wait" && !readString(args.label)) {
+    const durationMs = readNumber(args.duration_ms);
+    if (durationMs === null) return "";
+    return durationMs >= 1_000 && durationMs % 1_000 === 0
+      ? `for ${durationMs / 1_000} ${durationMs === 1_000 ? "second" : "seconds"}`
+      : `for ${durationMs} ms`;
   }
   return "";
 }
@@ -213,6 +248,12 @@ function readStringArray(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
 }
 
 function truncate(value: string, max: number): string {

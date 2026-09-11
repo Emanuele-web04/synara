@@ -33,6 +33,26 @@ function makePendingInteraction(
 }
 
 describe("derivePendingApprovals", () => {
+  it("preserves the task consent scope of a gateway Computer approval", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        summary: "Allow Computer for this task",
+        tone: "approval",
+        payload: {
+          requestId: "computer:task",
+          requestKind: "tool",
+          approvalScope: "computer-task",
+          sessionApprovalAvailable: false,
+        },
+      }),
+    ]);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      approvalScope: "computer-task",
+      sessionApprovalAvailable: false,
+    });
+  });
   it("shows only actionable durable approval settlements", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

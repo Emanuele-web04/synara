@@ -77,6 +77,31 @@ async function mountApprovalPanel(input?: {
 }
 
 describe("ComposerPendingApprovalPanel", () => {
+  it("explains task consent and keeps it separate from provider session approval", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "tool",
+        approvalScope: "computer-task",
+        toolName: "computer_click",
+      }),
+    });
+    try {
+      await expect.element(page.getByText(/^Allow Computer for this task\?/)).toBeInTheDocument();
+      await expect.element(page.getByText(/Stop cancels access/)).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: /Always allow this session/ }))
+        .not.toBeInTheDocument();
+      await page.getByRole("button", { name: /Allow Computer for this task/ }).click();
+      expect(mounted.onRespond).toHaveBeenCalledExactlyOnceWith(
+        APPROVAL_REQUEST_ID,
+        "accept",
+        LIFECYCLE_GENERATION,
+        "tool",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
   it.each([
     ["Approve once", "accept"],
     ["Always allow this session", "acceptForSession"],

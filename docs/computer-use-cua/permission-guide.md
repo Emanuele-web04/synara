@@ -6,6 +6,8 @@ The earlier permission service fix provided fresh native checks, but the setup U
 
 ## Resulting flow
 
+Follow-up, 11 September: selecting Computer access in the chat composer now reads fresh backend status and opens this same guide when macOS permissions are missing. The existing permission setup buttons and AppSnap use the same controller. Existing grants skip the guide; switching Off or leaving the thread fences a delayed check. Chat access remains an explicit choice, separate from OS grants.
+
 1. Set up starts one Electron-owned setup session and stops active Cua input through the existing cleanup barrier.
 2. A fresh AppSnap permission helper checks the selected scopes. Computer uses Accessibility → Screen Recording; AppSnap uses Input Monitoring → Screen Recording. Already-granted scopes are skipped.
 3. A small native guide stays visible beside System Settings. Its draggable app icon and Show in Finder action both use the bundle containing the running Electron executable, including custom names such as Synara Cua. The renderer cannot substitute a path.
@@ -41,3 +43,41 @@ Use a signed app built from this worktree; an older installed build does not con
 6. Dismiss setup while waiting, then grant access later. The dismissed guide must stay closed. Starting setup again should detect the current grants. Denying access or cancelling a drag must never show Granted.
 
 Actual grant reconciliation on the reporter's updated signed app remains the runtime acceptance check. A stale grant for a different build or app copy is not something the UI can turn into permission.
+
+## Main integration — 11 September
+
+Rebased all four branch commits onto `origin/main` at `31ed6b9ae`. Preserved main's AppSnap window picker, provider retry/settlement changes, browser shutdown and pending-interaction recovery alongside Computer capabilities. The previous head remains available locally as `codex/backup-computer-before-main-20260911`. No remote push was made.
+
+The running dev watcher attempted to restart Electron while rebasing/rebuilding removed `dist-electron/main.js`, producing the reported “Cannot find module” dialog. The launcher now checks all required bundles before every start, waiting when they are missing or empty. The dev process was stopped for integration, dependencies aligned to the lockfile, and the native helper plus production bundles rebuilt.
+
+Verification: 656 focused regressions passed, with one existing live Codex test skipped without `CODEX_BINARY_PATH`; 200 activation/dispatch tests passed (overlapping the broad run), nine Chromium tests passed, 28 AppSnap/source-launch tests passed, and eight launcher tests passed. Formatting, lint, seven-package typecheck and production builds passed; subsequent formatting/import-only changes received scoped checks. Logs are under `/private/tmp/synara-main-rebase/`. Initial root-level Vitest discovery followed the dev overlay into unrelated worktrees; those results were discarded, and verification was rerun with `--exclude '**/.synara/**'`. Run package-scoped tests or exclude the dev directory when testing this checkout.
+
+## Live reopen and stale grants — 11 September
+
+The reported Electron welcome screen was reproduced in the running process: LaunchServices opened the generated `.app` with no arguments, so Electron loaded `Resources/default_app.asar`. The generated bundle now includes a signed source bootstrap in `Resources/app`, following [Electron's application loading layout](https://www.electronjs.org/docs/latest/tutorial/application-distribution). A small allowlist of launch routing (home, flavor, source-build marker and renderer URL) is saved outside the signed bundle. An OS reopen restores the same source checkout and data directory; explicit source/smoke launches retain their own environment. Tokens and provider credentials are never persisted in this file. Changing routing does not re-sign the app.
+
+A second live issue was confirmed in macOS TCC logs: `Failed to match existing code requirement` for the Synara development bundle and ScreenCapture, comparing the previous and rebuilt cdhashes. System Settings showed its switch on, but the fresh helper correctly reported denied. The attribution log confirms the responsible process is the Synara GUI, not the shell or standalone helper. Polling cannot repair this stale OS grant. The shared native/web guide now explains removing only this app's old entry with the minus button, dragging the current app back in and enabling it. No permissions were reset or toggled by the agent.
+
+The settings/chat checklist also incorrectly converted a merely installed backend into granted permissions before its first native check. Both surfaces now share the same mapping: unprobed grants say `Not checked`, partial native results name the missing grant, and availability alone does not imply permission. An existing server-rendering failure in Computer settings was fixed by guarding access to the desktop bridge.
+
+Validation for this follow-up: 79 unit regressions across five files, 12 launcher tests and five Chromium permission UI tests passed. Scoped formatting, full lint and seven-package typecheck passed; the final small rendering guard and bootstrap changes received targeted tests/lint. The arm64 AppSnap helper rebuilt successfully and the generated app passed strict recursive signature verification. Logs: `/private/tmp/synara-main-rebase/permission-*.log`.
+
+Live validation: quit the development GUI, verified its process exited, then reopened the `.app` through macOS with no application arguments. Synara loaded the same isolated chat and settings. The initial checklist correctly remained unchecked, and starting setup displayed the native missing grants plus the recovery instructions. The final rebuilt app still requires the user to renew its stale Accessibility/Screen Recording grants in System Settings. An actual renewed grant, successful drop and Computer action have not been validated for this final build. The development runner remains active with home `.synara/electron-dev` and renderer port 8891; the unrelated Synara/Canary instances were preserved.
+
+## Authorized live grant recovery — 11 September
+
+After the user explicitly authorized repairing the running development app's permissions, reset only `Accessibility` and `ScreenCapture` for `com.emanueledipietro.synara.dev`. The previous section's no-reset statement describes the earlier verification pass. No production, Canary, Codex or fixture permissions were changed.
+
+The final GUI remained at cdhash `0ebb702b219514d50459f963518085cf426a362a`, with no rebuild or re-sign during recovery. TCC had retained different old requirements for Accessibility and ScreenCapture; dragging an already-listed app had not renewed those requirements. After resetting and enabling Accessibility in System Settings, the running setup automatically advanced to Screen Recording. Synara's own checklist showed Accessibility `Granted` and Screen Recording `Not granted`, confirming a real native transition and state push without Refresh.
+
+Adding the development app back to Screen Recording then reached macOS's **Privacy & Security — Touch ID or enter your password** authentication sheet. The user was away; authentication was not entered or bypassed. Screen Recording renewal, a successful native drag/drop and a Computer capture/action remain unverified on this exact build. The authentication sheet was left ready in System Settings. Setup has a five-minute lifetime; if it has paused when authentication is completed, choose Set up again to resume its fresh checks.
+
+Strict recursive signature verification and `git diff --check` passed after this live pass. The existing 96 focused tests and final lint/typecheck results above were re-inspected, not rerun; this recovery changed only OS state and this report. Restricted TCC diagnostics are in `/private/tmp/synara-main-rebase/permission-renewal-tcc.log`.
+
+## Completed permission renewal and native read-only smoke — 11 September
+
+After the user completed authentication and asked to continue, selected the exact current Synara (Dev) bundle in the Screen Recording add dialog, then accepted macOS's Quit & Reopen. Synara reopened the same isolated chat instead of Electron's welcome screen. A fresh Set up check reported both Accessibility and Screen Recording `Granted`, `Computer control available`, and capture/input capabilities. The GUI cdhash remained `0ebb702b219514d50459f963518085cf426a362a`.
+
+The user's 22:11 chat response still said tools were unavailable because its Computer mode was Off. This was directly confirmed in the composer permissions menu after the system grants succeeded. Enabled `Computer: Keep enabled in this chat`; the next dispatch logged `computerControlChanged: true` and restarted the Codex provider session. A bounded read-only request then used native window listing and reported a direct Synara (Dev) capture, PNG 1536×964, screenshot ID `shot-1`. Native screenshot tool activity was also visible in the user's subsequent independent desktop task. This verifies real permission consumption and Codex tool exposure; it does not qualify every provider or every input action. Renewal used the macOS add dialog, so successful native guide drag/drop is still a separate acceptance check.
+
+Updated the Computer settings ready-state explanation to name the two per-chat enable choices explicitly. Its usage description now makes clear that Set up checks system permissions without enabling existing chats. The eight existing settings rendering tests passed after updating their copy expectations. No provider prompt/schema changes or signature changes were needed for this clarification.

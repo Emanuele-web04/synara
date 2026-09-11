@@ -15,6 +15,7 @@ import { Schema } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 
 import { ProviderAdapterRequestError, type ProviderAdapterError } from "../Errors.ts";
+import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
 
 // Synara-internal ACP tool kind for provider-native subagent runs. ACP's ToolKind has
 // no subagent variant (Cursor sends `kind: "other"` + `rawInput._toolName: "task"`), so
@@ -148,6 +149,12 @@ export function resolveAcpPermissionPolicy(input: {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly options: ReadonlyArray<AcpPermissionOptionLike>;
+  readonly computerControlEnabled?: boolean;
+  readonly activeTurn?: boolean;
+  readonly toolCall?: {
+    readonly title?: unknown;
+    readonly rawInput?: unknown;
+  };
 }): AcpPermissionPolicyOutcome | undefined {
   if (input.interactionMode === "plan") {
     const optionId = selectAcpPermissionOptionId("decline", input.options);
@@ -156,6 +163,22 @@ export function resolveAcpPermissionPolicy(input: {
 
   if (input.interactionMode === undefined) {
     return { outcome: "cancelled" };
+  }
+
+  if (
+    shouldAllowSynaraComputerProviderTool({
+      computerControlEnabled: input.computerControlEnabled === true,
+      activeTurn: input.activeTurn === true,
+      interactionMode: input.interactionMode,
+      runtimeMode: input.runtimeMode,
+      permission: {
+        title: input.toolCall?.title,
+        rawInput: input.toolCall?.rawInput,
+      },
+    })
+  ) {
+    const optionId = input.options.find((option) => option.kind === "allow_once")?.optionId.trim();
+    if (optionId) return { outcome: "selected", optionId };
   }
 
   return input.runtimeMode === "full-access"

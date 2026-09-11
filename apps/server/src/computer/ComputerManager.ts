@@ -389,7 +389,19 @@ export class ComputerManager {
     threadId: string,
     mode: ComputerControlMode,
     generation = 0,
+    explicitInvocation = false,
   ): Promise<boolean> {
+    // A fresh user invocation can re-arm a stopped task. An invocation queued
+    // before Stop still carries the old generation and cannot revive input.
+    if (
+      explicitInvocation &&
+      mode === "request" &&
+      this.controlState.get(threadId).generation === generation &&
+      !this.suspendedThreads.has(threadId) &&
+      this.controlDisabled(threadId)
+    ) {
+      await this.setControlEnabled(threadId, true);
+    }
     const enabled = mode !== "off" && this.canActivateControl(threadId, generation);
     try {
       await this.controlState.recordChatIntent(threadId, enabled && mode === "chat", generation);
@@ -443,6 +455,8 @@ export class ComputerManager {
       this.controlRequests.delete(threadId);
       this.pendingControlWrites.delete(threadId);
     }
+    this.threadRuntime(threadId);
+    this.publishCached(threadId);
     return {
       enabled: !this.controlDisabled(threadId) && !this.suspendedThreads.has(threadId),
       generation: this.controlState.get(threadId).generation,
@@ -2580,6 +2594,7 @@ export class ComputerManager {
   private threadSnapshot(threadId: string, state: ThreadComputerRuntimeState): ThreadComputerState {
     return {
       threadId: ThreadId.makeUnsafe(threadId),
+      controlGeneration: this.controlState.get(threadId).generation,
       version: state.version,
       computerId: this.computerId,
       windows: state.windows,

@@ -3,22 +3,76 @@ import type { ProviderApprovalDecision } from "@synara/contracts";
 
 interface PendingApproval {
   readonly threadId: string;
+  readonly turnId?: string | undefined;
   readonly settle: (decision: ProviderApprovalDecision) => void;
 }
 
-/** Synara-owned approvals for providers without a native permission callback.
- * Entries exist only while their exact MCP call is alive; restart/stop cannot
- * reuse an approval. The runtime service routes user decisions here first.
+interface TaskApproval {
+  readonly turnId: string;
+  granted?: boolean;
+  pending?: Promise<boolean> | undefined;
+}
+
+/** Synara-owned Computer consent, scoped to one live turn. Clipboard reads use
+ * separate per-call approvals. The runtime routes user decisions here first;
+ * restart, Stop and terminal events discard the grant.
  */
 export class ComputerApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
+  private readonly tasks = new Map<string, TaskApproval>();
 
-  cancelThread(threadId: string): void {
+  cancelThread(threadId: string, turnId?: string): void {
+    const task = this.tasks.get(threadId);
+    if (turnId === undefined || task?.turnId === turnId) this.tasks.delete(threadId);
     for (const [id, pending] of this.pending) {
-      if (pending.threadId !== threadId) continue;
+      if (pending.threadId !== threadId || (turnId !== undefined && pending.turnId !== turnId))
+        continue;
       this.pending.delete(id);
       pending.settle("cancel");
     }
+  }
+
+  /** One consent for routine actions in the exact active turn, never a provider-wide grant. */
+  async requestTask(input: {
+    threadId: string;
+    turnId: string;
+    signal: AbortSignal;
+    publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
+  }): Promise<boolean> {
+    input.signal.throwIfAborted();
+    let task = this.tasks.get(input.threadId);
+    if (task?.turnId !== input.turnId) {
+      this.cancelThread(input.threadId);
+      task = { turnId: input.turnId };
+      this.tasks.set(input.threadId, task);
+    }
+    if (task.granted !== undefined) return task.granted;
+    const current = task;
+    current.pending ??= this.request(input)
+      .then((accepted) => {
+        if (this.tasks.get(input.threadId) !== current || input.signal.aborted) return false;
+        current.granted = accepted;
+        return accepted;
+      })
+      .finally(() => {
+        current.pending = undefined;
+      });
+    // A concurrent follower can be cancelled independently of the first call
+    // that published the shared prompt. Do not leave it waiting for user input.
+    let cancel: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(input.signal.reason);
+      input.signal.addEventListener("abort", cancel, { once: true });
+    });
+    let accepted: boolean;
+    try {
+      input.signal.throwIfAborted();
+      accepted = await Promise.race([current.pending, aborted]);
+    } finally {
+      if (cancel) input.signal.removeEventListener("abort", cancel);
+    }
+    input.signal.throwIfAborted();
+    return accepted && this.tasks.get(input.threadId) === current;
   }
 
   respond(threadId: string, requestId: string, decision: ProviderApprovalDecision): boolean {
@@ -32,6 +86,7 @@ export class ComputerApprovalGate {
 
   async request(input: {
     threadId: string;
+    turnId?: string | undefined;
     signal: AbortSignal;
     publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
   }): Promise<boolean> {
@@ -42,7 +97,7 @@ export class ComputerApprovalGate {
     const answer = new Promise<ProviderApprovalDecision>((resolve) => {
       settle = resolve;
     });
-    this.pending.set(requestId, { threadId: input.threadId, settle });
+    this.pending.set(requestId, { threadId: input.threadId, turnId: input.turnId, settle });
     const cancel = () => settle("cancel");
     input.signal.addEventListener("abort", cancel, { once: true });
     const timeout = setTimeout(cancel, 5 * 60_000);

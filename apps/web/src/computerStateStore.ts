@@ -131,3 +131,10 @@ export function useThreadComputerAvailability(threadId: ThreadId) {
     useShallow((state) => state.threadStatesByThreadId[threadId]?.availability),
   );
 }
+
+/** Observe revocation only, without rerendering the composer for desktop actions. */
+export function useThreadComputerControlGeneration(threadId: ThreadId) {
+  return useComputerStateStore(
+    (state) => state.threadStatesByThreadId[threadId]?.controlGeneration,
+  );
+}

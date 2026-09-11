@@ -7828,6 +7828,56 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect(
+    "lets active approval-required Computer tools reach the authoritative gateway gate",
+    () => {
+      const gateway = makeGatewayCredentialsHarness();
+      const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          enableComputerControl: true,
+        });
+
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Click the target",
+          attachments: [],
+        });
+
+        const canUseTool = harness.createInputs[0]?.options.canUseTool;
+        assert.equal(typeof canUseTool, "function");
+        if (!canUseTool) {
+          return;
+        }
+
+        const result = yield* Effect.promise(() =>
+          canUseTool(
+            "mcp__synara__computer_click",
+            { x: 12, y: 34 },
+            {
+              signal: new AbortController().signal,
+              toolUseID: "tool-use-computer-click",
+              requestId: "request-computer-click",
+            },
+          ),
+        );
+
+        assert.deepEqual(result, {
+          behavior: "allow",
+          updatedInput: { x: 12, y: 34 },
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("classifies generic and MCP tool approvals as canonical tool approvals", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

@@ -296,6 +296,21 @@ describe("isSynaraBrowserToolCall", () => {
 });
 
 describe("deriveReadableToolTitle", () => {
+  it.each([
+    ["computer_click", "Click"],
+    ["computer_type_text", "Type"],
+    ["mcp__synara__computer_activate_window", "Activate a window"],
+  ])("uses the curated Computer label for %s", (toolName, expected) => {
+    expect(
+      deriveReadableToolTitle({
+        title: "Tool",
+        fallbackLabel: "Tool",
+        itemType: "mcp_tool_call",
+        payload: { data: { item: { tool: toolName } } },
+      }),
+    ).toBe(expected);
+  });
+
   it("humanizes search commands even when wrapped in shell -lc", () => {
     expect(
       deriveReadableToolTitle({
@@ -410,6 +425,35 @@ describe("deriveReadableToolTitle", () => {
         },
       }),
     ).toBe("Computer Use: Get App State");
+  });
+
+  it("uses nested invocation metadata before a generic tool request kind", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "Tool",
+        fallbackLabel: "Tool",
+        itemType: "mcp_tool_call",
+        requestKind: "tool",
+        payload: {
+          data: {
+            invocation: {
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+    ).toBe("Computer Use: Get App State");
+  });
+
+  it("humanizes provider tool identifiers used as lifecycle titles", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "get_app_state",
+        fallbackLabel: "get_app_state",
+        itemType: "mcp_tool_call",
+      }),
+    ).toBe("Get App State");
   });
 });
 

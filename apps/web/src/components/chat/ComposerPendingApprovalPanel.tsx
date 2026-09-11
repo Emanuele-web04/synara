@@ -89,8 +89,19 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
-  const actions =
-    approval.sessionApprovalAvailable === false
+  const computerTask = approval.approvalScope === "computer-task";
+  const actions = computerTask
+    ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession").map((action) =>
+        action.decision === "accept"
+          ? {
+              ...action,
+              label: "Allow Computer for this task",
+              description:
+                "Continue routine desktop actions until this response ends. Stop cancels access.",
+            }
+          : action,
+      )
+    : approval.sessionApprovalAvailable === false
       ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
       : APPROVAL_ACTIONS;
 
@@ -136,8 +147,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
-          {KIND_PROMPT[approval.requestKind]}
-          {(approval.toolName ?? parsed.tool) ? (
+          {computerTask ? "Allow Computer for this task?" : KIND_PROMPT[approval.requestKind]}
+          {!computerTask && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
             </span>

@@ -15,7 +15,6 @@ import {
 } from "@synara/contracts";
 import {
   COMPUTER_PERMISSION_LABELS,
-  COMPUTER_PERMISSIONS,
   listComputerPermissions,
 } from "@synara/shared/computerPermissions";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +23,7 @@ import type { AppSettingsBinding } from "~/appSettings";
 import {
   computerBackendIsVisibleDesktop,
   computerLastFailureNote,
+  computerPermissionGrants,
   computerReconnectsNote,
   computerStatusNeedsSetup,
   resolveComputerAvailabilityView,
@@ -101,6 +101,8 @@ export function ComputerSettingsPanel({
   });
 
   const status = statusQuery.data;
+  const hasNativePermissionSetup =
+    typeof window !== "undefined" && !!window.desktopBridge?.permissions;
   useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }), active);
   /**
    * The grants the OS is withholding, named. The availability message already
@@ -140,7 +142,7 @@ export function ComputerSettingsPanel({
   // visible plugin-backed desktop may promise it.
   const capabilitiesDescription =
     backend === COMPUTER_MAC_BACKEND || backend === "cua"
-      ? "The agent shares your Mac desktop. Background input is preferred, but may affect app focus. Bringing a window forward requires your approval for that action. The drawn cursor is a visual indicator; it does not create a separate keyboard focus."
+      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus."
       : backend !== null &&
           COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
           status?.capabilities.visibleDesktop === true
@@ -224,7 +226,11 @@ export function ComputerSettingsPanel({
                 {availabilityView.title}
               </span>
             }
-            description={availabilityView.description}
+            description={
+              availabilityView.kind === "ready"
+                ? "The desktop is ready. Invoke /computer-use with your task, or ask to use Synara computer use. Its tools load for that request only."
+                : availabilityView.description
+            }
             status={[setup.note, ...healthNotes].filter(Boolean).join(" ") || undefined}
           />
           {backend ? (
@@ -238,7 +244,7 @@ export function ComputerSettingsPanel({
               }
             />
           ) : null}
-          {missingPermissions.length > 0 && !window.desktopBridge?.permissions ? (
+          {missingPermissions.length > 0 && !hasNativePermissionSetup ? (
             <SettingsRow
               title={
                 <span className="flex items-center gap-2">
@@ -252,23 +258,12 @@ export function ComputerSettingsPanel({
                 .join(" · ")}
             />
           ) : null}
-          {window.desktopBridge?.permissions ? (
+          {hasNativePermissionSetup ? (
             <div className="p-3">
               <DesktopPermissionSetup
                 feature="computer"
                 active={active}
-                grants={Object.fromEntries(
-                  COMPUTER_PERMISSIONS.map((permission) => [
-                    permission,
-                    status?.availability.kind === "permission-required"
-                      ? missingPermissions.includes(permission)
-                        ? "denied"
-                        : "granted"
-                      : status?.availability.kind === "available"
-                        ? "granted"
-                        : "unknown",
-                  ]),
-                )}
+                grants={computerPermissionGrants(statusQuery.isError ? undefined : status)}
               />
             </div>
           ) : null}
@@ -290,7 +285,7 @@ export function ComputerSettingsPanel({
           {backgroundInputDegraded ? (
             <SettingsRow
               title="Background typing is limited"
-              description="Some applications may refuse background typing or leave its effect uncertain. Bringing a window forward requires your explicit approval for that action."
+              description="Some applications may refuse background typing or leave its effect uncertain. An authorized Computer task can use foreground delivery after a confirmed refusal; uncertain input must be inspected before another action."
             />
           ) : null}
           {status && availabilityView.kind === "ready" ? (
@@ -338,33 +333,8 @@ export function ComputerSettingsPanel({
 
       <SettingsSection title="Computer control">
         <SettingsRow
-          title="Enable by default"
-          description="Keep computer tools available in new chats. This adds provider context even on ordinary messages. Leave off to enable only when needed."
-          resetAction={
-            settings.allowComputerControlInNewChats !== defaults.allowComputerControlInNewChats ? (
-              <SettingResetButton
-                label="computer control default"
-                onClick={() =>
-                  updateSettings({
-                    allowComputerControlInNewChats: defaults.allowComputerControlInNewChats,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.allowComputerControlInNewChats}
-              onCheckedChange={(checked) =>
-                updateSettings({ allowComputerControlInNewChats: Boolean(checked) })
-              }
-              aria-label="Enable computer control by default"
-            />
-          }
-        />
-        <SettingsRow
           title="How agents use the desktop"
-          description="Agents can call computer tools when they need them. The selected model must support images and tool calls. Actions and clipboard reads follow the conversation's approval mode. Foreground actions always ask first. Set up checks the macOS permissions, and the conversation offers setup guidance if access is missing."
+          description="Invoke /computer-use when you need desktop control. In Full access, routine actions continue automatically; approval mode asks once for the active Computer task. Provider risk reviews and consequential-action confirmations still apply, and clipboard reads remain separate. The model must support images and tool calls. Set up checks system permissions; it does not load Computer tools into ordinary messages."
         />
       </SettingsSection>
     </div>

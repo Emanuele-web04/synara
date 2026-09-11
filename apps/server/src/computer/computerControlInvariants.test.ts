@@ -139,6 +139,52 @@ describe("Production audit: desired invariants", () => {
 });
 
 describe("Provider authority invariants", () => {
+  it("a fresh invocation re-arms Stop but an older queued invocation cannot", async () => {
+    const { manager } = setup();
+    try {
+      const stopped = await manager.setControlEnabled("audit", false);
+      expect((await manager.getThreadState("audit")).controlGeneration).toBe(stopped.generation);
+      expect(await manager.admitControl("audit", "request", 0, true)).toBe(false);
+      expect(await manager.admitControl("audit", "request", stopped.generation, true)).toBe(true);
+      expect(manager.canContinueChatControl("audit")).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+  it("routes every provider's routine mutations through the same task gate", async () => {
+    const { manager } = setup();
+    const authorizeAction = vi.fn(async (_name: string) => true);
+    const tools = makeAgentGatewayComputerTools({ manager, authorizeAction });
+    const type = tools.find((tool) => tool.definition.name === "computer_type_text")!;
+    try {
+      for (const provider of [
+        "codex",
+        "claudeAgent",
+        "cursor",
+        "grok",
+        "droid",
+        "devin",
+        "opencode",
+        "pi",
+        "antigravity",
+      ] as const) {
+        await Effect.runPromise(
+          type.handler(
+            { text: "check", window_id: "fake-terminal", include_screenshot: false },
+            {
+              ...context(),
+              callerProvider: provider,
+              principal: { ...context().principal, provider },
+            },
+          ),
+        );
+        expect(authorizeAction.mock.calls.at(-1)?.[0]).toBe("computer_type_text");
+      }
+      expect(authorizeAction).toHaveBeenCalledTimes(9);
+    } finally {
+      await manager.dispose();
+    }
+  });
   it.each(["pi", "antigravity"] as const)(
     "lets Synara approve or deny %s actions",
     async (provider) => {

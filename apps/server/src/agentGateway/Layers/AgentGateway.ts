@@ -953,10 +953,17 @@ export const makeAgentGateway = Effect.gen(function* () {
               { signal },
             );
             if (Option.isNone(caller)) return false;
-            if (caller.value.runtimeMode === "full-access" && args.delivery_mode !== "foreground")
-              return true;
-            return computerApprovalGate.request({
+            // Computer capability is issued only after task activation. Full
+            // access already consents to routine desktop actions, including
+            // foreground delivery; focus is not a second approval boundary.
+            if (caller.value.runtimeMode === "full-access") return true;
+            const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
+            const requestApproval = taskConsent
+              ? computerApprovalGate.requestTask.bind(computerApprovalGate)
+              : computerApprovalGate.request.bind(computerApprovalGate);
+            return requestApproval({
               threadId: context.callerThreadId,
+              turnId: context.callerTurnId ?? "",
               signal,
               publish: async (requestId, decision) => {
                 const createdAt = isoNow();
@@ -972,15 +979,24 @@ export const makeAgentGateway = Effect.gen(function* () {
                       kind: decision === undefined ? "approval.requested" : "approval.resolved",
                       summary:
                         decision === undefined
-                          ? "Computer action needs approval"
+                          ? taskConsent
+                            ? "Allow Computer for this task"
+                            : "Computer action needs approval"
                           : "Computer approval resolved",
                       payload: {
                         requestId,
                         requestKind: "tool",
                         requestType: "tool",
                         toolName: name,
-                        toolParamsDisplay: JSON.stringify(args),
+                        toolParamsDisplay: JSON.stringify(
+                          Object.fromEntries(
+                            Object.entries(args).filter(
+                              ([key]) => key !== "text" && key !== "value",
+                            ),
+                          ),
+                        ),
                         sessionApprovalAvailable: false,
+                        ...(taskConsent ? { approvalScope: "computer-task" } : {}),
                         ...(decision === undefined ? {} : { decision }),
                       },
                       turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,

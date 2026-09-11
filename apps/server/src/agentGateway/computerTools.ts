@@ -824,7 +824,8 @@ export function makeAgentGatewayComputerTools(
         try: async (abortSignal) => {
           if (
             computerToolRequiresApproval(name) &&
-            (PROVIDERS_WITHOUT_APPROVAL_GATE.has(context.callerProvider) ||
+            (options.authorizeAction !== undefined ||
+              PROVIDERS_WITHOUT_APPROVAL_GATE.has(context.callerProvider) ||
               args.delivery_mode === "foreground" ||
               name === "computer_activate_window")
           ) {
@@ -1003,7 +1004,7 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             enum: ["background", "foreground"],
             description:
-              "Defaults to background. Foreground explicitly asks the user before bringing a window forward. Never use it to replay an uncertain action.",
+              "Defaults to background. Foreground may bring the exact target window forward within the active Computer task's consent. Never use it to replay an uncertain action.",
           },
         },
       },
@@ -1187,7 +1188,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_list_windows",
-        description: `List visible desktop windows and their bounds without touching the pointer. Windows come back topmost-first: stackingIndex is 0 for the topmost window and grows downward, and occludedBy names the overlapping windows stacked above each one. A plain x/y click lands on whatever is topmost at that point, so when the window you want is occluded, pass its id as window_id alongside x/y to scope the click to it. ${WINDOW_FOCUS_NOTE} Selecting window_id scopes input to that window and does not authorize activation. Background input may be refused; bringing a window forward requires a separate explicitly approved foreground action.${windowListCompletenessNote(dialect)}`,
+        description: `List visible desktop windows and their bounds without touching the pointer. Windows come back topmost-first: stackingIndex is 0 for the topmost window and grows downward, and occludedBy names the overlapping windows stacked above each one. A plain x/y click lands on whatever is topmost at that point, so when the window you want is occluded, pass its id as window_id alongside x/y to scope the click to it. ${WINDOW_FOCUS_NOTE} Selecting window_id scopes input without activating the window. When needed, use computer_activate_window within the active task's consent; never replay an uncertain input action.${windowListCompletenessNote(dialect)}`,
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
         annotations: { title: "List computer windows", ...READ_ONLY_TOOL_ANNOTATIONS },
       },
@@ -1710,7 +1711,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_activate_window",
       "Activate window",
-      "Bring a window into view and aim the agent keyboard at it. This persistent foreground action always requires explicit approval; ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
+      "Bring a window into view and aim the agent keyboard at it, within the active Computer task's consent and approval mode. Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
       {
         type: "object",
         properties: {
@@ -1855,6 +1856,6 @@ function windowListCompletenessNote(dialect: ComputerAgentDialect): string {
 
 function dragLimitNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Cua 0.24.0 requires explicit foreground authorization for each drag on macOS. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
+    ? "Cua 0.24.0 requires foreground delivery for dragging on macOS, covered by the active Computer task's consent. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
     : "This desktop injects the drag at screen coordinates, so it works for anything the pointer can sweep — selecting text, moving a slider — but cross-application drag-and-drop and dragging a window by its titlebar are handled by the compositor and may not follow. Check the result with computer_screenshot rather than assuming the drop landed.";
 }

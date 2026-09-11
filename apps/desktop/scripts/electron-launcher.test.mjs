@@ -12,11 +12,13 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
+import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
 function createLauncherFixture(t) {
   const root = mkdtempSync(join(tmpdir(), "synara-electron-signing-"));
@@ -34,6 +36,7 @@ function createLauncherFixture(t) {
   writeFileSync(join(source, "Contents", "Info.plist"), "original identity");
   writeFileSync(join(helperDirectory, "Contents", "Info.plist"), "original helper identity");
   writeFileSync(join(desktopDirectory, "resources", "icon.icns"), "synara icon");
+  writeFileSync(join(desktopDirectory, "package.json"), JSON.stringify({ version: "0.8.3" }));
 
   const commands = [];
   let codeSignFailure;
@@ -82,7 +85,7 @@ describe("macOS Electron launcher signature", () => {
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 3);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 4);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
@@ -118,7 +121,7 @@ describe("macOS Electron launcher signature", () => {
       fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 3);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 4);
   });
 
   for (const [argument, label, result] of [
@@ -153,6 +156,114 @@ describe("macOS Electron launcher signature", () => {
       fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
       true,
     );
+  });
+});
+
+describe("macOS source bundle reopen", () => {
+  function reopen(executable, environment = {}) {
+    const applicationDirectory = join(dirname(dirname(executable)), "Resources", "app");
+    const loaded = [];
+    const errors = [];
+    const nodeRequire = createRequire(import.meta.url);
+    const process = {
+      env: environment,
+      argv: [executable],
+      chdir: (path) => loaded.push(["cwd", path]),
+    };
+    const electron = {
+      app: {
+        setAppPath: (path) => loaded.push(["appPath", path]),
+        exit: (code) => loaded.push(["exit", code]),
+      },
+      dialog: { showErrorBox: (...args) => errors.push(args) },
+    };
+    runInNewContext(readFileSync(join(applicationDirectory, "main.cjs"), "utf8"), {
+      __dirname: applicationDirectory,
+      process,
+      require: (name) => {
+        if (name === "electron") return electron;
+        if (name.startsWith("node:")) return nodeRequire(name);
+        loaded.push(["entry", name]);
+      },
+    });
+    return { loaded, errors, environment };
+  }
+
+  it("opens Synara with no argv or inherited environment after the macOS permission restart", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const desktop = dirname(dirname(fixture.metadataPath));
+    const entry = join(desktop, "dist-electron/main.js");
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "// current build");
+    configureMacLauncher(executable, {
+      SYNARA_HOME: join(desktop, "isolated home"),
+      VITE_DEV_SERVER_URL: "http://localhost:8891",
+      SYNARA_AUTH_TOKEN: "synthetic-secret",
+      PROVIDER_API_KEY: "another-secret",
+    });
+
+    const result = reopen(executable);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.loaded, [
+      ["cwd", desktop],
+      ["appPath", desktop],
+      ["entry", entry],
+    ]);
+    assert.equal(result.environment.SYNARA_HOME, join(desktop, "isolated home"));
+    assert.equal(result.environment.VITE_DEV_SERVER_URL, "http://localhost:8891");
+    assert.equal(result.environment.SYNARA_DESKTOP_FLAVOR, "development");
+    assert.equal(Object.keys(result.environment).length, 4);
+    const configuration = readFileSync(
+      join(desktop, ".electron-runtime", "Synara (Dev).app.launch.json"),
+      "utf8",
+    );
+    assert.equal(configuration.includes("secret"), false);
+  });
+
+  it("changes launch routing without rebuilding or re-signing the bundle", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    configureMacLauncher(executable, {
+      SYNARA_HOME: "/tmp/first",
+      VITE_DEV_SERVER_URL: "http://localhost:8891",
+    });
+    fixture.commands.length = 0;
+    configureMacLauncher(executable, { SYNARA_HOME: "/tmp/second" });
+    assert.equal(fixture.build(), executable);
+    assert.deepEqual(fixture.commands, []);
+    const configuration = readFileSync(
+      join(dirname(fixture.metadataPath), "Synara (Dev).app.launch.json"),
+      "utf8",
+    );
+    assert.equal(configuration.includes("8891"), false);
+    assert.equal(configuration.includes("/tmp/second"), true);
+  });
+
+  it("preserves an explicit smoke launch's isolated home without requiring saved routing", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const desktop = dirname(dirname(fixture.metadataPath));
+    mkdirSync(join(desktop, "dist-electron"), { recursive: true });
+    writeFileSync(join(desktop, "dist-electron/main.js"), "// current build");
+    const environment = {
+      SYNARA_HOME: "/tmp/smoke-home",
+      SYNARA_SOURCE_DESKTOP_BUILD_MARKER: "test-marker",
+    };
+    const result = reopen(executable, environment);
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.environment.SYNARA_HOME, "/tmp/smoke-home");
+    assert.equal(result.loaded.at(-1)[0], "entry");
+  });
+
+  it("shows an actionable error if reopened while the build is absent", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    configureMacLauncher(executable, {});
+    const result = reopen(executable);
+    assert.deepEqual(result.loaded, [["exit", 1]]);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0][1], /bun run electron:dev/);
   });
 });
 

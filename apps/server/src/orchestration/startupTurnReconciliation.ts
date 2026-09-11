@@ -253,7 +253,9 @@ function buildStalePendingRequestCommand(input: {
     commandId: CommandId.makeUnsafe(commandKey),
     requestKind: input.requestKind,
     requestId: input.requestId,
-    lifecycleGeneration: input.lifecycleGeneration,
+    ...(input.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: input.lifecycleGeneration }
+      : {}),
     now: input.now,
   });
 }

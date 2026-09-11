@@ -391,7 +391,27 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
   return "unknown";
 }
 
-function itemTitle(itemType: CanonicalItemType): string | undefined {
+function toolItemTitle(item: Record<string, unknown> | undefined): string | undefined {
+  if (!item) return undefined;
+  const appContext = asObject(item.appContext);
+  const action =
+    asTrimmedString(appContext?.actionName) ??
+    asTrimmedString(item.title) ??
+    asTrimmedString(item.tool) ??
+    asTrimmedString(item.name);
+  if (!action) return undefined;
+
+  const appName = asTrimmedString(appContext?.appName);
+  if (!appName || action.toLowerCase().includes(appName.toLowerCase())) {
+    return action;
+  }
+  return `${action} in ${appName}`;
+}
+
+function itemTitle(
+  itemType: CanonicalItemType,
+  item?: Record<string, unknown>,
+): string | undefined {
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -406,9 +426,9 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
     case "file_change":
       return "File change";
     case "mcp_tool_call":
-      return "MCP tool call";
+      return toolItemTitle(item) ?? "MCP tool call";
     case "dynamic_tool_call":
-      return "Tool call";
+      return toolItemTitle(item) ?? "Tool call";
     case "web_search":
       return "Web search";
     case "image_generation":
@@ -912,6 +932,7 @@ function mapItemLifecycle(
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
+  const title = itemTitle(canonicalItemType, source);
 
   return {
     ...(generatedImageReference
@@ -925,7 +946,7 @@ function mapItemLifecycle(
     payload: {
       itemType: canonicalItemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
+      ...(title ? { title } : {}),
       ...(generatedImageReference
         ? { detail: generatedImageReference.path }
         : detail
@@ -1517,14 +1538,16 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "item/mcpToolCall/progress") {
+    const toolUseId = asString(payload?.toolUseId) ?? asString(payload?.itemId);
+    const summary = asString(payload?.summary) ?? asString(payload?.message);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "tool.progress",
         payload: {
-          ...(asString(payload?.toolUseId) ? { toolUseId: asString(payload?.toolUseId) } : {}),
+          ...(toolUseId ? { toolUseId } : {}),
           ...(asString(payload?.toolName) ? { toolName: asString(payload?.toolName) } : {}),
-          ...(asString(payload?.summary) ? { summary: asString(payload?.summary) } : {}),
+          ...(summary ? { summary } : {}),
           ...(asNumber(payload?.elapsedSeconds) !== undefined
             ? { elapsedSeconds: asNumber(payload?.elapsedSeconds) }
             : {}),

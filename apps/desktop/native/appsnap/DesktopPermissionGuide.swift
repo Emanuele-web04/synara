@@ -8,7 +8,7 @@ private final class PermissionAppDragView: NSView, NSDraggingSource {
     init(appPath: String, appName: String) {
         appURL = URL(fileURLWithPath: appPath)
         icon = NSWorkspace.shared.icon(forFile: appPath)
-        super.init(frame: NSRect(x: 20, y: 94, width: 340, height: 52))
+        super.init(frame: NSRect(x: 20, y: 168, width: 340, height: 52))
         wantsLayer = true
         layer?.cornerRadius = 8
         let image = NSImageView(frame: NSRect(x: 12, y: 10, width: 32, height: 32))
@@ -44,6 +44,7 @@ final class DesktopPermissionGuide: NSObject, NSWindowDelegate {
     private let heading = NSTextField(labelWithString: "Checking permissions…")
     private let instructions = NSTextField(wrappingLabelWithString: "")
     private let progress = NSTextField(labelWithString: "")
+    private let recovery = NSTextField(wrappingLabelWithString: "")
     private let appPath: String
     private let appName: String
     private let dragView: PermissionAppDragView
@@ -54,7 +55,7 @@ final class DesktopPermissionGuide: NSObject, NSWindowDelegate {
         self.appPath = appPath
         self.appName = appName
         dragView = PermissionAppDragView(appPath: appPath, appName: appName)
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 276),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 350),
             styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.title = "Set up \(appName)"
@@ -64,15 +65,18 @@ final class DesktopPermissionGuide: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = self
         guard let content = panel.contentView else { return }
-        heading.frame = NSRect(x: 20, y: 234, width: 340, height: 22)
+        heading.frame = NSRect(x: 20, y: 308, width: 340, height: 22)
         heading.font = .systemFont(ofSize: 16, weight: .semibold)
-        instructions.frame = NSRect(x: 20, y: 158, width: 340, height: 64)
+        instructions.frame = NSRect(x: 20, y: 232, width: 340, height: 64)
         instructions.font = .systemFont(ofSize: 13)
         instructions.textColor = .secondaryLabelColor
-        progress.frame = NSRect(x: 20, y: 57, width: 340, height: 24)
+        progress.frame = NSRect(x: 20, y: 131, width: 340, height: 24)
         progress.font = .systemFont(ofSize: 12, weight: .medium)
+        recovery.frame = NSRect(x: 20, y: 53, width: 340, height: 68)
+        recovery.font = .systemFont(ofSize: 12)
+        recovery.textColor = .secondaryLabelColor
         content.addSubview(heading); content.addSubview(instructions)
-        content.addSubview(dragView); content.addSubview(progress)
+        content.addSubview(dragView); content.addSubview(progress); content.addSubview(recovery)
         let reveal = NSButton(title: "Show in Finder", target: self, action: #selector(revealApp))
         reveal.frame = NSRect(x: 16, y: 14, width: 130, height: 30)
         reveal.bezelStyle = .rounded
@@ -112,6 +116,8 @@ final class DesktopPermissionGuide: NSObject, NSWindowDelegate {
         let required = state["required"] as? [String] ?? []
         let grants = state["grants"] as? [String: String] ?? [:]
         let grantedCount = required.filter { grants[$0] == "granted" }.count
+        recovery.stringValue = state["recoveryAdvice"] as? String ?? ""
+        recovery.isHidden = state["phase"] as? String == "complete"
         progress.stringValue = "\(grantedCount) of \(required.count) permissions granted · Checking automatically"
         if state["phase"] as? String == "complete" {
             heading.stringValue = "Permissions granted"

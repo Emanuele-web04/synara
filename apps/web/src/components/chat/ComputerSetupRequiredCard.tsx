@@ -10,7 +10,11 @@ import {
   computerStatusQueryOptions,
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
 } from "~/lib/serverReactQuery";
-import { computerStatusNeedsSetup, resolveComputerAvailabilityView } from "../ComputerPanel.logic";
+import {
+  computerPermissionGrants,
+  computerStatusNeedsSetup,
+  resolveComputerAvailabilityView,
+} from "../ComputerPanel.logic";
 import type {
   ComputerBuildSignature,
   ComputerPermission,
@@ -205,20 +209,7 @@ export function ConnectedComputerSetupRequiredCard(
       {window.desktopBridge?.permissions ? (
         <DesktopPermissionSetup
           feature="computer"
-          grants={{
-            accessibility:
-              status?.availability.kind === "available" ||
-              (status?.availability.kind === "permission-required" &&
-                !status.availability.missing.includes("accessibility"))
-                ? "granted"
-                : "unknown",
-            screenRecording:
-              status?.availability.kind === "available" ||
-              (status?.availability.kind === "permission-required" &&
-                !status.availability.missing.includes("screenRecording"))
-                ? "granted"
-                : "unknown",
-          }}
+          grants={computerPermissionGrants(statusQuery.isError ? undefined : status)}
         />
       ) : null}
     </div>

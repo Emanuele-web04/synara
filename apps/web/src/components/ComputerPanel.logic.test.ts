@@ -15,6 +15,7 @@ import {
   computerControlReadiness,
   computerDeliveryWarning,
   computerPaneInputMode,
+  computerPermissionGrants,
   computerStatusNeedsSetup,
   computerStopControlLabel,
   computerCursorPosition,
@@ -30,6 +31,55 @@ import {
 } from "./ComputerPanel.logic";
 
 const COMPUTER_ID = "desktop";
+
+describe("computer permission checklist", () => {
+  it("does not turn a present but unprobed backend into granted permissions", () => {
+    expect(
+      computerPermissionGrants({
+        availability: { kind: "available", backend: "cua" },
+        health: {
+          status: "unavailable",
+          captureAvailable: false,
+          consecutiveFailures: 0,
+          reconnects: 0,
+        },
+      }),
+    ).toEqual({ accessibility: "unknown", screenRecording: "unknown" });
+    expect(computerPermissionGrants(undefined)).toEqual({
+      accessibility: "unknown",
+      screenRecording: "unknown",
+    });
+  });
+
+  it("reports the native partial grant and subsequent completion", () => {
+    const health = {
+      status: "connected" as const,
+      captureAvailable: true,
+      consecutiveFailures: 0,
+      reconnects: 0,
+    };
+    expect(
+      computerPermissionGrants({
+        availability: {
+          kind: "permission-required",
+          missing: ["screenRecording"],
+          message: "Grant screen access",
+          buildSignature: "unknown",
+        },
+        health,
+      }),
+    ).toEqual({ accessibility: "granted", screenRecording: "denied" });
+    expect(
+      computerPermissionGrants({ availability: { kind: "available", backend: "cua" }, health }),
+    ).toEqual({ accessibility: "granted", screenRecording: "granted" });
+    expect(
+      computerPermissionGrants({
+        availability: { kind: "available", backend: "cua" },
+        health: { ...health, captureAvailable: false },
+      }),
+    ).toEqual({ accessibility: "granted", screenRecording: "unknown" });
+  });
+});
 
 function header(sequence: number, computerId = COMPUTER_ID): ComputerFrameHeader {
   return {

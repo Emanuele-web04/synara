@@ -3043,6 +3043,7 @@ describe("turn dispatch settings", () => {
     assistantSelections: [],
     browserAnnotations: [],
     terminalContexts: [],
+    pullRequestContexts: [],
     fileComments: [],
     pastedTexts: [],
     skills: [],

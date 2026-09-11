@@ -26,6 +26,7 @@ import {
 } from "../Services/ComputerLeaseReactor";
 import { ComputerService } from "../Services/ComputerService";
 import { cursorRuntimeActivity } from "../cursorActivity.ts";
+import { computerApprovalGate } from "../ComputerApprovalGate.ts";
 
 /**
  * A terminal turn ends the thread's authority to act: the gateway refuses every
@@ -47,12 +48,16 @@ const make = Effect.gen(function* () {
   const computerService = yield* ComputerService;
 
   const releaseDesktopControl = (event: ProviderRuntimeEvent) =>
-    Effect.promise(() =>
-      computerService.manager.releaseDesktopControl(
+    Effect.promise(() => {
+      computerApprovalGate.cancelThread(
+        event.threadId,
+        event.type === "session.exited" ? undefined : (event.turnId ?? undefined),
+      );
+      return computerService.manager.releaseDesktopControl(
         event.threadId,
         event.type === "session.exited" ? undefined : event.turnId,
-      ),
-    ).pipe(
+      );
+    }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)

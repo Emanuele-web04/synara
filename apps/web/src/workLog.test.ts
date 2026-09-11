@@ -1574,6 +1574,213 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("recovers Codex tool identity from item and nested invocation metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-mcp-item",
+        createdAt: "2026-09-11T20:00:00.000Z",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            item: {
+              type: "mcpToolCall",
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-mcp-invocation",
+        createdAt: "2026-09-11T20:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "mcp_tool_call",
+          requestKind: "tool",
+          data: {
+            invocation: {
+              server: "computer-use",
+              tool: "screenshot",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-mcp-item",
+        toolName: "get_app_state",
+        toolTitle: "Computer Use: Get App State",
+      },
+      {
+        id: "codex-mcp-invocation",
+        toolName: "screenshot",
+        toolTitle: "Computer Use: Screenshot",
+      },
+    ]);
+  });
+
+  it("renders contextual Computer titles from current and historical argument envelopes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "computer-item-arguments",
+        kind: "tool.completed",
+        summary: "Computer Click",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "computer_click",
+          data: {
+            toolCallId: "computer-click-1",
+            item: {
+              tool: "computer_click",
+              arguments: { x: 12, y: 34, app: "Safari" },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-item-input",
+        kind: "tool.completed",
+        summary: "Computer Type Text",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            toolCallId: "computer-type-1",
+            item: {
+              tool: "computer_type_text",
+              input: {
+                arguments: { label: "Password", text: "private value", app_name: "Notes" },
+              },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-invocation-arguments",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "mcp_tool_call",
+          data: {
+            toolCallId: "computer-window-1",
+            invocation: {
+              tool: "computer_activate_window",
+              arguments: { app_name: "Finder" },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-historical-approval",
+        kind: "tool.started",
+        summary: "Tool approval requested",
+        payload: {
+          requestKind: "tool",
+          toolName: "computer_launch_app",
+          toolParamsDisplay: JSON.stringify({ app: "Calculator" }),
+        },
+      }),
+      makeActivity({
+        id: "computer-historical-param-rows",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: {
+          requestKind: "tool",
+          toolName: "computer_click",
+          toolParamsDisplay: [
+            { name: "label", value: "Save" },
+            { display_name: "app", value: "TextEdit" },
+          ],
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "computer-item-arguments",
+          toolTitle: "Click at (12, 34) in Safari",
+        }),
+        expect.objectContaining({
+          id: "computer-item-input",
+          toolTitle: "Type on “Password” in Notes",
+        }),
+        expect.objectContaining({
+          id: "computer-invocation-arguments",
+          toolTitle: "Activate a window in Finder",
+        }),
+        expect.objectContaining({
+          id: "computer-historical-approval",
+          toolTitle: "Open an app Calculator",
+        }),
+        expect.objectContaining({
+          id: "computer-historical-param-rows",
+          toolTitle: "Click on “Save” in TextEdit",
+        }),
+      ]),
+    );
+    expect(entries.find((entry) => entry.id === "computer-item-input")?.toolTitle).not.toContain(
+      "private value",
+    );
+  });
+
+  it("preserves meaningful provider and progress titles for Computer calls", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "computer-custom-title",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          title: "Clicking the primary action",
+          toolName: "computer_click",
+          input: { label: "Continue" },
+        },
+      }),
+      makeActivity({
+        id: "computer-progress-title",
+        kind: "tool.updated",
+        summary: "Waiting for Safari",
+        payload: {
+          title: "Tool",
+          toolName: "computer_wait",
+          input: { duration_ms: 2_000 },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { id: "computer-custom-title", toolTitle: "Clicking the primary action" },
+      { id: "computer-progress-title", toolTitle: "Waiting for Safari" },
+    ]);
+  });
+
+  it("distinguishes Computer consent from an executed click", () => {
+    const activities = [
+      makeActivity({
+        id: "computer-consent-request",
+        kind: "approval.requested",
+        summary: "Allow Computer for this task",
+        payload: { approvalScope: "computer-task", toolName: "computer_click" },
+      }),
+      makeActivity({
+        id: "computer-consent-accepted",
+        kind: "approval.resolved",
+        summary: "Computer approval resolved",
+        payload: { approvalScope: "computer-task", toolName: "computer_click", decision: "accept" },
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { toolTitle: "Computer task approval requested" },
+      { toolTitle: "Computer task approved" },
+    ]);
+  });
+
   it("collapses Cursor tool lifecycle rows by toolCallId even when titles and details change", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

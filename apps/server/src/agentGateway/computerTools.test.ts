@@ -198,12 +198,12 @@ describe("agent gateway computer tools", () => {
     );
   });
 
-  it("describes explicit foreground approval for macOS", async () => {
+  it("covers routine foreground delivery with the active task consent on macOS", async () => {
     const { byName } = await setup(
       Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
     );
     const notes = computerToolInstructions();
-    expect(notes).toContain("Foreground delivery requires explicit approval");
+    expect(notes).toContain("covered by the active task's Computer consent");
     expect(notes).not.toContain("without bringing it to the front");
     expect(windowIdDescription(byName, "computer_click")).toContain(
       "input is scoped to that exact window",
@@ -212,7 +212,7 @@ describe("agent gateway computer tools", () => {
       "without authorizing foreground promotion",
     );
     expect(byName.get("computer_activate_window")?.definition.description).toContain(
-      "explicit approval",
+      "active Computer task's consent",
     );
     expect(byName.get("computer_list_windows")?.definition.description).not.toContain(
       "into view automatically",
@@ -1437,25 +1437,29 @@ describe("agent gateway computer tools", () => {
     });
   });
 
-  it("waits without touching the desktop, and never for longer than its bound", async () => {
-    const { backend, call } = await setup();
-    const started = Date.now();
-    const result = await call("computer_wait", { duration_ms: 5 });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(4);
-    expect(result.isError).not.toBe(true);
-    expect(resultJson(result)).toMatchObject({ waitedMs: 5 });
-    // No pointer, no keys, no capture: a wait that photographed the desktop
-    // would be a screenshot with a delay, which is not what it is for.
-    expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
-    expect(backend.callsFor("click")).toHaveLength(0);
+  it(
+    "waits without touching the desktop, and never for longer than its bound",
+    async () => {
+      const { backend, call } = await setup();
+      const started = Date.now();
+      const result = await call("computer_wait", { duration_ms: 5 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(4);
+      expect(result.isError).not.toBe(true);
+      expect(resultJson(result)).toMatchObject({ waitedMs: 5 });
+      // No pointer, no keys, no capture: a wait that photographed the desktop
+      // would be a screenshot with a delay, which is not what it is for.
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
+      expect(backend.callsFor("click")).toHaveLength(0);
 
-    // Clamped rather than refused: the intent is clear and only the scale is
-    // wrong, and an unclamped wait stalls the whole turn behind a sleep.
-    const clamped = await call("computer_wait", { duration_ms: 60 * 60 * 1_000 });
-    expect(resultJson(clamped)).toMatchObject({ waitedMs: COMPUTER_WAIT_MAX_MS });
-    const negative = await call("computer_wait", { duration_ms: -5 });
-    expect(resultJson(negative)).toMatchObject({ waitedMs: 0 });
-  });
+      // Clamped rather than refused: the intent is clear and only the scale is
+      // wrong, and an unclamped wait stalls the whole turn behind a sleep.
+      const clamped = await call("computer_wait", { duration_ms: 60 * 60 * 1_000 });
+      expect(resultJson(clamped)).toMatchObject({ waitedMs: COMPUTER_WAIT_MAX_MS });
+      const negative = await call("computer_wait", { duration_ms: -5 });
+      expect(resultJson(negative)).toMatchObject({ waitedMs: 0 });
+    },
+    COMPUTER_WAIT_MAX_MS + 5_000,
+  );
 
   it("holds modifiers across a click and a scroll, and refuses a name it cannot press", async () => {
     // Not expressible with computer_hotkey, which releases its keys before the

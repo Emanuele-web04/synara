@@ -153,6 +153,43 @@ function editAndResendCommand(enableComputerControl?: boolean) {
 }
 
 describe("decider computer-control pass-through", () => {
+  it.each([false, true])(
+    "freezes user invocation and generation in the actual nested command (queued=%s)",
+    async (queued) => {
+      const command = turnStartCommand();
+      const events = await decide(
+        {
+          ...command,
+          message: { ...command.message, text: "/computer-use open Calculator" },
+          computerControlGeneration: 7,
+        },
+        makeReadModel(queued ? { session: runningSession() } : {}),
+      );
+      expect(
+        payloadOf(events, queued ? "thread.turn-queued" : "thread.turn-start-requested"),
+      ).toMatchObject({
+        computerControlMode: "request",
+        enableComputerControl: true,
+        computerControlGeneration: 7,
+      });
+    },
+  );
+
+  it.each(["agent", "automation"] as const)(
+    "does not infer consent from a %s message",
+    async (dispatchOrigin) => {
+      const command = turnStartCommand();
+      const events = await decide(
+        {
+          ...command,
+          dispatchOrigin,
+          message: { ...command.message, text: "/computer-use open Calculator" },
+        },
+        makeReadModel(),
+      );
+      expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
+    },
+  );
   it.each([
     { computerControlMode: "off" as const, enableComputerControl: true, expected: false },
     { computerControlMode: "request" as const, enableComputerControl: false, expected: true },

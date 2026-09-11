@@ -7,6 +7,7 @@ import type { ComputerWindow } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  COMPUTER_TOOL_TITLES,
   computerToolName,
   describeComputerToolCall,
   isComputerToolName,
@@ -22,6 +23,32 @@ const SAFARI: ComputerWindow = {
 } as unknown as ComputerWindow;
 
 describe("computerToolName", () => {
+  it("covers every native desktop tool advertised by the gateway", () => {
+    expect(Object.keys(COMPUTER_TOOL_TITLES)).toEqual([
+      "computer_screenshot",
+      "computer_get_state",
+      "computer_get_screen_size",
+      "computer_list_windows",
+      "computer_click",
+      "computer_double_click",
+      "computer_triple_click",
+      "computer_right_click",
+      "computer_move_cursor",
+      "computer_drag",
+      "computer_scroll",
+      "computer_type_text",
+      "computer_press_key",
+      "computer_hotkey",
+      "computer_set_value",
+      "computer_perform_action",
+      "computer_launch_app",
+      "computer_activate_window",
+      "computer_wait",
+      "computer_read_clipboard",
+      "computer_write_clipboard",
+    ]);
+  });
+
   it("recovers the gateway tool through whatever wrapping a provider applied", () => {
     expect(computerToolName("mcp__synara__computer_click")).toBe("computer_click");
     expect(computerToolName("computer_click")).toBe("computer_click");
@@ -65,19 +92,19 @@ describe("describeComputerToolCall", () => {
     ).toBe("Click on “Save”");
   });
 
-  it("shows what is being typed, and calls a clipboard write a clipboard write", () => {
+  it("keeps typed and clipboard values out of transcript summaries", () => {
     // `computer_write_clipboard` used to be classified a *file change* by a
     // substring match on "write"; naming its payload "Text" would leave the same
     // impression, that something is being typed into whatever has focus.
     expect(
       describeComputerToolCall({ toolName: "computer_type_text", args: { text: "hello" } })
         ?.summary,
-    ).toBe("Type “hello”");
+    ).toBe("Type");
     const clipboard = describeComputerToolCall({
       toolName: "computer_write_clipboard",
       args: { text: "secret" },
     });
-    expect(clipboard?.summary).toBe("Write to the clipboard “secret”");
+    expect(clipboard?.summary).toBe("Write to the clipboard");
     expect(clipboard?.params).toContainEqual({ name: "Clipboard", value: "secret" });
   });
 
@@ -97,6 +124,35 @@ describe("describeComputerToolCall", () => {
       args: { x: 812, y: 344 },
     });
     expect(described?.params).toEqual([{ name: "Position", value: "812, 344" }]);
+  });
+
+  it("describes triple-click, activation, wait, and nested drag targets", () => {
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_triple_click",
+        args: { label: "Address" },
+      })?.summary,
+    ).toBe("Triple-click on “Address”");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_activate_window",
+        args: { window_id: "win-7" },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Activate a window in Safari — Google");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_wait",
+        args: { duration_ms: 2_000, label: "Done", window_id: "win-7" },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Wait for “Done” in Safari — Google");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_drag",
+        args: { from: { label: "Draft" }, to: { label: "Archive" } },
+      })?.summary,
+    ).toBe("Drag from “Draft” to “Archive”");
   });
 
   it("returns null for anything that is not a desktop tool", () => {

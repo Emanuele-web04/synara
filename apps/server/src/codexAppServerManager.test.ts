@@ -3589,6 +3589,125 @@ describe("MCP tool call elicitation approvals", () => {
     },
   });
 
+  function computerApprovalHarness() {
+    const harness = createCollabNotificationHarness();
+    const context = Object.assign(harness.context, {
+      enableComputerControl: true,
+      activeInteractionMode: "default",
+      gatewaySessionLease: { release: vi.fn() } as { release: () => void } | undefined,
+    });
+    context.session.runtimeMode = "approval-required";
+    context.session.activeTurnId = "turn_mcp";
+    return { ...harness, context };
+  }
+
+  it("delegates exact active Synara Computer calls to gateway consent without persistent permission", async () => {
+    const { manager, context, emitEvent, writeMessage } = computerApprovalHarness();
+    for (const toolName of ["computer_click", "computer_type_text", "computer_read_clipboard"]) {
+      const params = approvalParams();
+      params._meta.tool_name = toolName;
+      await handleServerRequestForTest(manager, context, {
+        id: toolName,
+        method: "mcpServer/elicitation/request",
+        params,
+      });
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: toolName,
+        result: { action: "accept", content: null, _meta: null },
+      });
+    }
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Allow the synara MCP server to run tool "computer_click"?', true],
+    ['Allow the synara MCP server to run tool "computer_type_text"?', true],
+    ['Allow the synara MCP server to run tool "shell"?', false],
+    ['Allow the other MCP server to run tool "computer_click"?', false],
+    ["Please approve computer_click", false],
+    ['Allow the synara MCP server to run tool "computer_click"? Extra text', false],
+  ])(
+    "handles the installed Codex approval envelope without tool_name: %s",
+    async (message, accepted) => {
+      const { manager, context, writeMessage } = computerApprovalHarness();
+      const { tool_name: _toolName, ...meta } = approvalParams()._meta;
+      await handleServerRequestForTest(manager, context, {
+        id: 75,
+        method: "mcpServer/elicitation/request",
+        params: { ...approvalParams(), message, _meta: meta },
+      });
+      expect(context.pendingApprovals.size).toBe(accepted ? 0 : 1);
+      expect(writeMessage.mock.calls.length).toBe(accepted ? 1 : 0);
+    },
+  );
+
+  it.each([
+    "other-server",
+    "unknown-tool",
+    "disabled",
+    "no-lease",
+    "retired",
+    "stopping",
+    "inactive",
+    "stale-turn",
+    "child-thread",
+    "plan",
+    "unknown-mode",
+    "auto",
+  ])("preserves provider approval for %s requests", async (condition) => {
+    const { manager, context, emitEvent, writeMessage } = computerApprovalHarness();
+    const params = approvalParams();
+    switch (condition) {
+      case "other-server":
+        params.serverName = "other";
+        break;
+      case "unknown-tool":
+        params._meta.tool_name = "computer_delete_everything";
+        break;
+      case "disabled":
+        context.enableComputerControl = false;
+        break;
+      case "no-lease":
+        context.gatewaySessionLease = undefined;
+        break;
+      case "retired":
+        context.gatewayCredentialRetired = true;
+        break;
+      case "stopping":
+        context.stopping = true;
+        break;
+      case "inactive":
+        context.session.status = "ready";
+        break;
+      case "stale-turn":
+        params.turnId = "turn_old";
+        break;
+      case "child-thread":
+        params.threadId = "provider_child";
+        break;
+      case "plan":
+        context.activeInteractionMode = "plan";
+        break;
+      case "unknown-mode":
+        context.activeInteractionMode = "";
+        break;
+      case "auto":
+        context.session.runtimeMode = "auto";
+        break;
+    }
+    await handleServerRequestForTest(manager, context, {
+      id: 74,
+      method: "mcpServer/elicitation/request",
+      params,
+    });
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "request", requestKind: "tool" }),
+    );
+  });
+
   it("tracks approval elicitations as tool requests and accepts them with the MCP response shape", async () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
 

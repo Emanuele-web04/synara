@@ -1933,7 +1933,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const buildProviderText = (context: PiSessionContext, text: string) =>
-      buildPiTurnPrompt(context, { text, gatewayControlAvailable: context.gatewayControlAvailable });
+      buildPiTurnPrompt(context, {
+        text,
+        gatewayControlAvailable: context.gatewayControlAvailable,
+      });
 
     const sendTurnBusyError = () =>
       new ProviderAdapterValidationError({

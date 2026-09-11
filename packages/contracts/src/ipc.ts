@@ -618,6 +618,7 @@ export interface DesktopPermissionSetupState {
   readonly appName: string;
   readonly appPath: string | null;
   readonly message: string | null;
+  readonly recoveryAdvice?: string;
 }
 
 export type DesktopSafariAccessInfo =

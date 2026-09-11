@@ -13,7 +13,6 @@ import type {
   OrchestrationEvent,
   ProviderKind,
   ProviderForkThreadResult,
-  ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
   ServerSettings,
