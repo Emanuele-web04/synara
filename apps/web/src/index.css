@@ -2519,7 +2519,7 @@ diffs-container {
    Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
    they are transient overlays, not part of this raised-card family. */
 :root {
-  --surface-border-strength: 72%;
+  --surface-border-strength: 55%;
   --surface-border: color-mix(
     in srgb,
     color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
