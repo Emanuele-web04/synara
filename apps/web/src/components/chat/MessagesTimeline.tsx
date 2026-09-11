@@ -10,7 +10,6 @@ import {
   type ResolvedKeybindingsConfig,
   ThreadId,
   type ThreadGoalAchievement,
-  type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
@@ -191,19 +190,14 @@ const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 // How long a jumped-to message keeps its highlight tint before fading back out.
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
-const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
-const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
+const FIND_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
+const FIND_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
 const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
 const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
 // Treat any partially visible row (>= 1px) as in view, so the navigation trail's
 // "active" tick tracks the topmost rendered row rather than waiting for a turn to
 // be substantially on-screen.
 const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
-// The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
-// never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
-const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
-const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
-const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
 const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_GOAL_ACHIEVEMENTS_BY_TURN_ID = new Map<TurnId, ThreadGoalAchievement>();
 const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
@@ -241,7 +235,6 @@ export interface MessagesTimelineController {
     messageId: MessageId,
     options?: { segmentIndex?: number; fineScrollFind?: boolean },
   ) => void;
-  scrollToMarker: (marker: ThreadMarker) => void;
   setActiveFindMatch: (match: ThreadFindMatch | null) => void;
 }
 
@@ -290,30 +283,6 @@ function cssAttributeSelectorValue(value: string): string {
 
 function getMonotonicTimeMs(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
-}
-
-// A marker can split into several spans when its range crosses markdown nodes, so collect every
-// rendered span for the marker (used both to scroll into view and to decorate the active ring).
-function collectThreadMarkerElements(
-  root: ParentNode | null,
-  marker: Pick<ThreadMarker, "id" | "messageId">,
-): HTMLElement[] {
-  if (!root) {
-    return [];
-  }
-  const messageId = cssAttributeSelectorValue(marker.messageId);
-  const markerId = cssAttributeSelectorValue(marker.id);
-  const selector = `[data-assistant-message-id="${messageId}"] [data-thread-marker-id="${markerId}"]`;
-  return Array.from(root.querySelectorAll<HTMLElement>(selector));
-}
-
-function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLElement | null {
-  for (const element of elements) {
-    if (element.getClientRects().length > 0) {
-      return element;
-    }
-  }
-  return null;
 }
 
 // Per-step status glyph for the worktree setup stepper. Mirrors the active
@@ -451,8 +420,6 @@ interface MessagesTimelineProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Fork the thread from the assistant footer, carrying the transcript up to that turn. */
   onForkFromMessage?: (messageId: MessageId) => void;
-  /** Text markers for assistant messages in the active thread. */
-  threadMarkers?: readonly ThreadMarker[];
   /** Recorded goal achievements; each renders a footer badge on its turn's terminal assistant message. */
   goalAchievements?: readonly ThreadGoalAchievement[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
@@ -555,7 +522,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   canPinMessage,
   onTogglePinMessage,
   onForkFromMessage,
-  threadMarkers: threadMarkersProp,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
   tailAnchorMessageId: tailAnchorMessageIdProp,
@@ -614,7 +580,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const worktreeSetup = worktreeSetupProp ?? null;
   const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
-  const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
@@ -741,22 +706,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     useState<MessageId | null>(null);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
-  // Index markers once per update so each assistant row avoids a full marker scan.
-  const threadMarkersByMessageId = useMemo<ReadonlyMap<MessageId, readonly ThreadMarker[]>>(() => {
-    if (threadMarkers.length === 0) {
-      return EMPTY_THREAD_MARKERS_BY_MESSAGE_ID;
-    }
-    const byMessageId = new Map<MessageId, ThreadMarker[]>();
-    for (const marker of threadMarkers) {
-      const messageMarkers = byMessageId.get(marker.messageId);
-      if (messageMarkers) {
-        messageMarkers.push(marker);
-      } else {
-        byMessageId.set(marker.messageId, [marker]);
-      }
-    }
-    return byMessageId;
-  }, [threadMarkers]);
   // Index achievements by the turn whose completion achieved the goal, so each
   // badge anchors to that turn's terminal assistant message. Last one wins per
   // turn (a turn can only end one goal at a time anyway).
@@ -949,7 +898,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
-      threadMarkersByMessageId,
       toolGroupSummaryOverrides,
     }),
     [
@@ -968,7 +916,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
-      threadMarkersByMessageId,
       toolGroupSummaryOverrides,
     ],
   );
@@ -979,37 +926,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     rowsRef.current = rows;
   }, [rows]);
   const jumpHighlightTimeoutRef = useRef<number | null>(null);
-  const markerFineScrollFrameRef = useRef<number | null>(null);
-  // Marker spans currently carrying the deep-link "active" ring, tracked so the decoration can be
-  // toggled imperatively (no markdown re-parse) and reliably cleared on the next jump or teardown.
-  const decoratedMarkerElementsRef = useRef<HTMLElement[]>([]);
-  const clearActiveMarkerDecoration = useCallback(() => {
-    for (const element of decoratedMarkerElementsRef.current) {
-      element.classList.remove(ACTIVE_MARKER_CLASS_NAME);
-    }
-    decoratedMarkerElementsRef.current = [];
-  }, []);
-  const applyActiveMarkerDecoration = useCallback(
-    (elements: readonly HTMLElement[]) => {
-      clearActiveMarkerDecoration();
-      for (const element of elements) {
-        element.classList.add(ACTIVE_MARKER_CLASS_NAME);
-      }
-      decoratedMarkerElementsRef.current = [...elements];
-    },
-    [clearActiveMarkerDecoration],
-  );
+  const findFineScrollFrameRef = useRef<number | null>(null);
   useEffect(
     () => () => {
       if (jumpHighlightTimeoutRef.current !== null) {
         window.clearTimeout(jumpHighlightTimeoutRef.current);
       }
-      if (markerFineScrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
+      if (findFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(findFineScrollFrameRef.current);
       }
-      clearActiveMarkerDecoration();
     },
-    [clearActiveMarkerDecoration],
+    [],
   );
   useEffect(() => {
     if (!controllerRef) {
@@ -1055,14 +982,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
       jumpHighlightTimeoutRef.current = window.setTimeout(() => {
         setHighlightedMessageId(null);
-        clearActiveMarkerDecoration();
         jumpHighlightTimeoutRef.current = null;
       }, JUMP_HIGHLIGHT_DURATION_MS);
     };
-    const cancelPendingMarkerFineScroll = () => {
-      if (markerFineScrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
-        markerFineScrollFrameRef.current = null;
+    const cancelPendingFindFineScroll = () => {
+      if (findFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(findFineScrollFrameRef.current);
+        findFineScrollFrameRef.current = null;
       }
     };
     const applyActiveFindMatch = () => {
@@ -1084,11 +1010,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const scheduleFindMatchFineScroll = (
       target: NonNullable<ReturnType<typeof resolveThreadFindJumpTarget>>,
     ) => {
-      cancelPendingMarkerFineScroll();
-      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      cancelPendingFindFineScroll();
+      const deadlineMs = getMonotonicTimeMs() + FIND_FINE_SCROLL_RETRY_TIMEOUT_MS;
       let attempts = 0;
       const tick = () => {
-        markerFineScrollFrameRef.current = null;
+        findFineScrollFrameRef.current = null;
         const root = timelineRootRef.current;
         if (!root) {
           return;
@@ -1116,36 +1042,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           }
         }
         attempts += 1;
-        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
-          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+        if (getMonotonicTimeMs() <= deadlineMs && attempts < FIND_FINE_SCROLL_MAX_RETRY_FRAMES) {
+          findFineScrollFrameRef.current = window.requestAnimationFrame(tick);
         }
       };
-      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
-    };
-    const scheduleMarkerFineScroll = (marker: ThreadMarker) => {
-      cancelPendingMarkerFineScroll();
-      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
-      let attempts = 0;
-      const tick = () => {
-        markerFineScrollFrameRef.current = null;
-        const elements = collectThreadMarkerElements(timelineRootRef.current, marker);
-        const visibleElement = findVisibleThreadMarkerElement(elements);
-        if (visibleElement) {
-          applyActiveMarkerDecoration(elements);
-          visibleElement.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
-          return;
-        }
-        attempts += 1;
-        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
-          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
-        }
-      };
-      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+      findFineScrollFrameRef.current = window.requestAnimationFrame(tick);
     };
     const controller: MessagesTimelineController = {
       scrollToMessage: (messageId, options) => {
-        cancelPendingMarkerFineScroll();
-        clearActiveMarkerDecoration();
+        cancelPendingFindFineScroll();
         const target = scrollToMessage(messageId, options?.segmentIndex);
         if (!target) {
           return;
@@ -1155,16 +1060,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         if (options?.fineScrollFind || target.collapsedNarrationMessageId) {
           scheduleFindMatchFineScroll(target);
         }
-      },
-      scrollToMarker: (marker) => {
-        clearActiveMarkerDecoration();
-        const target = scrollToMessage(marker.messageId);
-        if (!target) {
-          return;
-        }
-        setHighlightedMessageId(target.visibleMessageId);
-        clearJumpHighlightAfterDelay();
-        scheduleMarkerFineScroll(marker);
       },
       setActiveFindMatch: (match) => {
         activeFindMatchRef.current = match;
@@ -1177,14 +1072,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         controllerRef.current = null;
       }
     };
-  }, [
-    applyActiveMarkerDecoration,
-    clearActiveMarkerDecoration,
-    controllerRef,
-    onNavigate,
-    resolvedListRef,
-    setCollapsedWorkExpanded,
-  ]);
+  }, [controllerRef, onNavigate, resolvedListRef, setCollapsedWorkExpanded]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -1874,8 +1762,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = resolveAssistantMessageDisplayText(row);
-          const messageMarkers =
-            threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
             const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
             const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
@@ -2293,7 +2179,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
-                      markers={messageMarkers}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />

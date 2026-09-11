@@ -716,15 +716,6 @@ function SettingsRouteView() {
           })}
 
           {renderBooleanSettingRow({
-            settingKey: "showEnvironmentMarkers",
-            title: "Text markers",
-            description:
-              "Show highlighted and underlined transcript text in the Environment panel.",
-            resetLabel: "text markers section",
-            ariaLabel: "Show the Text markers section in the Environment panel",
-          })}
-
-          {renderBooleanSettingRow({
             settingKey: "showEnvironmentInstructions",
             title: "Project instructions",
             description: "Show project-level instructions in the Environment panel.",
