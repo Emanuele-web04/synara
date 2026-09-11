@@ -343,6 +343,56 @@ describe("pullRequestActionMutationOptions", () => {
     expect(otherRepositoryData).toEqual(snapshot(otherRepositoryPullRequest));
   });
 
+  it("does not reclassify a successful GitHub action when cache reconciliation rejects", async () => {
+    const queryClient = new QueryClient();
+    const input = {
+      projectId: "project-a" as ProjectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "ready",
+    } as const;
+    const pullRequest = {
+      number: 42,
+      url: "https://github.com/acme/widgets/pull/42",
+      state: "open",
+      isDraft: true,
+    };
+    const snapshotKey = [...gitQueryKeys.pullRequest("/worktree"), "snapshot", pullRequest.url];
+    queryClient.setQueryData(snapshotKey, { pullRequest });
+    const action = pullRequestActionMutationOptions(queryClient);
+    const context = await Reflect.apply(action.onMutate!, undefined, [input, undefined]);
+    const result = { workspaceRoot: "/project-root" };
+    const refreshError = new Error("cache refresh failed after GitHub accepted the action");
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockRejectedValue(refreshError);
+    let callbackError: unknown = null;
+    try {
+      await Reflect.apply(action.onSuccess!, undefined, [result, input, context, undefined]);
+    } catch (error) {
+      callbackError = error;
+    } finally {
+      invalidate.mockRestore();
+    }
+
+    // Mirrors TanStack's mutation lifecycle: a rejected onSuccess callback is routed through
+    // onError/onSettled even though the mutation function itself already returned success.
+    if (callbackError) {
+      await Reflect.apply(action.onError!, undefined, [callbackError, input, context, undefined]);
+    }
+    Reflect.apply(action.onSettled!, undefined, [
+      callbackError ? undefined : result,
+      callbackError,
+      input,
+      context,
+      undefined,
+    ]);
+
+    expect(callbackError).toBeNull();
+    expect(queryClient.getQueryData(snapshotKey)).toMatchObject({
+      pullRequest: { isDraft: false },
+    });
+    queryClient.clear();
+  });
+
   it("refreshes the affected worktree caches after success even when the action returns the project root", async () => {
     const queryClient = new QueryClient();
     const input = {

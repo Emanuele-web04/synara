@@ -253,7 +253,10 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
       refreshPullRequestReviewRequestCounts(queryClient);
     },
     onSuccess: async (result, input, context) => {
-      await Promise.all([
+      // GitHub already accepted the action. Cache reconciliation is best-effort and must not
+      // reject this callback, because TanStack would route that callback error through onError
+      // and roll back an action that actually succeeded remotely.
+      await Promise.allSettled([
         invalidatePullRequestListScopes(queryClient, context.affectedScopes),
         invalidatePullRequestActionDetails(queryClient, input),
         queryClient.invalidateQueries(pullRequestGitQueryFilters(input, result.workspaceRoot)),
