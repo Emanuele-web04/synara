@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import * as AcpErrors from "./AcpErrors.ts";
 
 import {
-  acpPermissionOutcome,
   canonicalItemTypeFromAcpToolKind,
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
@@ -16,10 +15,9 @@ import {
 describe("AcpAdapterSupport", () => {
   it("maps every ACP tool kind to its canonical runtime item type", () => {
     expect(
-      ["execute", "edit", "delete", "move", "fetch", "search", "read", undefined].map((kind) => [
-        kind,
-        canonicalItemTypeFromAcpToolKind(kind),
-      ]),
+      ["execute", "edit", "delete", "move", "fetch", "search", "read", "agent", undefined].map(
+        (kind) => [kind, canonicalItemTypeFromAcpToolKind(kind)],
+      ),
     ).toEqual([
       ["execute", "command_execution"],
       ["edit", "file_change"],
@@ -28,14 +26,9 @@ describe("AcpAdapterSupport", () => {
       ["fetch", "web_search"],
       ["search", "dynamic_tool_call"],
       ["read", "dynamic_tool_call"],
+      ["agent", "collab_agent_tool_call"],
       [undefined, "dynamic_tool_call"],
     ]);
-  });
-
-  it("maps ACP approval decisions to permission outcomes", () => {
-    expect(acpPermissionOutcome("accept")).toBe("allow-once");
-    expect(acpPermissionOutcome("acceptForSession")).toBe("allow-always");
-    expect(acpPermissionOutcome("decline")).toBe("reject-once");
   });
 
   it("selects the provider's real permission option id for approval decisions", () => {
@@ -186,5 +179,24 @@ describe("AcpAdapterSupport", () => {
 
     expect(error.message).toContain('402 {"title":"Payment Required"}');
     expect(error.message).not.toContain("Internal error: Agent error");
+  });
+
+  it("preserves filesystem detail from ACP persistence errors", () => {
+    const error = mapAcpToAdapterError(
+      "grok",
+      "thread-1" as never,
+      "session/start",
+      new AcpErrors.AcpRequestError({
+        code: -32603,
+        errorMessage: "Path not found.",
+        data: {
+          code: "FS_NOT_FOUND",
+          detail: "No such file or directory (os error 2)",
+        },
+      }),
+    );
+
+    expect(error.message).toContain("Path not found.");
+    expect(error.message).toContain("No such file or directory (os error 2)");
   });
 });

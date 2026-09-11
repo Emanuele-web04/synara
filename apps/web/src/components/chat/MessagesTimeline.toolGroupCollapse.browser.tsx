@@ -5,12 +5,13 @@
 
 import "../../index.css";
 
-import { MessageId } from "@synara/contracts";
+import { MessageId, TurnId } from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
 import type { TimelineEntry } from "../../session-logic";
+import { deriveTimelineEntries } from "../../workLog";
 
 function assistantEntry(id: string, text: string, streaming: boolean): TimelineEntry {
   return {
@@ -119,6 +120,71 @@ function isVisibleOutsideClosedDisclosure(text: string): boolean {
 describe("MessagesTimeline tool group collapse", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps calls made after steering visible in the live tool group", async () => {
+    const host = createTimelineHost();
+    const turnId = TurnId.makeUnsafe("steered-turn");
+    const timelineEntries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Investigate usage",
+          createdAt: "2026-03-17T19:12:20.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("preamble"),
+          role: "assistant",
+          turnId,
+          text: "Checking usage records.",
+          createdAt: "2026-03-17T19:12:21.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("steering"),
+          role: "user",
+          dispatchMode: "steer",
+          text: "Only Codex",
+          createdAt: "2026-03-17T19:12:22.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("continued"),
+          role: "assistant",
+          turnId,
+          text: "Continuing with Codex.",
+          createdAt: "2026-03-17T19:12:23.000Z",
+          streaming: true,
+        },
+      ],
+      [],
+      LIVE_COMMANDS.map((command, index) => ({
+        id: `steered-tool-${index}`,
+        turnId,
+        createdAt: `2026-03-17T19:12:2${4 + index}.000Z`,
+        label: "Running command",
+        tone: "tool",
+        itemType: "command_execution",
+        toolStatus: "running",
+        activityKind: "tool.started",
+        command,
+      })),
+    );
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={timelineEntries} />, {
+      container: host,
+    });
+
+    try {
+      for (const command of LIVE_COMMANDS) {
+        await expect.poll(() => isVisibleOutsideClosedDisclosure(command)).toBe(true);
+      }
+      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
   });
 
   it("collapses the settled run behind a summary and keeps the live run expanded", async () => {

@@ -8,18 +8,77 @@ import {
   buildBrowserAddressSuggestions,
   browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
   formatBrowserAnnotationActionError,
+  hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRuntimePresentation,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
 
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
+
+describe("native browser presentation ownership", () => {
+  it("keeps the native page in a floating slot and scales without a renderer handoff", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 320, height: 200 },
+      pageZoomFactor: 0.25,
+    });
+  });
+  it("preserves page dimensions across shell zoom and expands the same native surface", () => {
+    const floating = resolveBrowserRuntimePresentation({
+      native: true,
+      floating: true,
+      rect: { x: 20, y: 30, width: 640, height: 440 },
+      desktopZoom: 1.5,
+    });
+    expect(floating.surface).toBe("native");
+    expect(floating.bounds.width / floating.pageZoomFactor).toBe(1280);
+    expect(floating.bounds.height / floating.pageZoomFactor).toBe(800);
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: false,
+        rect: { x: 20, y: 30, width: 900, height: 600 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 30, width: 900, height: 600 },
+      pageZoomFactor: 1,
+    });
+  });
+  it("leaves existing renderer guests on their original CSS-scaled surface", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: false,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "renderer",
+      bounds: { x: 20, y: 40, width: 1280, height: 800 },
+      pageZoomFactor: 1,
+    });
+  });
+});
 const DOCUMENT_KEY = `sha256:${"0".repeat(64)}`;
 
 function committedEvent(
@@ -253,6 +312,63 @@ describe("createBrowserPanelHideScheduler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the surface visible when a new live host mounts before the old host cleans up", () => {
+    vi.useFakeTimers();
+    try {
+      const hide = vi.fn();
+      const scheduler = createBrowserPanelHideScheduler();
+      const releaseDockHost = scheduler.acquire("thread-a");
+      const releaseFloatingHost = scheduler.acquire("thread-a");
+
+      releaseDockHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).not.toHaveBeenCalled();
+
+      releaseFloatingHost();
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("createBrowserPanelRendererHandoff", () => {
+  it("waits for the previous renderer guest to detach before attaching its replacement", async () => {
+    let resolveDetach!: () => void;
+    const detach = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", detach);
+    const replacementReady = handoff.waitForDetach("thread-a");
+    let didAttach = false;
+    void replacementReady.then(() => {
+      didAttach = true;
+    });
+
+    await Promise.resolve();
+    expect(didAttach).toBe(false);
+
+    resolveDetach();
+    await replacementReady;
+
+    expect(didAttach).toBe(true);
+  });
+
+  it("does not block a replacement when detach IPC rejects", async () => {
+    const handoff = createBrowserPanelRendererHandoff();
+
+    handoff.trackDetach("thread-a", Promise.reject(new Error("stale guest")));
+
+    await expect(handoff.waitForDetach("thread-a")).resolves.toBeUndefined();
+  });
 });
 
 describe("shouldOccludeBrowserWebview", () => {
@@ -272,6 +388,56 @@ describe("shouldOccludeBrowserWebview", () => {
         showLocalServersHome: false,
         browserActionsMenuOpen: false,
         hasObscuringOverlay: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasObscuringHitStackElementAboveSurface", () => {
+  const surface = { id: "viewport" };
+  const overlay = { id: "dialog" };
+  const underlyingChat = { id: "chat" };
+  const isVisible = (element: { id: string }) => element.id !== "hidden";
+  const isNonObscuring = (element: { id: string }) => element.id === "toast-portal";
+  const isSurfaceBoundary = (element: { id: string }) =>
+    element.id === surface.id || element.id === "viewport-child";
+
+  it("detects a visible overlay above the viewport and ignores content behind it", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([overlay, surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat underlying chat siblings as an overlay", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([surface, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("stops at a descendant of the viewport as well", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([{ id: "viewport-child" }, underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores an incomplete stack that never reaches the viewport", () => {
+    expect(
+      hasObscuringHitStackElementAboveSurface([underlyingChat], {
+        isSurfaceBoundary,
+        isNonObscuring,
+        isVisible,
       }),
     ).toBe(false);
   });
@@ -450,5 +616,37 @@ describe("resolveBrowserChromeStatus", () => {
       tone: "default",
       label: "Starting browser...",
     });
+  });
+});
+
+describe("floating browser webview presentation", () => {
+  it("scales a CSS stage around the frozen guest, then restores fill layout", () => {
+    const stage = { style: {} } as HTMLElement;
+    applyBrowserWebviewPresentation(stage, {
+      floating: true,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(stage.style.width).toBe("1280px");
+    expect(stage.style.height).toBe("800px");
+    expect(stage.style.transform).toBe("scale(0.25)");
+    expect(stage.style.top).toBe("10px");
+
+    applyBrowserWebviewPresentation(stage, {
+      floating: false,
+      slotWidth: 320,
+      slotHeight: 220,
+    });
+    expect(stage.style.width).toBe("100%");
+    expect(stage.style.height).toBe("100%");
+    expect(stage.style.transform).toBe("");
+  });
+});
+
+describe("isBrowserPanelBoundsHiddenKey", () => {
+  it("detects hidden keys after the zoom suffix was added", () => {
+    expect(isBrowserPanelBoundsHiddenKey("renderer:hidden:zoom-1")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("native:hidden")).toBe(true);
+    expect(isBrowserPanelBoundsHiddenKey("renderer:12:40:800:600:zoom-1")).toBe(false);
   });
 });

@@ -1,10 +1,14 @@
 import {
+  ApprovalRequestId,
+  CommandId,
   EventId,
   MessageId,
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationPendingInteraction,
   OrchestrationProposedPlan,
   OrchestrationThreadActivity,
+  ThreadId,
   TurnId,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -197,6 +201,45 @@ describe("deriveThreadSummaryMetadata", () => {
     });
   });
 
+  it("orders unsorted activity arrays by sequence before replaying request lifecycles", () => {
+    // Resolution stored before its request: replayed in array order the request would win and
+    // stay pending; ordering by sequence must close it. Guards the sorted-input fast path.
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("activity-2"),
+        tone: "approval",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        payload: { requestId: "approval-1" },
+        sequence: 2,
+        turnId: TurnId.makeUnsafe("turn-1"),
+        createdAt: "2026-02-27T00:02:00.000Z",
+      },
+      {
+        id: EventId.makeUnsafe("activity-1"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Approval requested",
+        payload: {
+          requestId: "approval-1",
+          requestType: "exec_command_approval",
+        },
+        sequence: 1,
+        turnId: TurnId.makeUnsafe("turn-1"),
+        createdAt: "2026-02-27T00:01:00.000Z",
+      },
+    ];
+
+    expect(
+      deriveThreadSummaryMetadata({
+        messages: [],
+        activities,
+        proposedPlans: [],
+        latestTurn: null,
+      }),
+    ).toMatchObject({ hasPendingApprovals: false });
+  });
+
   it("keeps replacement requests open when an older runtime generation resolves", () => {
     const question = {
       id: "question-1",
@@ -338,6 +381,85 @@ describe("deriveThreadSummaryMetadata", () => {
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
+    });
+  });
+
+  it("uses a present interaction projection as authority across every request kind", () => {
+    const requestId = ApprovalRequestId.makeUnsafe("approval-mixed-sequence");
+    const threadId = ThreadId.makeUnsafe("thread-mixed-sequence");
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("approval-requested-high-runtime-sequence"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Approval requested",
+        payload: { requestId, requestKind: "command" },
+        sequence: 1_695_339,
+        turnId: TurnId.makeUnsafe("turn-mixed-sequence"),
+        createdAt: "2026-02-27T00:01:00.000Z",
+      },
+      {
+        id: EventId.makeUnsafe("stale-failure-low-orchestration-sequence"),
+        tone: "error",
+        kind: "provider.approval.respond.failed",
+        summary: "Approval response failed",
+        payload: {
+          requestId,
+          detail:
+            "Stale pending approval request: approval-mixed-sequence. Provider callback state does not survive app restarts.",
+        },
+        sequence: 667_085,
+        turnId: null,
+        createdAt: "2026-02-27T00:02:00.000Z",
+      },
+      {
+        id: EventId.makeUnsafe("user-input-without-settlement-row"),
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "input-without-settlement-row",
+          questions: [
+            {
+              id: "confirm",
+              header: "Confirm",
+              question: "Continue?",
+              options: [{ label: "Yes", description: "Continue the turn." }],
+            },
+          ],
+        },
+        sequence: 1_695_340,
+        turnId: TurnId.makeUnsafe("turn-mixed-sequence"),
+        createdAt: "2026-02-27T00:03:00.000Z",
+      },
+    ];
+    const pendingInteractions: OrchestrationPendingInteraction[] = [
+      {
+        interactionKind: "approval",
+        requestId,
+        threadId,
+        turnId: TurnId.makeUnsafe("turn-mixed-sequence"),
+        lifecycleGeneration: null,
+        status: "uncertain",
+        decision: null,
+        responseCommandId: CommandId.makeUnsafe("restart-reconcile-command"),
+        responseRequestedAt: null,
+        createdAt: "2026-02-27T00:01:00.000Z",
+        resolvedAt: "2026-02-27T00:02:00.000Z",
+      },
+    ];
+
+    expect(
+      deriveThreadSummaryMetadata({
+        messages: [],
+        activities,
+        pendingInteractions,
+        proposedPlans: [],
+        latestTurn: null,
+      }),
+    ).toMatchObject({
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
     });
   });
 });

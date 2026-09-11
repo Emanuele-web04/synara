@@ -43,10 +43,10 @@ function ClaudeTraitsPickerHarness(props: {
       codex: [],
       claudeAgent: [],
       cursor: [],
+      devin: [],
       antigravity: [],
       grok: [],
       droid: [],
-      kilo: [],
       opencode: [],
       commandcode: [],
       pi: [],
@@ -96,6 +96,7 @@ async function mountClaudePicker(props?: {
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       skills: [],
       mentions: [],
       queuedTurns: [],
@@ -310,6 +311,32 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
+  it.each(["claude-opus-4-6", "claude-sonnet-5", "claude-opus-4-6[1m]"])(
+    "selects Auto and preserves explicit budgets for %s",
+    async (model) => {
+      await using _ = await mountClaudePicker({ model });
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "200k" }).click();
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "200k" }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "1M" }).click();
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "1M" }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }).click();
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }))
+        .toHaveAttribute("aria-checked", "true");
+    },
+  );
+
   it("keeps the Claude auto-compact budget per-thread instead of sticky", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-6",
@@ -317,7 +344,7 @@ describe("TraitsPicker (Claude)", () => {
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "1M (model default)" }).click();
+    await page.getByRole("menuitemradio", { name: "1M" }).click();
 
     // A 1M thread can grow far beyond the normal compaction point: keep the explicit
     // thread choice, but never leak it into sticky defaults for future threads.
@@ -346,6 +373,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       skills: [],
       mentions: [],
       queuedTurns: [],
@@ -646,10 +674,10 @@ function OpenCodeTraitsPickerHarness(props: {
       codex: [],
       claudeAgent: [],
       cursor: [],
+      devin: [],
       antigravity: [],
       grok: [],
       droid: [],
-      kilo: [],
       opencode: [],
       commandcode: [],
       pi: [],
@@ -690,6 +718,7 @@ async function mountOpenCodePicker(props?: {
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       skills: [],
       mentions: [],
       queuedTurns: [],

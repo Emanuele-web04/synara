@@ -104,12 +104,17 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
-  { key: "mod+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },
-  { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
+  // Keep workspace tabs on literal Ctrl so Cmd+1…9 remains consistent app navigation
+  // on macOS even when a thread was opened directly as a full-width terminal.
+  { key: "ctrl+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },
+  { key: "ctrl+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "alt+arrowdown", command: "diff.change.next", when: "!terminalFocus" },
+  { key: "alt+arrowup", command: "diff.change.previous", when: "!terminalFocus" },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
+  { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
@@ -137,21 +142,60 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // app-level even with terminal focus; the web route captures it before xterm input.
   { key: "ctrl+tab", command: "view.recent.next" },
   { key: "ctrl+shift+tab", command: "view.recent.previous" },
-  { key: "mod+1", command: "thread.jump.1", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+2", command: "thread.jump.2", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+3", command: "thread.jump.3", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+4", command: "thread.jump.4", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+5", command: "thread.jump.5", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+6", command: "thread.jump.6", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+7", command: "thread.jump.7", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+8", command: "thread.jump.8", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+9", command: "thread.jump.9", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  {
+    key: "mod+1",
+    command: "thread.jump.1",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+2",
+    command: "thread.jump.2",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+3",
+    command: "thread.jump.3",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+4",
+    command: "thread.jump.4",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+5",
+    command: "thread.jump.5",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+6",
+    command: "thread.jump.6",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+7",
+    command: "thread.jump.7",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+8",
+    command: "thread.jump.8",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
+  {
+    key: "mod+9",
+    command: "thread.jump.9",
+    when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
+  },
   // Copying the active thread id is not terminal input on macOS, but Ctrl+Shift+C is the
   // terminal copy chord on Linux/Windows, so it keeps the same `|| isMac` escape hatch.
   { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  { key: "meta+ctrl+p", command: "git.commitAndPush", when: "!terminalFocus && isMac" },
+  { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
+  { key: "mod+s", command: "editor.file.save", when: "!terminalFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {
@@ -431,16 +475,26 @@ export const ResolvedKeybindingFromConfig = KeybindingRule.pipe(
   ),
 );
 
-export const ResolvedKeybindingsFromConfig = Schema.Array(ResolvedKeybindingFromConfig).check(
-  Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
-);
-
 function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
   return (
     left.command === right.command &&
     left.key === right.key &&
     (left.when ?? undefined) === (right.when ?? undefined)
   );
+}
+
+function resolvedKeybindingRuleIdentity(rule: KeybindingRule): string | null {
+  const resolved = compileResolvedKeybindingRule(rule);
+  if (!resolved) return null;
+  const key = encodeShortcut(resolved.shortcut);
+  if (!key) return null;
+  const when = resolved.whenAst ? encodeWhenAst(resolved.whenAst) : "";
+  return `${resolved.command}\u0000${key}\u0000${when}`;
+}
+
+function isSameResolvedKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
+  const leftIdentity = resolvedKeybindingRuleIdentity(left);
+  return leftIdentity !== null && leftIdentity === resolvedKeybindingRuleIdentity(right);
 }
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {
@@ -613,6 +667,14 @@ const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"],
 // regardless of focus while Linux/Windows keep yielding Ctrl-chords to the shell.
 const OUTDATED_CREATION_TERMINAL_GUARD = "!terminalFocus";
 const RELAXED_CREATION_TERMINAL_GUARD = "!terminalFocus || isMac";
+const OUTDATED_THREAD_JUMP_GUARD = "!terminalFocus && !terminalWorkspaceOpen";
+const RELAXED_THREAD_JUMP_GUARD = "(!terminalFocus && !terminalWorkspaceOpen) || isMac";
+const OUTDATED_WORKSPACE_TAB_SHORTCUT_BY_COMMAND: Partial<
+  Record<KeybindingRule["command"], string>
+> = {
+  "terminal.workspace.terminal": "mod+1",
+  "terminal.workspace.chat": "mod+2",
+};
 const CREATION_COMMANDS_WITH_TERMINAL_ESCAPE = new Set<KeybindingRule["command"]>([
   "chat.new",
   "chat.newLatestProject",
@@ -738,6 +800,41 @@ function relaxCreationCommandTerminalGuards(rules: readonly KeybindingRule[]): {
   return { rules: next, migratedCount };
 }
 
+// The original full-width workspace reused mod+1/mod+2 for its terminal/chat tabs and
+// disabled all numbered thread jumps while the workspace was open. That made Cmd+1…9
+// stop being app navigation when a macOS thread opened as a terminal. Move only the exact
+// shipped tab defaults to literal Ctrl, and relax only the exact shipped thread-jump guard;
+// custom keys and conditions remain untouched.
+function migrateNumberedTerminalWorkspaceDefaults(rules: readonly KeybindingRule[]): {
+  readonly rules: KeybindingRule[];
+  readonly migratedCount: number;
+} {
+  let migratedCount = 0;
+  const next = rules.map((rule) => {
+    const outdatedWorkspaceShortcut = OUTDATED_WORKSPACE_TAB_SHORTCUT_BY_COMMAND[rule.command];
+    if (
+      outdatedWorkspaceShortcut !== undefined &&
+      rule.key === outdatedWorkspaceShortcut &&
+      rule.when === "terminalWorkspaceOpen"
+    ) {
+      migratedCount += 1;
+      return { ...rule, key: rule.command === "terminal.workspace.terminal" ? "ctrl+1" : "ctrl+2" };
+    }
+
+    if (
+      /^thread\.jump\.[1-9]$/.test(rule.command) &&
+      rule.key === `mod+${rule.command.slice(-1)}` &&
+      rule.when === OUTDATED_THREAD_JUMP_GUARD
+    ) {
+      migratedCount += 1;
+      return { ...rule, when: RELAXED_THREAD_JUMP_GUARD };
+    }
+
+    return rule;
+  });
+  return { rules: next, migratedCount };
+}
+
 function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): ResolvedKeybindingsConfig {
   if (custom.length === 0) {
     return [...DEFAULT_RESOLVED_KEYBINDINGS];
@@ -801,11 +898,16 @@ export interface KeybindingsShape {
   /**
    * Upsert a keybinding rule and persist the resulting configuration.
    *
+   * When `replacing` is supplied, only that semantic rule is replaced so sibling
+   * conditions for the same command remain intact. Without it, the command keeps
+   * the existing command-wide replacement behavior.
+   *
    * Writes config atomically and enforces the max rule count by truncating
    * oldest entries when needed.
    */
   readonly upsertKeybindingRule: (
     rule: KeybindingRule,
+    replacing?: KeybindingRule,
   ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
 }
 
@@ -988,9 +1090,13 @@ const makeKeybindings = Effect.gen(function* () {
     migratedDefaultRuleCount += sidebarSearchMigration.migratedCount;
     const relaxed = relaxCreationCommandTerminalGuards(sidebarSearchMigration.rules);
     migratedDefaultRuleCount += relaxed.migratedCount;
+    const numberedTerminalWorkspaceMigration = migrateNumberedTerminalWorkspaceDefaults(
+      relaxed.rules,
+    );
+    migratedDefaultRuleCount += numberedTerminalWorkspaceMigration.migratedCount;
 
     return {
-      keybindings: relaxed.rules,
+      keybindings: numberedTerminalWorkspaceMigration.rules,
       issues,
       migratedLegacyCommandCount,
       migratedDefaultRuleCount,
@@ -1199,6 +1305,25 @@ const makeKeybindings = Effect.gen(function* () {
     yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
   });
 
+  const validateUpsertRule = (rule: KeybindingRule) =>
+    compileResolvedKeybindingRule(rule) === null
+      ? Effect.fail(
+          new KeybindingsConfigError({
+            configPath: keybindingsConfigPath,
+            detail: "invalid shortcut or condition expression",
+          }),
+        )
+      : Effect.void;
+
+  const keepExistingRuleDuringUpsert = (
+    existingRule: KeybindingRule,
+    rule: KeybindingRule,
+    replacing: KeybindingRule | undefined,
+  ) =>
+    replacing
+      ? !isSameResolvedKeybindingRule(existingRule, replacing)
+      : existingRule.command !== rule.command;
+
   return {
     start,
     ready: Deferred.await(startedDeferred),
@@ -1208,12 +1333,14 @@ const makeKeybindings = Effect.gen(function* () {
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
-    upsertKeybindingRule: (rule) =>
+    upsertKeybindingRule: (rule, replacing) =>
       upsertSemaphore.withPermits(1)(
         Effect.gen(function* () {
+          yield* validateUpsertRule(rule);
+          if (replacing) yield* validateUpsertRule(replacing);
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const nextConfig = [
-            ...customConfig.filter((entry) => entry.command !== rule.command),
+            ...customConfig.filter((entry) => keepExistingRuleDuringUpsert(entry, rule, replacing)),
             rule,
           ];
           const cappedConfig =

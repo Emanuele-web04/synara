@@ -57,6 +57,8 @@ interface PipeClient {
 }
 
 export interface BrowserHostPipeServerOptions {
+  readonly vault?: import("./browserAutomation/browserVault").BrowserVault;
+  readonly vaultCapture?: import("./browserAutomation/browserVaultCapture").BrowserVaultCapture;
   readonly pipePath?: string;
   readonly capability?: string;
   readonly platform?: NodeJS.Platform;
@@ -124,14 +126,7 @@ export function resolveConfiguredBrowserHostPipePath(
   return configured || resolveDefaultBrowserHostPipePath(platform);
 }
 
-/** @deprecated Compatibility export for callers using the former IAB name. */
-export const resolveDefaultBrowserUsePipePath = resolveDefaultBrowserHostPipePath;
-/** @deprecated Compatibility export for callers using the former IAB name. */
-export const resolveConfiguredBrowserUsePipePath = resolveConfiguredBrowserHostPipePath;
-
 export const SYNARA_BROWSER_HOST_PIPE_PATH = resolveConfiguredBrowserHostPipePath();
-/** @deprecated Compatibility alias for old packaged backend builds. */
-export const SYNARA_BROWSER_USE_PIPE_PATH = SYNARA_BROWSER_HOST_PIPE_PATH;
 
 export function resolveBrowserHostPipeBackendEnv(
   inheritedEnv: NodeJS.ProcessEnv,
@@ -151,9 +146,6 @@ export function resolveBrowserHostPipeBackendEnv(
   }
   return backendEnv;
 }
-
-/** @deprecated Compatibility export for the former function name. */
-export const resolveBrowserUsePipeBackendEnv = resolveBrowserHostPipeBackendEnv;
 
 function encodeFrame(message: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(message), "utf8");
@@ -226,6 +218,8 @@ export class BrowserHostPipeServer {
   private readonly pipePath: string;
   private readonly platform: NodeJS.Platform;
   private readonly automationHost: Pick<DesktopBrowserAutomationHost, "executeTool">;
+  private readonly disposeAutomationHost: (() => Promise<void>) | undefined;
+  private readonly drainAutomationHost: (() => Promise<void>) | undefined;
   private readonly maxInFlightRequests: number;
   private readonly maxQueuedOutputBytes: number;
   private readonly capability: string;
@@ -245,12 +239,26 @@ export class BrowserHostPipeServer {
     this.capability = capability;
     this.maxInFlightRequests = normalized.maxInFlightRequests ?? MAX_IN_FLIGHT_REQUESTS;
     this.maxQueuedOutputBytes = normalized.maxQueuedOutputBytes ?? MAX_QUEUED_OUTPUT_BYTES;
-    const hostOptions = normalized.requestOpenPanel
-      ? { requestOpenPanel: normalized.requestOpenPanel }
-      : {};
-    this.automationHost =
-      normalized.automationHost ?? new DesktopBrowserAutomationHost(browserManager, hostOptions);
+    const hostOptions = {
+      ...(normalized.requestOpenPanel ? { requestOpenPanel: normalized.requestOpenPanel } : {}),
+      ...(normalized.vault ? { vault: normalized.vault } : {}),
+      ...(normalized.vaultCapture ? { vaultCapture: normalized.vaultCapture } : {}),
+    };
+    if (normalized.automationHost) {
+      this.automationHost = normalized.automationHost;
+      this.disposeAutomationHost = undefined;
+      this.drainAutomationHost = undefined;
+    } else {
+      const automationHost = new DesktopBrowserAutomationHost(browserManager, hostOptions);
+      this.automationHost = automationHost;
+      this.disposeAutomationHost = () => automationHost.dispose();
+      this.drainAutomationHost = () => automationHost.waitForIdle();
+    }
     this.server = Net.createServer((socket) => this.handleConnection(socket));
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.drainAutomationHost?.();
   }
 
   async start(): Promise<void> {
@@ -283,6 +291,7 @@ export class BrowserHostPipeServer {
     }
     this.sockets.clear();
     this.clients.clear();
+    await this.disposeAutomationHost?.();
     if (this.started) {
       await new Promise<void>((resolve) => this.server.close(() => resolve()));
       this.started = false;

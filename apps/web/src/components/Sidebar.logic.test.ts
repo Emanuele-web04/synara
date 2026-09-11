@@ -16,15 +16,11 @@ import {
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
-  getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
-  getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
-  getVisibleSidebarThreadIds,
-  getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
   partitionSidebarThreadsByProjectIds,
@@ -43,11 +39,11 @@ import {
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
-  isUrgentThreadStatusPill,
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldUseLivePullRequestForSidebarThread,
@@ -136,7 +132,7 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
     ).toBe(true);
   });
 
-  it("still requires a branch match for a shared project root", () => {
+  it("never attributes live PR data from a shared project root", () => {
     expect(
       shouldUseLivePullRequestForSidebarThread({
         threadBranch: "feature/another-thread",
@@ -150,7 +146,7 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
         liveBranch: "feat/agent-created-branch",
         hasDedicatedWorktree: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not use live PR data for a detached worktree", () => {
@@ -165,8 +161,24 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
 });
 
 describe("resolveSidebarThreadPullRequest", () => {
+  type TestPr = {
+    readonly number: number;
+    readonly headBranch: string;
+    readonly state: "open" | "closed" | "merged";
+  };
+  const openPr = (number: number, headBranch: string): TestPr => ({
+    number,
+    headBranch,
+    state: "open",
+  });
+  const mergedPr = (number: number, headBranch: string): TestPr => ({
+    number,
+    headBranch,
+    state: "merged",
+  });
+
   it("keeps persisted PR metadata when the worktree is no longer available", () => {
-    const persisted = { number: 574, headBranch: "feat/provider-usage-snapshot-cache" };
+    const persisted = openPr(574, "feat/provider-usage-snapshot-cache");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/provider-usage-snapshot-cache",
@@ -179,8 +191,35 @@ describe("resolveSidebarThreadPullRequest", () => {
     ).toBe(persisted);
   });
 
+  it("keeps the thread-associated PR instead of the live PR from a shared checkout", () => {
+    const persisted = openPr(841, "fix/created-at-thread-order");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/environment-all-provider-usage",
+        liveBranch: "feat/environment-all-provider-usage",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: openPr(842, "feat/environment-all-provider-usage"),
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("does not claim an unrelated live PR for an unassociated shared-checkout thread", () => {
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/environment-all-provider-usage",
+        liveBranch: "feat/environment-all-provider-usage",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: openPr(842, "feat/environment-all-provider-usage"),
+        persistedPullRequest: null,
+      }),
+    ).toBeNull();
+  });
+
   it("prefers live metadata for the worktree's current branch", () => {
-    const live = { number: 575, headBranch: "feat/current-branch" };
+    const live = openPr(575, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "synara/stale-branch",
@@ -188,13 +227,13 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: live,
-        persistedPullRequest: { number: 574, headBranch: "synara/stale-branch" },
+        persistedPullRequest: openPr(574, "synara/stale-branch"),
       }),
     ).toBe(live);
   });
 
   it("keeps persisted metadata during a transient lookup failure on the same branch", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/current-branch",
@@ -208,7 +247,7 @@ describe("resolveSidebarThreadPullRequest", () => {
   });
 
   it("uses the live worktree branch to validate persisted metadata while thread branch metadata catches up", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: null,
@@ -222,7 +261,7 @@ describe("resolveSidebarThreadPullRequest", () => {
   });
 
   it("uses the live worktree branch to validate persisted metadata when the thread branch is stale", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -235,7 +274,7 @@ describe("resolveSidebarThreadPullRequest", () => {
     ).toBe(persisted);
   });
 
-  it("does not attach a persisted PR from another branch to the current worktree branch", () => {
+  it("does not attach an open persisted PR from another branch to the current worktree branch", () => {
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -243,12 +282,54 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: null,
-        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+        persistedPullRequest: openPr(574, "feat/previous-branch"),
       }),
     ).toBeNull();
   });
 
-  it("hides a persisted PR when an active dedicated worktree is detached", () => {
+  it("keeps a merged persisted PR visible after the worktree switches to another branch", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: "main",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
+  });
+
+  it("keeps a merged persisted PR visible on a shared checkout that moved to another branch", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "main",
+        liveBranch: "main",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
+  });
+
+  it("prefers a live PR for the current branch over a merged persisted PR", () => {
+    const live = openPr(600, "feat/current-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/current-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: live,
+        persistedPullRequest: mergedPr(574, "feat/previous-branch"),
+      }),
+    ).toBe(live);
+  });
+
+  it("hides an open persisted PR when an active dedicated worktree is detached", () => {
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -256,9 +337,23 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: null,
-        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+        persistedPullRequest: openPr(574, "feat/previous-branch"),
       }),
     ).toBeNull();
+  });
+
+  it("keeps a merged persisted PR when an active dedicated worktree is detached", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: null,
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
   });
 });
 
@@ -339,6 +434,35 @@ describe("debug feature flags menu visibility", () => {
         storageValue: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveSidebarProjectRowLabel", () => {
+  it("prefers the configured display name over the folder name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "Hubspot extension",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
+  });
+
+  it("falls back to the folder name when the display name is empty", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "   ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("hubspot-support-send-email-extension");
+  });
+
+  it("trims whitespace from the configured display name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "  Hubspot extension  ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
   });
 });
 
@@ -1028,17 +1152,6 @@ function statusPill(label: ThreadStatusPill["label"]): ThreadStatusPill {
   return { label, colorClass: "", dotClass: "", pulse: false };
 }
 
-describe("isUrgentThreadStatusPill", () => {
-  it("treats every status but a finished turn as urgent", () => {
-    expect(isUrgentThreadStatusPill(statusPill("Pending Approval"))).toBe(true);
-    expect(isUrgentThreadStatusPill(statusPill("Awaiting Input"))).toBe(true);
-    expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
-    expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
-    expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
-    expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
-  });
-});
-
 describe("resolveThreadStatusTrailingIndicator", () => {
   it("shows nothing when there is no status", () => {
     expect(resolveThreadStatusTrailingIndicator({ status: null })).toBeNull();
@@ -1238,24 +1351,24 @@ describe("resolveThreadStatusPill", () => {
 describe("resolveThreadRowClassName", () => {
   it("keeps selected active rows on the selected sidebar background", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
     expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
     expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
   it("keeps selected rows visually aligned with hover", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
     expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
     expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
   it("uses the hover sidebar background for active-only threads", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
   });
 
   it("uses the sidebar accent token for hover-only rows", () => {
@@ -1312,76 +1425,6 @@ describe("resolveProjectStatusIndicator", () => {
         },
       ]),
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
-  });
-});
-
-describe("getVisibleThreadsForProject", () => {
-  it("includes the active thread even when it falls below the folded preview", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
-        title: `Thread ${index + 1}`,
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-8"),
-      previewLimit: 6,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-2"),
-      ThreadId.makeUnsafe("thread-3"),
-      ThreadId.makeUnsafe("thread-4"),
-      ThreadId.makeUnsafe("thread-5"),
-      ThreadId.makeUnsafe("thread-6"),
-      ThreadId.makeUnsafe("thread-8"),
-    ]);
-  });
-
-  it("returns all threads when the preview limit covers the whole list", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-8"),
-      previewLimit: 8,
-    });
-
-    expect(result.hasHiddenThreads).toBe(false);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
-      threads.map((thread) => thread.id),
-    );
-  });
-});
-
-describe("getRenderedThreadsForSidebarProject", () => {
-  it("pins only the active thread when the parent project is collapsed", () => {
-    const threads = Array.from({ length: 4 }, (_, index) =>
-      makeThread({
-        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
-        title: `Thread ${index + 1}`,
-      }),
-    );
-
-    const result = getRenderedThreadsForSidebarProject({
-      project: makeProject({ expanded: false }),
-      threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-4"),
-      previewLimit: 2,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.renderedThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-4"),
-    ]);
   });
 });
 
@@ -1536,131 +1579,6 @@ describe("getVisibleSidebarEntriesForPreview", () => {
   });
 });
 
-describe("getVisibleSidebarThreadIds", () => {
-  it("flattens only the sidebar-visible threads in render order", () => {
-    const projects = [
-      makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true }),
-      makeProject({ id: ProjectId.makeUnsafe("project-2"), expanded: false }),
-    ];
-    const threads = [
-      makeThread({
-        id: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        createdAt: "2026-03-09T10:01:00.000Z",
-      }),
-      makeThread({
-        id: ThreadId.makeUnsafe("thread-2"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        createdAt: "2026-03-09T10:02:00.000Z",
-      }),
-      makeThread({
-        id: ThreadId.makeUnsafe("thread-3"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        createdAt: "2026-03-09T10:03:00.000Z",
-      }),
-      makeThread({
-        id: ThreadId.makeUnsafe("thread-4"),
-        projectId: ProjectId.makeUnsafe("project-2"),
-        createdAt: "2026-03-09T10:04:00.000Z",
-      }),
-      makeThread({
-        id: ThreadId.makeUnsafe("thread-5"),
-        projectId: ProjectId.makeUnsafe("project-2"),
-        createdAt: "2026-03-09T10:05:00.000Z",
-      }),
-    ];
-
-    const visibleThreadIds = getVisibleSidebarThreadIds({
-      projects,
-      threads,
-      activeThreadId: ThreadId.makeUnsafe("thread-4"),
-      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
-      previewLimit: 2,
-      previewPageSize: 2,
-      threadSortOrder: "created_at",
-    });
-
-    expect(visibleThreadIds).toEqual([
-      ThreadId.makeUnsafe("thread-3"),
-      ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-4"),
-    ]);
-  });
-
-  it("groups interleaved thread input by project before flattening", () => {
-    const visibleThreadIds = getVisibleSidebarThreadIds({
-      projects: [
-        makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true }),
-        makeProject({ id: ProjectId.makeUnsafe("project-2"), expanded: true }),
-      ],
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-project-2"),
-          projectId: ProjectId.makeUnsafe("project-2"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-project-1-newer"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-project-1-older"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-      activeThreadId: undefined,
-      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
-      previewLimit: 10,
-      previewPageSize: 5,
-      threadSortOrder: "created_at",
-    });
-
-    expect(visibleThreadIds).toEqual([
-      ThreadId.makeUnsafe("thread-project-1-newer"),
-      ThreadId.makeUnsafe("thread-project-1-older"),
-      ThreadId.makeUnsafe("thread-project-2"),
-    ]);
-  });
-
-  it("reveals an active subagent without persistent expansion state", () => {
-    const visibleThreadIds = getVisibleSidebarThreadIds({
-      projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-parent"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-child"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-other"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-      activeThreadId: ThreadId.makeUnsafe("thread-child"),
-      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
-      previewLimit: 6,
-      previewPageSize: 5,
-      threadSortOrder: "created_at",
-    });
-
-    expect(visibleThreadIds).toEqual([
-      ThreadId.makeUnsafe("thread-parent"),
-      ThreadId.makeUnsafe("thread-child"),
-      ThreadId.makeUnsafe("thread-other"),
-    ]);
-  });
-});
-
 describe("getNextVisibleSidebarThreadId", () => {
   const visibleThreadIds = [
     ThreadId.makeUnsafe("thread-1"),
@@ -1686,32 +1604,6 @@ describe("getNextVisibleSidebarThreadId", () => {
         direction: "backward",
       }),
     ).toBe(ThreadId.makeUnsafe("thread-3"));
-  });
-});
-
-describe("getSidebarThreadIdForJumpCommand", () => {
-  const visibleThreadIds = [
-    ThreadId.makeUnsafe("thread-1"),
-    ThreadId.makeUnsafe("thread-2"),
-    ThreadId.makeUnsafe("thread-3"),
-  ];
-
-  it("resolves numbered jump commands against the visible sidebar order", () => {
-    expect(
-      getSidebarThreadIdForJumpCommand({
-        visibleThreadIds,
-        command: "thread.jump.2",
-      }),
-    ).toBe(ThreadId.makeUnsafe("thread-2"));
-  });
-
-  it("returns null when a jump command points past the visible rows", () => {
-    expect(
-      getSidebarThreadIdForJumpCommand({
-        visibleThreadIds,
-        command: "thread.jump.9",
-      }),
-    ).toBeNull();
   });
 });
 
@@ -1983,6 +1875,53 @@ describe("deriveSidebarProjectData", () => {
     });
   });
 
+  it("keeps collapsed projects empty when they do not contain the active thread", () => {
+    const project = makeProject({ expanded: false });
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([makeSidebarThreadSummary()]),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: ThreadId.makeUnsafe("thread-in-another-project"),
+      previewLimit: 5,
+      previewPageSize: 5,
+    });
+
+    expect(data.get(project.id)).toMatchObject({
+      activeEntryId: null,
+      visibleEntries: [],
+      canShowMoreThreads: false,
+    });
+  });
+
+  it("reveals an active subagent and its parent beyond the preview limit", () => {
+    const project = makeProject();
+    const firstThread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-first") });
+    const parent = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-parent") });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-child"),
+      parentThreadId: parent.id,
+    });
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([firstThread, parent, child]),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: child.id,
+      previewLimit: 1,
+      previewPageSize: 5,
+    });
+
+    expect(data.get(project.id)?.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      firstThread.id,
+      parent.id,
+      child.id,
+    ]);
+    expect(data.get(project.id)?.activeEntryId).toBe(child.id);
+  });
+
   it("uses the provided thread-status resolver for project status", () => {
     const project = makeProject();
     const threadOne = makeSidebarThreadSummary({
@@ -2175,6 +2114,40 @@ describe("sortThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
+
+  it("keeps createdAt order stable across live and unread completion states", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newest-plain"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-middle-unread"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+          lastVisitedAt: "2026-03-09T10:01:00.000Z",
+        }),
+        {
+          ...makeThread({
+            id: ThreadId.makeUnsafe("thread-oldest-working"),
+            createdAt: "2026-03-09T09:00:00.000Z",
+            updatedAt: "2026-03-09T09:00:00.000Z",
+          }),
+          hasLiveTailWork: true,
+        },
+      ],
+      "created_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-middle-unread"),
+      ThreadId.makeUnsafe("thread-oldest-working"),
     ]);
   });
 

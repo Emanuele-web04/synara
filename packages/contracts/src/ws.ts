@@ -33,9 +33,12 @@ import {
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
+  OrchestrationRegenerateThreadTitleInput,
 } from "./orchestration";
 import {
   GitActionProgressEvent,
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
@@ -45,6 +48,7 @@ import {
   GitCreateWorktreeInput,
   GitInitInput,
   GitListBranchesInput,
+  GitListRecentCommitsInput,
   GitPullInput,
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
@@ -59,6 +63,7 @@ import {
   GitStatusInput,
   GitSummarizeDiffInput,
   GitUnstageFilesInput,
+  GitWorktreeSetupProgressEvent,
 } from "./git";
 import {
   TerminalAckOutputInput,
@@ -77,15 +82,43 @@ import {
   ProjectDiscoverScriptsInput,
   ProjectListDirectoriesInput,
   ProjectReadFileInput,
+  ProjectWatchFileInput,
+  ProjectPrewarmSearchIndexInput,
+  ProjectResolveWorkspaceFileReferencesInput,
   ProjectResolveOutOfRootFileReferenceInput,
   ProjectRunDevServerInput,
   ProjectSearchEntriesInput,
+  ProjectSearchContentInput,
   ProjectSearchLocalEntriesInput,
   ProjectStopDevServerInput,
   ProjectWriteFileInput,
 } from "./project";
 import { StudioListThreadOutputsInput } from "./studio";
 import { FilesystemBrowseInput } from "./filesystem";
+import {
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
+  DeviceAttachInput,
+  DeviceBootInput,
+  DeviceDescribeUiInput,
+  DeviceScrollToElementInput,
+  DeviceDetachInput,
+  DeviceEvent,
+  DeviceInstallAppInput,
+  DeviceKeyEventInput,
+  DeviceLaunchAppInput,
+  DeviceListInput,
+  DeviceOpenUrlInput,
+  DevicePressButtonInput,
+  DeviceScreenshotInput,
+  DeviceStartRecordingInput,
+  DeviceStopRecordingInput,
+  DeviceShutdownInput,
+  DeviceSwipeInput,
+  DeviceTapInput,
+  DeviceThreadInput,
+  DeviceTypeTextInput,
+} from "./device";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
@@ -140,7 +173,11 @@ export const WS_METHODS = {
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
   projectsSearchLocalEntries: "projects.searchLocalEntries",
+  projectsSearchContent: "projects.searchContent",
+  projectsPrewarmSearchIndex: "projects.prewarmSearchIndex",
   projectsReadFile: "projects.readFile",
+  projectsSubscribeFileChange: "projects.subscribeFileChange",
+  projectsResolveWorkspaceFileReferences: "projects.resolveWorkspaceFileReferences",
   projectsResolveOutOfRootFileReference: "projects.resolveOutOfRootFileReference",
   projectsCreateLocalFilePreviewGrant: "projects.createLocalFilePreviewGrant",
   projectsWriteFile: "projects.writeFile",
@@ -164,10 +201,13 @@ export const WS_METHODS = {
   gitGithubRepository: "git.githubRepository",
   gitStatus: "git.status",
   gitReadWorkingTreeDiff: "git.readWorkingTreeDiff",
+  gitBlameLine: "git.blameLine",
+  gitReadFileAtRev: "git.readFileAtRev",
   gitWorkingTreeDiffStats: "git.workingTreeDiffStats",
   gitSummarizeDiff: "git.summarizeDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
+  gitListRecentCommits: "git.listRecentCommits",
   gitCreateWorktree: "git.createWorktree",
   gitCreateDetachedWorktree: "git.createDetachedWorktree",
   gitRemoveWorktree: "git.removeWorktree",
@@ -266,6 +306,7 @@ export const WS_METHODS = {
 export const WS_CHANNELS = {
   automationEvent: "automation.event",
   gitActionProgress: "git.actionProgress",
+  gitWorktreeSetupProgress: "git.worktreeSetupProgress",
   projectProvisionProgress: "project.provisionProgress",
   terminalEvent: "terminal.event",
   projectDevServerEvent: "project.devServerEvent",
@@ -295,6 +336,10 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+    OrchestrationRegenerateThreadTitleInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
   tagRequestBody(
@@ -315,7 +360,14 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsListDirectories, ProjectListDirectoriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
+  tagRequestBody(WS_METHODS.projectsSearchContent, ProjectSearchContentInput),
+  tagRequestBody(WS_METHODS.projectsPrewarmSearchIndex, ProjectPrewarmSearchIndexInput),
   tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
+  tagRequestBody(WS_METHODS.projectsSubscribeFileChange, ProjectWatchFileInput),
+  tagRequestBody(
+    WS_METHODS.projectsResolveWorkspaceFileReferences,
+    ProjectResolveWorkspaceFileReferencesInput,
+  ),
   tagRequestBody(
     WS_METHODS.projectsResolveOutOfRootFileReference,
     ProjectResolveOutOfRootFileReferenceInput,
@@ -337,6 +389,28 @@ const WebSocketRequestBody = Schema.Union([
 
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
 
+  // Device pane (macOS only; the server refuses these off darwin)
+  tagRequestBody(DEVICE_WS_METHODS.list, DeviceListInput),
+  tagRequestBody(DEVICE_WS_METHODS.boot, DeviceBootInput),
+  tagRequestBody(DEVICE_WS_METHODS.shutdown, DeviceShutdownInput),
+  tagRequestBody(DEVICE_WS_METHODS.attach, DeviceAttachInput),
+  tagRequestBody(DEVICE_WS_METHODS.detach, DeviceDetachInput),
+  tagRequestBody(DEVICE_WS_METHODS.getThreadState, DeviceThreadInput),
+  tagRequestBody(DEVICE_WS_METHODS.tap, DeviceTapInput),
+  tagRequestBody(DEVICE_WS_METHODS.swipe, DeviceSwipeInput),
+  tagRequestBody(DEVICE_WS_METHODS.typeText, DeviceTypeTextInput),
+  tagRequestBody(DEVICE_WS_METHODS.keyEvent, DeviceKeyEventInput),
+  tagRequestBody(DEVICE_WS_METHODS.pressButton, DevicePressButtonInput),
+  tagRequestBody(DEVICE_WS_METHODS.installApp, DeviceInstallAppInput),
+  tagRequestBody(DEVICE_WS_METHODS.launchApp, DeviceLaunchAppInput),
+  tagRequestBody(DEVICE_WS_METHODS.openUrl, DeviceOpenUrlInput),
+  tagRequestBody(DEVICE_WS_METHODS.screenshot, DeviceScreenshotInput),
+  tagRequestBody(DEVICE_WS_METHODS.startRecording, DeviceStartRecordingInput),
+  tagRequestBody(DEVICE_WS_METHODS.stopRecording, DeviceStopRecordingInput),
+  tagRequestBody(DEVICE_WS_METHODS.describeUi, DeviceDescribeUiInput),
+  tagRequestBody(DEVICE_WS_METHODS.scrollToElement, DeviceScrollToElementInput),
+  tagRequestBody(DEVICE_WS_METHODS.subscribeEvents, Schema.Struct({})),
+
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
 
@@ -345,10 +419,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
   tagRequestBody(WS_METHODS.gitReadWorkingTreeDiff, GitReadWorkingTreeDiffInput),
+  tagRequestBody(WS_METHODS.gitBlameLine, GitBlameLineInput),
+  tagRequestBody(WS_METHODS.gitReadFileAtRev, GitReadFileAtRevInput),
   tagRequestBody(WS_METHODS.gitWorkingTreeDiffStats, GitReadWorkingTreeDiffInput),
   tagRequestBody(WS_METHODS.gitSummarizeDiff, GitSummarizeDiffInput),
   tagRequestBody(WS_METHODS.gitRunStackedAction, GitRunStackedActionInput),
   tagRequestBody(WS_METHODS.gitListBranches, GitListBranchesInput),
+  tagRequestBody(WS_METHODS.gitListRecentCommits, GitListRecentCommitsInput),
   tagRequestBody(WS_METHODS.gitCreateWorktree, GitCreateWorktreeInput),
   tagRequestBody(WS_METHODS.gitCreateDetachedWorktree, GitCreateDetachedWorktreeInput),
   tagRequestBody(WS_METHODS.gitRemoveWorktree, GitRemoveWorktreeInput),
@@ -473,9 +550,11 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
+  readonly [WS_CHANNELS.gitWorktreeSetupProgress]: typeof GitWorktreeSetupProgressEvent.Type;
   readonly [WS_CHANNELS.projectProvisionProgress]: typeof GitHubProjectProvisionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [WS_CHANNELS.projectDevServerEvent]: typeof ProjectDevServerEvent.Type;
+  readonly [DEVICE_WS_CHANNELS.event]: typeof DeviceEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.shellEvent]: OrchestrationShellStreamItem;
   readonly [ORCHESTRATION_WS_CHANNELS.threadEvent]: OrchestrationThreadStreamItem;
@@ -520,6 +599,10 @@ export const WsPushGitActionProgress = makeWsPushSchema(
   WS_CHANNELS.gitActionProgress,
   GitActionProgressEvent,
 );
+export const WsPushGitWorktreeSetupProgress = makeWsPushSchema(
+  WS_CHANNELS.gitWorktreeSetupProgress,
+  GitWorktreeSetupProgressEvent,
+);
 export const WsPushProjectProvisionProgress = makeWsPushSchema(
   WS_CHANNELS.projectProvisionProgress,
   GitHubProjectProvisionProgressEvent,
@@ -529,6 +612,7 @@ export const WsPushProjectDevServerEvent = makeWsPushSchema(
   WS_CHANNELS.projectDevServerEvent,
   ProjectDevServerEvent,
 );
+export const WsPushDeviceEvent = makeWsPushSchema(DEVICE_WS_CHANNELS.event, DeviceEvent);
 export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
@@ -544,6 +628,7 @@ export const WsPushOrchestrationThreadEvent = makeWsPushSchema(
 
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.gitActionProgress,
+  WS_CHANNELS.gitWorktreeSetupProgress,
   WS_CHANNELS.projectProvisionProgress,
   WS_CHANNELS.serverWelcome,
   WS_CHANNELS.serverMaintenanceUpdated,
@@ -553,6 +638,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.automationEvent,
   WS_CHANNELS.terminalEvent,
   WS_CHANNELS.projectDevServerEvent,
+  DEVICE_WS_CHANNELS.event,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
   ORCHESTRATION_WS_CHANNELS.threadEvent,
@@ -567,9 +653,11 @@ export const WsPush = Schema.Union([
   WsPushServerSettingsUpdated,
   WsPushAutomationEvent,
   WsPushGitActionProgress,
+  WsPushGitWorktreeSetupProgress,
   WsPushProjectProvisionProgress,
   WsPushTerminalEvent,
   WsPushProjectDevServerEvent,
+  WsPushDeviceEvent,
   WsPushOrchestrationDomainEvent,
   WsPushOrchestrationShellEvent,
   WsPushOrchestrationThreadEvent,

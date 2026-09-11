@@ -4,6 +4,7 @@
 // Depends on: providerModelOptions shared formatting helpers.
 
 import { describe, expect, it } from "vitest";
+import { getAppModelOptions } from "./appSettings";
 
 import {
   buildModelSelection,
@@ -46,6 +47,21 @@ describe("Claude model selections", () => {
 });
 
 describe("formatProviderModelOptionName", () => {
+  it("uses branded humanized labels for qualified Pi model slugs", () => {
+    expect(
+      formatProviderModelOptionName({
+        provider: "pi",
+        slug: "zai/glm-5.3-flash",
+      }),
+    ).toBe("GLM 5.3 Flash");
+    expect(
+      formatProviderModelOptionName({
+        provider: "pi",
+        slug: "deepseek/deepseek-v4-flash",
+      }),
+    ).toBe("DeepSeek V4 Flash");
+  });
+
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
     expect(
       formatProviderModelOptionName({
@@ -75,6 +91,56 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it.each(["pi", "opencode"] as const)(
+    "preserves %s discovery names when selection adds a placeholder",
+    (provider) => {
+      const dynamicModels = [
+        { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash", expected: "GLM 5.3 Flash" },
+        {
+          slug: "anthropic/claude-opus-4-9-20260715",
+          name: "claude-opus-4-9-20260715",
+          expected: "Claude Opus 4.9 20260715",
+        },
+        { slug: "zai/glm-5.3-fast", name: "GLM-5.3 Highspeed", expected: "GLM 5.3 Highspeed" },
+        {
+          slug: "deepseek/deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          expected: "DeepSeek V4 Flash",
+        },
+        {
+          slug: "opencode/minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          expected: "MiniMax M2.5 Free",
+        },
+        { slug: "kimi-for-coding/k2p6", name: "K2P6", expected: "K2P6" },
+        { slug: "custom/MyModel", name: "MyModel", expected: "MyModel" },
+      ];
+      for (const model of dynamicModels) {
+        for (const selected of [undefined, model.slug]) {
+          const options = mergeDynamicModelOptions({
+            provider,
+            staticOptions: getAppModelOptions(provider, [], selected),
+            dynamicModels,
+          });
+          expect(options.find((option) => option.slug === model.slug)?.name).toBe(model.expected);
+        }
+      }
+    },
+  );
+
+  it("normalizes slug-shaped Pi display names", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash" },
+          { slug: "deepseek/deepseek-v4-flash", name: "Deepseek V4 Flash" },
+        ],
+      }).map((option) => option.name),
+    ).toEqual(["GLM 5.3 Flash", "DeepSeek V4 Flash"]);
+  });
+
   it("does not offer Pi Anthropic models when discovery only returns local models", () => {
     expect(
       mergeDynamicModelOptions({
@@ -191,6 +257,96 @@ describe("mergeDynamicModelOptions", () => {
         upstreamProviderId: "xai",
         upstreamProviderName: "xAI",
       },
+    ]);
+  });
+
+  it("orders discovered Claude models by the curated catalog, not by CLI order", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: [
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+          { slug: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+        ],
+        dynamicModels: [
+          { slug: "default", name: "Default (recommended)" },
+          { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+          { slug: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual([
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5",
+    ]);
+  });
+
+  it("keeps discovered Claude models the catalog does not know yet at the top", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: [
+          { slug: "claude-fable-5", name: "Claude Fable 5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+        dynamicModels: [
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+          { slug: "claude-opus-6", name: "Claude Opus 6" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["claude-opus-6", "claude-fable-5", "claude-opus-5"]);
+  });
+
+  it("normalizes Devin family labels to canonical brand casing", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "devin",
+        staticOptions: [
+          { slug: "adaptive", name: "Adaptive" },
+          { slug: "swe-1-6", name: "SWE 1.6" },
+          { slug: "swe-1-7", name: "SWE 1.7" },
+        ],
+        dynamicModels: [
+          { slug: "swe-1.7", name: "SWE-1.7" },
+          { slug: "swe-1.7-lightning", name: "SWE-1.7 Lightning" },
+          { slug: "swe-2", name: "SWE-2" },
+          { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+          { slug: "glm-5.2", name: "GLM-5.2" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+      }).map((option) => ({ slug: option.slug, name: option.name })),
+    ).toEqual([
+      { slug: "swe-1-7", name: "SWE 1.7" },
+      { slug: "swe-1.7-lightning", name: "SWE 1.7 Lightning" },
+      { slug: "swe-2", name: "SWE 2" },
+      { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+      { slug: "glm-5.2", name: "GLM 5.2" },
+      { slug: "claude-opus-5", name: "Claude Opus 5" },
+    ]);
+  });
+
+  it("treats the live Grok CLI catalog as authoritative", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "grok",
+        staticOptions: [
+          { slug: "grok-4.6", name: "Grok 4.6" },
+          { slug: "grok-4.5", name: "Grok 4.5" },
+          { slug: "grok-build", name: "Grok 4.3" },
+          { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
+      }),
+    ).toEqual([
+      { slug: "grok-4.6", name: "Grok 4.6" },
+      { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
     ]);
   });
 });

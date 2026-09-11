@@ -6,6 +6,10 @@ import type {
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
+import {
+  parseQuitConfirmationRequest,
+  parseQuitConfirmationResponse,
+} from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
 
@@ -74,8 +78,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
+  setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
+  safariAccess: {
+    getInfo: () => ipcRenderer.invoke(IPC.safariAccess.getInfo),
+    openSettings: () => ipcRenderer.invoke(IPC.safariAccess.openSettings),
+    revealApp: () => ipcRenderer.invoke(IPC.safariAccess.revealApp),
+  },
   showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),
   shell: {
     showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),
@@ -100,6 +111,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
     },
   },
+  customTitleBar: {
+    getState: () => ipcRenderer.invoke(IPC.customTitleBarGetState),
+    setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
+    relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -110,6 +126,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
+  },
+  onQuitConfirmationRequest: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const request = parseQuitConfirmationRequest(payload);
+      if (request) listener(request);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationRequest, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationRequest, wrappedListener);
+    };
+  },
+  replyQuitConfirmation: (response) => {
+    const parsed = parseQuitConfirmationResponse(response);
+    if (!parsed) return;
+    ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
   },
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);
@@ -154,6 +186,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     listPendingCaptures: () => ipcRenderer.invoke(IPC.appSnap.listPendingCaptures),
     acknowledgeCapture: (captureId) =>
       ipcRenderer.invoke(IPC.appSnap.acknowledgeCapture, captureId),
+    listWindows: () => ipcRenderer.invoke(IPC.appSnap.listWindows),
+    captureWindow: (input) => ipcRenderer.invoke(IPC.appSnap.captureWindow, input),
     onCaptured: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
         if (typeof capture !== "object" || capture === null) return;
@@ -187,6 +221,26 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     transcribeVoice: (input) => ipcRenderer.invoke(IPC.transcribeVoice, input),
   },
   browser: {
+    vault: {
+      snapshot: () => ipcRenderer.invoke(IPC.browser.vault.snapshot),
+      configure: (input) => ipcRenderer.invoke(IPC.browser.vault.configure, input),
+      remove: (id) => ipcRenderer.invoke(IPC.browser.vault.remove, id),
+      respond: (input) => ipcRenderer.invoke(IPC.browser.vault.respond, input),
+      setupMaster: (password) => ipcRenderer.invoke(IPC.browser.vault.setupMaster, password),
+      unlock: (password) => ipcRenderer.invoke(IPC.browser.vault.unlock, password),
+      lock: () => ipcRenderer.invoke(IPC.browser.vault.lock),
+      reveal: (input) => ipcRenderer.invoke(IPC.browser.vault.reveal, input),
+      cookieSources: () => ipcRenderer.invoke(IPC.browser.vault.cookieSources),
+      cookieProfiles: (browser) => ipcRenderer.invoke(IPC.browser.vault.cookieProfiles, browser),
+      importCookies: (input) => ipcRenderer.invoke(IPC.browser.vault.importCookies, input),
+      onChanged: (listener) => {
+        const wrapped = () => listener();
+        ipcRenderer.on(IPC.browser.vault.changed, wrapped);
+        return () => {
+          ipcRenderer.removeListener(IPC.browser.vault.changed, wrapped);
+        };
+      },
+    },
     open: (input) => ipcRenderer.invoke(IPC.browser.open, input),
     close: (input) => ipcRenderer.invoke(IPC.browser.close, input),
     hide: (input) => ipcRenderer.invoke(IPC.browser.hide, input),
@@ -200,6 +254,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
+    capturePreview: (input) => ipcRenderer.invoke(IPC.browser.capturePreview, input),
     navigate: (input) => ipcRenderer.invoke(IPC.browser.navigate, input),
     reload: (input) => ipcRenderer.invoke(IPC.browser.reload, input),
     goBack: (input) => ipcRenderer.invoke(IPC.browser.goBack, input),

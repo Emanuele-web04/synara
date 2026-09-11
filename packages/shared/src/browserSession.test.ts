@@ -8,13 +8,34 @@ import {
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
   isLikelyOAuthHost,
+  normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
   isBlankBrowserTabUrl,
   resolveCopyableBrowserTabUrl,
+  resolveFloatingBrowserGuestLayout,
 } from "./browserSession";
 
 const ELECTRON_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Synara/0.3.1 Chrome/124.0.6367.91 Electron/30.0.1 Safari/537.36";
+
+describe("floating browser page zoom", () => {
+  it("scales the frozen 1280x800 guest into the floating card without changing page zoom", () => {
+    expect(resolveFloatingBrowserGuestLayout({ width: 320, height: 220 })).toEqual({
+      width: 1_280,
+      height: 800,
+      scale: 0.25,
+      x: 0,
+      y: 10,
+    });
+    expect(resolveFloatingBrowserGuestLayout({ width: 1_280, height: 800 }).scale).toBe(1);
+  });
+
+  it("normalizes page zoom and preserves valid factors", () => {
+    expect(normalizeBrowserPageZoomFactor(undefined)).toBe(1);
+    expect(normalizeBrowserPageZoomFactor(Number.NaN)).toBe(1);
+    expect(normalizeBrowserPageZoomFactor(0.375)).toBe(0.375);
+  });
+});
 
 describe("deriveChromeUserAgent", () => {
   it("strips Electron and app product tokens to leave a vanilla Chrome UA", () => {

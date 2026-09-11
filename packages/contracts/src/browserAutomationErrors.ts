@@ -28,6 +28,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserDebuggerConflict",
   "BrowserReconciliationRequired",
   "BrowserStaleReference",
+  "BrowserWebMcpDiscoveryStale",
   "BrowserTargetNotFound",
   "BrowserTargetAmbiguous",
   "BrowserTargetNotVisible",
@@ -36,6 +37,10 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserTargetNotEditable",
   "BrowserInvalidLocator",
   "BrowserInputUnsupported",
+  "BrowserInvalidArguments",
+  "BrowserInvalidTimeout",
+  "BrowserCredentialTargetRequired",
+  "BrowserCredentialUseUnavailable",
   "BrowserNavigationBlocked",
   "BrowserNetworkBlocked",
   "BrowserNavigationFailed",
@@ -43,6 +48,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserPopupOpenerUnsupported",
   "BrowserDownloadApprovalRequired",
   "BrowserEvaluationFailed",
+  "BrowserScriptApiUnavailable",
   "BrowserEvaluationResultTooLarge",
   "BrowserSnapshotTooLarge",
   "BrowserScreenshotTooLarge",
@@ -76,10 +82,13 @@ export type BrowserAutomationErrorPhase = typeof BrowserAutomationErrorPhase.Typ
 
 type BrowserFixedAutomationErrorCode =
   | "BrowserReconciliationRequired"
+  | "BrowserWebMcpDiscoveryStale"
   | "BrowserTargetAmbiguous"
   | "BrowserTargetNotEnabled"
   | "BrowserTargetObscured"
   | "BrowserInputUnsupported"
+  | "BrowserInvalidArguments"
+  | "BrowserInvalidTimeout"
   | "BrowserScreenshotTooLarge"
   | "BrowserUploadPathOutsideWorkspace"
   | "BrowserUploadWorkspaceUnavailable"
@@ -128,6 +137,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserReconciliationRequired:
     "The accepted browser routing inventory changed before the operation was admitted. Refresh browser tabs and retry.",
   BrowserStaleReference: "The snapshot reference is stale.",
+  BrowserWebMcpDiscoveryStale:
+    "The WebMCP discovery is stale. Discover the page's tools again before calling one.",
   BrowserTargetNotFound: "No browser element matched the locator.",
   BrowserTargetAmbiguous:
     "The locator matched more than one browser element. Use a unique locator.",
@@ -138,13 +149,25 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserInvalidLocator: "The browser locator is invalid.",
   BrowserInputUnsupported:
     "The requested browser input is unsupported. Use a supported browser action.",
-  BrowserNavigationBlocked: "Browser navigation was blocked by policy.",
+  BrowserInvalidArguments:
+    "The tool arguments do not match the published input schema. No browser action ran. Correct the argument names, types and bounds before retrying; this does not mean form filling is unsupported.",
+  BrowserInvalidTimeout:
+    "timeoutMs must be an integer from 100 to 30000 milliseconds. No browser action ran. Use timeoutMs: 30000 or omit it, and split longer workflows into smaller calls.",
+  BrowserCredentialTargetRequired:
+    "Saved login form detection could not select a target. Agent password filling and generation are unavailable. Ask the user to sign in manually or import a browser session through Saved logins. Never ask for passwords in chat.",
+  BrowserCredentialUseUnavailable:
+    "Saved logins are metadata-only for agents. Password filling, generation and changes are unavailable. Ask the user to sign in manually or import a browser session through Saved logins. Never ask for passwords in chat.",
+  BrowserNavigationBlocked:
+    "Browser navigation was rejected: browser tools accept only http/https URLs (localhost is allowed) or a resolvable annotationId. The user can open local HTML files from the integrated browser's address bar.",
   BrowserNetworkBlocked: "The browser network request was blocked by policy.",
   BrowserNavigationFailed: "Browser navigation failed before a confirmed result was available.",
   BrowserPopupBlocked: "The browser popup was blocked by policy.",
   BrowserPopupOpenerUnsupported: "The popup opener relationship is unsupported.",
   BrowserDownloadApprovalRequired: "The browser download requires explicit approval.",
-  BrowserEvaluationFailed: "Browser evaluation failed before a confirmed result was available.",
+  BrowserEvaluationFailed:
+    "Browser evaluation failed before a confirmed result was available. Inspect the current page and isolate the failing operation in a focused call; do not repeat unchanged calls. This error does not establish that input or sign-in buttons are blocked.",
+  BrowserScriptApiUnavailable:
+    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Use global snapshot(), not page.snapshot(). Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
   BrowserEvaluationResultTooLarge: "The browser evaluation result exceeds the safe response limit.",
   BrowserSnapshotTooLarge: "The browser snapshot exceeds the safe response limit.",
   BrowserScreenshotTooLarge: "The browser screenshot exceeds the safe response limit.",
@@ -166,10 +189,13 @@ export const BrowserAutomationErrorMessages = Object.freeze({
 
 export const BrowserFixedAutomationErrorInvariants = Object.freeze({
   BrowserReconciliationRequired: fixedBrowserErrorInvariant(true, "routing", false),
+  BrowserWebMcpDiscoveryStale: fixedBrowserErrorInvariant(true, "input", false),
   BrowserTargetAmbiguous: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetNotEnabled: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetObscured: fixedBrowserErrorInvariant(true, "target", false),
   BrowserInputUnsupported: fixedBrowserErrorInvariant(false, "input", false),
+  BrowserInvalidArguments: fixedBrowserErrorInvariant(false, "input", false),
+  BrowserInvalidTimeout: fixedBrowserErrorInvariant(false, "input", false),
   BrowserScreenshotTooLarge: fixedBrowserErrorInvariant(false, "snapshot", false),
   BrowserUploadPathOutsideWorkspace: fixedBrowserErrorInvariant(false, "input", false),
   BrowserUploadWorkspaceUnavailable: fixedBrowserErrorInvariant(false, "input", false),

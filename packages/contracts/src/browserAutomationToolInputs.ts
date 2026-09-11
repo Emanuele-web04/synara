@@ -1,8 +1,19 @@
 import { Schema } from "effect";
 
 import { BoundedUtf8String } from "./browserAutomationBounds";
-import { BrowserIdempotencyKey, BrowserTabId } from "./browserAutomationIds";
-import { BrowserNodeTarget, BrowserPointerTarget } from "./browserAutomationTargets";
+import {
+  BrowserIdempotencyKey,
+  BrowserTabId,
+  BrowserWebMcpDiscoveryId,
+  BrowserWebMcpToolId,
+} from "./browserAutomationIds";
+import { BrowserBoundedJsonObject } from "./browserAutomationJson";
+import {
+  BrowserLocator,
+  BrowserNodeTarget,
+  BrowserPointerTarget,
+} from "./browserAutomationTargets";
+import { BrowserCssSelector } from "./browserAutomationCssSelector";
 import {
   BrowserLoadState,
   browserBoundedInt as boundedInt,
@@ -15,7 +26,8 @@ const described = <S extends Schema.Top>(schema: S, description: string): S =>
 export const BROWSER_FIELD_INSTRUCTION_COPY = {
   tabId:
     "Optional scoped tab returned by browser_tabs/open; omit to use provider-session affinity.",
-  timeoutMs: "Optional end-to-end action deadline in milliseconds within the published bounds.",
+  timeoutMs:
+    "Optional end-to-end action deadline: integer from 100 to 30000 milliseconds. Never pass 45000 or 60000; split longer workflows into smaller calls.",
   idempotencyKey:
     "Optional advanced retry key. Synara derives a stable key from the authenticated tool request when omitted; provide one only to deliberately deduplicate a byte-identical retry.",
   target:
@@ -34,35 +46,19 @@ export const BrowserTimeoutMs = described(
   BROWSER_FIELD_INSTRUCTION_COPY.timeoutMs,
 );
 
-function makeInvocationFields() {
-  return {
-    timeoutMs: Schema.optional(BrowserTimeoutMs),
-    idempotencyKey: Schema.optional(
-      described(BrowserIdempotencyKey, BROWSER_FIELD_INSTRUCTION_COPY.idempotencyKey),
-    ),
-  };
-}
-
-const readOnlyInvocationFields = makeInvocationFields();
-const effectingInvocationFields = makeInvocationFields();
+const invocationFields = {
+  timeoutMs: Schema.optional(BrowserTimeoutMs),
+  idempotencyKey: Schema.optional(
+    described(BrowserIdempotencyKey, BROWSER_FIELD_INSTRUCTION_COPY.idempotencyKey),
+  ),
+};
 const optionalTabField = {
   tabId: Schema.optional(described(BrowserTabId, BROWSER_FIELD_INSTRUCTION_COPY.tabId)),
 };
 
-export const BrowserReadOnlyInvocationCommon = closedStruct(readOnlyInvocationFields);
-export const BrowserEffectingInvocationCommon = closedStruct(effectingInvocationFields);
-export const BrowserReadOnlyTabInvocationCommon = closedStruct({
-  ...readOnlyInvocationFields,
-  ...optionalTabField,
-});
-export const BrowserEffectingTabInvocationCommon = closedStruct({
-  ...effectingInvocationFields,
-  ...optionalTabField,
-});
-
 const BrowserUrl = described(
   BoundedUtf8String(8_192, 1),
-  "Absolute HTTP or HTTPS URL, bounded to 8 KiB; other schemes are rejected by browser policy.",
+  "Absolute HTTP or HTTPS URL, bounded to 8 KiB. Localhost and other local addresses are fully supported. Other schemes (e.g. file:) are rejected as tool input only — the integrated browser itself can open local HTML files when the user enters them in its address bar.",
 );
 const BrowserAnnotationId = described(
   BoundedUtf8String(128, 1).check(
@@ -113,10 +109,10 @@ const defaultDomContentLoaded = () => "domcontentloaded" as const;
 const optionalDefault = <S extends Schema.Top>(schema: S, value: () => S["Encoded"]) =>
   Schema.optional(schema).pipe(Schema.withDecodingDefault<Schema.optional<S>>(value));
 
-export const BrowserStatusInput = closedStruct(readOnlyInvocationFields);
-export const BrowserTabsInput = closedStruct(readOnlyInvocationFields);
+export const BrowserStatusInput = closedStruct(invocationFields);
+export const BrowserTabsInput = closedStruct(invocationFields);
 export const BrowserToolOpenInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   url: Schema.optional(BrowserUrl),
   show: optionalDefault(
     described(Schema.Boolean, BROWSER_FIELD_INSTRUCTION_COPY.show),
@@ -131,7 +127,7 @@ export const BrowserToolOpenInput = closedStruct({
   ),
 });
 export const BrowserToolNavigateInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   url: Schema.optional(BrowserUrl),
   annotationId: Schema.optional(BrowserAnnotationId),
@@ -140,7 +136,7 @@ export const BrowserToolNavigateInput = closedStruct({
   Schema.makeFilter((input) => (input.url === undefined) !== (input.annotationId === undefined)),
 );
 const BrowserHistoryNavigationFields = {
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   waitUntil: optionalDefault(BrowserWaitUntil, defaultDomContentLoaded),
 };
@@ -154,7 +150,7 @@ export const BrowserReloadInput = closedStruct({
   ),
 });
 export const BrowserResizeInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   width: described(
     boundedInt(320, 3_840),
@@ -166,7 +162,7 @@ export const BrowserResizeInput = closedStruct({
   ),
 });
 export const BrowserSnapshotInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   includeImage: optionalDefault(
     described(
@@ -183,9 +179,47 @@ export const BrowserSnapshotInput = closedStruct({
     defaultTrue,
   ),
 });
-export const BrowserScreenshotInput = closedStruct({
-  ...readOnlyInvocationFields,
+export const BrowserWebMcpToolsInput = closedStruct({
+  ...invocationFields,
   ...optionalTabField,
+  query: Schema.optional(
+    described(
+      BoundedUtf8String(512, 1),
+      "Optional current user goal used to rank page-declared WebMCP tools before returning them.",
+    ),
+  ),
+  limit: optionalDefault(
+    described(
+      boundedInt(1, 32),
+      "Maximum page-declared WebMCP tools to return after ranking; defaults to 8.",
+    ),
+    () => 8,
+  ),
+});
+export const BrowserWebMcpCallInput = closedStruct({
+  ...invocationFields,
+  ...optionalTabField,
+  discoveryId: described(
+    BrowserWebMcpDiscoveryId,
+    "Opaque discovery id returned by browser_webmcp_tools for the current document.",
+  ),
+  toolId: described(
+    BrowserWebMcpToolId,
+    "Opaque tool id returned by browser_webmcp_tools; never substitute the page tool name.",
+  ),
+  arguments: Schema.optional(BrowserBoundedJsonObject).pipe(
+    Schema.withDecodingDefault<Schema.optional<typeof BrowserBoundedJsonObject>>(() => ({})),
+  ),
+});
+export const BrowserScreenshotInput = closedStruct({
+  ...invocationFields,
+  ...optionalTabField,
+  kind: Schema.optional(
+    described(
+      Schema.Literals(["proof", "debug", "question"]),
+      "Use proof to save a completion screenshot for embedding in chat; otherwise capture only for inspection.",
+    ),
+  ),
   fullPage: optionalDefault(
     described(
       Schema.Boolean,
@@ -195,7 +229,7 @@ export const BrowserScreenshotInput = closedStruct({
   ),
 });
 export const BrowserLogsInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   includeConsole: optionalDefault(
     described(
@@ -220,7 +254,7 @@ export const BrowserLogsInput = closedStruct({
   ),
 }).check(Schema.makeFilter((value) => value.includeConsole || value.includeNetwork));
 export const BrowserClickInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(BrowserPointerTarget, BROWSER_FIELD_INSTRUCTION_COPY.target),
   button: Schema.optional(
@@ -231,12 +265,12 @@ export const BrowserClickInput = closedStruct({
   ),
 });
 export const BrowserHoverInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(BrowserPointerTarget, BROWSER_FIELD_INSTRUCTION_COPY.target),
 });
 export const BrowserDragInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   source: described(
     BrowserPointerTarget,
@@ -252,7 +286,7 @@ export const BrowserDragInput = closedStruct({
   ),
 });
 export const BrowserTypeInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
     BrowserNodeTarget,
@@ -268,7 +302,7 @@ export const BrowserTypeInput = closedStruct({
   ),
 });
 export const BrowserSelectInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
     BrowserNodeTarget,
@@ -281,12 +315,18 @@ export const BrowserSelectInput = closedStruct({
     "One through 64 unique exact option values. A non-multiple select accepts exactly one value.",
   ),
 });
+export const BrowserUploadTarget = Schema.Union([
+  closedStruct({ selector: BrowserCssSelector }),
+  closedStruct({ locator: BrowserLocator }),
+]);
+export type BrowserUploadTarget = typeof BrowserUploadTarget.Type;
+
 export const BrowserUploadInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
-    BrowserNodeTarget,
-    "Exactly one enabled input[type=file] in the shared browser page; prefer a current snapshot {ref,snapshotId}.",
+    BrowserUploadTarget,
+    "One strict CSS selector or semantic locator for an enabled input[type=file]. Observe it with Betterwright first. Refs are scoped to a browser_run call and cannot be passed to this tool.",
   ),
   paths: described(
     Schema.Array(BrowserWorkspaceRelativePath)
@@ -296,7 +336,7 @@ export const BrowserUploadInput = closedStruct({
   ),
 });
 export const BrowserPressInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   keys: described(
     Schema.Array(BrowserKeyChord).check(Schema.isMinLength(1), Schema.isMaxLength(16)),
@@ -317,7 +357,7 @@ const nonZeroPageCount = boundedInt(-100_000, 100_000).check(
   Schema.makeFilter((value: number) => value !== 0),
 );
 export const BrowserScrollInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   mode: Schema.Literals(["pixels", "pages", "direction"]),
   deltaX: Schema.optional(nonZeroFinite),
@@ -380,7 +420,7 @@ export const BrowserWaitCondition = Schema.Union([
   closedStruct({ kind: Schema.Literal("load"), state: BrowserLoadState }),
 ]);
 export const BrowserWaitInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   mode: optionalDefault(
     described(Schema.Literals(["all", "any"]), "Combine conditions using all (default) or any."),
@@ -392,12 +432,20 @@ export const BrowserWaitInput = closedStruct({
   ),
 });
 export const BrowserEvaluateInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   expression: BrowserEvaluateExpression,
 });
+export const BrowserRunInput = closedStruct({
+  ...invocationFields,
+  ...optionalTabField,
+  code: described(
+    BoundedUtf8String(16_384, 1),
+    "A bounded Betterwright snippet using page and snapshot(); return JSON. Snippet state does not persist between calls.",
+  ),
+});
 export const BrowserCloseInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
 });
 
@@ -410,6 +458,8 @@ export type BrowserForwardInput = typeof BrowserForwardInput.Type;
 export type BrowserReloadInput = typeof BrowserReloadInput.Type;
 export type BrowserResizeInput = typeof BrowserResizeInput.Type;
 export type BrowserSnapshotInput = typeof BrowserSnapshotInput.Type;
+export type BrowserWebMcpToolsInput = typeof BrowserWebMcpToolsInput.Type;
+export type BrowserWebMcpCallInput = typeof BrowserWebMcpCallInput.Type;
 export type BrowserScreenshotInput = typeof BrowserScreenshotInput.Type;
 export type BrowserLogsInput = typeof BrowserLogsInput.Type;
 export type BrowserClickInput = typeof BrowserClickInput.Type;
@@ -423,4 +473,5 @@ export type BrowserScrollInput = typeof BrowserScrollInput.Type;
 export type BrowserWaitCondition = typeof BrowserWaitCondition.Type;
 export type BrowserWaitInput = typeof BrowserWaitInput.Type;
 export type BrowserEvaluateInput = typeof BrowserEvaluateInput.Type;
+export type BrowserRunInput = typeof BrowserRunInput.Type;
 export type BrowserCloseInput = typeof BrowserCloseInput.Type;

@@ -8,7 +8,7 @@ import type {
   ThreadId,
   RuntimeMode,
 } from "@synara/contracts";
-import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
+import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -25,7 +25,7 @@ import {
 } from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
-  createAllThreadsSelector,
+  createAccountRateLimitThreadsSelector,
   createProjectSelector,
   createThreadSelector,
 } from "../storeSelectors";
@@ -50,18 +50,16 @@ import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentRowBody,
-  EnvironmentRowChevron,
 } from "./chat/environment/EnvironmentRow";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { ComposerEnvironmentPicker } from "./chat/ComposerEnvironmentPicker";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
-  MenuGroup,
-  MenuGroupLabel,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -72,40 +70,6 @@ import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon className={className} />;
-}
-
-/** Leading glyph treatment shared by every "Continue in" menu row (16px, muted). */
-const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
-
-/**
- * One row of the "Continue in" menu: `[glyph] [label …grows] [✓ when selected]`.
- * Centralizes the icon/label/check treatment so the local, worktree, and handoff
- * entries stay on one grid instead of repeating the same class strings per row.
- */
-function ContinueInMenuItem({
-  icon,
-  label,
-  selected: selectedProp,
-  disabled: disabledProp,
-  onSelect,
-}: {
-  icon: ReactNode;
-  label: ReactNode;
-  selected?: boolean;
-  disabled?: boolean;
-  onSelect?: () => void;
-}) {
-  const selected = selectedProp ?? false;
-  const disabled = disabledProp ?? false;
-  return (
-    <MenuItem disabled={disabled} {...(onSelect ? { onClick: onSelect } : {})}>
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {selected ? (
-        <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
-      ) : null}
-    </MenuItem>
-  );
 }
 
 function RuntimeModeMenuItem({
@@ -151,6 +115,7 @@ export interface BranchToolbarProps {
   className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
+  threadDetailReady: boolean;
   onHandoffToWorktree?: () => void;
   onHandoffToLocal?: () => void;
   handoffBusy?: boolean;
@@ -288,6 +253,7 @@ export default function BranchToolbar({
   className,
   onEnvModeChange,
   envLocked,
+  threadDetailReady,
   onHandoffToWorktree,
   onHandoffToLocal,
   handoffBusy: handoffBusyProp,
@@ -304,8 +270,8 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const [allThreadsSelector] = useState(() => createAllThreadsSelector());
-  const threads = useStore(allThreadsSelector);
+  const [rateLimitThreadsSelector] = useState(() => createAccountRateLimitThreadsSelector());
+  const threads = useStore(rateLimitThreadsSelector);
   const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
@@ -492,16 +458,8 @@ export default function BranchToolbar({
     fetchOpenUsageData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
-  const [envPickerOpen, setEnvPickerOpen] = useState(false);
 
   if (!activeThreadId || !activeProject) return null;
-
-  const envGlyph = (className: string) =>
-    environmentPresentation.mode === "local" ? (
-      <CentralIcon name="macbook-air" className={className} />
-    ) : (
-      <WorktreeGlyph className={className} />
-    );
 
   return (
     <div
@@ -514,113 +472,48 @@ export default function BranchToolbar({
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
         {showEnvPicker ? (
-          <Menu open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  className={
-                    isPanel
-                      ? ENVIRONMENT_ROW_CLASS_NAME
-                      : COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME
-                  }
-                />
-              }
-            >
-              {isPanel ? (
-                <EnvironmentRowBody
-                  icon={envGlyph(ENVIRONMENT_ROW_ICON_CLASS_NAME)}
-                  label={environmentPresentation.shortLabel}
-                  trailing={<EnvironmentRowChevron />}
-                />
-              ) : (
-                <>
-                  {envGlyph("size-3.5")}
-                  {environmentPresentation.shortLabel}
-                  <ChevronDownIcon className="size-3 opacity-60" />
-                </>
-              )}
-            </MenuTrigger>
-            <ComposerPickerMenuPopup
-              align="start"
-              side={isPanel ? "bottom" : "top"}
-              sideOffset={6}
-              className="w-60 min-w-60"
-            >
-              <MenuGroup>
-                <MenuGroupLabel>Continue in</MenuGroupLabel>
-                {environmentPresentation.mode === "local" ? (
-                  <ContinueInMenuItem
-                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.localOptionLabel}
-                    selected
-                  />
-                ) : (
-                  <ContinueInMenuItem
-                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.localOptionLabel}
-                    onSelect={() => onEnvModeChange("local")}
-                  />
-                )}
-                {canSwitchToWorktree ? (
-                  <ContinueInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="New worktree"
-                    onSelect={() => onEnvModeChange("worktree")}
-                  />
-                ) : null}
-                {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
-                  <ContinueInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.worktreeOptionLabel}
-                    selected
-                  />
-                ) : null}
-                {canHandoffToWorktree && onHandoffToWorktree ? (
-                  <ContinueInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to new worktree"
-                    disabled={handoffBusy}
-                    onSelect={() => onHandoffToWorktree()}
-                  />
-                ) : null}
-                {canHandoffToLocal && onHandoffToLocal ? (
-                  <ContinueInMenuItem
-                    icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to local"
-                    disabled={handoffBusy}
-                    onSelect={() => onHandoffToLocal()}
-                  />
-                ) : null}
-              </MenuGroup>
+          <ComposerEnvironmentPicker
+            environmentPresentation={environmentPresentation}
+            onEnvModeChange={onEnvModeChange}
+            canSwitchToWorktree={canSwitchToWorktree}
+            canHandoffToLocal={canHandoffToLocal}
+            canHandoffToWorktree={canHandoffToWorktree}
+            onHandoffToLocal={onHandoffToLocal}
+            onHandoffToWorktree={onHandoffToWorktree}
+            handoffBusy={handoffBusy}
+            isPanel={isPanel}
+          >
+            {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
+            {hasServerThread ? (
+              <>
+                <MenuSeparator />
 
-              <MenuSeparator />
-
-              <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
-                  <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                  <DisclosureChevron
-                    open={rateLimitsOpen}
-                    className="text-[var(--color-text-foreground-secondary)]"
-                  />
-                </MenuItem>
-                <CollapsiblePanel>
-                  <ProviderUsagePanelContent
-                    provider={activeProvider}
-                    rateLimits={usageSummary.rateLimits}
-                    usageLines={usageSummary.usageLines}
-                    notice={usageSummary.usageNotice}
-                    isLoading={usageSummary.isLoading}
-                    learnMoreHref={usageSummary.learnMoreHref}
-                    showTitle={false}
-                    showLearnMore={true}
-                    className="px-2 pb-1 pt-1"
-                  />
-                </CollapsiblePanel>
-              </Collapsible>
-            </ComposerPickerMenuPopup>
-          </Menu>
+                <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
+                  <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
+                    <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                    <DisclosureChevron
+                      open={rateLimitsOpen}
+                      className="text-[var(--color-text-foreground-secondary)]"
+                    />
+                  </MenuItem>
+                  <CollapsiblePanel>
+                    <ProviderUsagePanelContent
+                      provider={activeProvider}
+                      rateLimits={usageSummary.rateLimits}
+                      usageLines={usageSummary.usageLines}
+                      notice={usageSummary.usageNotice}
+                      isLoading={usageSummary.isLoading}
+                      learnMoreHref={usageSummary.learnMoreHref}
+                      showTitle={false}
+                      showLearnMore={true}
+                      className="px-2 pb-1 pt-1"
+                    />
+                  </CollapsiblePanel>
+                </Collapsible>
+              </>
+            ) : null}
+          </ComposerEnvironmentPicker>
         ) : isPanel ? (
           <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
             <EnvironmentRowBody
@@ -636,7 +529,11 @@ export default function BranchToolbar({
         )}
 
         {showBranchSelector ? (
+          /* ChatView stays mounted while the route switches threads. Reset the selector's
+             optimistic checkout state at that boundary so a previous thread cannot paint its
+             branch while the new thread's workspace query is resolving. */
           <BranchToolbarBranchSelector
+            key={threadId}
             activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
@@ -644,6 +541,7 @@ export default function BranchToolbar({
             effectiveEnvMode={effectiveEnvMode}
             envLocked={envLocked}
             hasServerThread={hasServerThread}
+            isThreadSettled={serverThread?.settledAt != null || !threadDetailReady}
             onSetThreadWorkspace={setThreadWorkspace}
             variant={variant}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}

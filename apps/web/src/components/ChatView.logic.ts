@@ -1,6 +1,9 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
+  type GitWorktreeSetupPhase,
+  type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
@@ -10,7 +13,7 @@ import {
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
-import { normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -34,6 +37,10 @@ import {
 } from "../lib/terminalContext";
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
+  normalizePullRequestContexts,
+  type PullRequestContextDraft,
+} from "../lib/pullRequestContext";
+import {
   humanizeSubagentStatus,
   normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
@@ -44,7 +51,7 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import type { ProviderModelOption } from "../providerModelOptions";
+import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -251,27 +258,47 @@ export function shouldEnableComposerPastedTextCollapse(input: {
   );
 }
 
-export function buildComposerMenuSelectionKey(input: {
-  menuOpen: boolean;
-  picker: string | null;
-  triggerKind: string | null;
-  triggerQuery: string;
-  items: readonly { id: string }[];
-}): string | null {
-  if (!input.menuOpen) {
-    return null;
-  }
-  const sourceKey = input.picker
-    ? `picker:${input.picker}`
-    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
-  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
-}
-
 export function buildTranscriptAutoFollowSignal(input: {
   readonly messageCount: number;
   readonly tailKey: string;
 }): string {
   return `${input.messageCount}\u001f${input.tailKey}`;
+}
+
+// Deliberately excludes the tail message's text length: while a streamed
+// message grows, LegendList's own `maintainScrollAtEnd` keeps the bottom
+// stick, and re-arming the auto-follow re-snap on every store flush would
+// schedule a redundant scrollToEnd per flush for the whole stream. The key
+// still moves on every transition that needs an explicit re-snap: a new tail
+// message, role change, stream start/settle, first content landing, and
+// completion.
+export function buildTranscriptTailKey(
+  tailMessage: {
+    readonly id: string;
+    readonly role: string;
+    readonly streaming?: boolean;
+    readonly text: string;
+    readonly completedAt?: string | null | undefined;
+  } | null,
+): string {
+  if (tailMessage === null) {
+    return "empty";
+  }
+  return [
+    tailMessage.id,
+    tailMessage.role,
+    tailMessage.streaming ? "streaming" : "settled",
+    // While streaming, per-token growth is owned by LegendList's
+    // maintainScrollAtEnd — only the empty->content transition matters here.
+    // Once settled, a projection repair can replace the text under the same id
+    // with nothing else changing, so length is back in the key.
+    tailMessage.streaming
+      ? tailMessage.text.length > 0
+        ? "content"
+        : "empty"
+      : String(tailMessage.text.length),
+    tailMessage.completedAt ?? "",
+  ].join(":");
 }
 
 export function resolveThreadArtifactWorkspaceRoot(input: {
@@ -590,6 +617,30 @@ export function resolveGitRepoUiState(input: {
   return input.queriedIsRepo ?? !input.isStudioContainer;
 }
 
+export interface SettledThreadBranchMismatch {
+  readonly threadBranch: string;
+  readonly currentBranch: string;
+}
+
+export function resolveSettledThreadBranchMismatch(input: {
+  isSettled: boolean;
+  isLocalWorkspace: boolean;
+  threadBranch: string | null | undefined;
+  currentBranch: string | null | undefined;
+}): SettledThreadBranchMismatch | null {
+  if (!input.isSettled || !input.isLocalWorkspace) {
+    return null;
+  }
+
+  const threadBranch = input.threadBranch?.trim() ?? "";
+  const currentBranch = input.currentBranch?.trim() ?? "";
+  if (!threadBranch || !currentBranch || threadBranch === currentBranch) {
+    return null;
+  }
+
+  return { threadBranch, currentBranch };
+}
+
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
@@ -686,6 +737,27 @@ export function resolveThreadDetailHydration(input: {
   return input.detailSyncState === "failed" ? "failed" : "loading";
 }
 
+/**
+ * Fallback model selection for a draft thread before the first server turn exists.
+ * An explicit project default wins; otherwise the user's default provider is used
+ * (pi has no default model, so it is skipped), then codex. The model comes from the
+ * project default only when it matches the chosen provider, otherwise the provider's
+ * own default.
+ */
+export function resolveDraftFallbackModelSelection(input: {
+  projectDefault: ModelSelection | null | undefined;
+  settingsDefaultProvider: ProviderKind;
+}): ModelSelection {
+  const settingsProvider =
+    input.settingsDefaultProvider === "pi" ? null : input.settingsDefaultProvider;
+  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
+  const model =
+    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
+    getDefaultModel(provider) ??
+    DEFAULT_MODEL_BY_PROVIDER.codex;
+  return buildModelSelection(provider, model);
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -715,6 +787,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    ...(draftThread.goal ? { goal: draftThread.goal } : {}),
   };
 }
 
@@ -742,6 +815,26 @@ export function filterSidechatTranscriptMessages(
   return isSidechat
     ? messages.filter((message) => message.source !== "fork-import")
     : [...messages];
+}
+
+// Imported fork history should not lock a Side chat's provider before its first native turn.
+export function threadHasProviderLockingMessages(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId">,
+): boolean {
+  if (!thread.sidechatSourceThreadId) {
+    return thread.messages.length > 0;
+  }
+  return thread.messages.some((message) => (message.source ?? "native") !== "fork-import");
+}
+
+export function threadHasProviderLockingActivity(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId" | "latestTurn" | "session">,
+): boolean {
+  return (
+    thread.latestTurn !== null ||
+    thread.session !== null ||
+    threadHasProviderLockingMessages(thread)
+  );
 }
 
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
@@ -923,19 +1016,30 @@ export interface PullRequestDialogState {
   key: number;
 }
 
-// Ordered client-side phases of the "New worktree" first-send setup. The
-// labels surface verbatim in the transcript's transient setup row.
-export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
-  id: WorktreeSetupStepId;
-  label: string;
-}> = [
-  { id: "create-worktree", label: "Creating branch and worktree" },
-  { id: "prepare-thread", label: "Linking thread workspace" },
-  { id: "start-session", label: "Starting session" },
-];
+// Labels for the "New worktree" first-send setup steps, surfaced verbatim in
+// the transcript's transient setup row. Single source — the ordered step list
+// is assembled in `worktreeSetupStepDefinitions`.
+const WORKTREE_SETUP_STEP_LABELS: Record<WorktreeSetupStepId, string> = {
+  "create-branch": "Creating branch",
+  "create-worktree": "Creating worktree",
+  "copy-changes": "Copying local changes",
+  "prepare-thread": "Linking thread workspace",
+  "run-setup-action": "Running setup action",
+  "start-session": "Starting session",
+};
+
+// Creation phases mirror the server's real worktree setup progress events, so
+// each row completes on an actual boundary instead of one row spinning through
+// all of them.
+export const WORKTREE_SETUP_STEP_ID_BY_PHASE: Record<GitWorktreeSetupPhase, WorktreeSetupStepId> = {
+  branch: "create-branch",
+  worktree: "create-worktree",
+  "copy-changes": "copy-changes",
+};
 
 export interface WorktreeSetupSnapshotOptions {
   setupScriptName?: string | null;
+  copyLocalChanges?: boolean;
 }
 
 export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
@@ -949,18 +1053,23 @@ function worktreeSetupStepDefinitions(
 ): ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> {
   const setupScriptName = options?.setupScriptName?.trim();
   const includeSetupStep = activeStepId === "run-setup-action" || Boolean(setupScriptName);
-  if (!includeSetupStep) {
-    return WORKTREE_SETUP_STEP_DEFINITIONS;
+  const includeCopyStep = activeStepId === "copy-changes" || Boolean(options?.copyLocalChanges);
+  const stepIds: WorktreeSetupStepId[] = ["create-branch", "create-worktree"];
+  if (includeCopyStep) {
+    stepIds.push("copy-changes");
   }
-  return [
-    { id: "create-worktree", label: "Creating branch and worktree" },
-    { id: "prepare-thread", label: "Linking thread workspace" },
-    {
-      id: "run-setup-action",
-      label: setupScriptName ? `Running setup action: ${setupScriptName}` : "Running setup action",
-    },
-    { id: "start-session", label: "Starting session" },
-  ];
+  stepIds.push("prepare-thread");
+  if (includeSetupStep) {
+    stepIds.push("run-setup-action");
+  }
+  stepIds.push("start-session");
+  return stepIds.map((id) => ({
+    id,
+    label:
+      id === "run-setup-action" && setupScriptName
+        ? `${WORKTREE_SETUP_STEP_LABELS[id]}: ${setupScriptName}`
+        : WORKTREE_SETUP_STEP_LABELS[id],
+  }));
 }
 
 // How long a failed setup step stays visible before the row is dismissed, so
@@ -1040,6 +1149,58 @@ export function createWorktreeSetupResolution(): WorktreeSetupResolution {
       settle(next);
     },
   };
+}
+
+export interface WorktreeCreationFlowDeps<Result extends { worktree: { path: string } }> {
+  /** Correlates streamed progress events with this creation request. */
+  progressId: string;
+  subscribeToProgress: (listener: (event: GitWorktreeSetupProgressEvent) => void) => () => void;
+  startCreation: () => Promise<Result>;
+  resolution: WorktreeSetupResolution;
+  /** Advances the setup card to the step matching a streamed creation phase. */
+  onCreationStep: (stepId: WorktreeSetupStepId) => void;
+  removeWorktree: (worktreePath: string) => Promise<unknown>;
+}
+
+export type WorktreeCreationFlowOutcome<Result> =
+  | { outcome: "resolved" }
+  | { outcome: "created"; result: Result };
+
+/**
+ * Runs one worktree creation while the setup card is showing: subscribes to
+ * the server's streamed setup phases, races the creation against the card's
+ * "Cancel" / "Work locally" resolution, and — when the user resolves first —
+ * tears the (possibly still materializing) worktree down once the creation
+ * lands so a resolved send leaves no stray checkout.
+ */
+export async function runWorktreeCreationFlow<Result extends { worktree: { path: string } }>(
+  deps: WorktreeCreationFlowDeps<Result>,
+): Promise<WorktreeCreationFlowOutcome<Result>> {
+  const unsubscribe = deps.subscribeToProgress((event) => {
+    if (
+      event.progressId !== deps.progressId ||
+      event.kind !== "phase_started" ||
+      deps.resolution.action !== null
+    ) {
+      return;
+    }
+    deps.onCreationStep(WORKTREE_SETUP_STEP_ID_BY_PHASE[event.phase]);
+  });
+  try {
+    const creation = deps.startCreation();
+    // `git worktree add` is the longest step; let the card's buttons win the
+    // wait instead of only taking effect once the creation finishes.
+    await Promise.race([creation, deps.resolution.promise]);
+    if (deps.resolution.action !== null) {
+      void creation
+        .then((result) => deps.removeWorktree(result.worktree.path))
+        .catch(() => undefined);
+      return { outcome: "resolved" };
+    }
+    return { outcome: "created", result: await creation };
+  } finally {
+    unsubscribe();
+  }
 }
 
 // Once the turn RPC has resolved the server provably owns the turn; the
@@ -1187,11 +1348,22 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
+/** The exact label set the transcript's working indicator can render. */
+export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
-}): "Loading" | "Thinking" {
-  return input.isSendBusy && !input.turnTakenOver ? "Loading" : "Thinking";
+  isConnecting?: boolean;
+  providerName?: string;
+}): WorkingLabel {
+  if (input.isSendBusy && !input.turnTakenOver) {
+    return "Loading";
+  }
+  if (input.isConnecting && input.providerName) {
+    return `Starting ${input.providerName}…`;
+  }
+  return "Thinking";
 }
 
 /**
@@ -1326,6 +1498,84 @@ export function resolveQueuedSteerGateTransition(input: {
   };
 }
 
+export function shouldHoldQueuedComposerAutoDispatch(input: {
+  hasQueueableLiveTurn: boolean;
+  phase: SessionPhase;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isAwaitingTurnStart: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+}): boolean {
+  return (
+    input.hasQueueableLiveTurn ||
+    input.phase === "disconnected" ||
+    input.isSendBusy ||
+    input.isConnecting ||
+    input.isAwaitingTurnStart ||
+    input.queuedSteerGate !== null ||
+    input.hasPendingApproval ||
+    input.hasPendingProgress ||
+    input.hasPendingUserInput ||
+    input.queuedTurnCount === 0
+  );
+}
+
+/** The post-ack gap is not live-turn takeover, so hold until `hasLiveTurnTakenOver` or fail-open. */
+export function resolveQueuedComposerAutoDispatchHold(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
+  isConnecting: boolean;
+  queuedSteerGate: QueuedSteerGate | null;
+  hasPendingApproval: boolean;
+  hasPendingProgress: boolean;
+  hasPendingUserInput: boolean;
+  queuedTurnCount: number;
+  threadError: string | null | undefined;
+  now?: number;
+}): boolean {
+  const isSendBusy =
+    input.localDispatch !== null &&
+    !hasServerAcknowledgedLocalDispatch({
+      localDispatch: input.localDispatch,
+      phase: input.phase,
+      latestTurn: input.latestTurn,
+      session: input.session,
+      messages: input.messages,
+      hasPendingApproval: input.hasPendingApproval,
+      hasPendingUserInput: input.hasPendingUserInput,
+      threadError: input.threadError,
+    });
+  const turnTakenOver = hasLiveTurnTakenOver({
+    localDispatch: input.localDispatch,
+    phase: input.phase,
+    latestTurn: input.latestTurn,
+    session: input.session,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingUserInput: input.hasPendingUserInput,
+    threadError: input.threadError,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
+  return shouldHoldQueuedComposerAutoDispatch({
+    hasQueueableLiveTurn: input.phase === "running" && input.session?.activeTurnId != null,
+    phase: input.phase,
+    isSendBusy,
+    isConnecting: input.isConnecting,
+    isAwaitingTurnStart: input.localDispatch !== null && !turnTakenOver,
+    queuedSteerGate: input.queuedSteerGate,
+    hasPendingApproval: input.hasPendingApproval,
+    hasPendingProgress: input.hasPendingProgress,
+    hasPendingUserInput: input.hasPendingUserInput,
+    queuedTurnCount: input.queuedTurnCount,
+  });
+}
+
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
 
 export function shouldStartActiveTurnLayoutGrace(options: {
@@ -1356,11 +1606,13 @@ export function deriveComposerSendState(options: {
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
+  pullRequestContexts: ReadonlyArray<PullRequestContextDraft>;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
   sendablePastedTexts: PastedTextDraft[];
+  sendablePullRequestContexts: PullRequestContextDraft[];
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
@@ -1368,11 +1620,13 @@ export function deriveComposerSendState(options: {
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
   const sendablePastedTexts = filterPastedTextsWithText(options.pastedTexts);
+  const sendablePullRequestContexts = normalizePullRequestContexts(options.pullRequestContexts);
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
     sendablePastedTexts,
+    sendablePullRequestContexts,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
@@ -1381,7 +1635,8 @@ export function deriveComposerSendState(options: {
       options.browserAnnotationCount > 0 ||
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
-      sendablePastedTexts.length > 0,
+      sendablePastedTexts.length > 0 ||
+      sendablePullRequestContexts.length > 0,
   };
 }
 

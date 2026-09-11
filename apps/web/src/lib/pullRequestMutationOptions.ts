@@ -8,7 +8,12 @@ import type {
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
-import { gitQueryKeys } from "./gitReactQuery";
+import {
+  optimisticallyPatchPullRequestGitCaches,
+  pullRequestGitQueryFilters,
+  rollbackPullRequestGitCaches,
+  type GitPullRequestActionRollback,
+} from "./pullRequestGitCache";
 import {
   cancelPullRequestListScopes,
   invalidateOtherPullRequestListQueries,
@@ -68,6 +73,7 @@ type ActionOwnedFields = { state?: PullRequestState; isDraft?: boolean; closedAt
 type ActionMutationContext = {
   previousDetailFields: ActionOwnedFields | null;
   listRollbackByQuery: ActionListCacheRollback[];
+  gitRollbackByQuery: GitPullRequestActionRollback[];
   optimisticListPatch: PullRequestActionListPatch;
   affectedScopes: PullRequestListQueryScope[];
   protection: PullRequestActionProtectionContext;
@@ -128,6 +134,27 @@ function pullRequestActionTargetState(
   }
 }
 
+function invalidatePullRequestActionDetails(
+  queryClient: QueryClient,
+  input: PullRequestActionInput,
+) {
+  if (input.action !== "merge") {
+    return queryClient.invalidateQueries({
+      queryKey: pullRequestQueryKeys.detail(input),
+      exact: true,
+    });
+  }
+  // A stacked merge changes every PR through the selected stack position. The action payload is
+  // intentionally small, so invalidate all cached details for this repository; standalone merges
+  // pay the same bounded invalidation and avoid a second pre-merge stack lookup.
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey;
+      return key[0] === "pull-requests" && key[1] === "detail" && key[3] === input.repository;
+    },
+  });
+}
+
 export function pullRequestActionMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationKey: pullRequestMutationKeys.action,
@@ -152,6 +179,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         await Promise.all([
           queryClient.cancelQueries({ queryKey: detailKey, exact: true }),
           cancelPullRequestListScopes(queryClient, affectedScopes),
+          queryClient.cancelQueries(pullRequestGitQueryFilters(input)),
         ]);
         const previousDetail = queryClient.getQueryData<
           ActionOwnedFields & Record<string, unknown>
@@ -174,15 +202,23 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
             input,
             optimisticListPatch,
           ),
+          gitRollbackByQuery: optimisticallyPatchPullRequestGitCaches(
+            queryClient,
+            input,
+            optimisticListPatch,
+          ),
           affectedScopes,
           protection,
         };
       } catch (error) {
-        finishPullRequestActionProtection(queryClient, protection);
+        finishPullRequestActionProtection(queryClient, protection, "failed");
         throw error;
       }
     },
     onError: async (_error, input, context) => {
+      // Failed intent must stop winning query-result overlays before rollback/refetch restores
+      // the last cache value and then converges on remote truth. finish is idempotent in settled.
+      if (context) finishPullRequestActionProtection(queryClient, context.protection, "failed");
       const patch = optimisticPullRequestActionPatch(input.action);
       if (patch && context) {
         const previousDetailFields = context.previousDetailFields;
@@ -198,6 +234,12 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           optimisticPatch: context.optimisticListPatch,
           rollbackByQuery: context.listRollbackByQuery,
         });
+        rollbackPullRequestGitCaches({
+          queryClient,
+          identity: input,
+          optimisticPatch: context.optimisticListPatch,
+          rollback: context.gitRollbackByQuery,
+        });
       }
       // The command may have reached GitHub even when transport failed. Mark the rollback
       // provisional so reconnect/refetch converges on server truth instead of assuming failure.
@@ -205,28 +247,30 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         context
           ? invalidatePullRequestListScopes(queryClient, context.affectedScopes)
           : Promise.resolve(),
-        queryClient.invalidateQueries({
-          queryKey: pullRequestQueryKeys.detail(input),
-          exact: true,
-        }),
+        invalidatePullRequestActionDetails(queryClient, input),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input)),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
     onSuccess: async (result, input, context) => {
-      await Promise.all([
+      // GitHub already accepted the action. Cache reconciliation is best-effort and must not
+      // reject this callback, because TanStack would route that callback error through onError
+      // and roll back an action that actually succeeded remotely.
+      await Promise.allSettled([
         invalidatePullRequestListScopes(queryClient, context.affectedScopes),
-        queryClient.invalidateQueries({
-          queryKey: pullRequestQueryKeys.detail(input),
-          exact: true,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: gitQueryKeys.pullRequest(result.workspaceRoot),
-        }),
+        invalidatePullRequestActionDetails(queryClient, input),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input, result.workspaceRoot)),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
-    onSettled: (_result, _error, _input, context) => {
-      if (context) finishPullRequestActionProtection(queryClient, context.protection);
+    onSettled: (_result, error, _input, context) => {
+      if (context) {
+        finishPullRequestActionProtection(
+          queryClient,
+          context.protection,
+          error ? "failed" : "succeeded",
+        );
+      }
     },
   });
 }

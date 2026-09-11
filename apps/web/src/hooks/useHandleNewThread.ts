@@ -1,13 +1,26 @@
 import { type ProjectId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition } from "react";
 import { useAppSettings } from "../appSettings";
+import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import {
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "../lib/providerAvailability";
 import {
   buildDraftThreadContextPatch,
   createActiveDraftThreadSnapshot,
@@ -27,6 +40,7 @@ import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -41,7 +55,12 @@ export interface NewThreadNavigationOptions {
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverCwd = serverConfigQuery.data?.cwd ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const navigate = useNavigate();
   const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -57,7 +76,46 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    if (!useStore.getState().threadsHydrated) {
+      return Promise.resolve(null);
+    }
+
     const entryPoint = options?.entryPoint ?? "chat";
+    const defaultEnvMode =
+      (entryPoint === "chat"
+        ? useProjectEnvironmentStore.getState().envModeByProjectId[projectId]
+        : undefined) ?? settings.defaultThreadEnvMode;
+    if (entryPoint === "chat") {
+      const draftStore = useComposerDraftStore.getState();
+      const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
+      const draftComposer = draftThread
+        ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
+        : null;
+      const project = useStore.getState().projects.find((candidate) => candidate.id === projectId);
+
+      prefetchModelsForNewThread(queryClient, {
+        settings,
+        serverSettings: serverSettings ?? null,
+        hiddenProviders: settings.hiddenProviders,
+        providerOverride: options?.provider ?? null,
+        draftActiveProvider: draftComposer?.activeProvider ?? null,
+        stickyActiveProvider: draftStore.stickyActiveProvider,
+        projectDefaultProvider: project?.defaultModelSelection?.provider ?? null,
+        projectCwd: project?.cwd ?? null,
+        draftWorktreePath: draftThread?.worktreePath ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        hasExplicitWorktreePath: options?.worktreePath !== undefined,
+        fresh: options?.fresh === true,
+        envMode: options?.envMode ?? draftThread?.envMode ?? defaultEnvMode,
+        serverCwd,
+        providerStatuses,
+        statusesReconciled: providerStatusesReconciled,
+        providerOrder: settings.providerOrder,
+        includeDroid: true,
+      });
+    }
     const wantsTemporaryThread = options?.temporary === true;
     const applyProviderOverride = (threadId: ThreadId) => {
       if (!options?.provider) {
@@ -137,6 +195,46 @@ export function useHandleNewThread() {
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
+    const applyUsableStickyState = (threadId: ThreadId) => {
+      applyStickyState(threadId);
+      if (options?.provider || !hasReconciledServerProviderStatuses(queryClient)) {
+        return;
+      }
+
+      const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const stickyProvider = draft?.activeProvider ?? null;
+      if (
+        !stickyProvider ||
+        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
+      ) {
+        return;
+      }
+
+      const fallbackProvider = resolveAvailableProviderPreference({
+        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+        statuses: providerStatuses,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
+      });
+      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
+        return;
+      }
+
+      setModelSelection(
+        threadId,
+        resolvePreferredComposerModelSelection({
+          draft: draft
+            ? {
+                modelSelectionByProvider: draft.modelSelectionByProvider,
+                activeProvider: fallbackProvider,
+              }
+            : null,
+          threadModelSelection: null,
+          projectModelSelection: projectDefaultModelSelection,
+          defaultProvider: fallbackProvider,
+        }),
+      );
+    };
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (
@@ -273,14 +371,21 @@ export function useHandleNewThread() {
         markTemporaryThread(threadId);
       }
       const createdAt = new Date().toISOString();
-      const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
+      const draftSeed = createFreshDraftThreadSeed({
+        createdAt,
+        entryPoint,
+        options,
+        defaultEnvMode,
+      });
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
           registerDraftThread(threadId, { projectId, ...draftSeed });
           activateThreadEntryPoint(threadId);
-          applyStickyState(threadId);
+          // Seed the draft from the sticky (last-used) selection so a new chat
+          // reopens with the model and options used most recently.
+          applyUsableStickyState(threadId);
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route

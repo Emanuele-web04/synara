@@ -22,6 +22,646 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.8.3",
+    date: "Sep 6",
+    features: [
+      {
+        id: "packaged-provider-fix",
+        title: "Fix provider startup after the 0.8.2 update",
+        description:
+          "The desktop app now includes the missing dependency that could prevent ACP providers from starting.",
+        details:
+          "Fixes the Cannot find package 'zod' error in the packaged app. Release verification now loads provider SDKs and other lazy runtime dependencies from the packaged application before publication.",
+      },
+      {
+        id: "remember-diff-layout",
+        title: "Remember your preferred diff layout",
+        description:
+          "Your Split or Stacked diff choice stays selected when you close and reopen the panel.",
+        details:
+          "The diff layout is saved locally and restored across panel remounts and app restarts. Split remains the default when no preference has been saved.",
+      },
+    ],
+  },
+  {
+    version: "0.8.2",
+    date: "Sep 6",
+    features: [
+      {
+        id: "concurrent-streaming",
+        title: "Smoother conversations while other tasks run",
+        description:
+          "Streaming code blocks keep their state, and background conversations trigger less rendering work.",
+        details:
+          "In the checked-in production component benchmark with five concurrent streams and one visible code message, total Chromium CPU time fell from 3.597 to 2.858 seconds (20.5%), renderer CPU from 3.196 to 2.187 seconds (31.6%), and frame-interval p95 from 25.0 to 9.6 ms. With ten streams, renderer CPU fell 20.7% and frame-interval p95 reached 9.7 ms. Unchanged code blocks remounted zero times instead of 60; the closed automation hook rendered zero times instead of 120. These short synthetic component samples exclude the complete Electron app and real providers.",
+      },
+      {
+        id: "faster-diffs-and-tool-output",
+        title: "Less waiting for large diffs and tool output",
+        description:
+          "Natural file sorting, read summaries, and tool-output parsing do less repeated work.",
+        details:
+          "Isolated production-function benchmarks reduced sorting 2,048 file paths from 36.45 to 2.59 ms (92.9%) and tree construction from 18.89 to 1.91 ms (89.9%). A normal 24 KB multiline work log improved 38%; a deliberately adverse whitespace-heavy case dropped from 2,287 ms to 0.053 ms. Counting a 2,000-line read summary improved 57.9%. Ordering, raw content, indentation, and exit codes are preserved. These are operation timings, not whole-app speedup percentages.",
+      },
+      {
+        id: "diagnostics-and-turn-start",
+        title: "Cheaper diagnostics and conversation preparation",
+        description:
+          "Large browser-log reads and selecting previous messages avoid repeated serialization and text normalization.",
+        details:
+          "Reading 200 large browser-log entries fell from 80.06 to 0.964 ms (98.8%), returning the same bounded result. Selecting prior messages from 2,000 messages of 2 KiB each fell from 1.833 to 0.0195 ms (98.9%). Turn scheduling also wakes when a blocking claim settles, and startup diagnostics expose phase durations. The percentages describe isolated measured operations.",
+      },
+      {
+        id: "scroll-and-status",
+        title: "Keep your place during live output",
+        description:
+          "Scrolling up stays under your control, and provider status better reflects what is actually happening.",
+        details:
+          "Tool activity, buffering, and reconnects no longer masquerade as live assistant text for scroll following. First-send transitions avoid an empty-home flash, elapsed durations remain stable, read conversations stay read after restart, and orchestrator approval cards are restored. Routine Codex startup messages no longer clutter the transcript; actual errors stay visible.",
+      },
+      {
+        id: "live-file-previews",
+        title: "See file changes without reopening the viewer",
+        description: "Open file previews and diffs revalidate when workspace files change.",
+        details:
+          "Text, image, and PDF previews refresh through project file-change subscriptions, while dirty text edits remain protected. Rendered Markdown selections now offer Add to chat, and compaction tool rows have a dedicated icon. Chat card seams are softer.",
+      },
+      {
+        id: "rename-and-preferences",
+        title: "Rename tasks directly from the composer",
+        description:
+          "Use /rename with a title, or let Synara generate a title from the conversation.",
+        details:
+          "/rename My task sets the title directly. Bare /rename generates a title once the task has conversation context, preserving a newer title if another rename wins the race. New chats restore the last-used model and options, and expanded or collapsed sidebar projects stay that way across restarts.",
+      },
+      {
+        id: "simulator-focus",
+        title: "Keep simulator activity with its task",
+        description:
+          "Background simulator work no longer takes focus from the conversation you are using.",
+        details:
+          "The Automatically open simulator setting lets you disable mirrored-pane auto-opening while continuing to use Simulator.app. Manual opening remains available, and manually closing the pane is respected. Deferred open requests remain associated with their owning task.",
+      },
+      {
+        id: "model-discovery",
+        title: "More reliable model lists across providers",
+        description:
+          "Model discovery shares cached results, bounds retries, and makes failures visible instead of silently falling back.",
+        details:
+          "Active model selection takes priority over background prefetch. Server discovery deduplicates concurrent requests and isolates catalogs by project and runtime. Pi discovers executable OpenRouter models using native authentication, refreshes OpenCode Zen models with the right protocols and capabilities, and updates its SDK for GLM 5.3 Flash and GPT-6 Astra. Factory Droid usage can read Factory credentials, including supported secure storage.",
+      },
+      {
+        id: "claude-context-and-gateway",
+        title: "Let Claude Code choose automatic compaction",
+        description: "Auto (Claude Code) is distinct from explicit 200k and 1M overrides.",
+        details:
+          "Automatic mode leaves compaction resolution to Claude Code; choosing 200k or 1M pins the requested window. Model switches and gateway metadata report the effective context. Claude context usage uses SDK summary mode, avoiding per-turn token-count requests. Shared harness instructions and browser tool schemas are slimmer, and Pi/OpenCode gateway calls accept the corrected schemas.",
+      },
+      {
+        id: "provider-and-git-recovery",
+        title: "Recover stalled providers and noisy Git refreshes",
+        description:
+          "Devin recovery, Windows launches, and checkpoint capture handle more failure cases.",
+        details:
+          "Stale Devin sessions recover before dispatch, and wedged children can be restarted instead of leaving turns waiting for the full idle budget. Windows Cursor and Devin detection accepts their launch shims; Effect child processes stay hidden and process snapshots accept PID zero. Failed Git remote refreshes back off. A task that initializes a Git repository no longer reports the absent pre-initialization baseline as a capture failure.",
+      },
+      {
+        id: "development-and-site",
+        title: "Faster development checks and less idle website work",
+        description:
+          "Bun 1.4.2 and TypeScript 7 are now the default toolchain, with more parallel CI checks.",
+        details:
+          "On the recorded seven-workspace comparison using Bun 1.4.2, median typechecking fell from 56.339 to 12.528 seconds cold (77.8%) and from 12.451 to 3.170 seconds incrementally (74.5%). The legacy checker remains available because one Effect barrel-import diagnostic is not covered by the native checker. The website now lives in the monorepo, and its theme synchronization stops an idle observer loop: 427\u2013430 callbacks per 1.1 seconds fell to zero in the isolated browser probe. CI shards unit and browser tests and caches dependency installation; no CI speedup percentage is claimed.",
+      },
+    ],
+  },
+  {
+    version: "0.8.1",
+    date: "Sep 2",
+    features: [
+      {
+        id: "claude-fable-5-1",
+        title: "Use Claude Fable 5.1 across Claude and Pi",
+        description:
+          "Claude Fable 5.1 is now a first-class model with the right thinking controls, aliases, context variants, and usage reporting.",
+        details:
+          "Synara lists Fable 5.1 at the top of the Claude catalog and repairs older Pi Anthropic catalogs so the model remains selectable there too. The plain `fable` alias now resolves to 5.1 while explicit Fable 5 selections keep working. Its always-on thinking model exposes Low through Max effort without a fast-mode lane, compatible Cursor context variants are recognized, and Claude usage surfaces now show Fable's dedicated weekly allowance from Anthropic's current scoped-limit response.",
+      },
+      {
+        id: "large-database-startup",
+        title: "Open large workspaces with less startup work",
+        description:
+          "Synara avoids redundant sidebar snapshots, dead-turn replay, and oversized SQLite memory budgets during launch.",
+        details:
+          "The browser now accepts the live shell snapshot and only falls back when one is genuinely missing, including after reconnects. The server prunes unrecoverable open-turn rows instead of replaying and logging them on every boot, stops a failed replay once, and scales SQLite cache and mmap budgets to the machine. On the measured 1.7 GB database, shell snapshot requests fell from three to one and warm server boot-to-listen time fell from 1.06 seconds to 0.53 seconds.",
+      },
+      {
+        id: "devin-active-tool-reliability",
+        title: "Keep long-running Devin tools alive",
+        description:
+          "Quiet but active Devin tools no longer look like abandoned turns, and malformed tool-output requests recover safely.",
+        details:
+          "A current in-progress tool call now receives its own one-hour idle budget instead of sharing the ordinary 30-minute turn watchdog, with stale events prevented from refreshing the active clock. Synara also normalizes Devin's unexpected boolean `get_output.block` field without weakening other ACP messages, and project creation waits for a real task before navigation so superseded routes cannot overwrite newer work.",
+      },
+      {
+        id: "windows-process-runtime",
+        title: "Run and stop providers more predictably on Windows",
+        description:
+          "Provider, Git, updater, voice, terminal, native Windows, and WSL process handling now share one hardened runtime boundary.",
+        details:
+          "Executable lookup, PATH and PATHEXT handling, `.cmd` and PowerShell launches, WSL working directories, lifecycle diagnostics, and process-tree teardown now follow one implementation. Startup failures retain a typed phase and cause, stop operations reverify process identity before escalation, migration and lock durability use platform-aware filesystem rules, and failure to prove process exit stays visible instead of being reported as success.",
+      },
+      {
+        id: "git-writing-and-composer-polish",
+        title: "Keep Git writing and project picking focused",
+        description:
+          "Git copy is generated only through dedicated backends, while project and composer controls share a cleaner interaction style.",
+        details:
+          "The Git-writing picker now includes Cursor alongside Codex, OpenCode, and Droid while excluding chat-only agents that lack a safe one-shot generation path. The composer is slightly tighter, picker capsules use consistent hover treatment, and the project reset affordance now matches the folder control without losing its highlighted reset state.",
+      },
+    ],
+  },
+  {
+    version: "0.8.0",
+    date: "Sep 1",
+    features: [
+      {
+        id: "devin-acp-provider",
+        title: "Work with Devin from the same Synara workspace",
+        description:
+          "Devin CLI joins Synara as a first-class ACP provider with its own models, commands, modes, usage, attachments, and MCP configuration.",
+        details:
+          "Synara can start and resume Devin ACP sessions, discover the models and slash commands exposed by the installed CLI, switch Plan mode, compact long conversations, attach files and images, pass compatible MCP servers, and show account usage. Authentication remains owned by Devin through `devin auth login` or its supported API-key environment variables, and provider capabilities are gated so unsupported active-turn steering is never implied.",
+      },
+      {
+        id: "provider-neutral-webmcp",
+        title: "Give any capable provider the live browser tools",
+        description:
+          "WebMCP browser tools are now provider-neutral instead of being tied to one agent runtime.",
+        details:
+          "Browser sessions expose the same bounded, task-owned WebMCP surface to supported providers, with consistent tool discovery, invocation, timeouts, result shaping, tab ownership, and lifecycle cleanup. This keeps browser work attached to the correct task while allowing more agents to inspect and operate the page Synara is already showing.",
+      },
+      {
+        id: "in-thread-find",
+        title: "Find anything inside a long conversation",
+        description:
+          "Press Cmd/Ctrl+F to search the current transcript from a compact floating panel.",
+        details:
+          "The search walks real transcript messages, highlights matching text, reports the active result and total count, supports previous/next navigation and keyboard shortcuts, and follows matches without confusing tool-only rows with new assistant output. Closing the panel clears the temporary highlights without changing the conversation.",
+      },
+      {
+        id: "fast-live-conversations",
+        title: "Models, sidebars, and live replies react faster",
+        description:
+          "A focused performance pass reduces model-loading delay, sidebar work, toggle churn, and streaming update cost.",
+        details:
+          "Available models are ready sooner, sidebar projections do less repeated work, visibility changes avoid unnecessary updates, and assistant text follows a simpler live-output path. Auto-scroll now responds to real transcript messages rather than buffering, reconnecting, approvals, or tool-only activity, which avoids feedback loops and unwanted jumps while work is merely pending.",
+      },
+      {
+        id: "queued-reply-reliability",
+        title: "Queued follow-ups wait, dispatch, and recover predictably",
+        description:
+          "Follow-ups no longer race the turn ahead of them or strand work when a task is in the background.",
+        details:
+          "Synara holds a queued follow-up until the previous turn has actually started, promotes work for backgrounded tasks, preserves preview contents while capacity is constrained, resumes from the durable cursor after an idle stop, and prevents duplicated streamed replies. Reconnect and settlement paths converge on the same turn instead of replaying visible text twice.",
+      },
+      {
+        id: "migration-recovery-and-isolation",
+        title: "Database upgrades fail safely and explain recovery",
+        description:
+          "Schema migrations now verify runtime identity, ask before risky recovery, and keep source builds isolated from installed app data.",
+        details:
+          "A source checkout uses its own development home by default instead of silently opening Stable or Canary state. Migration startup verifies that the launcher and database belong together, creates recoverable backups, records recovery state, and presents deliberate restore or retry choices when an upgrade cannot complete. Existing Stable, Canary, and explicit home-directory behavior remains intact.",
+      },
+      {
+        id: "provider-control-and-context",
+        title: "Provider state is controlled by the server and visible in context",
+        description:
+          "Settings, usage, context changes, update notices, and enabled-provider behavior now agree on what the runtime can actually do.",
+        details:
+          "Disabling a provider now prevents server lifecycle execution instead of only hiding it in the interface. Usage is available for every enabled provider Synara can verify, provider-driven context changes appear in the conversation, routine lifecycle hooks stay out of the transcript, and update notices recover when availability checks overlap or temporarily fail.",
+      },
+      {
+        id: "durable-sidechat-panes",
+        title: "Side chats keep their place and relationship",
+        description:
+          "Parent-linked side chats now survive refreshes and expiry without losing the pane you were working in.",
+        details:
+          "Side-chat leases and parent relationships are stored durably, docked panes restore against the correct task, and archiving or unarchiving no longer discards an active lease. Expired transient state is reclaimed without confusing a regular child task for a disposable side chat.",
+      },
+      {
+        id: "custom-sidebar-navigation",
+        title: "Arrange the sidebar around your workflow",
+        description:
+          "The main navigation groups can now be reordered and keep that order across windows and restarts.",
+        details:
+          "Drag the configurable sidebar destinations into the order that suits you. The preference synchronizes through shared local storage, tolerates additions and older saved values, and preserves sensible defaults when stored data is incomplete or invalid.",
+      },
+      {
+        id: "file-actions-and-previews",
+        title: "Files open, reveal, copy, and preview more reliably",
+        description:
+          "Edited-file cards and workspace references have clearer actions and better path handling.",
+        details:
+          "macOS users can reveal a file in Finder, every platform can copy its path, and Open actions are separated from file management. Missing relative references no longer become misleading chips, valid absolute paths render as badges, dot-prefixed images and attachments are accepted, preview contents survive constrained queues, and numeric PDF destinations resolve to the intended page.",
+      },
+      {
+        id: "kilo-to-opencode-migration",
+        title: "Kilo Code data moves safely to OpenCode",
+        description:
+          "The retired Kilo Code provider has been removed, with existing Kilo tasks and preferences migrated to OpenCode.",
+        details:
+          "The database migration preserves provider sessions and task history while translating the provider kind. Follow-up compatibility handling also moves favorite providers and saved editor-tab state, so older installations do not retain broken Kilo selections after upgrading.",
+      },
+      {
+        id: "git-terminal-and-thread-correctness",
+        title: "Git, terminal shortcuts, and task metadata stay attached",
+        description:
+          "Pull-request attribution, creation time, terminal numbering, and final replies now resolve against the correct task.",
+        details:
+          "Pull requests are attributed to the owning thread rather than a neighboring checkout, created-at ordering remains stable, numbered terminal shortcuts select the intended tab, and the final assistant response remains self-contained after segmented or folded output. Factory Droid can also generate Git commit and pull-request text through the shared action flow.",
+      },
+      {
+        id: "security-boundary-hardening",
+        title: "Paths, networks, payloads, and credentials fail closed",
+        description:
+          "A broad boundary audit closes prototype, path, byte-limit, loopback, retry, and temporary-credential edge cases.",
+        details:
+          "Untrusted object keys cannot mutate prototypes, Windows drive-relative paths are rejected while drive roots remain valid, UTF-8 limits count bytes without splitting characters, IPv4-mapped addresses cannot bypass network policy, Retry-After values are validated and bounded, empty streamed chunks settle correctly at limits, and provider credential files use isolated temporary locations.",
+      },
+      {
+        id: "platform-update-safety",
+        title: "Desktop updates and platform paths are safer",
+        description:
+          "Electron, backend shutdown, Windows home paths, and source-launch identity received release-focused fixes.",
+        details:
+          "Electron is upgraded to 43.4.1 to include the fix for CVE-2026-70608. POSIX desktop updates now shut the backend down gracefully before replacement, Windows home paths abbreviate consistently, and source validation uses the working directory only when no stronger launcher digest is available.",
+      },
+      {
+        id: "provider-lifecycle-integrity",
+        title: "Provider resumes, compaction, and versions keep their identity",
+        description:
+          "Replay gates and exact provider metadata prevent stale lifecycle work from appearing as new activity.",
+        details:
+          "ACP load replay is suppressed until the restored session is ready, native resume is gated by the provider's real capability, Claude Auto variants match exact context limits and fail closed, compaction refreshes usage from the new boundary, long-message pagination is lossless and Unicode-safe, and prerelease provider versions retain their complete identifiers.",
+      },
+    ],
+  },
+  {
+    version: "0.7.3",
+    date: "Aug 21",
+    features: [
+      {
+        id: "safe-quit-and-resume",
+        title: "Quit without silently abandoning running chats",
+        description:
+          "Synara now shows every chat still working before the desktop app closes and can continue eligible work on the next launch.",
+        details:
+          "The quit dialog lists live chats and remembers whether automatic resume is enabled. When you confirm, Synara records the exact in-flight turns before interrupting them, then starts one guarded continuation per unchanged chat after restart. Completed, archived, deleted, replaced, or otherwise advanced work is skipped, and a bounded fallback still lets the app quit if the local server cannot acknowledge the resume record.",
+      },
+      {
+        id: "floating-in-chat-browser",
+        title: "Keep the browser over the conversation",
+        description:
+          "The task browser can now float inside the chat instead of taking over the right sidebar.",
+        details:
+          "The floating panel shares the task's existing browser tabs and session, opens automatically when an agent requests the browser, and can be dragged, resized from every edge, closed, or returned to the sidebar. Its bounds stay inside the visible chat surface, new tabs use the current page's context more predictably, and the hidden dock remains preview-only so one live browser guest is never driven by two surfaces.",
+      },
+      {
+        id: "all-provider-usage",
+        title: "See usage for every signed-in provider",
+        description:
+          "Provider usage is no longer limited to Codex and Claude; Settings and in-context meters now cover every authenticated runtime Synara can verify.",
+        details:
+          "Synara adds account or quota views for Antigravity, Cursor, Grok, OpenCode, and locally authenticated providers, while keeping Codex and Claude's detailed windows. Provider-specific adapters use local credentials or documented account endpoints, share cached snapshots, retain useful stale data through transient failures, apply bounded cooldowns after rate limiting, and explain when a provider exposes sign-in state but no machine-readable quota.",
+      },
+      {
+        id: "runtime-performance-pass",
+        title: "Lower CPU, GPU, memory, and Git overhead",
+        description:
+          "A measured performance pass cuts work in the renderer, sidebar, Git statistics, runtime-event pipeline, and idle provider discovery.",
+        details:
+          "Streaming updates avoid repeated full-array scans and unnecessary visual effects, Git diff statistics are aggregated in one pass, runtime-event handling performs fewer repeated traversals, sidebar spinners pause when hidden, and animated translucency costs less. The server also trims idle Codex discovery sessions sooner while extending the grace period when real requests arrive, reducing process-tree memory without interrupting active model discovery.",
+      },
+      {
+        id: "windows-wsl-and-title-bar",
+        title: "Windows and Linux workspaces feel more native",
+        description:
+          "WSL repositories, UNC paths, taskbar icons, and desktop chrome now behave like first-class platform paths and controls.",
+        details:
+          "On Windows, a project opened through \\\\wsl.localhost or \\\\wsl$ launches provider commands inside the selected distribution with a Linux cwd, while local-folder mentions and the project browser recognize UNC and Windows home paths. Runtime icon changes now refresh the shell-visible taskbar icon. Windows and Linux users can also switch between Synara's custom title bar and the system title bar from Appearance, with an explicit restart to apply the frame change.",
+      },
+      {
+        id: "headless-server-distribution",
+        title: "Run and inspect Synara without the desktop shell",
+        description:
+          "GitHub releases now include a versioned headless server tarball, and the CLI can verify whether a server is reachable and ready.",
+        details:
+          "The release pipeline builds synara-server-<version>.tar.gz from the same source and web client as the desktop release. The new `synara server status` command discovers the persisted local runtime or accepts an explicit HTTP(S) URL, verifies the runtime identity, probes `/health`, reports projection readiness, supports JSON output, and exits non-zero when the server is unreachable or not ready.",
+      },
+      {
+        id: "cross-provider-side-chats",
+        title: "Send a side chat to another provider",
+        description:
+          "`/side` can now target a different installed provider without moving the main conversation.",
+        details:
+          "Use `/side <provider> <prompt>` with a provider kind or display name. Synara validates the requested provider against the runtimes currently available to the task, removes the provider token from the child prompt, and keeps the existing guarded side-chat creation and source relationship. Omitting the provider continues to open the side chat on the current runtime.",
+      },
+      {
+        id: "provider-runtime-correctness",
+        title: "Provider turns keep their real text, tools, and children",
+        description:
+          "Antigravity, OpenCode, Cursor, and Grok received focused lifecycle and option fixes.",
+        details:
+          "Antigravity now streams tool cards, settles completed turns, routes subagents into child threads, and keeps background task turns alive instead of killing the CLI. OpenCode preserves raw streamed assistant text. Cursor no longer leaves fast mode or Grok HIGH reasoning stuck after their controls are disabled, preserves fallback model options, and Grok's effort picker follows the live CLI model ladders.",
+      },
+      {
+        id: "diagnostic-secret-hardening",
+        title: "Diagnostics reveal less and reject ambiguous input",
+        description:
+          "Process, provider, environment, URL, and fixture diagnostics now apply a broader fail-closed credential policy.",
+        details:
+          "Synara redacts quoted, wrapped, truncated, serialized, reordered, compact, URL-embedded, and shell-composed secret forms; bounds sanitizer traversal; preserves safe numeric diagnostic tokens; and keeps OpenAI credentials out of restricted provider children. Duplicate Origin headers, off-origin WebSocket token injection, high-water cursor violations, unterminated credentials, and ambiguous command substitutions are rejected instead of being interpreted optimistically.",
+      },
+      {
+        id: "workspace-and-landing-flow",
+        title: "Find files and start work with fewer corrective clicks",
+        description:
+          "Workspace search ranks and presents results more clearly, while project scripts are available again from the empty landing view.",
+        details:
+          "File search now emphasizes fuzzy matches, keeps the most useful parent path visible, limits mounted rows, debounces server work, and opens directories directly in Explorer. The landing composer and project controls share a flatter, more consistent visual treatment, muted labels and disclosure contrast are normalized, and project script shortcuts remain accessible before a chat exists.",
+      },
+      {
+        id: "approval-worktree-and-route-safety",
+        title: "Repeated actions and restored state converge safely",
+        description:
+          "Approvals, managed worktrees, feature flags, and route restoration now have stronger replay and ownership fences.",
+        details:
+          "Duplicate approval responses are rejected durably at the serialized decider. Permanent deletion reclaims only Synara-owned managed worktrees and preserves unowned paths. Malformed cached feature flags reset instead of leaving stale values, route restoration ignores snapshots from superseded refreshes, and large projection repair stops thrashing when the state is already being repaired.",
+      },
+      {
+        id: "stream-and-path-integrity",
+        title: "Text, paths, attachments, and origins survive edge cases",
+        description:
+          "Several low-level boundaries now preserve exact data instead of corrupting, truncating, or misclassifying it.",
+        details:
+          "Process output and bounded runtime text preserve UTF-8 characters split across chunks, multi-dot attachments keep their final extension, Windows workspace comparisons ignore case, Codex prerelease versions retain every hyphenated segment, malformed Claude auth JSON fails closed, missing provider commands are classified consistently, and duplicate HTTP Origin headers are refused.",
+      },
+      {
+        id: "desktop-and-simulator-compatibility",
+        title: "Desktop replies and simulator support recover more cleanly",
+        description:
+          "Background completions appear without reloads, terminal fences settle at the right reply, and Xcode 27 beta remains usable.",
+        details:
+          "The web client keeps a completed assistant reply attached to its terminal fence until the final post-settle text arrives, including work that finishes in the background. Xcode 27 beta's relocated SimulatorKit framework is discovered by the iOS device helper, and browser navigation guidance now accurately distinguishes supported localhost and file behavior from genuinely blocked destinations.",
+      },
+      {
+        id: "interface-polish-and-model-pickers",
+        title: "A calmer shell with clearer model choices",
+        description:
+          "Sidebar surfaces, the landing composer, quit confirmation, and provider pickers received a cohesive visual and interaction pass.",
+        details:
+          "Translucent surfaces have fewer seams and better light/dark contrast, the quit dialog now matches the command palette, and empty-landing controls sit flush with the composer. Claude models sort by their live catalogue order, picker menus have more room for full names, and provider metadata is enforced exhaustively so new runtimes cannot silently miss required UI descriptions.",
+      },
+    ],
+  },
+  {
+    version: "0.7.2",
+    date: "Aug 15",
+    features: [
+      {
+        id: "ios-simulator-pane",
+        title: "Build and test iOS apps beside the conversation",
+        description:
+          "The new iOS Simulator pane gives you and supported agents one live, interactive device surface inside Synara.",
+        details:
+          "On macOS, Synara can boot and attach simulators, stream their display, install and launch apps, tap, swipe, type, press hardware controls, save screenshots, record the view, and inspect accessibility elements. The source-shipped helper compiles with your selected Xcode, runs in a constrained sandbox, drops slow frames instead of blocking RPC traffic, and reclaims Synara-owned devices after crashes.",
+      },
+      {
+        id: "persistent-autonomous-goals",
+        title: "Give a thread a goal and let it keep going",
+        description:
+          "Persistent goals stay visible, timed, and active across turns, with pause, resume, achievement, and recovery controls.",
+        details:
+          "Use /goal or the stacked composer panel to set an objective. Synara carries it through provider turns, restarts, retries, and subagent steering, records completed goals, and can automatically start the next continuation after clean completion. Queued user work, approvals, Plan mode, interrupts, failures, timeouts, and repeated blockers all have explicit priority and pause rules so autonomy does not become an uncontrolled loop.",
+      },
+      {
+        id: "stacked-pull-requests",
+        title: "See and manage the whole pull-request stack",
+        description:
+          "Pull-request rows and details now understand stack position, order, readiness, navigation, and merge outcomes.",
+        details:
+          "Stack badges show where each PR sits, the detail view opens an ordered navigator, and merge copy accounts for drafts, conflicts, and incomplete stack data. Synara uses GitHub's asynchronous merge path when available, falls back safely where needed, and refreshes repository-wide PR state after a stack mutation.",
+      },
+      {
+        id: "evidence-first-debug-mode",
+        title: "Debug with an evidence-first workflow",
+        description:
+          "A new Debug mode guides the selected agent through observe, reproduce, investigate, fix, and verify.",
+        details:
+          "Debug is available from the mode menu and /debug, persists across drafts, turns, forks, handoffs, queues, and restarts, and keeps the current runtime permissions. It budgets its instructions across providers, asks structured reproduction questions where supported, and explicitly prevents unverified success claims or invisible assumptions about external state.",
+      },
+      {
+        id: "workspace-file-and-code-search",
+        title: "Search files and code across the workspace",
+        description:
+          "Open files by name with Cmd/Ctrl+P or search matching source lines with Cmd/Ctrl+Shift+F.",
+        details:
+          "The new command palette ranks file-name matches and provides bounded, grep-style content results with path, line number, and matching text. Search respects the workspace index and ignored files, skips binary content, stays scoped to the active project, and opens the selected result in the right-dock file pane.",
+      },
+      {
+        id: "universal-native-forks",
+        title: "Fork from the exact message across more providers",
+        description:
+          "Message-level forks now preserve their source visually and use native provider forks wherever the runtime supports them.",
+        details:
+          "Claude, Cursor, Droid, Grok, and OpenCode join Codex with centralized capability checks, timeouts, cleanup, cursor handling, and in-flight-turn protection. A source divider links back to the original conversation, turn counts and resumability metadata survive, and retained transcript reconstruction remains the safe fallback when native forking is unavailable.",
+      },
+      {
+        id: "automation-failure-controls",
+        title: "Automations explain failures and stop on your terms",
+        description:
+          "Choose how many consecutive failures an automation should tolerate, or let it keep retrying indefinitely.",
+        details:
+          "Failure counts, disable reasons, and timestamps are now durable; a successful run resets the count, hitting the threshold requires an explicit re-enable, and manual reruns keep the evidence intact. Inline creation and editing fields, clearer risk confirmation, optimistic concurrency, and visible disabled-state explanations make the policy easier to understand and safer to change.",
+      },
+      {
+        id: "large-history-and-streaming-performance",
+        title: "Large histories start faster and live output does less work",
+        description:
+          "Projector replay and the visible streaming pipeline received a measured performance pass.",
+        details:
+          "SQLite replay now keeps its primary-key range scan and uses bounded cache and memory-map settings; on the documented 2.9 GB fixture, a lagging replay fell from several minutes to about 24 seconds. Streaming text commits are batched, bottom-follow keys stay stable, layout reads and scroll work are coalesced, store selectors are narrower, and a production-path benchmark now covers the complete event-to-transcript pipeline.",
+      },
+      {
+        id: "truthful-provider-activity",
+        title: "Provider activity stays visible even when it is unfamiliar",
+        description:
+          "Oversized and previously unmapped runtime events no longer disappear or quarantine an otherwise healthy session.",
+        details:
+          "Large event payloads are bounded and truncated while retaining their diagnostic meaning, unknown events surface through a safe fallback row, stale-generation terminal events settle the owning turn, and OpenCode tool titles and lifecycle detail parsing are normalized before persistence.",
+      },
+      {
+        id: "ordered-transcript-progress",
+        title: "Transcript progress reads in the order it happened",
+        description:
+          "Assistant text, tools, reasoning, task progress, change summaries, and footer actions now form a clearer sequence.",
+        details:
+          "Text segments interleave with tool rows using provider event order, compacted reasoning stays anchored to its first update, repeated task-list updates collapse into one progressing row, the turn changes card appears before footer actions, and streamed text no longer repeatedly re-arms bottom-stick or redundant highlight scrolling.",
+      },
+      {
+        id: "safer-drafts-branches-and-git-actions",
+        title: "Drafts, branches, diffs, and Git actions keep their context",
+        description:
+          "Switching tasks or repositories is less likely to lose a draft, branch, diff selection, or action explanation.",
+        details:
+          "New-chat drafts survive thread switches, local branches remain attached during resume, branch mismatches settle before send, Pull appears when upstream is ahead, Git diff previews follow the selected file, worktree cancellation stays durable, and the shared commit/push/PR dialog keeps disabled reasons while presenting more direct primary actions.",
+      },
+      {
+        id: "provider-model-and-usage-resilience",
+        title: "Model and usage discovery fails smaller",
+        description:
+          "One malformed model or very large local Codex archive no longer destabilizes an entire catalogue or usage refresh.",
+        details:
+          "Synara isolates invalid descriptors, warms every available provider catalogue for new threads, shows installed providers, exposes Pi's maximum thinking level, and turns unknown rate-limit windows into readable labels. Codex usage scans now read archives backward in bounded 64 KiB chunks and skip oversized records without loading entire session files into memory.",
+      },
+      {
+        id: "adjustable-chat-and-file-actions",
+        title: "Tune the reading width and act on file links",
+        description:
+          "Choose a focused, standard, or wide chat column and use context actions directly from file references.",
+        details:
+          "Chat width is persisted as a visual preference, while Markdown file links can copy their path, open in Synara, or reveal supported workspace references. File and snippet search use the same direct-to-file workflow for a more consistent navigation path.",
+      },
+      {
+        id: "desktop-platform-polish",
+        title: "Desktop behavior is more native across macOS and Windows",
+        description:
+          "Dock and taskbar icons, terminal startup, updater shutdown, timestamps, and action glyphs received a platform-focused pass.",
+        details:
+          "macOS can follow appearance with a dark dock icon, Windows refreshes its taskbar icon after runtime changes and starts Bun PTYs reliably, updater failures no longer erase quit intent, and message metadata now adds day or date context when a time alone would be ambiguous. Sidebar and turn-action icons were simplified and aligned.",
+      },
+      {
+        id: "replay-and-queue-recovery",
+        title: "Interrupted and replayed work converges more reliably",
+        description:
+          "Queue promotion, snapshot replay, terminal settlement, and goal recovery now preserve durable ordering through restarts and races.",
+        details:
+          "Queued turns can be promoted replay-safely, stalled projection cursors escape permanent resnapshot loops, superseded projections retain retry backoff, terminal sessions can retry eligible goals, and pause or blocked transitions fence automatic continuation before user interrupts or newer work can be overtaken.",
+      },
+      {
+        id: "release-pipeline-hardening",
+        title: "Release publication has stricter, clearer gates",
+        description:
+          "The release workflow now uses least-privilege permissions, clean-lane checks, deterministic Windows setup, and scoped unsigned exceptions.",
+        details:
+          "Publication policy is explicit about when a release can proceed, Windows dependency installation is stabilized, and an unsigned Windows build must still pass packaging, provenance, startup smoke, and artifact-upload checks under an exact version-scoped exception.",
+      },
+    ],
+  },
+  {
+    version: "0.7.1",
+    date: "Aug 9",
+    features: [
+      {
+        id: "startup-reconnect-recovery",
+        title: "Large histories start and reconnect without a fixed deadline",
+        description:
+          "Synara now keeps waiting for a healthy backend and recovers late connections instead of giving up while a large history is still loading.",
+        details:
+          "Desktop readiness is cancellable but no longer capped by a fixed timeout, WebSocket reconnects use bounded backoff, and orchestration replay filters irrelevant events before decoding them. Startup, resume, and late-event handling now converge without turning a slow database into a false failure.",
+      },
+      {
+        id: "live-git-and-pr-state",
+        title: "Branches and pull requests stay in sync while agents work",
+        description:
+          "Task metadata now follows branch, worktree, push, and pull-request changes as they happen.",
+        details:
+          "A dedicated Git metadata reactor propagates mid-turn repository changes, recognizes task branches and pull requests more reliably, and repairs stale merged-PR badges. Refresh work is serialized and coalesced so commit, push, and PR actions are not blocked by competing background reads.",
+      },
+      {
+        id: "complete-pr-creation",
+        title: "Create PR can finish the whole publishing flow",
+        description:
+          "The PR dialog can commit the intended changes, push the branch, and open the pull request as one guided action.",
+        details:
+          "The flow has clearer draft and ready-for-review actions, safer branch and upstream handling, progress-aware controls, and refresh behavior that detaches after the terminal Git action succeeds instead of leaving the UI stuck while metadata catches up.",
+      },
+      {
+        id: "editable-explorer",
+        title: "Edit and save files directly from Explorer",
+        description:
+          "Workspace previews are now useful for small code and text edits without leaving Synara.",
+        details:
+          "Explorer file previews support editing, dirty-state tracking, guarded saves, clearer breadcrumbs, and safer path validation. Image overlays and preview layering were also corrected so file inspection remains usable beside the native browser and docked tools.",
+      },
+      {
+        id: "provider-usage-cache",
+        title: "Usage limits load faster and survive transient failures",
+        description:
+          "Provider usage is fetched once on the server and shared consistently across the sidebar and Settings.",
+        details:
+          "Claude and Codex credential refresh, keychain fallback, request joining, identity-scoped caching, throttling, and stale-but-healthy snapshot retention were hardened. A temporary provider or network failure no longer wipes a previously verified usage view.",
+      },
+      {
+        id: "provider-session-reliability",
+        title: "Provider sessions recover from more real-world failures",
+        description:
+          "Codex, Claude, OpenCode, Grok, Kilo, Antigravity, and ACP sessions now settle and resume more predictably.",
+        details:
+          "This release adds focused recovery for transient Grok storage and Kilo credential failures, OpenCode host-policy reinjection and Windows launching, Antigravity cancellation, AskUserQuestion replies, handoff eligibility, inline API keys, model discovery, and late terminal events.",
+      },
+      {
+        id: "calmer-live-transcript",
+        title: "Long and streaming conversations do less unnecessary work",
+        description:
+          "Live output remains visible while background polling, subscriptions, and timeline layout are more selective.",
+        details:
+          "Runtime polling adapts to activity, thread subscriptions are retained only where needed, replay avoids duplicate persistence, and timeline rows guard against painted overlap. Loading and Working labels now follow the real send and stream lifecycle instead of sticking after acknowledgements are lost or a live turn is taken over.",
+      },
+      {
+        id: "worktree-controls-and-forks",
+        title: "Worktree setup is visible, cancellable, and easier to recover",
+        description:
+          "See setup progress, cancel before dispatch, or open a local checkout when that is the better path.",
+        details:
+          "Automatic branch creation and attachment were restored, setup races were closed, worktree activity is easier to identify, and imported Codex history can now create a real fork while preserving the source relationship. The configured Git model is also used when naming new worktree branches.",
+      },
+      {
+        id: "appearance-personalization",
+        title: "Choose the desktop icon and preview themes visually",
+        description:
+          "Settings now includes native-style app icon choices and a compact theme mockup picker.",
+        details:
+          "Desktop icon selection persists through renderer startup and updates the packaged macOS presentation. Theme, shortcut, sidebar, composer glass, and translucent surface layouts were tightened, including production-safe backdrop filtering and better fallbacks where native transparency is unavailable.",
+      },
+      {
+        id: "faster-project-and-keyboard-workflows",
+        title: "Project and keyboard workflows need fewer corrective clicks",
+        description:
+          "Project search focuses immediately, and terminal and side-chat shortcuts behave more predictably.",
+        details:
+          "The shared project picker keeps its existing shell while focusing its search field on open. Conditional shortcut edits, keybinding capture, side-chat terminal exits, and shortcut settings were hardened so platform-specific combinations do not silently replace unrelated bindings.",
+      },
+      {
+        id: "clearer-feedback-and-release-history",
+        title: "Errors, confirmations, and release notes are easier to find",
+        description:
+          "Task errors now appear as toasts, routine notices remain visible longer, and past releases are available from Help.",
+        details:
+          "Shared toast providers now default to a 10-second dismissal while preserving explicitly persistent notices. Error banners moved into the common toast path, copying the active task ID has a dedicated shortcut, and the sidebar Help menu now opens the complete in-app release history.",
+      },
+      {
+        id: "cross-platform-rendering-fixes",
+        title: "Windows, Markdown, images, and pull-request views are sturdier",
+        description:
+          "Several small but disruptive platform and rendering failures have been removed.",
+        details:
+          "Windows OpenCode shim spawning and terminal activity detection were corrected, malformed GitHub-flavored Markdown tables are repaired before rendering, image overlays stack above the browser correctly, PR comments parse more consistently, and diff statistics can use an optional red/green presentation.",
+      },
+    ],
+  },
+  {
     version: "0.7.0",
     date: "Aug 5",
     features: [

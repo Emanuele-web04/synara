@@ -52,6 +52,30 @@
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
     },
+    "./executable": {
+      "types": "./src/executable.ts",
+      "import": "./src/executable.ts"
+    },
+    "./platformProcess": {
+      "types": "./src/platformProcess.ts",
+      "import": "./src/platformProcess.ts"
+    },
+    "./processRuntime": {
+      "types": "./src/processRuntime.ts",
+      "import": "./src/processRuntime.ts"
+    },
+    "./filesystemPlatform": {
+      "types": "./src/filesystemPlatform.ts",
+      "import": "./src/filesystemPlatform.ts"
+    },
+    "./platformEnvironment": {
+      "types": "./src/platformEnvironment.ts",
+      "import": "./src/platformEnvironment.ts"
+    },
+    "./wslBridge": {
+      "types": "./src/wslBridge.ts",
+      "import": "./src/wslBridge.ts"
+    },
     "./windowsCertificate": {
       "types": "./src/windowsCertificate.ts",
       "import": "./src/windowsCertificate.ts"
@@ -63,6 +87,10 @@
     "./desktopChrome": {
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
+    },
+    "./desktopTitleBar": {
+      "types": "./src/desktopTitleBar.ts",
+      "import": "./src/desktopTitleBar.ts"
     },
     "./desktopIdentity": {
       "types": "./src/desktopIdentity.ts",
@@ -124,6 +152,10 @@
       "types": "./src/threadDetailEvents.ts",
       "import": "./src/threadDetailEvents.ts"
     },
+    "./sidechatExpiry": {
+      "types": "./src/sidechatExpiry.ts",
+      "import": "./src/sidechatExpiry.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
@@ -143,10 +175,6 @@
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
       "import": "./src/pinnedMessages.ts"
-    },
-    "./threadMarkers": {
-      "types": "./src/threadMarkers.ts",
-      "import": "./src/threadMarkers.ts"
     },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
@@ -187,6 +215,10 @@
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"
+    },
+    "./workspaceFileWrite": {
+      "types": "./src/workspaceFileWrite.ts",
+      "import": "./src/workspaceFileWrite.ts"
     },
     "./localPreviewFiles": {
       "types": "./src/localPreviewFiles.ts",
@@ -260,10 +292,6 @@
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
     },
-    "./unifiedPatchStats": {
-      "types": "./src/unifiedPatchStats.ts",
-      "import": "./src/unifiedPatchStats.ts"
-    },
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
@@ -271,11 +299,25 @@
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"
+    },
+    "./deviceFrame": {
+      "types": "./src/deviceFrame.ts",
+      "import": "./src/deviceFrame.ts"
+    },
+    "./deviceHelperCache": {
+      "types": "./src/deviceHelperCache.ts",
+      "import": "./src/deviceHelperCache.ts"
+    },
+    "./searchQuery": {
+      "types": "./src/searchQuery.ts",
+      "import": "./src/searchQuery.ts"
     }
   },
   "scripts": {
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

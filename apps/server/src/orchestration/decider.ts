@@ -4,7 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
-  ThreadMarker,
+  ThreadGoalAchievement,
 } from "@synara/contracts";
 import {
   EventId,
@@ -12,7 +12,7 @@ import {
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
-  THREAD_MARKERS_MAX_COUNT,
+  THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
   TurnId,
 } from "@synara/contracts";
 import {
@@ -20,7 +20,6 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
-import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -31,8 +30,15 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import {
+  isExpiredSidechat,
+  latestSidechatActivityAt,
+  SIDECHAT_EXPIRED_EXECUTION_MESSAGE,
+  sidechatActivityInstantsEqual,
+} from "./sidechatLifecycle.ts";
 import {
   findSpaceById,
   isLegacyHomeChatContainerRow,
@@ -44,6 +50,7 @@ import {
   listActiveProjectsByWorkspaceRoot,
   listActiveSpaces,
   listThreadsByProjectId,
+  requireApprovalNotResponded,
   requireProject,
   requireProjectAbsent,
   requireProjectHasNoThreads,
@@ -59,14 +66,34 @@ import {
   requireThreadNotArchived,
   threadHasInFlightTurn,
   threadHasCheckpointRevertInProgress,
+  threadResumePreconditionDetail,
+  threadResumePreconditionViolation,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
-const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
+// Commands from the web client always carry an explicit assistantDeliveryMode;
+// this default only covers legacy/omitted fields. Streaming is the safe fallback:
+// an unrecorded preference should degrade to live output, never to a silent
+// buffer that withholds the whole assistant message until turn completion.
+const DEFAULT_ASSISTANT_DELIVERY_MODE = "streaming" as const;
 const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+
+function validateSidechatExecutionAvailable(
+  command: Pick<OrchestrationCommand, "type">,
+  thread: Pick<OrchestrationThread, "sidechatExpiredAt">,
+) {
+  return isExpiredSidechat(thread)
+    ? Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: SIDECHAT_EXPIRED_EXECUTION_MESSAGE,
+        }),
+      )
+    : Effect.void;
+}
 
 function validateAutoRuntimeMode(
   command: OrchestrationCommand,
@@ -112,6 +139,52 @@ function withEventBase(
     commandId: input.commandId,
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
+  };
+}
+
+function userMessageUpsertEvent(input: {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly threadId: OrchestrationThread["id"];
+  readonly message: OrchestrationThread["messages"][number];
+  readonly turnId: OrchestrationThread["messages"][number]["turnId"];
+  readonly startsNewTurn?: boolean;
+  readonly occurredAt: string;
+}): Omit<OrchestrationEvent, "sequence"> {
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.threadId,
+      occurredAt: input.occurredAt,
+      commandId: input.commandId,
+    }),
+    type: "thread.message-sent",
+    payload: {
+      threadId: input.threadId,
+      messageId: input.message.id,
+      role: "user",
+      text: input.message.text,
+      ...(input.message.attachments !== undefined
+        ? { attachments: input.message.attachments }
+        : {}),
+      ...(input.message.skills !== undefined ? { skills: input.message.skills } : {}),
+      ...(input.message.mentions !== undefined ? { mentions: input.message.mentions } : {}),
+      ...(input.message.dispatchMode !== undefined
+        ? { dispatchMode: input.message.dispatchMode }
+        : {}),
+      ...(input.message.dispatchOrigin !== undefined
+        ? { dispatchOrigin: input.message.dispatchOrigin }
+        : {}),
+      ...(input.startsNewTurn !== undefined
+        ? { startsNewTurn: input.startsNewTurn }
+        : input.message.startsNewTurn !== undefined
+          ? { startsNewTurn: input.message.startsNewTurn }
+          : {}),
+      turnId: input.turnId,
+      streaming: false,
+      source: input.message.source,
+      createdAt: input.message.createdAt,
+      updatedAt: input.message.updatedAt,
+    },
   };
 }
 
@@ -319,6 +392,81 @@ function resolveCreatedThreadWorkspaceMetadata(
         : {}),
     }),
   };
+}
+
+/**
+ * Stamps authoritative goal timestamps for `thread.meta.update`. `goalAchieved`
+ * takes precedence over everything: it records a ThreadGoalAchievement (with
+ * pause-adjusted elapsed time, anchored to the thread's latest turn) and clears
+ * the goal in the same event. A goal change takes precedence over `goalPaused`
+ * in the same command: a newly set goal starts the pursuit clock, an edit of an
+ * existing goal keeps the running clock and pause state, and clearing resets
+ * everything. Pause freezes the clock at `goalPausedAt`; resume rebases
+ * `goalStartedAt` so the paused span is excluded from the elapsed time.
+ */
+function resolveThreadGoalPatch(
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  currentThread: OrchestrationThread,
+  occurredAt: string,
+): {
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: readonly ThreadGoalAchievement[];
+} {
+  const activeGoal = (currentThread.goal ?? "").trim();
+  if (command.goalAchieved === true) {
+    if (activeGoal.length === 0) {
+      return {};
+    }
+    const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+    const pausedMs = Date.parse(currentThread.goalPausedAt ?? "");
+    const occurredMs = Date.parse(occurredAt);
+    const endMs = Number.isFinite(pausedMs) ? pausedMs : occurredMs;
+    const elapsedMs =
+      Number.isFinite(startedMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startedMs) : null;
+    const achievement: ThreadGoalAchievement = {
+      goal: activeGoal,
+      achievedAt: occurredAt,
+      elapsedMs,
+      turnId: currentThread.latestTurn?.turnId ?? null,
+    };
+    return {
+      goal: "",
+      goalStartedAt: null,
+      goalPausedAt: null,
+      goalAchievements: [...(currentThread.goalAchievements ?? []), achievement].slice(
+        -THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
+      ),
+    };
+  }
+  if (command.goal !== undefined) {
+    if (command.goal.trim().length === 0) {
+      return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
+    }
+    if (activeGoal.length > 0) {
+      return { goal: command.goal };
+    }
+    return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
+  }
+  if (command.goalPaused === undefined || activeGoal.length === 0) {
+    return {};
+  }
+  const pausedAt = currentThread.goalPausedAt ?? null;
+  if (command.goalPaused) {
+    return pausedAt === null ? { goalPausedAt: occurredAt } : {};
+  }
+  if (pausedAt === null) {
+    return {};
+  }
+  const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+  const pausedMs = Date.parse(pausedAt);
+  const occurredMs = Date.parse(occurredAt);
+  const rebasedStartedAt =
+    Number.isFinite(startedMs) && Number.isFinite(pausedMs) && Number.isFinite(occurredMs)
+      ? new Date(occurredMs - Math.max(0, pausedMs - startedMs)).toISOString()
+      : occurredAt;
+  return { goalStartedAt: rebasedStartedAt, goalPausedAt: null };
 }
 
 function resolveThreadWorkspaceMetadataPatch(
@@ -1074,7 +1222,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
-          title: command.title,
+          title: command.sidechatSourceThreadId
+            ? command.title
+            : buildForkThreadTitle(
+                sourceThread,
+                listThreadsByProjectId(readModel, command.projectId),
+              ),
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
@@ -1088,6 +1241,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
           sidechatSourceThreadId: command.sidechatSourceThreadId,
+          sidechatLastActivityAt: command.sidechatSourceThreadId ? command.createdAt : null,
+          sidechatExpiredAt: null,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1123,6 +1278,89 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }));
 
       return [createdEvent, ...importedMessageEvents];
+    }
+
+    case "thread.sidechat.activity.record": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (!thread.sidechatSourceThreadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a side chat.`,
+        });
+      }
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' already expired.`,
+        });
+      }
+      const lastActivityAt = latestSidechatActivityAt(
+        thread.sidechatLastActivityAt,
+        command.activityAt,
+      );
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: lastActivityAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.sidechat-activity-recorded",
+        payload: { threadId: command.threadId, lastActivityAt },
+      };
+    }
+
+    case "thread.sidechat.expire": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (!thread.sidechatSourceThreadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a side chat.`,
+        });
+      }
+      if (thread.sidechatExpiredAt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' already expired.`,
+        });
+      }
+      const lastActivityAt = thread.sidechatLastActivityAt ?? thread.updatedAt ?? thread.createdAt;
+      if (!sidechatActivityInstantsEqual(lastActivityAt, command.expectedLastActivityAt)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' became active before expiry.`,
+        });
+      }
+      if (
+        thread.latestTurn?.state === "running" ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' still has a running turn.`,
+        });
+      }
+      if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Side chat '${command.threadId}' still has a pending interaction.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.expiredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.sidechat-expired",
+        payload: {
+          threadId: command.threadId,
+          expectedLastActivityAt: command.expectedLastActivityAt,
+          expiredAt: command.expiredAt,
+        },
+      };
     }
 
     case "thread.delete": {
@@ -1262,6 +1500,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          ...(command.goalStartBehavior !== undefined
+            ? { goalStartBehavior: command.goalStartBehavior }
+            : {}),
+          ...resolveThreadGoalPatch(command, thread, occurredAt),
           updatedAt: occurredAt,
         },
       };
@@ -1373,149 +1615,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.marker.add": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (command.endOffset <= command.startOffset) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Marker end offset must be greater than start offset.`,
-        });
-      }
-      let existingMarker: ThreadMarker | undefined = undefined;
-      let replacedMarkerCount = 0;
-      for (const marker of thread.threadMarkers ?? []) {
-        if (
-          marker.id === command.markerId ||
-          (marker.messageId === command.messageId &&
-            marker.startOffset === command.startOffset &&
-            marker.endOffset === command.endOffset &&
-            marker.style === command.style)
-        ) {
-          existingMarker = marker;
-        }
-        if (
-          doThreadMarkerRangesOverlap(marker, {
-            messageId: command.messageId,
-            startOffset: command.startOffset,
-            endOffset: command.endOffset,
-          })
-        ) {
-          replacedMarkerCount += 1;
-        }
-      }
-      if (
-        !existingMarker &&
-        (thread.threadMarkers?.length ?? 0) - replacedMarkerCount >= THREAD_MARKERS_MAX_COUNT
-      ) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Thread '${command.threadId}' already has the maximum of ${THREAD_MARKERS_MAX_COUNT} markers.`,
-        });
-      }
-      const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.marker-added",
-        payload: {
-          threadId: command.threadId,
-          marker: existingMarker ?? {
-            id: command.markerId,
-            messageId: command.messageId,
-            startOffset: command.startOffset,
-            endOffset: command.endOffset,
-            selectedText: command.selectedText,
-            style: command.style,
-            color: command.color,
-            label: null,
-            done: false,
-            createdAt: occurredAt,
-            updatedAt: occurredAt,
-          },
-          updatedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.marker.remove": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.marker-removed",
-        payload: {
-          threadId: command.threadId,
-          markerId: command.markerId,
-          updatedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.marker.done.set": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.marker-done-set",
-        payload: {
-          threadId: command.threadId,
-          markerId: command.markerId,
-          done: command.done,
-          updatedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.marker.label.set": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.marker-label-set",
-        payload: {
-          threadId: command.threadId,
-          markerId: command.markerId,
-          label: command.label,
-          updatedAt: occurredAt,
-        },
-      };
-    }
-
     case "thread.runtime-mode.set": {
       const thread = yield* requireThread({
         readModel,
@@ -1541,7 +1640,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.interaction-mode.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
@@ -1557,6 +1656,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.interaction-mode-set",
         payload: {
           threadId: command.threadId,
+          previousInteractionMode: thread.interactionMode,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
         },
@@ -1569,6 +1669,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, targetThread);
+      if (command.resumePrecondition !== undefined) {
+        // Quit-resume continuations are only valid while the thread is exactly as
+        // it was recorded; checked here so it holds inside the serialized dispatch.
+        const violation = threadResumePreconditionViolation(
+          targetThread,
+          command.resumePrecondition,
+        );
+        if (violation !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: threadResumePreconditionDetail(command.threadId, violation),
+          });
+        }
+      }
       if (threadHasCheckpointRevertInProgress(targetThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1576,10 +1691,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      // A quit-resume command is planned just before commands are admitted.
+      // Respect settings changed before its serialized dispatch instead of
+      // replaying the planner's stale permission or interaction mode.
+      const runtimeMode =
+        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+      const interactionMode =
+        command.resumePrecondition === undefined
+          ? command.interactionMode
+          : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
         command,
         command.modelSelection ?? targetThread.modelSelection,
-        command.runtimeMode,
+        runtimeMode,
       );
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1605,6 +1729,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
+      const activeProvider =
+        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
+      const isThreadRunning =
+        targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      // Subagent threads never queue: their messages steer the running child task
+      // through the parent session, so deferring until the turn settles would
+      // deliver the message only after the subagent already finished.
+      // Steers ride the live turn natively only on providers whose runtime can
+      // inject mid-turn input; everywhere else they queue and interrupt below.
+      const shouldQueue =
+        targetThread.parentThreadId === null &&
+        isThreadRunning &&
+        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1628,6 +1765,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // originally dispatched by an automation/agent must overwrite the
           // stale origin instead of inheriting it.
           dispatchOrigin: command.dispatchOrigin ?? "user",
+          startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
           source: "native",
@@ -1646,24 +1784,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
-        runtimeMode: command.runtimeMode,
-        interactionMode: command.interactionMode,
+        runtimeMode,
+        interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;
-      const activeProvider =
-        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
-      const isThreadRunning =
-        targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
-      // Subagent threads never queue: their messages steer the running child task
-      // through the parent session, so deferring until the turn settles would
-      // deliver the message only after the subagent already finished.
-      // Steers ride the live turn natively only on providers whose runtime can
-      // inject mid-turn input; everywhere else they queue and interrupt below.
-      const shouldQueue =
-        targetThread.parentThreadId === null &&
-        isThreadRunning &&
-        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1705,6 +1830,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1748,12 +1874,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1767,6 +1893,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      if ((thread.goal ?? "").trim().length === 0 || thread.goalPausedAt != null) {
+        return interruptEvent;
+      }
+
+      const pausedAt = nowIso();
+      const pauseEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: pausedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          goalPausedAt: pausedAt,
+          updatedAt: pausedAt,
+        },
+      };
+      return [
+        pauseEvent,
+        {
+          ...interruptEvent,
+          causationEventId: pauseEvent.eventId,
+        },
+      ];
     }
 
     case "thread.task.stop": {
@@ -1814,10 +1966,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.approval.respond": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      yield* validateSidechatExecutionAvailable(command, thread);
+      yield* requireApprovalNotResponded({
+        readModel,
+        command,
+        threadId: command.threadId,
+        requestId: command.requestId,
+        ...(command.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: command.lifecycleGeneration }
+          : {}),
       });
       return {
         ...withEventBase({
@@ -1843,11 +2005,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.user-input.respond": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, thread);
       const answers = omitNullUserInputAnswers(command);
       return {
         ...withEventBase({
@@ -1980,6 +2143,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateSidechatExecutionAvailable(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2082,6 +2246,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.goal.continue": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* validateSidechatExecutionAvailable(command, thread);
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-continuation-requested",
+        payload: {
+          threadId: command.threadId,
+          goalStartedAt: command.goalStartedAt,
+          trigger: command.trigger,
+          ...(command.sourceTurnId !== undefined ? { sourceTurnId: command.sourceTurnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,
@@ -2164,6 +2353,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.segmentStartedAt ? { segmentStartedAt: command.segmentStartedAt } : {}),
+          ...(command.segmentSequence !== undefined
+            ? { segmentSequence: command.segmentSequence }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,
@@ -2204,6 +2397,64 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.message.user.bind-turn": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        message.turnId !== null &&
+        message.turnId !== undefined &&
+        message.turnId !== command.turnId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' is already bound to turn '${message.turnId}'.`,
+        });
+      }
+      // The command engine requires at least one event per accepted command.
+      // Re-emit the canonical upsert when already bound to this exact turn so
+      // recovery retries with a fresh command id remain safely idempotent.
+      return userMessageUpsertEvent({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        message,
+        turnId: command.turnId,
+        occurredAt: command.createdAt,
+      });
+    }
+
+    case "thread.message.user.set-turn-boundary": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return userMessageUpsertEvent({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        message,
+        turnId: message.turnId,
+        startsNewTurn: command.startsNewTurn,
+        occurredAt: command.createdAt,
+      });
     }
 
     case "thread.proposed-plan.upsert": {
@@ -2332,12 +2583,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const activity = command.activity;
       const requestId =
-        typeof command.activity.payload === "object" &&
-        command.activity.payload !== null &&
-        "requestId" in command.activity.payload &&
-        typeof (command.activity.payload as { requestId?: unknown }).requestId === "string"
-          ? ((command.activity.payload as { requestId: string })
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        "requestId" in activity.payload &&
+        typeof (activity.payload as { requestId?: unknown }).requestId === "string"
+          ? ((activity.payload as { requestId: string })
               .requestId as OrchestrationEvent["metadata"]["requestId"])
           : undefined;
       return {
@@ -2351,7 +2603,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.activity-appended",
         payload: {
           threadId: command.threadId,
-          activity: command.activity,
+          activity,
         },
       };
     }

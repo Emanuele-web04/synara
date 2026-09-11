@@ -242,6 +242,15 @@ export type MessagesTimelineRow =
       revertTurnCount?: number | undefined;
     }
   | {
+      // One slice of a completed assistant message whose streamed text was
+      // interleaved with tool rows; rendered compactly at its own start time.
+      kind: "message-segment";
+      id: string;
+      createdAt: string;
+      message: ChatMessage;
+      segmentIndex: number;
+    }
+  | {
       kind: "proposed-plan";
       id: string;
       createdAt: string;
@@ -269,6 +278,71 @@ export type MessagesTimelineRow =
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];
+}
+
+export interface ThreadFindJumpTarget {
+  rowIndex: number;
+  visibleMessageId: MessageId;
+  expandCollapsedWorkMessageId?: MessageId;
+  collapsedNarrationMessageId?: MessageId;
+}
+
+/**
+ * Map a find match onto the row that currently owns it. Settled turns splice
+ * earlier assistant messages out of the live list and fold them into the
+ * terminal row's collapsed narration, so jumping by message id alone misses.
+ */
+export function resolveThreadFindJumpTarget(
+  rows: readonly MessagesTimelineRow[],
+  match: { messageId: MessageId; segmentIndex?: number },
+): ThreadFindJumpTarget | null {
+  const { messageId, segmentIndex } = match;
+  if (segmentIndex !== undefined) {
+    const segmentRowIndex = rows.findIndex(
+      (row) =>
+        row.kind === "message-segment" &&
+        row.message.id === messageId &&
+        row.segmentIndex === segmentIndex,
+    );
+    if (segmentRowIndex >= 0) {
+      return { rowIndex: segmentRowIndex, visibleMessageId: messageId };
+    }
+  }
+
+  const messageRowIndex = rows.findIndex(
+    (row) => row.kind === "message" && row.message.id === messageId,
+  );
+  if (messageRowIndex >= 0) {
+    return { rowIndex: messageRowIndex, visibleMessageId: messageId };
+  }
+
+  const anySegmentRowIndex = rows.findIndex(
+    (row) => row.kind === "message-segment" && row.message.id === messageId,
+  );
+  if (anySegmentRowIndex >= 0) {
+    return { rowIndex: anySegmentRowIndex, visibleMessageId: messageId };
+  }
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]!;
+    if (row.kind !== "message" || row.message.role !== "assistant") {
+      continue;
+    }
+    const hasNarration = (row.collapsedTurnItems ?? []).some(
+      (item) => item.kind === "narration" && item.message.id === messageId,
+    );
+    if (!hasNarration) {
+      continue;
+    }
+    return {
+      rowIndex,
+      visibleMessageId: row.message.id,
+      expandCollapsedWorkMessageId: row.message.id,
+      collapsedNarrationMessageId: messageId,
+    };
+  }
+
+  return null;
 }
 
 export function computeMessageDurationStart(
@@ -579,6 +653,21 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "message-segment") {
+      // Interleaved slice of assistant text, already alternating with the tool
+      // rows in timeline order. Do not merge pending work into it: segment
+      // boundaries ARE tool interventions, so each segment stands alone.
+      flushPendingWorkGroup({ attachToPreviousAssistant: false });
+      nextRows.push({
+        kind: "message-segment",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        message: timelineEntry.message,
+        segmentIndex: timelineEntry.segmentIndex,
+      });
+      continue;
+    }
+
     const message = timelineEntry.message;
     const leadingWorkEntries =
       message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
@@ -761,6 +850,14 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
+      // A settled assistant message whose streamed text interleaved with tool
+      // rows renders as message-segment slices. They are still this turn's
+      // narration, so they fold too instead of stranding everything earlier
+      // outside the disclosure.
+      if (prev.kind === "message-segment" && !prev.message.streaming) {
+        foldIndices.push(scan);
+        continue;
+      }
       if (prev.kind === "proposed-plan") {
         // The plan card stays visible, but it should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
@@ -777,11 +874,24 @@ function collapseSettledTurns(
     // (e.g. a failed attempt before a retry), which would report only the tail
     // of the turn instead of the full run.
     let collapsedStart = row.durationStart;
+    // All slices of one segmented message share the same ChatMessage, so the
+    // message folds once (at its first slice) to keep narration identity stable.
+    const foldedSegmentMessageIds = new Set<string>();
     for (const index of foldIndices) {
       const folded = rows[index]!;
       if (folded.kind === "work") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         collectWorkItems(folded.groupedEntries, collapsedItems);
+      } else if (folded.kind === "message-segment") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
+        if (!foldedSegmentMessageIds.has(folded.message.id)) {
+          foldedSegmentMessageIds.add(folded.message.id);
+          collapsedItems.push({
+            kind: "narration",
+            id: folded.message.id,
+            message: folded.message,
+          });
+        }
       } else if (folded.kind === "message" && folded.message.role === "assistant") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.durationStart);
         if (folded.assistantTurnDiffSummary) {
@@ -1103,6 +1213,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );
+    }
+
+    case "message-segment": {
+      const bm = b as typeof a;
+      return a.message === bm.message && a.segmentIndex === bm.segmentIndex;
     }
   }
 }

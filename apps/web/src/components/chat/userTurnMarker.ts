@@ -1,8 +1,6 @@
 // FILE: userTurnMarker.ts
 // Purpose: Single predicate for the marker chip above a sent user message
-// ("Sent via Automation" / "Sent by agent" / "Steering conversation"). Shared by the transcript
-// renderer (MessagesTimeline) and the row-height estimator (timelineHeight) so
-// what gets rendered and what gets measured can never drift apart.
+// ("Sent via Automation" / "Sent by agent" / "Steering conversation").
 // Layer: web chat feature (pure logic, no I/O).
 
 // Server-dispatched turns (automation runs, agent gateway tools) take
@@ -33,12 +31,11 @@ export interface UserTurnMediaCounts {
   readonly browserAnnotationCount: number;
   readonly fileCommentCount: number;
   readonly pastedTextCount: number;
+  readonly pullRequestContextCount: number;
 }
 
 // The marker chip sits directly above any leading media row, and its bottom
-// margin is larger when media follows. Renderer and height estimator must agree
-// on which attachment kinds count as media, or estimated row heights drift from
-// what actually renders.
+// margin is larger when media follows.
 export function hasLeadingUserMedia(counts: UserTurnMediaCounts): boolean {
   return (
     counts.imageCount > 0 ||
@@ -46,6 +43,7 @@ export function hasLeadingUserMedia(counts: UserTurnMediaCounts): boolean {
     counts.assistantSelectionCount > 0 ||
     counts.browserAnnotationCount > 0 ||
     counts.fileCommentCount > 0 ||
-    counts.pastedTextCount > 0
+    counts.pastedTextCount > 0 ||
+    counts.pullRequestContextCount > 0
   );
 }

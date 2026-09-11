@@ -34,11 +34,15 @@ import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
+import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import {
   attachmentPrincipalForSession,
@@ -241,21 +245,36 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
   return HttpRouter.add(
     "GET",
     "/health",
-    readiness.getSnapshot.pipe(
-      Effect.map((snapshot) =>
-        HttpServerResponse.jsonUnsafe(
-          {
-            status: "ok",
-            startupReady: snapshot.startupReady,
-            pushBusReady: snapshot.pushBusReady,
-            keybindingsReady: snapshot.keybindingsReady,
-            terminalSubscriptionsReady: snapshot.terminalSubscriptionsReady,
-            orchestrationSubscriptionsReady: snapshot.orchestrationSubscriptionsReady,
+    Effect.gen(function* () {
+      const snapshot = yield* readiness.getSnapshot;
+      const orchestrationEngine = yield* OrchestrationEngineService;
+      const projection = yield* orchestrationEngine.getProjectionCatchUpStatus;
+      return HttpServerResponse.jsonUnsafe(
+        {
+          status: "ok",
+          startupReady: snapshot.startupReady,
+          pushBusReady: snapshot.pushBusReady,
+          keybindingsReady: snapshot.keybindingsReady,
+          terminalSubscriptionsReady: snapshot.terminalSubscriptionsReady,
+          orchestrationSubscriptionsReady: snapshot.orchestrationSubscriptionsReady,
+          // /health is unauthenticated, so only shape-level diagnostics may
+          // leave the process. lastFailure carries pretty-printed causes whose
+          // schema-decode issues can embed raw event payloads (user prompts);
+          // it stays server-side — the log line that recorded the failure is
+          // where operators read the detail.
+          projection: {
+            state: projection.state,
+            inFlight: projection.inFlight,
+            retryAttempts: projection.retryAttempts,
+            hasFailure: projection.lastFailure !== null,
+            highWaterSequence: projection.highWaterSequence,
+            lagByProjector: projection.lagByProjector,
+            missingProjectors: projection.missingProjectors,
           },
-          { status: 200 },
-        ),
-      ),
-    ),
+        },
+        { status: 200 },
+      );
+    }),
   );
 }
 
@@ -792,12 +811,16 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),
     );
     if (!previewFile) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+      return HttpServerResponse.text("Not Found", {
+        status: 404,
+        headers: localPreviewCorsHeaders({ config, request, url }),
+      });
     }
 
     // Stream (don't use HttpServerResponse.file, which depends on
@@ -976,7 +999,8 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
       const registry = yield* ProviderAdapterRegistry;
-      const adapter = yield* registry.getByProvider(provider as never);
+      const serverSettings = yield* ServerSettingsService;
+      const adapter = yield* getEnabledProviderAdapter(provider as never, serverSettings, registry);
       if (!adapter.transcribeVoice) {
         return HttpServerResponse.jsonUnsafe(
           { error: `Voice transcription is unavailable for provider '${provider}'.` },

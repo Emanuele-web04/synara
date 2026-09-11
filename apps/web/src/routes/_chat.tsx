@@ -51,7 +51,7 @@ import {
   useSidebar,
 } from "~/components/ui/sidebar";
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -170,7 +170,7 @@ function resolveBrowserNavigationShortcut(
   event: KeyboardEvent,
   platform: string,
 ): "back" | "forward" | null {
-  const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
+  const isMac = isMacPlatform(platform);
   const key = event.key.toLowerCase();
 
   if (
@@ -246,7 +246,7 @@ function ChatRouteGlobalShortcuts() {
   useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeThreadTerminalState = activeContextThreadId
@@ -453,31 +453,19 @@ function ChatRouteGlobalShortcuts() {
             });
             return;
           }
-          await handleNewThread(target.projectId, {
-            provider,
-            ...(target.inheritContext
-              ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-              : {}),
-          });
+          await handleNewThread(target.projectId, { provider });
         })();
         return;
       }
 
       if (command !== "chat.new") return;
-      // Falls back to the most recent project when none is focused (e.g. the landing
-      // view) so the primary "new thread" chord always creates a thread; on that
-      // fallback the active branch/worktree context belongs to the absent project, so
-      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      // Fall back to the most recent project when none is focused and let the
+      // shared bootstrap apply that project's preferred environment.
       const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
       if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(
-        target.projectId,
-        target.inheritContext
-          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-          : undefined,
-      );
+      void handleNewThread(target.projectId);
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });

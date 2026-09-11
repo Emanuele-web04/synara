@@ -70,9 +70,12 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
 }
 
 const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
-const whenThreadJumpAvailable = whenAnd(
-  whenNotTerminalFocus,
-  whenNot(whenIdentifier("terminalWorkspaceOpen")),
+// Cmd+1…9 is app navigation on macOS, including from a focused/full-width terminal.
+// On Linux/Windows `mod` is Ctrl, so keep yielding the chord to the shell and to the
+// terminal workspace's Ctrl+1/Ctrl+2 tabs while that surface is open.
+const whenThreadJumpAvailable = whenOr(
+  whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("terminalWorkspaceOpen"))),
+  whenIdentifier("isMac"),
 );
 // App-level `mod` chords (new chat/terminal/provider chat/split, copy thread id) bind to
 // `mod`, which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
@@ -172,10 +175,25 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
   },
+  {
+    command: "diff.change.next",
+    shortcut: commandShortcut("arrowdown", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "diff.change.previous",
+    shortcut: commandShortcut("arrowup", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   {
     command: "composer.focus.toggle",
     shortcut: commandShortcut("l", { metaKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "chat.find",
+    shortcut: commandShortcut("f"),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -265,13 +283,18 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   },
   {
     command: "terminal.workspace.terminal",
-    shortcut: commandShortcut("1"),
+    shortcut: commandShortcut("1", { ctrlKey: true, modKey: false }),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
     command: "terminal.workspace.chat",
-    shortcut: commandShortcut("2"),
+    shortcut: commandShortcut("2", { ctrlKey: true, modKey: false }),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
+    command: "editor.file.save",
+    shortcut: commandShortcut("s"),
+    whenAst: whenNotTerminalFocus,
   },
 ];
 
@@ -422,6 +445,14 @@ function findEffectiveShortcutForCommand(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): KeybindingShortcut | null {
+  return findEffectiveKeybindingForCommand(keybindings, command, options)?.shortcut ?? null;
+}
+
+export function findEffectiveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
   const claimedShortcuts = new Set<string>();
@@ -438,11 +469,36 @@ function findEffectiveShortcutForCommand(
 
     claimedShortcuts.add(conflictKey);
     if (binding.command === command) {
-      return binding.shortcut;
+      return binding;
     }
   }
 
   return null;
+}
+
+export function resolveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
+  return (
+    findEffectiveKeybindingForCommand(keybindings, command, options) ??
+    findEffectiveKeybindingForCommand(getFallbackBindings(keybindings), command, options)
+  );
+}
+
+export function formatKeybindingWhenExpression(node: KeybindingWhenNode | undefined): string {
+  if (!node) return "";
+  switch (node.type) {
+    case "identifier":
+      return node.name;
+    case "not":
+      return `!(${formatKeybindingWhenExpression(node.node)})`;
+    case "and":
+      return `(${formatKeybindingWhenExpression(node.left)} && ${formatKeybindingWhenExpression(node.right)})`;
+    case "or":
+      return `(${formatKeybindingWhenExpression(node.left)} || ${formatKeybindingWhenExpression(node.right)})`;
+  }
 }
 
 function matchesCommandShortcut(
@@ -641,87 +697,20 @@ export function shouldShowThreadJumpHints(
   return false;
 }
 
-export function isTerminalToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.toggle", options);
-}
-
-export function isTerminalSplitShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.split", options);
-}
-
-export function isTerminalNewShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.new", options);
-}
-
-export function isTerminalCloseShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "terminal.close", options);
-}
-
-export function isSidebarToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "sidebar.toggle", options);
-}
-
-export function isDiffToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "diff.toggle", options);
-}
-
-export function isBrowserToggleShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "browser.toggle", options);
-}
-
-export function isChatNewShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.new", options);
-}
-
-export function isChatNewChatShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return (
-    matchesCommandShortcut(event, keybindings, "chat.newChat", options) ||
-    matchesCommandShortcut(event, keybindings, "chat.newLocal", options)
-  );
-}
-
 export function isOpenFavoriteEditorShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
+}
+
+export function isEditorFileSaveShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "editor.file.save", options);
 }
 
 export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {

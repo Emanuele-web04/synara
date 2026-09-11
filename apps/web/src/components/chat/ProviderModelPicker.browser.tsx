@@ -1,10 +1,11 @@
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import type { ProviderModelOption } from "../../providerModelOptions";
+import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
@@ -33,14 +34,6 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     },
     { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna" },
   ],
-  kilo: [
-    {
-      slug: "kilo/kilo-auto/free",
-      name: "Kilo Auto Free",
-      upstreamProviderId: "kilo",
-      upstreamProviderName: "Kilo",
-    },
-  ],
   opencode: [
     {
       slug: "opencode/nemotron-3-super-free",
@@ -53,6 +46,14 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5",
       upstreamProviderId: "openai",
       upstreamProviderName: "OpenAI",
+    },
+  ],
+  devin: [
+    {
+      slug: "devin/swe-1.7",
+      name: "SWE 1.7",
+      upstreamProviderId: "devin",
+      upstreamProviderName: "Devin",
     },
   ],
   pi: [
@@ -146,6 +147,25 @@ const PI_FAVORITE_SORT_MODELS = [
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const PI_BRANDED_MODELS = mergeDynamicModelOptions({
+  provider: "pi",
+  staticOptions: [],
+  dynamicModels: [
+    {
+      slug: "zai/glm-5.3-flash",
+      name: "GLM-5.3-Flash",
+      upstreamProviderId: "zai",
+      upstreamProviderName: "Z.AI",
+    },
+    {
+      slug: "deepseek/deepseek-v4-flash",
+      name: "Deepseek V4 Flash",
+      upstreamProviderId: "deepseek",
+      upstreamProviderName: "DeepSeek",
+    },
+  ],
+}) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -197,6 +217,22 @@ describe("ProviderModelPicker", () => {
       provider: "claudeAgent",
       model: "claude-opus-4-6",
       lockedProvider: null,
+      providers: [
+        {
+          provider: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "claudeAgent",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
     });
 
     try {
@@ -251,6 +287,40 @@ describe("ProviderModelPicker", () => {
       );
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("keeps branded Pi model labels stable after selection", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+
+    function ControlledPiPicker() {
+      const [model, setModel] = useState<ModelSlug>("deepseek/deepseek-v4-flash");
+      return (
+        <ProviderModelPicker
+          provider="pi"
+          model={model}
+          lockedProvider="pi"
+          modelOptionsByProvider={{
+            ...MODEL_OPTIONS_BY_PROVIDER,
+            pi: PI_BRANDED_MODELS,
+          }}
+          onProviderModelChange={(_provider, nextModel) => setModel(nextModel)}
+        />
+      );
+    }
+
+    const screen = await render(<ControlledPiPicker />, { container: host });
+    try {
+      await expect.element(page.getByRole("button", { name: /DeepSeek V4 Flash/u })).toBeVisible();
+      await page.getByRole("button", { name: /DeepSeek V4 Flash/u }).click();
+      await page.getByRole("menuitemradio", { name: "GLM 5.3 Flash" }).click();
+
+      await expect.element(page.getByRole("button", { name: /GLM 5.3 Flash/u })).toBeVisible();
+      expect(document.body.textContent ?? "").not.toContain("Glm 5.3 Flash");
+    } finally {
+      await screen.unmount();
+      host.remove();
     }
   });
 
@@ -601,7 +671,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("shows unavailable providers as disabled rows", async () => {
+  it("hides unavailable providers and offers provider settings", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -630,15 +700,16 @@ describe("ProviderModelPicker", () => {
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
         expect(text).toContain("Codex");
-        expect(text).toContain("Claude");
-        expect(text).toContain("Sign in");
+        expect(text).not.toContain("Claude");
+        expect(text).not.toContain("Sign in");
       });
+      await expect.element(page.getByRole("menuitem", { name: "Add Providers" })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("does not make providers selectable before live status is known", async () => {
+  it("hides providers before live status is known", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -659,9 +730,10 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-        expect(text).toContain("Claude");
-        expect(text).toContain("Checking");
+        expect(text).not.toContain("Claude");
+        expect(text).not.toContain("Checking");
       });
+      await expect.element(page.getByRole("menuitem", { name: "Add Providers" })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }

@@ -10,6 +10,7 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "../DiffPanelShell";
+import type { DiffFileEditRequest } from "../../lib/diffEditBaseRev";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { Spinner } from "../ui/spinner";
@@ -18,6 +19,7 @@ import { scheduleDeferredChatMount } from "./deferredChatMount";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
 export const LazyBrowserPanel = lazy(() => import("../BrowserPanel"));
+export const LazyDevicePanel = lazy(() => import("../DevicePanel"));
 
 export const noopChatSurfaceAction = () => {};
 
@@ -45,6 +47,8 @@ export function LazyDiffPanel(props: {
   hideHeader?: boolean;
   onRenderableFilesChange?: (files: ReadonlyArray<FileDiffMetadata>, isLoading: boolean) => void;
   onEditorDiffOptionsChange?: (control: ReactNode | null) => void;
+  onVisibleFileChange?: (filePath: string | null) => void;
+  onEditFile?: (request: DiffFileEditRequest) => void;
 }) {
   return (
     <DiffWorkerPoolProvider>
@@ -67,12 +71,14 @@ export function LazyDiffPanel(props: {
             : {})}
           {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
           {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
+          {...(props.onEditFile ? { onEditFile: props.onEditFile } : {})}
           {...(props.onRenderableFilesChange
             ? { onRenderableFilesChange: props.onRenderableFilesChange }
             : {})}
           {...(props.onEditorDiffOptionsChange
             ? { onEditorDiffOptionsChange: props.onEditorDiffOptionsChange }
             : {})}
+          {...(props.onVisibleFileChange ? { onVisibleFileChange: props.onVisibleFileChange } : {})}
         />
       </Suspense>
     </DiffWorkerPoolProvider>
@@ -100,6 +106,7 @@ export function ChatMountLoader() {
 
 export function DeferredChatView(props: {
   threadId: ThreadId;
+  hideHeader?: boolean;
   paneScopeId: string;
   deferMount: boolean;
   surfaceMode: "single" | "split";
@@ -109,6 +116,7 @@ export function DeferredChatView(props: {
   onToggleDiff: () => void;
   onToggleRightDock?: () => void;
   onToggleBrowser: () => void;
+  onToggleDevice?: () => void;
   onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
@@ -156,6 +164,7 @@ export function DeferredChatView(props: {
     <ChatView
       key={props.paneScopeId}
       threadId={props.threadId}
+      hideHeader={props.hideHeader ?? false}
       paneScopeId={props.paneScopeId}
       surfaceMode={props.surfaceMode}
       presentationMode={props.presentationMode ?? "default"}
@@ -164,6 +173,7 @@ export function DeferredChatView(props: {
       onToggleDiffPanel={props.onToggleDiff}
       {...(props.onToggleRightDock ? { onToggleRightDock: props.onToggleRightDock } : {})}
       onToggleBrowserPanel={props.onToggleBrowser}
+      {...(props.onToggleDevice ? { onToggleDevicePanel: props.onToggleDevice } : {})}
       onOpenBrowserUrl={props.onOpenBrowserUrl}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}

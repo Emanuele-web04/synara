@@ -307,16 +307,10 @@ describe("wsNativeApi", () => {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
+          devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
-          kilo: {
-            enabled: true,
-            binaryPath: "kilo",
-            serverUrl: "",
-            serverPasswordConfigured: false,
-            customModels: [],
-          },
           opencode: {
             enabled: true,
             binaryPath: "opencode",
@@ -349,12 +343,14 @@ describe("wsNativeApi", () => {
     const onTerminalEvent = vi.fn();
     const onDomainEvent = vi.fn();
     const onActionProgress = vi.fn();
+    const onWorktreeSetupProgress = vi.fn();
 
     api.terminal.onEvent(onTerminalEvent);
     expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
     const unsubscribeDomainEvent = api.orchestration.onDomainEvent(onDomainEvent);
     expect(channelListeners.get(ORCHESTRATION_WS_CHANNELS.domainEvent)?.size).toBe(1);
     api.git.onActionProgress(onActionProgress);
+    api.git.onWorktreeSetupProgress(onWorktreeSetupProgress);
 
     const terminalEvent = {
       threadId: "thread-1",
@@ -396,6 +392,11 @@ describe("wsNativeApi", () => {
       phase: "commit",
       label: "Committing...",
     });
+    emitPush(WS_CHANNELS.gitWorktreeSetupProgress, {
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
+    });
 
     expect(onTerminalEvent).toHaveBeenCalledTimes(1);
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
@@ -411,6 +412,12 @@ describe("wsNativeApi", () => {
       kind: "phase_started",
       phase: "commit",
       label: "Committing...",
+    });
+    expect(onWorktreeSetupProgress).toHaveBeenCalledTimes(1);
+    expect(onWorktreeSetupProgress).toHaveBeenCalledWith({
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
     });
   });
 
@@ -501,6 +508,22 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("runs thread-title regeneration without a client timeout", async () => {
+    requestMock.mockResolvedValue({ status: "renamed", title: "Backend auth" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.orchestration.regenerateThreadTitle({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+      { threadId: "thread-1" },
+      { timeoutMs: null },
+    );
+  });
+
   it("forwards terminal output ACKs to the websocket transport", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -583,6 +606,37 @@ describe("wsNativeApi", () => {
       cwd: "/tmp/project",
       relativePath: "src/app.ts",
     });
+  });
+
+  it("forwards an abort signal on projects.readFile to the transport", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      contents: "export {};\n",
+      truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+    const api = createWsNativeApi();
+
+    await api.projects.readFile(
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
+
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.projectsReadFile,
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
   });
 
   it("forwards local preview grant creation to the websocket project method", async () => {
@@ -1001,6 +1055,8 @@ describe("wsNativeApi", () => {
       ],
       { x: 200, y: 300 },
     );
+
+    expect(api.browser.vault).toBeUndefined();
 
     expect(showContextMenu).toHaveBeenCalledWith(
       [

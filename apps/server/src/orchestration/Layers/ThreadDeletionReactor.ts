@@ -1,10 +1,15 @@
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { ServerConfig } from "../../config";
+import { DeviceService } from "../../device/Services/DeviceService";
+import { GitCore } from "../../git/Services/GitCore";
+import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
-import { TerminalManager } from "../../terminal/Services/Manager";
+import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "../../threadRetention";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery";
@@ -40,27 +45,6 @@ export function isThreadCurrentlyArchived(
   return thread?.archivedAt !== null && thread?.archivedAt !== undefined;
 }
 
-export const logCleanupCauseUnlessInterrupted = <R, E>({
-  effect,
-  message,
-  threadId,
-}: {
-  readonly effect: Effect.Effect<void, E, R>;
-  readonly message: string;
-  readonly threadId: ThreadDeletedEvent["payload"]["threadId"];
-}): Effect.Effect<void, E, R> =>
-  effect.pipe(
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) {
-        return Effect.failCause(cause);
-      }
-      return Effect.logDebug(message, {
-        threadId,
-        cause: Cause.pretty(cause),
-      });
-    }),
-  );
-
 export const cleanupSucceededUnlessInterrupted = <R, E>({
   effect,
   message,
@@ -83,12 +67,69 @@ export const cleanupSucceededUnlessInterrupted = <R, E>({
     }),
   );
 
+export const detachThreadDevice = (threadId: ThreadId) =>
+  Effect.service(DeviceService).pipe(
+    Effect.flatMap((service) =>
+      Effect.promise(() => service.manager.handleThreadRemoved(threadId)).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logDebug("thread lifecycle cleanup skipped device detach", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+    ),
+  );
+
+export const closeThreadTerminalScopes = (
+  terminalManager: Pick<TerminalManagerShape, "close" | "closeSessionsOpenedAtOrBefore">,
+  threadId: ThreadId,
+  deleteHistory: boolean,
+  openedAtOrBefore?: string,
+) =>
+  Effect.forEach(terminalScopeIdsForThread(threadId), (scopeId) =>
+    cleanupSucceededUnlessInterrupted({
+      effect:
+        openedAtOrBefore === undefined
+          ? terminalManager.close({ threadId: ThreadId.makeUnsafe(scopeId), deleteHistory })
+          : terminalManager.closeSessionsOpenedAtOrBefore({
+              threadId: ThreadId.makeUnsafe(scopeId),
+              openedAtOrBefore,
+            }),
+      message: "thread lifecycle cleanup skipped terminal close",
+      threadId: ThreadId.makeUnsafe(scopeId),
+    }),
+  ).pipe(Effect.map((results) => results.every(Boolean)));
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const profileStatsArchive = yield* ProfileStatsArchive;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const serverConfig = yield* ServerConfig;
+  const git = yield* GitCore;
+
+  const pruneManagedWorktreesAfterLifecycle = (context: {
+    readonly eventType: ThreadDeletedEvent["type"];
+    readonly threadId?: string;
+  }) =>
+    pruneProjectedArchivedManagedWorktrees({
+      homeDir: serverConfig.homeDir,
+      worktreesDir: serverConfig.worktreesDir,
+      snapshotQuery: projectionSnapshotQuery,
+      git,
+    }).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("thread lifecycle cleanup skipped managed worktree prune", {
+          ...context,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
 
   const refreshCommandReadModelAfterPurge = (threadId: string) =>
     orchestrationEngine.refreshCommandReadModel().pipe(
@@ -137,18 +178,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadDeletedEvent["payload"]["threadId"],
     deleteHistory: boolean,
     openedAtOrBefore?: string,
-  ) =>
-    cleanupSucceededUnlessInterrupted({
-      effect:
-        openedAtOrBefore === undefined
-          ? terminalManager.close({ threadId, deleteHistory })
-          : terminalManager.closeSessionsOpenedAtOrBefore({
-              threadId,
-              openedAtOrBefore,
-            }),
-      message: "thread lifecycle cleanup skipped terminal close",
-      threadId,
-    });
+  ) => closeThreadTerminalScopes(terminalManager, threadId, deleteHistory, openedAtOrBefore);
 
   const waitForThreadPurgeFence = Effect.fn(function* (
     threadId: ThreadDeletedEvent["payload"]["threadId"],
@@ -218,6 +248,7 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      yield* detachThreadDevice(threadId);
       const terminalCleanupSucceeded = yield* closeThreadTerminals(
         threadId,
         false,
@@ -236,7 +267,14 @@ const make = Effect.gen(function* () {
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
     const { threadId } = event.payload;
+    yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
+    // Reclaim while the soft-deleted projection row still names the worktree.
+    // Dirty managed worktrees are snapped and left with a warning (no force).
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
         threadId,
@@ -246,11 +284,11 @@ const make = Effect.gen(function* () {
     yield* purgeThreadData(event);
   });
 
-  const processThreadLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
+  const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
     event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
 
-  const processThreadLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
-    processThreadLifecycleEvent(event).pipe(
+  const processLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
+    processLifecycleEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -263,7 +301,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadLifecycleEventSafely, {
+  const worker = yield* makeDrainableWorker(processLifecycleEventSafely, {
     capacity: THREAD_LIFECYCLE_REACTOR_CAPACITY,
   });
 
@@ -287,7 +325,16 @@ const make = Effect.gen(function* () {
                   cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)).pipe(
                     Effect.flatMap((cleaned) =>
                       cleaned
-                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId))
+                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId)).pipe(
+                            Effect.flatMap((fenced) =>
+                              fenced
+                                ? pruneManagedWorktreesAfterLifecycle({
+                                    eventType: "thread.deleted",
+                                    threadId,
+                                  }).pipe(Effect.as(true))
+                                : Effect.succeed(false),
+                            ),
+                          )
                         : Effect.succeed(false),
                     ),
                   ),

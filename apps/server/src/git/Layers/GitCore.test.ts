@@ -10,6 +10,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
+import { TestClock } from "effect/testing";
 
 import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
@@ -152,22 +153,6 @@ function commitWithDate(
 
 it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
-    it.effect("truncates captured output without stopping progress consumption", () =>
-      Effect.gen(function* () {
-        const lines: string[] = [];
-        const output = yield* collectGitOutput(
-          { operation: "test output", cwd: process.cwd(), args: ["status"] },
-          Stream.fromIterable([new TextEncoder().encode("first\nsecond\nthird\n")]),
-          8,
-          (line) => Effect.sync(() => lines.push(line)),
-          "truncate",
-        );
-
-        expect(output).toBe("first\nse");
-        expect(lines).toEqual(["first", "second", "third"]);
-      }),
-    );
-
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
         const result = yield* runTruncatedNodeCommand({
@@ -179,6 +164,713 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(result.code).toBe(0);
         expect(result.stdout.length).toBeLessThanOrEqual(128);
         expect(result.stdoutTruncated || result.stderrTruncated).toBe(true);
+      }),
+    );
+  });
+
+  describe("bounded working-tree and ref reads", () => {
+    it.effect("streams rename metadata beyond the capture limit for a selected file", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const names = Array.from({ length: 24 }, (_, index) => `file-${index}.txt`);
+        for (const name of names) {
+          yield* writeTextFile(path.join(tmp, name), `${name}\n`.repeat(10));
+        }
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "rename sources"]);
+        for (const name of names) yield* git(tmp, ["mv", name, `moved-${name}`]);
+        const metadata = yield* realCore.execute({
+          operation: "test rename metadata",
+          cwd: tmp,
+          args: ["diff", "--name-status", "-z", "HEAD"],
+        });
+        expect(metadata.stdout.length).toBeGreaterThan(128);
+        const core = yield* makeIsolatedGitCore((input) =>
+          realCore.execute({
+            ...input,
+            ...(input.operation === "GitCore.readWorkingTreePatch.renamePaths"
+              ? { maxOutputBytes: 128 }
+              : {}),
+          }),
+        );
+        const patch = (yield* core.readWorkingTreePatch(tmp, "moved-file-9.txt")).patch;
+        expect(patch).toContain("rename from file-9.txt");
+        expect(patch).toContain("rename to moved-file-9.txt");
+        expect(patch).not.toContain("moved-file-8.txt");
+        expect(patch).not.toContain("new file mode");
+      }),
+    );
+
+    it.effect("preserves a regular-file to gitlink type change against the ref", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const sub = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* initRepoWithCommit(sub);
+        yield* writeTextFile(path.join(tmp, "vendor"), "old file\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "old file"]);
+        yield* git(tmp, ["rm", "vendor"]);
+        yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("new file mode 160000");
+        expect(patch).toContain("+Subproject commit ");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 4,
+          deletions: 1,
+          fileCount: 2,
+        });
+        yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+        expect((yield* core.readRefPatch(tmp, "HEAD")).patch).toContain("new file mode 160000");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 4,
+          deletions: 1,
+          fileCount: 2,
+        });
+      }),
+    );
+
+    it.effect("preserves an updated stage-zero gitlink when the module is uninitialized", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const sub = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* initRepoWithCommit(sub);
+        yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
+        yield* git(tmp, ["commit", "-am", "initial module"]);
+        const module = path.join(tmp, "vendor");
+        yield* git(module, ["config", "user.email", "test@test.com"]);
+        yield* git(module, ["config", "user.name", "Test"]);
+        yield* writeTextFile(path.join(module, "next.txt"), "next commit\n");
+        yield* git(module, ["add", "."]);
+        yield* git(module, ["commit", "-m", "next"]);
+        const nextCommit = yield* git(module, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["add", "vendor"]);
+        yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain(`+Subproject commit ${nextCommit}`);
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 1,
+          deletions: 1,
+          fileCount: 1,
+        });
+      }),
+    );
+
+    for (const edited of [false, true]) {
+      it.effect(
+        "preserves " + (edited ? "edited" : "pure") + " rename metadata in a destination-only read",
+        () =>
+          Effect.gen(function* () {
+            const core = yield* GitCore;
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* writeTextFile(path.join(tmp, "old.txt"), "unchanged\n".repeat(20));
+            yield* git(tmp, ["add", "."]);
+            yield* git(tmp, ["commit", "-m", "base"]);
+            yield* git(tmp, ["mv", "old.txt", "new.txt"]);
+            if (edited) {
+              yield* writeTextFile(
+                path.join(tmp, "new.txt"),
+                "unchanged\n".repeat(19) + "edited\n",
+              );
+            }
+            const fullPatch = (yield* core.readWorkingTreePatch(tmp)).patch;
+            expect((yield* core.readWorkingTreePatch(tmp, "new.txt")).patch).toBe(fullPatch);
+            expect(fullPatch).toContain("rename from old.txt");
+            expect(fullPatch).toContain("rename to new.txt");
+          }),
+      );
+    }
+
+    it.effect("truncates an oversized unstaged patch instead of failing", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const original = "x\n".repeat(400_000);
+        const updated = "y\n".repeat(400_000);
+        yield* writeTextFile(path.join(tmp, "generated.ts"), original);
+        yield* git(tmp, ["add", "generated.ts"]);
+        yield* git(tmp, ["commit", "-m", "add generated"]);
+        yield* writeTextFile(path.join(tmp, "generated.ts"), updated);
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(Buffer.byteLength(result.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
+        expect(result.truncated).toBe(true);
+        expect(result.patch).toContain("diff --git a/generated.ts b/generated.ts");
+      }),
+    );
+
+    it.effect("shares one byte budget across tracked and untracked patch segments", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "tracked.txt"), "x\n".repeat(150_000));
+        yield* git(tmp, ["add", "tracked.txt"]);
+        yield* git(tmp, ["commit", "-m", "add tracked fixture"]);
+        yield* writeTextFile(path.join(tmp, "tracked.txt"), "y\n".repeat(150_000));
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "z\n".repeat(300_000));
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(Buffer.byteLength(result.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
+        expect(result.truncated).toBe(true);
+        expect(result.patch).toContain("diff --git a/tracked.txt b/tracked.txt");
+        expect(result.patch).toContain("diff --git a/untracked.txt b/untracked.txt");
+      }),
+    );
+
+    it.effect("stops deterministically after the first untracked patch exhausts the budget", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a-first.txt"), "a\n".repeat(200));
+        yield* writeTextFile(path.join(tmp, "b-second.txt"), "b\n".repeat(200));
+        const diffedFiles: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readUnstagedPatch.untrackedPatch") {
+            diffedFiles.push(input.args.at(-1) ?? "");
+            return realCore.execute({ ...input, maxOutputBytes: 64 });
+          }
+          return realCore.execute(input);
+        });
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(result.truncated).toBe(true);
+        expect(diffedFiles).toEqual(["a-first.txt"]);
+      }),
+    );
+
+    it.effect("surfaces an untracked patch read failure", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "vanished.txt"), "content\n");
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readUnstagedPatch.untrackedPatch") {
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access 'vanished.txt'",
+            });
+          }
+          return realCore.execute(input);
+        });
+
+        const result = yield* Effect.result(core.readUnstagedPatch(tmp));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            operation: "GitCore.readUnstagedPatch.untrackedPatch",
+            detail: "error: Could not access 'vanished.txt'",
+          });
+        }
+      }),
+    );
+
+    it.effect("accepts an untracked patch when Git emits a line-ending warning", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.autocrlf", "true"]);
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "first line\nsecond line\n");
+
+        const stats = yield* core.readDiffStats(tmp, "unstaged");
+        const result = yield* core.readUnstagedPatch(tmp);
+
+        expect(stats).toEqual({ additions: 2, deletions: 0, fileCount: 1 });
+        expect(result.truncated).toBe(false);
+        expect(result.patch).toContain("diff --git a/untracked.txt b/untracked.txt");
+        expect(result.patch).toContain("+first line");
+      }),
+    );
+
+    it.effect("keeps an ignored renamed symbolic link as a link in ref comparisons", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "new-link\n");
+        yield* Effect.promise(() => fs.symlink("README.md", path.join(tmp, "old-link")));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "link"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old-link"), path.join(tmp, "new-link")),
+        );
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "new-link"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("new file mode 120000");
+        expect(patch).toContain("+README.md");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 1,
+          deletions: 1,
+          fileCount: 2,
+        });
+      }),
+    );
+
+    it.effect("keeps progress lines after the retained prefix fills across chunks", () =>
+      Effect.gen(function* () {
+        const lines: string[] = [];
+        const { text, truncated } = yield* collectGitOutput(
+          { operation: "test output", cwd: process.cwd(), args: ["clone"] },
+          Stream.fromIterable(
+            ["first\nsecond\n", "third\nfourth\n"].map((text) => new TextEncoder().encode(text)),
+          ),
+          8,
+          (line) =>
+            Effect.sync(() => {
+              lines.push(line);
+            }),
+          "truncate",
+        );
+        expect(text).toBe("first\nse");
+        expect(truncated).toBe(true);
+        expect(lines).toEqual(["first", "second", "third", "fourth"]);
+      }),
+    );
+
+    it.effect("preserves NUL-delimited paths across byte chunks beyond the capture limit", () =>
+      Effect.gen(function* () {
+        const records = ["R100", "old\r\nname", "new é\tname"];
+        const bytes = new TextEncoder().encode(records.join("\0") + "\0");
+        const received: string[] = [];
+        const { text, truncated } = yield* collectGitOutput(
+          { operation: "test paths", cwd: process.cwd(), args: ["diff"] },
+          Stream.fromIterable(Array.from(bytes, (byte) => Uint8Array.of(byte))),
+          16,
+          (record) =>
+            Effect.sync(() => {
+              received.push(record);
+            }),
+          "truncate",
+          "\0",
+        );
+        expect(text).toBe(new TextDecoder().decode(bytes).slice(0, 16));
+        expect(truncated).toBe(true);
+        expect(received).toEqual(records);
+      }),
+    );
+
+    it.effect("retains a byte-safe UTF-8 prefix without splitting multibyte text", () =>
+      Effect.gen(function* () {
+        const bytes = new TextEncoder().encode("🙂éx");
+        const { text, truncated } = yield* collectGitOutput(
+          { operation: "test utf8 output", cwd: process.cwd(), args: ["diff"] },
+          Stream.fromIterable(Array.from(bytes, (byte) => Uint8Array.of(byte))),
+          5,
+          undefined,
+          "truncate",
+        );
+
+        expect(text).toBe("🙂");
+        expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(5);
+        expect(text).not.toContain("�");
+        expect(truncated).toBe(true);
+      }),
+    );
+
+    it.effect("includes a force-added ignored rename destination with its file mode", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.sh\n");
+        yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o755));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
+        );
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("b/renamed.sh");
+        expect(patch).toContain("new file mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 5,
+          deletions: 5,
+          fileCount: 2,
+        });
+      }),
+    );
+
+    for (const initialized of [true, false]) {
+      it.effect(
+        `includes a new ${initialized ? "initialized" : "uninitialized"} gitlink and preserves the real index`,
+        () =>
+          Effect.gen(function* () {
+            const core = yield* GitCore;
+            const tmp = yield* makeTmpDir();
+            const sub = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* initRepoWithCommit(sub);
+            yield* git(tmp, [
+              "-c",
+              "protocol.file.allow=always",
+              "submodule",
+              "add",
+              sub,
+              "vendor",
+            ]);
+            if (!initialized) {
+              yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+            }
+            const indexBefore = yield* Effect.promise(() =>
+              fs.readFile(path.join(tmp, ".git", "index")),
+            );
+            const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+            expect(patch).toContain("new file mode 160000");
+            expect(patch).toContain("+Subproject commit ");
+            expect(patch.match(/diff --git a\/vendor b\/vendor/g)).toHaveLength(1);
+            expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+              additions: 4,
+              deletions: 0,
+              fileCount: 2,
+            });
+            const indexAfter = yield* Effect.promise(() =>
+              fs.readFile(path.join(tmp, ".git", "index")),
+            );
+            expect(indexAfter).toEqual(indexBefore);
+          }),
+      );
+    }
+
+    it.effect("reads literal numeric-colon filenames from index stage zero", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "1:foo.txt"), "literal filename\n");
+        yield* git(tmp, ["add", "--", "1:foo.txt"]);
+        expect(
+          yield* core.readFileAtRev({
+            cwd: tmp,
+            filePath: "1:foo.txt",
+            base: "index",
+          }),
+        ).toMatchObject({ missing: false, contents: "literal filename\n" });
+      }),
+    );
+
+    it.effect("bounds tracked and untracked patches to a literal requested file", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "[a].txt"), "before\n");
+        yield* writeTextFile(path.join(tmp, "a.txt"), "before\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "files"]);
+        yield* writeTextFile(path.join(tmp, "[a].txt"), "selected\n");
+        yield* writeTextFile(path.join(tmp, "a.txt"), "unrelated\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "new selected\n");
+        const tracked = (yield* core.readWorkingTreePatch(tmp, "[a].txt")).patch;
+        expect(tracked).toContain("+selected");
+        expect(tracked).not.toContain("unrelated");
+        expect(tracked).not.toContain("untracked.txt");
+        const untracked = (yield* core.readWorkingTreePatch(tmp, "untracked.txt")).patch;
+        expect(untracked).toContain("+new selected");
+        expect(untracked).not.toContain("a.txt");
+        expect((yield* core.readWorkingTreePatch(tmp, "missing.txt")).patch).toBe("");
+      }),
+    );
+
+    it.effect("bounds unborn and ignored staged rename destinations without unrelated files", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "selected.txt"), "selected\n");
+        yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
+        yield* git(tmp, ["add", "."]);
+        expect((yield* core.readWorkingTreePatch(tmp, "selected.txt")).patch).not.toContain(
+          "other.txt",
+        );
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.txt\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "selected.txt"), path.join(tmp, "renamed.txt")),
+        );
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.txt"]);
+        yield* writeTextFile(path.join(tmp, "other.txt"), "unrelated change\n");
+        const patch = (yield* core.readWorkingTreePatch(tmp, "renamed.txt")).patch;
+        expect(patch).toContain("b/renamed.txt");
+        expect(patch).not.toContain("other.txt");
+      }),
+    );
+
+    it.effect("rejects traversal and directories instead of expanding a file request", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "folder")));
+        yield* writeTextFile(path.join(tmp, "folder", "child.txt"), "child\n");
+        for (const filePath of ["../outside.txt", "/tmp/outside.txt", "folder", "folder/", ""]) {
+          const exit = yield* core.readWorkingTreePatch(tmp, filePath).pipe(Effect.exit);
+          expect(Exit.isFailure(exit)).toBe(true);
+        }
+      }),
+    );
+  });
+
+  describe("blameLine", () => {
+    it.effect("attributes a committed line at a resolved revision", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const sha = yield* git(tmp, ["rev-parse", "HEAD"]);
+
+        const result = yield* core.blameLine({
+          cwd: tmp,
+          filePath: "README.md",
+          line: 1,
+          rev: "HEAD",
+        });
+
+        expect(result.sha).toBe(sha);
+        expect(result.uncommitted).toBe(false);
+      }),
+    );
+
+    it.effect("blames a deleted line at the branch diff's merge base", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* git(tmp, ["branch", `--set-upstream-to=${initialBranch}`]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# rewritten\n");
+        yield* git(tmp, ["add", "README.md"]);
+        yield* git(tmp, ["commit", "-m", "rewrite readme"]);
+
+        const result = yield* core.blameLine({
+          cwd: tmp,
+          filePath: "README.md",
+          line: 1,
+          base: "branch",
+        });
+
+        expect(result.sha).toBe(baseSha);
+      }),
+    );
+
+    it.effect("rejects an option-like revision before invoking blame", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .blameLine({
+            cwd: tmp,
+            filePath: "README.md",
+            line: 1,
+            rev: "--contents=/etc/passwd",
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("not a valid revision");
+      }),
+    );
+
+    it.effect("reports lines in a repository without commits as uncommitted", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* core.initRepo({ cwd: tmp });
+        yield* writeTextFile(path.join(tmp, "first.ts"), "fresh\n");
+
+        const result = yield* core.blameLine({ cwd: tmp, filePath: "first.ts", line: 1 });
+
+        expect(result.uncommitted).toBe(true);
+      }),
+    );
+
+    it.effect("reports working-tree lines of a file HEAD does not know as uncommitted", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "untracked.ts"), "fresh\n");
+
+        const result = yield* core.blameLine({ cwd: tmp, filePath: "untracked.ts", line: 1 });
+
+        expect(result.uncommitted).toBe(true);
+        expect(result.shortSha).toBe("");
+      }),
+    );
+  });
+
+  describe("readFileAtRev", () => {
+    it.effect("reads the committed blob, not the working tree copy", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "committed\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add src"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "working tree\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "src.ts" });
+
+        expect(result.contents).toBe("committed\n");
+        expect(result.missing).toBe(false);
+        expect(result.truncated).toBe(false);
+        expect(result.resolvedRev).toMatch(/^[0-9a-f]{40}$/);
+      }),
+    );
+
+    it.effect("reports a path that does not exist at the revision as missing", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "added.ts"), "brand new\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "added.ts" });
+
+        expect(result).toMatchObject({ contents: "", missing: true, truncated: false });
+      }),
+    );
+
+    it.effect("reads the branch base from the upstream merge base", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "base\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* git(tmp, ["branch", `--set-upstream-to=${initialBranch}`]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "feature"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "src.ts",
+          base: "branch",
+        });
+
+        expect(result.resolvedRev).toBe(mergeBase);
+        expect(result.contents).toBe("base\n");
+      }),
+    );
+
+    it.effect("fails when the requested revision does not resolve", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .readFileAtRev({ cwd: tmp, filePath: "README.md", rev: "deleted-branch" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("Cannot resolve");
+      }),
+    );
+
+    it.effect("reads the staged blob when the base is the index", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "committed\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add src"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "staged\n");
+        yield* git(tmp, ["add", "src.ts"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "working tree\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "src.ts", base: "index" });
+
+        expect(result.contents).toBe("staged\n");
+        expect(result.resolvedRev).toBe("index");
+        expect(result.missing).toBe(false);
+      }),
+    );
+
+    it.effect("reads the branch base from the fallback base when there is no upstream", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "base\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        // The branch diff falls back to a default base branch name when the
+        // current branch tracks nothing; pin one so the fixture is deterministic.
+        yield* git(tmp, ["branch", "-f", "main", mergeBase]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "feature"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "src.ts",
+          base: "branch",
+        });
+
+        expect(result.resolvedRev).toBe(mergeBase);
+        expect(result.contents).toBe("base\n");
+      }),
+    );
+
+    it.effect("marks a blob larger than the byte budget as truncated", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "big.txt"), "x".repeat(500));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "big"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "big.txt",
+          maxBytes: 100,
+        });
+
+        expect(result.truncated).toBe(true);
+        expect(result.contents.length).toBeLessThanOrEqual(100);
+      }),
+    );
+
+    it.effect("rejects paths that escape the workspace", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .readFileAtRev({ cwd: tmp, filePath: "../outside.ts" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("workspace-relative");
       }),
     );
   });
@@ -1295,6 +1987,94 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reports setup phases at the real command boundaries", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-phase-events");
+        const phases: string[] = [];
+        yield* core.createDetachedWorktree(
+          {
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/ph123456",
+            copyChangesFrom: tmp,
+          },
+          {
+            onPhase: (phase) =>
+              Effect.sync(() => {
+                phases.push(phase);
+              }),
+          },
+        );
+
+        expect(phases).toEqual(["branch", "worktree", "copy-changes"]);
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+      }),
+    );
+
+    it.effect("does not report branch creation before preliminary validation", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const phases: string[] = [];
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree(
+            {
+              cwd: tmp,
+              ref: "refs/heads/missing",
+              path: path.join(tmp, "wt-invalid-ref"),
+              newBranch: "synara/notstarted",
+            },
+            {
+              onPhase: (phase) =>
+                Effect.sync(() => {
+                  phases.push(phase);
+                }),
+            },
+          ),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(phases).toEqual([]);
+        expect(yield* git(tmp, ["branch", "--list", "synara/notstarted"])).toBe("");
+      }),
+    );
+
+    it.effect("deletes the pre-created branch when worktree add fails", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-rollback-branch");
+        // A plain file at the target path makes `git worktree add` fail after
+        // the branch has already been created.
+        yield* writeTextFile(wtPath, "occupied\n");
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/rollback1",
+          }),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(yield* git(tmp, ["branch", "--list", "synara/rollback1"])).toBe("");
+      }),
+    );
+
     it.effect("removeWorktree reclamation never deletes user-named branches", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -2042,6 +2822,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
         const core = yield* GitCore;
+        const fileSystem = yield* FileSystem.FileSystem;
 
         yield* core.createBranch({ cwd: tmp, branch: "feature/diff-scopes" });
         yield* core.checkoutBranch({ cwd: tmp, branch: "feature/diff-scopes" });
@@ -2053,6 +2834,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["add", "staged.txt"]);
         yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
         yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+        yield* fileSystem.writeFile(path.join(tmp, "untracked.bin"), new Uint8Array([0, 1, 2, 3]));
 
         const branchPatch = (yield* core.readBranchPatch(tmp)).patch;
         expect(branchPatch).toContain("diff --git a/branch.txt b/branch.txt");
@@ -2069,6 +2851,287 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(unstagedPatch).toContain("diff --git a/README.md b/README.md");
         expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
         expect(unstagedPatch).not.toContain("staged.txt");
+
+        const workingTreePatch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(workingTreePatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(workingTreePatch).toContain("+staged change");
+        expect(workingTreePatch).toContain("+unstaged change");
+        expect(workingTreePatch).toContain("+untracked change");
+        expect(workingTreePatch).toContain("diff --git a/untracked.bin b/untracked.bin");
+        expect(workingTreePatch).not.toContain("branch.txt");
+
+        const scopeTotals = [
+          ["branch", { additions: 4, deletions: 0, fileCount: 5 }],
+          ["staged", { additions: 1, deletions: 0, fileCount: 1 }],
+          ["unstaged", { additions: 2, deletions: 0, fileCount: 3 }],
+          ["workingTree", { additions: 3, deletions: 0, fileCount: 4 }],
+        ] as const;
+        for (const [scope, expected] of scopeTotals) {
+          expect(yield* core.readDiffStats(tmp, scope)).toEqual(expected);
+        }
+      }),
+    );
+
+    it.effect("surfaces tracked numstat failures", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: bad object",
+          }),
+        );
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "staged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.tracked",
+            detail: "fatal: bad object",
+          });
+        }
+      }),
+    );
+
+    it.effect("surfaces untracked numstat failures instead of undercounting", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation.endsWith(".untrackedFiles")) {
+            return Effect.succeed({ code: 0, stdout: "vanished.txt\0", stderr: "" });
+          }
+          if (input.operation.endsWith(".untrackedNumstat")) {
+            // `--no-index` also exits 1 when the path cannot be read.
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access 'vanished.txt'",
+            });
+          }
+          return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+        });
+
+        const result = yield* Effect.result(core.readDiffStats("/repo", "unstaged"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.readDiffStats.untrackedNumstat",
+            detail: "error: Could not access 'vanished.txt'",
+          });
+        }
+      }),
+    );
+
+    it.effect("truncates large untracked additions and still reads the committed ref patch", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const contents = "0123456789abcdef".repeat(75_000) + "\n";
+        yield* writeTextFile(path.join(tmp, "large.txt"), contents);
+
+        const unstaged = yield* core.readUnstagedPatch(tmp);
+        expect(unstaged.truncated).toBe(true);
+        expect(Buffer.byteLength(unstaged.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
+
+        yield* git(tmp, ["add", "large.txt"]);
+        yield* git(tmp, ["commit", "-m", "add large tracked text"]);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const result = yield* core.readRefPatch(tmp, baseSha);
+        expect(result.truncated).toBe(false);
+        expect(result.patch).toContain("new file mode 100644");
+        expect(result.patch).toContain(`+${contents}`);
+        const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        expect(indexAfter).toEqual(indexBefore);
+      }),
+    );
+
+    it.effect("keeps reference addition patch capture finite by truncating overflow", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(path.join(tmp, "addition.txt"), "bounded patch\n".repeat(50));
+        yield* git(tmp, ["add", "addition.txt"]);
+        yield* git(tmp, ["commit", "-m", "add text"]);
+        let requestedLimit: number | undefined;
+        let requestedMode: string | undefined;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readRefPatch.untrackedPatch") {
+            requestedLimit = input.maxOutputBytes;
+            requestedMode = input.outputMode;
+            // Exercise the real collector's truncate path with a small fixture.
+            return realCore.execute({ ...input, maxOutputBytes: 128 });
+          }
+          return realCore.execute(input);
+        });
+        const result = yield* core.readRefPatch(tmp, baseSha);
+        expect(requestedLimit).toBe(10_000_000);
+        expect(requestedMode).toBe("truncate");
+        expect(result.truncated).toBe(true);
+        expect(result.patch.length).toBeLessThan(1_000_000);
+      }),
+    );
+
+    it.effect("reads the working tree as a patch against an older commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+
+        yield* writeTextFile(path.join(tmp, "committed.txt"), "committed change\n");
+        yield* git(tmp, ["add", "committed.txt"]);
+        yield* git(tmp, ["commit", "-m", "committed change"]);
+
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged change\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).toContain("diff --git a/committed.txt b/committed.txt");
+        expect(refPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(refPatch).toContain("diff --git a/README.md b/README.md");
+        expect(refPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
+
+        const headPatch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(headPatch).not.toContain("diff --git a/committed.txt b/committed.txt");
+        expect(headPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(headPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
+      }),
+    );
+
+    it.effect("shows a ref-tracked path recreated untracked as one modification", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+        yield* git(tmp, ["add", "x.txt"]);
+        yield* git(tmp, ["commit", "-m", "add x"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["rm", "-q", "x.txt"]);
+        yield* writeTextFile(path.join(tmp, "x.txt"), "two\nthree\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch.match(/^diff --git a\/x\.txt b\/x\.txt$/gm)).toHaveLength(1);
+        expect(refPatch).not.toContain("deleted file mode");
+        expect(refPatch).toContain("-one");
+        expect(refPatch).toContain("+two");
+        expect(refPatch).not.toContain("synara-ref-blob-");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 2, deletions: 1, fileCount: 1 });
+      }),
+    );
+
+    it.effect("drops a ref-tracked path recreated untracked with identical contents", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+        yield* git(tmp, ["add", "x.txt"]);
+        yield* git(tmp, ["commit", "-m", "add x"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["rm", "-q", "x.txt"]);
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).not.toContain("x.txt");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 0, deletions: 0, fileCount: 0 });
+      }),
+    );
+
+    it.effect("keeps a tracked but ignored addition in ref diffs", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "built.js\n");
+        yield* git(tmp, ["add", ".gitignore"]);
+        yield* git(tmp, ["commit", "-m", "ignore build output"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(path.join(tmp, "built.js"), "built\n");
+        yield* git(tmp, ["add", "-f", "built.js"]);
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).toContain("diff --git a/built.js b/built.js");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 1, deletions: 0, fileCount: 1 });
+      }),
+    );
+
+    it.effect("reads a patch against a branch name", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "feature/compare-with" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/compare-with" });
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature change\n");
+        yield* git(tmp, ["add", "feature.txt"]);
+        yield* git(tmp, ["commit", "-m", "feature change"]);
+
+        const patch = (yield* core.readRefPatch(tmp, initialBranch)).patch;
+        expect(patch).toContain("diff --git a/feature.txt b/feature.txt");
+      }),
+    );
+
+    it.effect("fails with a clear error when the compare ref does not resolve", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        const exit = yield* core.readRefPatch(tmp, "does/not/exist").pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          const rendered = String(exit.cause);
+          expect(rendered).toContain("GitCore.readRefPatch.verifyRef");
+          expect(rendered).toContain("Cannot resolve");
+          expect(rendered).toContain("does/not/exist");
+          expect(rendered).toContain("to a commit in this repository.");
+        }
+      }),
+    );
+
+    it.effect("lists recent commits newest first and tolerates an empty repository", () =>
+      Effect.gen(function* () {
+        const empty = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(empty);
+        const core = yield* GitCore;
+        expect((yield* core.listRecentCommits({ cwd: empty, limit: 5 })).commits).toEqual([]);
+
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "second.txt"), "second\n");
+        yield* git(tmp, ["add", "second.txt"]);
+        yield* git(tmp, ["commit", "-m", "second commit"]);
+
+        const result = yield* core.listRecentCommits({ cwd: tmp, limit: 5 });
+        expect(result.commits).toHaveLength(2);
+        expect(result.commits[0]?.subject).toBe("second commit");
+        expect(result.commits[1]?.subject).toBe("initial commit");
+        expect(result.commits[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
+        expect(result.commits[0]?.sha.startsWith(result.commits[0].shortSha)).toBe(true);
+        expect(result.commits[0]?.committedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+        const limited = yield* core.listRecentCommits({ cwd: tmp, limit: 1 });
+        expect(limited.commits).toHaveLength(1);
+        expect(limited.commits[0]?.subject).toBe("second commit");
       }),
     );
 
@@ -2405,6 +3468,60 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(details.branch).toBe(initialBranch);
           expect(details.aheadCount).toBe(0);
           expect(details.behindCount).toBe(1);
+        }),
+    );
+
+    it.effect(
+      "backs off failed upstream fetches and resumes the normal interval after recovery",
+      () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
+          yield* initRepoWithCommit(source);
+          const realCore = yield* GitCore;
+          const branch = (yield* realCore.listBranches({ cwd: source })).branches.find(
+            (entry) => entry.current,
+          )!.name;
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", branch]);
+          let fetches = 0;
+          let recovered = false;
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.args[0] !== "fetch") return realCore.execute(input);
+            fetches += 1;
+            return Effect.succeed({
+              code: recovered ? 0 : 1,
+              stdout: "",
+              stderr: recovered ? "" : "unreachable",
+            });
+          });
+          yield* core.statusDetails(source);
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("29 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          yield* TestClock.adjust("59 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          recovered = true;
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(3);
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(4);
+          recovered = false;
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(5);
+          yield* TestClock.adjust("30 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(6);
         }),
     );
 

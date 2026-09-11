@@ -1,3 +1,4 @@
+import type { PendingUserInputRecoveryDraft } from "./pendingUserInputRecovery";
 // FILE: composerDraftDomain.ts
 // Purpose: Defines composer draft state, stable defaults, and content/project normalization.
 // Exports: Internal domain primitives plus public facade types.
@@ -33,6 +34,10 @@ import {
   type FileCommentSelection,
   normalizeFileCommentSelection,
 } from "./lib/fileComments";
+import {
+  type PullRequestContextDraft,
+  normalizePullRequestContexts,
+} from "./lib/pullRequestContext";
 import { type TerminalContextDraft, normalizeTerminalContextText } from "./lib/terminalContext";
 import {
   type ChatAssistantSelectionAttachment,
@@ -105,6 +110,7 @@ export interface ComposerPromptHistorySavedDraft {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
 }
@@ -124,6 +130,7 @@ export interface QueuedComposerChatTurn {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -161,6 +168,7 @@ export interface QueuedComposerPlanFollowUp {
 export type QueuedComposerTurn = QueuedComposerChatTurn | QueuedComposerPlanFollowUp;
 
 export interface ComposerThreadDraftState {
+  pendingUserInputDrafts?: Record<string, PendingUserInputRecoveryDraft>;
   prompt: string;
   // Non-null only while composer prompt-history browsing is active: the user's
   // real draft, kept safe while `prompt` temporarily holds a recalled history
@@ -176,6 +184,7 @@ export interface ComposerThreadDraftState {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -197,6 +206,9 @@ export interface DraftThreadState {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
+  // Goal staged before the thread exists server-side; persisted via
+  // `thread.meta.update` when the first send promotes the draft.
+  goal?: string;
   isTemporary?: boolean;
   promotedTo?: ThreadId;
 }
@@ -215,6 +227,8 @@ interface DraftThreadMutationOptions {
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;
   isTemporary?: boolean;
+  // Empty string clears the staged goal; undefined leaves it unchanged.
+  goal?: string;
 }
 
 type DraftThreadCreatedAtMode = "accept-empty" | "preserve-existing-on-empty";
@@ -224,6 +238,10 @@ interface ProjectDraftThread extends DraftThreadState {
 }
 
 export interface ComposerDraftStoreState {
+  setPendingUserInputDrafts: (
+    threadId: ThreadId,
+    drafts: Record<string, PendingUserInputRecoveryDraft>,
+  ) => void;
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
@@ -350,6 +368,9 @@ export interface ComposerDraftStoreState {
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
+  addPullRequestContext: (threadId: ThreadId, context: PullRequestContextDraft) => boolean;
+  removePullRequestContext: (threadId: ThreadId, contextId: string) => void;
+  clearPullRequestContexts: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -433,6 +454,8 @@ export function buildDraftThreadState(input: {
         ? false
         : existingThread?.isTemporary === true;
   const nextPromotedTo = existingThread?.promotedTo;
+  const nextGoal =
+    options?.goal === undefined ? existingThread?.goal : options.goal.trim() || undefined;
 
   return {
     projectId: input.projectId,
@@ -458,6 +481,7 @@ export function buildDraftThreadState(input: {
         : (options.lastKnownPr ?? null),
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
+    ...(nextGoal ? { goal: nextGoal } : {}),
     ...(nextIsTemporary ? { isTemporary: true } : {}),
     ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
   };
@@ -482,6 +506,7 @@ export function draftThreadStatesEqual(
     (left.workingDirectory ?? null) === (right.workingDirectory ?? null) &&
     Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     left.envMode === right.envMode &&
+    (left.goal ?? "") === (right.goal ?? "") &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
     left.promotedTo === right.promotedTo
   );
@@ -517,6 +542,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -724,6 +750,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(draft.pullRequestContexts),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
   };
@@ -755,6 +782,7 @@ export function buildTransferredComposerDraft(input: {
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(sourceDraft.pullRequestContexts),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
     restoredSourceProposedPlan: null,
@@ -798,6 +826,7 @@ function clonePromptHistorySavedDraft(
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
   };
@@ -805,6 +834,7 @@ function clonePromptHistorySavedDraft(
 
 export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
+    Object.keys(draft.pendingUserInputDrafts ?? {}).length === 0 &&
     draft.prompt.length === 0 &&
     draft.promptHistorySavedDraft === null &&
     draft.images.length === 0 &&
@@ -815,6 +845,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
     draft.pastedTexts.length === 0 &&
+    draft.pullRequestContexts.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
@@ -840,6 +871,7 @@ const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_BROWSER_ANNOTATIONS: BrowserAnnotationDraft[] = [];
 const EMPTY_PASTED_TEXTS: PastedTextDraft[] = [];
+const EMPTY_PULL_REQUEST_CONTEXTS: PullRequestContextDraft[] = [];
 const EMPTY_SKILLS: ProviderSkillReference[] = [];
 const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
@@ -850,6 +882,7 @@ Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_TERMINAL_CONTEXTS);
 Object.freeze(EMPTY_BROWSER_ANNOTATIONS);
 Object.freeze(EMPTY_PASTED_TEXTS);
+Object.freeze(EMPTY_PULL_REQUEST_CONTEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
@@ -868,6 +901,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
+  pullRequestContexts: EMPTY_PULL_REQUEST_CONTEXTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,

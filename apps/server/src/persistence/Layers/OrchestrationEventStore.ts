@@ -13,7 +13,7 @@ import {
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 
 import {
   PersistenceDecodeError,
@@ -67,6 +67,10 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
   throughSequenceInclusive: NonNegativeInt,
   limit: Schema.Number,
+  filterEnabled: Schema.Boolean,
+  includeBoundaryEvent: Schema.Boolean,
+  eventTypes: Schema.Array(Schema.String),
+  activityKinds: Schema.Array(Schema.String),
 });
 const ReadThreadFromSequenceRequestSchema = Schema.Struct({
   threadId: Schema.String,
@@ -332,6 +336,66 @@ function inferActorKind(
   return "client";
 }
 
+/**
+ * Builds the paged projector-replay query. Exported so tests can pin its query
+ * plan with EXPLAIN QUERY PLAN.
+ *
+ * Every predicate below the sequence range uses SQLite's unary + to stay
+ * ineligible for index selection. Without it the planner turns the boundary OR
+ * into a MULTI-INDEX OR that scans the whole event_type index and re-sorts
+ * through a temp b-tree for every page, which makes projector bootstrap
+ * quadratic in event-log size (minutes of startup on multi-GB logs). The +
+ * keeps the integer-primary-key range scan: a sparse filter can still walk a
+ * long sequence interval to fill one page, but the whole replay stays linear
+ * in the covered range (each row visited once), and rows already come back
+ * in sequence order with no sort step.
+ */
+export const buildReadEventRowsFromSequenceQuery = (
+  sql: SqlClient.SqlClient,
+  request: typeof ReadFromSequenceRequestSchema.Type,
+) => {
+  const activityKindFilter =
+    request.activityKinds.length === 0
+      ? sql``
+      : sql`
+          AND (
+            +event_type <> 'thread.activity-appended'
+            OR json_extract(payload_json, '$.activity.kind') IN ${sql.in(request.activityKinds)}
+          )
+        `;
+  const filteredEventPredicate =
+    request.eventTypes.length === 0
+      ? sql`0`
+      : sql`(+event_type IN ${sql.in(request.eventTypes)} ${activityKindFilter})`;
+  const replayFilter = !request.filterEnabled
+    ? sql``
+    : request.includeBoundaryEvent
+      ? sql`AND (+sequence = ${request.throughSequenceInclusive} OR ${filteredEventPredicate})`
+      : sql`
+          AND ${filteredEventPredicate}
+        `;
+  return sql`
+    SELECT
+      sequence,
+      event_id AS "eventId",
+      event_type AS "type",
+      aggregate_kind AS "aggregateKind",
+      stream_id AS "aggregateId",
+      occurred_at AS "occurredAt",
+      command_id AS "commandId",
+      causation_event_id AS "causationEventId",
+      correlation_id AS "correlationId",
+      payload_json AS "payloadJson",
+      metadata_json AS "metadataJson"
+    FROM orchestration_events
+    WHERE sequence > ${request.sequenceExclusive}
+      AND sequence <= ${request.throughSequenceInclusive}
+      ${replayFilter}
+    ORDER BY sequence ASC
+    LIMIT ${request.limit}
+  `;
+};
+
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -396,26 +460,7 @@ const makeEventStore = Effect.gen(function* () {
   const readEventRowsFromSequence = SqlSchema.findAll({
     Request: ReadFromSequenceRequestSchema,
     Result: RawPersistedEventRowSchema,
-    execute: (request) =>
-      sql`
-        SELECT
-          sequence,
-          event_id AS "eventId",
-          event_type AS "type",
-          aggregate_kind AS "aggregateKind",
-          stream_id AS "aggregateId",
-          occurred_at AS "occurredAt",
-          command_id AS "commandId",
-          causation_event_id AS "causationEventId",
-          correlation_id AS "correlationId",
-          payload_json AS "payloadJson",
-          metadata_json AS "metadataJson"
-        FROM orchestration_events
-        WHERE sequence > ${request.sequenceExclusive}
-          AND sequence <= ${request.throughSequenceInclusive}
-        ORDER BY sequence ASC
-        LIMIT ${request.limit}
-      `,
+    execute: (request) => buildReadEventRowsFromSequenceQuery(sql, request),
   });
 
   const readThreadEventRowsFromSequence = SqlSchema.findAll({
@@ -469,6 +514,25 @@ const makeEventStore = Effect.gen(function* () {
         SELECT COALESCE(MAX(sequence), 0) AS "highWaterSequence"
         FROM orchestration_events
         WHERE aggregate_kind = 'thread' AND stream_id = ${threadId}
+      `,
+  });
+
+  const readThreadTitleHighWaterSequenceRow = SqlSchema.findOne({
+    Request: ThreadHighWaterRequestSchema,
+    Result: HighWaterSequenceRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "highWaterSequence"
+        FROM orchestration_events
+        WHERE aggregate_kind = 'thread'
+          AND stream_id = ${threadId}
+          AND (
+            event_type IN ('thread.created', 'thread.archived', 'thread.deleted')
+            OR (
+              event_type = 'thread.meta-updated'
+              AND json_type(payload_json, '$.title') = 'text'
+            )
+          )
       `,
   });
 
@@ -533,25 +597,61 @@ const makeEventStore = Effect.gen(function* () {
       ),
     );
 
+  interface EventPageState {
+    readonly cursor: number;
+    readonly remaining: number;
+  }
+
+  const makeEventStream = (input: {
+    readonly sequenceExclusive: number;
+    readonly limit: number;
+    readonly readPage: (
+      cursor: number,
+      pageSize: number,
+    ) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, OrchestrationEventStoreError>;
+  }) =>
+    Stream.paginate<EventPageState, OrchestrationEvent, OrchestrationEventStoreError>(
+      { cursor: input.sequenceExclusive, remaining: input.limit },
+      ({ cursor, remaining }) => {
+        const pageSize = Math.min(remaining, READ_PAGE_SIZE);
+        return input.readPage(cursor, pageSize).pipe(
+          Effect.map((events) => {
+            const nextRemaining = remaining - events.length;
+            const lastEvent = events[events.length - 1];
+            const nextState =
+              lastEvent !== undefined && events.length === pageSize && nextRemaining > 0
+                ? Option.some({ cursor: lastEvent.sequence, remaining: nextRemaining })
+                : Option.none<EventPageState>();
+            return [events, nextState] as const;
+          }),
+        );
+      },
+    );
+
   const readFromSequence: OrchestrationEventStoreShape["readFromSequence"] = (
     sequenceExclusive,
     limit = DEFAULT_READ_FROM_SEQUENCE_LIMIT,
     throughSequenceInclusive = Number.MAX_SAFE_INTEGER,
+    filter,
   ) => {
     const normalizedLimit = Math.max(0, Math.floor(limit));
     const normalizedThroughSequence = Math.max(0, Math.floor(throughSequenceInclusive));
     if (normalizedLimit === 0 || normalizedThroughSequence <= sequenceExclusive) {
       return Stream.empty;
     }
-    const readPage = (
-      cursor: number,
-      remaining: number,
-    ): Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError> =>
-      Stream.fromEffect(
+
+    return makeEventStream({
+      sequenceExclusive,
+      limit: normalizedLimit,
+      readPage: (cursor, pageSize) =>
         readEventRowsFromSequence({
           sequenceExclusive: cursor,
           throughSequenceInclusive: normalizedThroughSequence,
-          limit: Math.min(remaining, READ_PAGE_SIZE),
+          limit: pageSize,
+          filterEnabled: filter !== undefined,
+          includeBoundaryEvent: filter?.includeBoundaryEvent === true,
+          eventTypes: [...(filter?.eventTypes ?? [])],
+          activityKinds: [...(filter?.activityKinds ?? [])],
         }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
@@ -565,23 +665,7 @@ const makeEventStore = Effect.gen(function* () {
             ),
           ),
         ),
-      ).pipe(
-        Stream.flatMap((events) => {
-          if (events.length === 0) {
-            return Stream.empty;
-          }
-          const nextRemaining = remaining - events.length;
-          if (nextRemaining <= 0) {
-            return Stream.fromIterable(events);
-          }
-          return Stream.concat(
-            Stream.fromIterable(events),
-            readPage(events[events.length - 1]!.sequence, nextRemaining),
-          );
-        }),
-      );
-
-    return readPage(sequenceExclusive, normalizedLimit);
+    });
   };
 
   const readThreadEventsFromSequence: OrchestrationEventStoreShape["readThreadEventsFromSequence"] =
@@ -597,16 +681,15 @@ const makeEventStore = Effect.gen(function* () {
       if (normalizedLimit === 0 || normalizedThroughSequence <= sequenceExclusive) {
         return Stream.empty;
       }
-      const readPage = (
-        cursor: number,
-        remaining: number,
-      ): Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError> =>
-        Stream.fromEffect(
+      return makeEventStream({
+        sequenceExclusive,
+        limit: normalizedLimit,
+        readPage: (cursor, pageSize) =>
           readThreadEventRowsFromSequence({
             threadId,
             sequenceExclusive: cursor,
             throughSequenceInclusive: normalizedThroughSequence,
-            limit: Math.min(remaining, READ_PAGE_SIZE),
+            limit: pageSize,
             eventTypes: [...eventTypes],
           }).pipe(
             Effect.mapError(
@@ -624,19 +707,7 @@ const makeEventStore = Effect.gen(function* () {
               ),
             ),
           ),
-        ).pipe(
-          Stream.flatMap((events) => {
-            if (events.length === 0) return Stream.empty;
-            const nextRemaining = remaining - events.length;
-            if (nextRemaining <= 0) return Stream.fromIterable(events);
-            return Stream.concat(
-              Stream.fromIterable(events),
-              readPage(events[events.length - 1]!.sequence, nextRemaining),
-            );
-          }),
-        );
-
-      return readPage(sequenceExclusive, normalizedLimit);
+      });
     };
 
   const getHighWaterSequence: OrchestrationEventStoreShape["getHighWaterSequence"] = () =>
@@ -662,6 +733,18 @@ const makeEventStore = Effect.gen(function* () {
       ),
       Effect.map((row) => row.highWaterSequence),
     );
+
+  const getThreadTitleHighWaterSequence: OrchestrationEventStoreShape["getThreadTitleHighWaterSequence"] =
+    (threadId) =>
+      readThreadTitleHighWaterSequenceRow({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.getThreadTitleHighWaterSequence:query",
+            "OrchestrationEventStore.getThreadTitleHighWaterSequence:decodeRow",
+          ),
+        ),
+        Effect.map((row) => row.highWaterSequence),
+      );
 
   const readThreadEvents: OrchestrationEventStoreShape["readThreadEvents"] = (input) => {
     const limit = Math.max(0, Math.floor(input.limit));
@@ -694,6 +777,7 @@ const makeEventStore = Effect.gen(function* () {
     append,
     getHighWaterSequence,
     getThreadHighWaterSequence,
+    getThreadTitleHighWaterSequence,
     readThreadEvents,
     readThreadEventsFromSequence,
     readFromSequence,

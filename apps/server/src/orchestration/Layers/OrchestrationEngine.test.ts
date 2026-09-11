@@ -2,6 +2,7 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -30,6 +31,7 @@ import {
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { ORCHESTRATION_EVENT_PUBSUB_CAPACITY } from "../orchestrationAdmission.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 /**
@@ -58,7 +60,10 @@ const makeThreadEventReadMethods = (
   events: ReadonlyArray<OrchestrationEvent>,
 ): Pick<
   OrchestrationEventStoreShape,
-  "getThreadHighWaterSequence" | "readThreadEvents" | "readThreadEventsFromSequence"
+  | "getThreadHighWaterSequence"
+  | "getThreadTitleHighWaterSequence"
+  | "readThreadEvents"
+  | "readThreadEventsFromSequence"
 > => ({
   getThreadHighWaterSequence: (threadId) =>
     Effect.succeed(
@@ -66,6 +71,7 @@ const makeThreadEventReadMethods = (
         .filter((event) => event.aggregateKind === "thread" && event.aggregateId === threadId)
         .at(-1)?.sequence ?? 0,
     ),
+  getThreadTitleHighWaterSequence: () => Effect.succeed(0),
   readThreadEvents: (input) =>
     Effect.succeed(
       events
@@ -136,6 +142,189 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("keeps a second checkpoint revert protected after a failed revert with a higher runtime sequence", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-revert-sequence");
+    const threadId = ThreadId.makeUnsafe("thread-revert-sequence");
+    let commandIndex = 0;
+    const commandId = () => CommandId.makeUnsafe(`revert-sequence-${++commandIndex}`);
+    const appendActivity = (kind: string, sequence?: number) =>
+      system.run(
+        engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId(),
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(`revert-sequence-activity-${commandIndex}`),
+            kind,
+            tone: "info",
+            summary: kind,
+            payload: {},
+            turnId: null,
+            ...(sequence === undefined ? {} : { sequence }),
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+    const revert = () =>
+      system.run(
+        engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: commandId(),
+          threadId,
+          turnCount: 1,
+          createdAt,
+        }),
+      );
+
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: commandId(),
+          projectId,
+          title: "Checkpoint sequence",
+          workspaceRoot: "/tmp/checkpoint-sequence",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: commandId(),
+          threadId,
+          projectId,
+          title: "Checkpoint sequence",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await appendActivity("tool.completed", 1_000);
+      await revert();
+      await appendActivity("checkpoint.revert.failed");
+      await revert();
+
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.delete",
+            commandId: commandId(),
+            threadId,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId(),
+            threadId,
+            message: {
+              messageId: asMessageId("message-during-revert"),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            createdAt,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(revert()).rejects.toThrow("checkpoint revert in progress");
+    } finally {
+      await system.dispose();
+    }
+  });
+
+  it("preserves large Unicode responses and segment boundaries through completion", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-large-response");
+    const messageId = asMessageId("message-large-response");
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("large-project"),
+          projectId: asProjectId("large-project"),
+          title: "Large response",
+          workspaceRoot: "/tmp/large-response",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("large-thread"),
+          threadId,
+          projectId: asProjectId("large-project"),
+          title: "Large response",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      // Each delta fits the journal budget, but their combined text exceeds
+      // 512 KiB. Later output includes a surrogate pair split across deltas.
+      const chunks = [
+        "é漢😀".repeat(30_000),
+        `${"é漢😀".repeat(30_000)}\nSecond segment \ud83d`,
+        "\ude80 done",
+      ];
+      for (const [index, delta] of chunks.entries()) {
+        await system.run(
+          engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: CommandId.makeUnsafe(`large-delta-${index}`),
+            threadId,
+            messageId,
+            delta,
+            ...(index < 2 ? { segmentStartedAt: createdAt, segmentSequence: index + 1 } : {}),
+            createdAt,
+          }),
+        );
+      }
+      await system.run(
+        engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.makeUnsafe("large-complete"),
+          threadId,
+          messageId,
+          createdAt,
+        }),
+      );
+      const expected = chunks.join("");
+      const events = await system.run(Stream.runCollect(engine.readEvents(0)));
+      const completed = Array.from(events).findLast(
+        (event) => event.type === "thread.message-sent",
+      );
+      expect(completed?.payload).toMatchObject({ streaming: false, text: expected });
+      const model = await system.run(engine.getReadModel());
+      const message = model.threads.find((thread) => thread.id === threadId)?.messages[0];
+      expect(message?.text).toBe(expected);
+      expect(message?.textSegments?.map((segment) => segment.text)).toEqual([
+        chunks[0],
+        chunks.slice(1).join(""),
+      ]);
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("quiesces normal admission while draining reserved lifecycle commands", async () => {
     const system = await createOrchestrationSystem();
     const createdAt = now();
@@ -172,6 +361,24 @@ describe("OrchestrationEngine", () => {
     );
 
     await system.run(system.engine.quiesce);
+    const diagnostic = {
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-engine-quiesce-diagnostic"),
+      threadId,
+      activity: {
+        id: EventId.makeUnsafe("engine-quiesce-diagnostic"),
+        tone: "error",
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        payload: { detail: "Provider rejected the interrupt during shutdown." },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    } as const;
+    await expect(system.run(system.engine.dispatch(diagnostic))).resolves.toMatchObject({
+      sequence: expect.any(Number),
+    });
     await expect(
       system.run(
         system.engine.dispatch({
@@ -224,6 +431,15 @@ describe("OrchestrationEngine", () => {
     ).resolves.toMatchObject({ sequence: expect.any(Number) });
     await system.run(system.engine.drain);
     await system.run(system.engine.stop);
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...diagnostic,
+          commandId: CommandId.makeUnsafe("cmd-engine-stopped-diagnostic"),
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "stopped" });
 
     await expect(
       system.run(
@@ -554,6 +770,50 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-slow-subscriber");
+    // Overflow by more than one durable replay page (500 events).
+    const count = ORCHESTRATION_EVENT_PUBSUB_CAPACITY + 510;
+    try {
+      const initial = await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-slow-subscriber-create"),
+          projectId,
+          title: "Slow subscriber",
+          workspaceRoot: "/tmp/slow-subscriber",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      );
+      const result = await system.run(
+        Effect.gen(function* () {
+          // Attach before loading/processing work, as startup and reactors do.
+          const live = yield* engine.subscribeDomainEvents;
+          for (let i = 0; i < count; i++) {
+            yield* engine.dispatch({
+              type: "project.meta.update",
+              commandId: CommandId.makeUnsafe(`cmd-slow-subscriber-${i}`),
+              projectId,
+              title: `Update ${i}`,
+            });
+          }
+          return Array.from(yield* Stream.runCollect(Stream.take(live, count)));
+        }).pipe(Effect.scoped, Effect.timeoutOption("8 seconds")),
+      );
+      expect(Option.isSome(result)).toBe(true);
+      const events = Option.getOrThrow(result);
+      expect(events.map((event) => event.sequence)).toEqual(
+        Array.from({ length: count }, (_, i) => initial.sequence + i + 1),
+      );
+      expect(events.at(-1)?.payload).toMatchObject({ title: `Update ${count - 1}` });
+    } finally {
+      await system.dispose();
+    }
+  }, 15_000);
+
   it("streams persisted domain events in order", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -818,7 +1078,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -965,7 +1225,7 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
 
@@ -1083,7 +1343,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -1182,6 +1442,118 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("loads authoritative pending interactions before expiring a side chat", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+    const projectId = asProjectId("project-sidechat-pending-expiry");
+    const sourceThreadId = ThreadId.makeUnsafe("thread-sidechat-pending-source");
+    const sidechatId = ThreadId.makeUnsafe("thread-sidechat-pending");
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-project"),
+        projectId,
+        title: "Sidechat pending expiry",
+        workspaceRoot: "/tmp/sidechat-pending-expiry",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-source"),
+        threadId: sourceThreadId,
+        projectId,
+        title: "Source thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-create"),
+        threadId: sidechatId,
+        sourceThreadId,
+        sidechatSourceThreadId: sourceThreadId,
+        projectId,
+        title: "Pending side chat",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-pending-approval"),
+        threadId: sidechatId,
+        activity: {
+          id: EventId.makeUnsafe("activity-sidechat-pending-approval"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          payload: {
+            requestId: "approval-sidechat-pending",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.sidechat.expire",
+          commandId: CommandId.makeUnsafe("cmd-sidechat-pending-expire"),
+          threadId: sidechatId,
+          expectedLastActivityAt: createdAt,
+          expiredAt: new Date(Date.parse(createdAt) + 3_600_000).toISOString(),
+        }),
+      ),
+    ).rejects.toThrow("still has a pending interaction");
+
+    await system.dispose();
+  });
+
+  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
+        projectId: asProjectId("project-health-fresh"),
+        title: "Fresh projection health",
+        workspaceRoot: "/tmp/project-health-fresh",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
+      state: "healthy",
+      missingProjectors: [],
+    });
+
+    await system.dispose();
+  });
+
   it("retries deferred projection catch-up while idle until it recovers", async () => {
     let bootstrapCalls = 0;
     let deferredCalls = 0;
@@ -1208,7 +1580,7 @@ describe("OrchestrationEngine", () => {
       }),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => {
         deferredCalls += 1;
         if (deferredCalls === 1) {
@@ -1293,11 +1665,12 @@ describe("OrchestrationEngine", () => {
     expect(deferredCalls).toBeGreaterThanOrEqual(1);
     expect(bootstrapCalls).toBe(4);
     await vi.waitFor(async () => {
-      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toEqual({
+      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toMatchObject({
         state: "healthy",
         inFlight: false,
         retryAttempts: 0,
         lastFailure: null,
+        missingProjectors: [],
       });
     });
 
@@ -1309,7 +1682,7 @@ describe("OrchestrationEngine", () => {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(
@@ -1345,6 +1718,62 @@ describe("OrchestrationEngine", () => {
       "did not reach captured event fence 1",
     );
     await expect(runtime.runPromise(engine.getReadModel())).resolves.toEqual(beforeRepair);
+
+    await runtime.dispose();
+  });
+
+  it("coalesces concurrent projection repairs and skips an immediate repeat", async () => {
+    let bootstrapCalls = 0;
+    let repairBootstrapCalls = 0;
+    let resolveBootstrapStarted: (() => void) | undefined;
+    let releaseBootstrap: (() => void) | undefined;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      resolveBootstrapStarted = resolve;
+    });
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const blockingProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.sync(() => (bootstrapCalls += 1)).pipe(
+        Effect.flatMap((call) => {
+          if (call === 1) {
+            return Effect.void;
+          }
+          repairBootstrapCalls += 1;
+          resolveBootstrapStarted?.();
+          return Effect.promise(() => bootstrapGate);
+        }),
+      ),
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
+      projectDeferredEvent: () => Effect.void,
+    };
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, blockingProjectionPipeline)),
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+
+    const firstRepair = runtime.runPromise(engine.repairState());
+    await bootstrapStarted;
+    const secondRepair = runtime.runPromise(engine.repairState());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBootstrap?.();
+
+    const [firstSnapshot, secondSnapshot] = await Promise.all([firstRepair, secondRepair]);
+    expect(secondSnapshot).toEqual(firstSnapshot);
+    expect(repairBootstrapCalls).toBe(1);
+
+    await runtime.runPromise(engine.repairState());
+    expect(repairBootstrapCalls).toBe(1);
 
     await runtime.dispose();
   });

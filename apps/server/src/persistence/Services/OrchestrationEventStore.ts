@@ -15,6 +15,12 @@ import type { Effect, Stream } from "effect";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
 
+export interface OrchestrationEventReplayFilter {
+  readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
+  readonly activityKinds?: ReadonlyArray<string>;
+  readonly includeBoundaryEvent?: boolean;
+}
+
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
  */
@@ -36,6 +42,11 @@ export interface OrchestrationEventStoreShape {
 
   /** Capture the latest durable sequence for one thread stream. */
   readonly getThreadHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Capture the latest durable event sequence that assigned this thread's title. */
+  readonly getThreadTitleHighWaterSequence: (
     threadId: string,
   ) => Effect.Effect<number, OrchestrationEventStoreError>;
 
@@ -71,6 +82,7 @@ export interface OrchestrationEventStoreShape {
     sequenceExclusive: number,
     limit?: number,
     throughSequenceInclusive?: number,
+    filter?: OrchestrationEventReplayFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**

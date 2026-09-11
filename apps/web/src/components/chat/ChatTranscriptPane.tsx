@@ -3,11 +3,12 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@synara/contracts";
+import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type CSSProperties,
   type MouseEventHandler,
@@ -26,8 +27,10 @@ import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { composerOverlayAffordanceBottomPx } from "./composerOverlay";
 import { MessageTrail } from "./MessageTrail";
 import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
+import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 
@@ -38,6 +41,10 @@ interface ChatTranscriptPaneProps {
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
+  contentInsetBottomPx?: ComponentProps<typeof MessagesTimeline>["contentInsetBottomPx"];
+  contentInsetBottomClearancePx?: ComponentProps<
+    typeof MessagesTimeline
+  >["contentInsetBottomClearancePx"];
   chatFontSizePx: number;
   emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
@@ -53,13 +60,15 @@ interface ChatTranscriptPaneProps {
   pinnedMessageIds?: ReadonlySet<MessageId>;
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
-  threadMarkers?: readonly ThreadMarker[];
+  onForkFromMessage?: (messageId: MessageId) => void;
+  goalAchievements?: ComponentProps<typeof MessagesTimeline>["goalAchievements"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
   tailAnchorScrollInFlightRef?: ComponentProps<
     typeof MessagesTimeline
   >["tailAnchorScrollInFlightRef"];
   crossTaskOrigin?: ComponentProps<typeof MessagesTimeline>["crossTaskOrigin"];
+  forkSource?: ComponentProps<typeof MessagesTimeline>["forkSource"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -73,6 +82,7 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
   onIsAtEndChange: (isAtEnd: boolean) => void;
+  onNavigate?: () => void;
   onCloseAgentActivityDetail?: () => void;
   onOpenAgentActivity?: ComponentProps<typeof MessagesTimeline>["onOpenAgentActivity"];
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -92,11 +102,14 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
+  keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
+  availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupPendingAction?: ComponentProps<
     typeof MessagesTimeline
   >["worktreeSetupPendingAction"];
   onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
+  findHighlightStore?: ThreadFindHighlightStore | null;
 }
 
 export function ChatTranscriptPane({
@@ -106,6 +119,8 @@ export function ChatTranscriptPane({
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
+  contentInsetBottomPx,
+  contentInsetBottomClearancePx,
   chatFontSizePx,
   emptyStateContent,
   emptyStateProjectName,
@@ -121,11 +136,13 @@ export function ChatTranscriptPane({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
-  threadMarkers,
+  onForkFromMessage,
+  goalAchievements,
   enteringUserMessageIds,
   tailAnchorMessageId,
   tailAnchorScrollInFlightRef,
   crossTaskOrigin,
+  forkSource,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -139,6 +156,7 @@ export function ChatTranscriptPane({
   onMessagesTouchStart,
   onMessagesWheel,
   onIsAtEndChange,
+  onNavigate,
   onCloseAgentActivityDetail,
   onOpenAgentActivity,
   onOpenTurnDiff,
@@ -158,13 +176,24 @@ export function ChatTranscriptPane({
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
+  keybindings,
+  availableEditors,
   worktreeSetup,
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
+  findHighlightStore: findHighlightStoreProp,
 }: ChatTranscriptPaneProps) {
-  const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
-    ? { paddingRight: contentInsetRightPx }
-    : undefined;
+  // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
+  // affordance rides above it on the same inset the transcript content uses.
+  const scrollButtonFrameStyle: CSSProperties | undefined =
+    contentInsetRightPx || contentInsetBottomPx
+      ? {
+          ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+          ...(contentInsetBottomPx
+            ? { bottom: composerOverlayAffordanceBottomPx(contentInsetBottomPx) }
+            : {}),
+        }
+      : undefined;
 
   // Left-edge navigation trail: one tick per sent message. Current + visible
   // highlights are pushed up from MessagesTimeline as the viewport scrolls. They
@@ -173,6 +202,13 @@ export function ChatTranscriptPane({
   // highlights can't linger.
   const trailItems = deriveMessageTrailItems(timelineEntries);
   const [activeTrailStore] = useState(() => createActiveTrailStore());
+  const [fallbackFindHighlightStore] = useState(() => createThreadFindHighlightStore());
+  const findHighlightStore = findHighlightStoreProp ?? fallbackFindHighlightStore;
+  const findHighlight = useSyncExternalStore(
+    findHighlightStore.subscribe,
+    findHighlightStore.get,
+    findHighlightStore.get,
+  );
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
@@ -217,11 +253,13 @@ export function ChatTranscriptPane({
             {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
-            {...(threadMarkers ? { threadMarkers } : {})}
+            {...(onForkFromMessage ? { onForkFromMessage } : {})}
+            {...(goalAchievements ? { goalAchievements } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             tailAnchorMessageId={tailAnchorMessageId ?? null}
             {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
             {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
+            {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
@@ -237,6 +275,7 @@ export function ChatTranscriptPane({
             onImageExpand={onExpandTimelineImage}
             followLiveOutput={followLiveOutput}
             onIsAtEndChange={onIsAtEndChange}
+            {...(onNavigate ? { onNavigate } : {})}
             onTrailHighlightsChange={activeTrailStore.set}
             onMessagesScroll={onMessagesScroll}
             onMessagesClickCapture={onMessagesClickCapture}
@@ -253,8 +292,13 @@ export function ChatTranscriptPane({
             chatFontSizePx={chatFontSizePx}
             timestampFormat={timestampFormat}
             workspaceRoot={workspaceRoot}
+            {...(keybindings ? { keybindings } : {})}
+            {...(availableEditors ? { availableEditors } : {})}
             contentInsetRightPx={contentInsetRightPx}
+            contentInsetBottomPx={contentInsetBottomPx}
+            contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+            findHighlight={findHighlight}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />

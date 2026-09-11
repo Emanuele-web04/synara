@@ -12,10 +12,10 @@ type ModelProviderKind =
   | "antigravity"
   | "grok"
   | "droid"
-  | "kilo"
   | "opencode"
   | "commandcode"
-  | "pi";
+  | "pi"
+  | "devin";
 
 const NON_DROID_MODEL_SLUGS = new Set(
   Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
@@ -52,6 +52,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "pi";
   }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
+  }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
   }
@@ -59,7 +62,7 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
     return "commandcode";
   }
   if (lowerLabel.includes("kilo")) {
-    return "kilo";
+    return "opencode";
   }
   if (lowerLabel.includes("cursor")) {
     return "cursor";
@@ -76,8 +79,17 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
+  // Windsurf shares Devin credentials, so its labels attribute to the Devin provider.
+  if (lowerLabel.includes("windsurf")) {
+    return "devin";
+  }
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
+  }
+  // Word-boundary match only: a bare substring would also catch unrelated
+  // labels like "speech recognition".
+  if (/(^|[^a-z0-9])cognition([^a-z0-9]|$)/u.test(lowerLabel)) {
+    return "devin";
   }
   if (lowerLabel.includes("codex")) {
     return "codex";
@@ -93,15 +105,18 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "antigravity" ||
     provider === "grok" ||
     provider === "droid" ||
-    provider === "kilo" ||
     provider === "opencode" ||
     provider === "commandcode" ||
-    provider === "pi"
+    provider === "pi" ||
+    provider === "devin"
   ) {
     return provider;
   }
   if (provider === "gemini") {
     return "antigravity";
+  }
+  if (provider === "kilo") {
+    return "opencode";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -124,14 +139,24 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   if (lowerModel.includes("grok")) {
     return "grok";
   }
+  if (lowerModel.includes("devin")) {
+    return "devin";
+  }
   return "codex";
 }
 
-function readLegacyProviderOptions(options: unknown, provider: ModelProviderKind): unknown {
+function readLegacyProviderOptions(
+  options: unknown,
+  provider: ModelProviderKind,
+  legacyProvider?: string,
+): unknown {
   if (!isRecord(options)) {
     return options;
   }
-  const providerScopedOptions = options[provider];
+  // Selections migrated from a renamed provider (e.g. kilo → opencode) keep
+  // their options scoped under the original provider key.
+  const providerScopedOptions =
+    options[provider] ?? (legacyProvider === undefined ? undefined : options[legacyProvider]);
   return providerScopedOptions === undefined ? options : providerScopedOptions;
 }
 
@@ -186,7 +211,13 @@ export function normalizeLegacyModelSelection(input: {
   const migratedGeminiSelection = input.provider === "gemini";
   const normalizedOptions = migratedGeminiSelection
     ? undefined
-    : normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+    : normalizeModelOptions(
+        readLegacyProviderOptions(
+          input.options,
+          provider,
+          typeof input.provider === "string" ? input.provider : undefined,
+        ),
+      );
   const antigravityModel =
     provider === "antigravity"
       ? splitLegacyAntigravityModelLabel(

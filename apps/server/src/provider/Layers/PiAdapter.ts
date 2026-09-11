@@ -1,10 +1,7 @@
+import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  spawn as spawnChildProcess,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -38,6 +35,11 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
+import { stripTerminalControlSequences } from "@synara/shared/text";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -74,13 +76,16 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -102,7 +107,8 @@ const PI_THINKING_OPTIONS: ReadonlyArray<{
   { value: "low", label: "Low", description: "Faster reasoning" },
   { value: "medium", label: "Medium", description: "Balanced reasoning", isDefault: true },
   { value: "high", label: "High", description: "Deeper reasoning" },
-  { value: "xhigh", label: "Extra High", description: "Maximum reasoning" },
+  { value: "xhigh", label: "Extra High", description: "Extra-high reasoning" },
+  { value: "max", label: "Max", description: "Maximum reasoning" },
 ];
 const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "off",
@@ -111,12 +117,17 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-4-8",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
  * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ * and omitted Fable 5.1 / Fable 5 / Opus 4.8. Values mirror `@earendil-works/pi-ai`
+ * Anthropic models; Fable 5.1 follows Anthropic's published pricing until pi-ai ships it.
  */
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
@@ -132,6 +143,17 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
   "claude-fable-5": {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -179,7 +201,7 @@ export interface PiBashProcessSupervisorOptions {
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => ChildProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
@@ -187,7 +209,14 @@ export interface PiBashProcessSupervisorOptions {
 export function makePiBashProcessSupervisor(
   options: PiBashProcessSupervisorOptions,
 ): PiBashProcessSupervisor {
-  const spawnProcess = options.spawnProcess ?? spawnChildProcess;
+  const spawnProcess =
+    options.spawnProcess ??
+    ((command: string, args: ReadonlyArray<string>, spawnOptions: RuntimeSpawnOptions) =>
+      spawnPlatformProcess(command, args, {
+        ...spawnOptions,
+        requireExecutable: true,
+        ownProcessGroup: true,
+      }));
   const teardownProcessTree = options.teardownProcessTree ?? teardownProviderProcessTree;
   const activeProcesses = new Set<PiActiveProcess>();
   let configuredShellPath: string | undefined;
@@ -228,13 +257,11 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
-          detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-          windowsHide: true,
         },
       );
       const active: PiActiveProcess = {
@@ -335,6 +362,7 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
   activeToolItems: Map<string, PiTrackedToolCall>;
@@ -369,6 +397,7 @@ export function makePiRuntimeEventBase(
 interface PiStoredTurn {
   readonly id: TurnId;
   readonly items: unknown[];
+  readonly toolItemIndexes: Map<string, number>;
   leafId?: string | null;
 }
 
@@ -489,6 +518,10 @@ function trimToUndefined(value: string | null | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function trimPiDisplayText(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : trimToUndefined(stripTerminalControlSequences(value));
+}
+
 function isPiThinkingLevel(value: string | null | undefined): value is ThinkingLevel {
   return (
     value === "off" ||
@@ -496,7 +529,8 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "xhigh"
+    value === "xhigh" ||
+    value === "max"
   );
 }
 
@@ -539,8 +573,9 @@ export function getPiSupportedThinkingOptions(
 }
 
 /**
- * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
- * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ * When Anthropic is already authenticated, ensure Fable 5.1, Fable 5, and Opus 4.8
+ * appear even if an older pi-anthropic-oauth extension replaced the built-in
+ * Anthropic catalog.
  */
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,
@@ -660,6 +695,13 @@ function createProviderModelFallback(
   if (!providerDefault) {
     return undefined;
   }
+  // Zen mixes four protocols. A missing model must not inherit an arbitrary API.
+  if (
+    parsed.provider === "opencode" &&
+    /^https:\/\/opencode\.ai\/zen(?:\/|$)/u.test(providerDefault.baseUrl)
+  ) {
+    return undefined;
+  }
   if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
     const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
     return {
@@ -687,7 +729,7 @@ function createProviderModelFallback(
   };
 }
 
-function findModelInRegistry(
+export function findModelInRegistry(
   registry: PiModelRegistry,
   modelId: string | null | undefined,
 ): Model<Api> | undefined {
@@ -1003,16 +1045,16 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
 }
 
 function toolTitle(toolName: string, args: unknown): string {
-  const command = toolName === "bash" ? toolCommand(args) : undefined;
+  const command = toolName === "bash" ? trimPiDisplayText(toolCommand(args)) : undefined;
   if (command) return command;
-  const filePath = toolPath(args);
+  const filePath = trimPiDisplayText(toolPath(args));
   if (
     filePath &&
     (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === "ls")
   ) {
     return `${toolName} ${filePath}`;
   }
-  const query = toolSearchQuery(toolName, args);
+  const query = trimPiDisplayText(toolSearchQuery(toolName, args));
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
@@ -1206,11 +1248,42 @@ function makeAgentDir(
 export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
+  signal?: AbortSignal,
 ): Promise<ModelRuntime> {
-  return piSdk.ModelRuntime.create({
+  const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
+  await refreshPiOpenCodeCatalog(runtime, { signal });
+  return runtime;
+}
+
+export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<void> {
+  // Explicit extension catalogs and custom endpoints own their model metadata.
+  if (
+    process.env.PI_OFFLINE !== undefined ||
+    runtime.getRegisteredProviderIds().includes("openrouter") ||
+    !runtime.hasConfiguredAuth("openrouter") ||
+    runtime.getProvider("openrouter")?.baseUrl !== OPENROUTER_BASE_URL
+  )
+    return;
+  const live = await fetchOpenRouterModels();
+  if (live.length === 0) return;
+  const base = openrouterProvider();
+  const models = new Map(base.getModels().map((model) => [model.id, model]));
+  for (const model of live) models.set(model.id, model);
+  // Native providers remain below models.json, preserving user model overrides.
+  runtime.registerNativeProvider({
+    ...base,
+    getModels: () => [...models.values()],
+    // Reuse the SDK store so a later session keeps discovered capacities offline.
+    refreshModels: async ({ publish }) => {
+      await publish({
+        persist: { models: live, lastModified: Date.now(), checkedAt: Date.now() },
+      });
+    },
+  });
+  await runtime.refresh({ allowNetwork: false });
 }
 
 function modelRegistryFacade(
@@ -1231,7 +1304,7 @@ function extensionDisplayName(extension: {
 }
 
 function makePiUserInputOption(label: string): UserInputQuestion["options"][number] {
-  const normalizedLabel = trimToUndefined(label) ?? "Option";
+  const normalizedLabel = trimPiDisplayText(label) ?? "Option";
   return { label: normalizedLabel, description: normalizedLabel };
 }
 
@@ -1240,7 +1313,7 @@ export function makePiUserInputOptions(
 ): ReadonlyArray<PiUserInputOptionMapping> {
   const labelCounts = new Map<string, number>();
   return labels.map((label, index) => {
-    const baseLabel = trimToUndefined(label) ?? `Option ${index + 1}`;
+    const baseLabel = trimPiDisplayText(label) ?? `Option ${index + 1}`;
     const count = (labelCounts.get(baseLabel) ?? 0) + 1;
     labelCounts.set(baseLabel, count);
     const displayLabel = count === 1 ? baseLabel : `${baseLabel} (${count})`;
@@ -1322,21 +1395,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
     const runtimeEventIngress = yield* makeBoundedCallbackIngress<
-      ProviderRuntimeEvent,
+      SizedProviderRuntimeEvent,
       never,
       never
     >(
-      (event) =>
-        (nativeEventLogger && event.raw
-          ? nativeEventLogger.write(event.raw, event.threadId).pipe(Effect.ignore)
+      (item) =>
+        (nativeEventLogger && item.event.raw
+          ? nativeEventLogger.write(item.event.raw, item.event.threadId).pipe(Effect.ignore)
           : Effect.void
-        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, event)), Effect.asVoid),
+        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, item.event)), Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 
@@ -1380,6 +1453,31 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           method: input.method,
           ...(input.messageType ? { messageType: input.messageType } : {}),
           payload: input.cause ?? { message: input.message },
+        },
+      } satisfies ProviderRuntimeEvent);
+    };
+
+    const offerPiRetryWarning = (
+      context: PiSessionContext,
+      input: {
+        readonly message: string;
+        readonly method: string;
+        readonly messageType?: string;
+        readonly detail?: unknown;
+      },
+    ) => {
+      offerRuntimeEvent({
+        ...makeEventBase(context),
+        type: "runtime.warning",
+        payload: {
+          message: input.message,
+          detail: input.detail ?? { method: input.method },
+        },
+        raw: {
+          source: "pi.sdk.event",
+          method: input.method,
+          ...(input.messageType ? { messageType: input.messageType } : {}),
+          payload: input.detail ?? { message: input.message },
         },
       } satisfies ProviderRuntimeEvent);
     };
@@ -1467,8 +1565,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
     const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
       const unsupportedWarnings = new Set<string>();
-      const statusTexts = new Map<string, string>();
-      let workingMessage: string | undefined;
       const warnUnsupported = (method: string) => {
         if (unsupportedWarnings.has(method)) return;
         unsupportedWarnings.add(method);
@@ -1486,21 +1582,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           },
         } satisfies ProviderRuntimeEvent);
       };
-      const emitPluginProgress = (summary: string) => {
-        const normalized = trimToUndefined(summary);
-        if (!normalized) return;
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "tool.progress",
-          payload: { toolName: "Pi plugin", summary: normalized },
-          raw: {
-            source: "pi.sdk.event",
-            method: "extension/ui-progress",
-            payload: { summary: normalized },
-          },
-        } satisfies ProviderRuntimeEvent);
-      };
-
       const uiContext: ExtensionUIContext = {
         async select(title, options, opts) {
           const questionId = "selection";
@@ -1510,8 +1591,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
-              question: trimToUndefined(title) ?? "Choose an option.",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
+              question: trimPiDisplayText(title) ?? "Choose an option.",
               options: optionMappings.map((mapping) => mapping.option),
             },
             rawPayload: { title, options },
@@ -1526,9 +1607,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
               question:
-                trimToUndefined(message) ?? trimToUndefined(title) ?? "Confirm this action?",
+                trimPiDisplayText(message) ?? trimPiDisplayText(title) ?? "Confirm this action?",
               options: [makePiUserInputOption("Yes"), makePiUserInputOption("No")],
             },
             rawPayload: { title, message },
@@ -1542,54 +1623,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
               question:
-                trimToUndefined(placeholder) ?? trimToUndefined(title) ?? "Type a response.",
+                trimPiDisplayText(placeholder) ?? trimPiDisplayText(title) ?? "Type a response.",
               options: [],
             },
             rawPayload: { title, placeholder },
           });
           return firstPiUserInputAnswer(answers, questionId);
         },
-        notify(message, type) {
-          const normalized = trimToUndefined(message);
+        notify(message, type = "info") {
+          const normalized = trimPiDisplayText(message);
           if (!normalized) return;
-          if (type === "warning" || type === "error") {
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              type: "runtime.warning",
-              payload: { message: normalized, detail: { type: type ?? "info" } },
-              raw: {
-                source: "pi.sdk.event",
-                method: "extension/ui/notify",
-                payload: { message: normalized, type },
-              },
-            } satisfies ProviderRuntimeEvent);
-            return;
-          }
-          emitPluginProgress(normalized);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "runtime.warning",
+            payload: { message: normalized, detail: { type } },
+            raw: {
+              source: "pi.sdk.event",
+              method: "extension/ui/notify",
+              payload: { message: normalized, type },
+            },
+          } satisfies ProviderRuntimeEvent);
         },
         onTerminalInput() {
           warnUnsupported("onTerminalInput");
           return () => undefined;
         },
-        setStatus(key, text) {
-          const normalizedKey = trimToUndefined(key) ?? "status";
-          const normalizedText = trimToUndefined(text);
-          if (!normalizedText) {
-            statusTexts.delete(normalizedKey);
-            return;
-          }
-          if (statusTexts.get(normalizedKey) === normalizedText) return;
-          statusTexts.set(normalizedKey, normalizedText);
-          emitPluginProgress(`${normalizedKey}: ${normalizedText}`);
-        },
-        setWorkingMessage(message) {
-          const normalizedMessage = trimToUndefined(message);
-          if (!normalizedMessage || normalizedMessage === workingMessage) return;
-          workingMessage = normalizedMessage;
-          emitPluginProgress(normalizedMessage);
-        },
+        // Pi extensions use status and working-message callbacks for terminal
+        // chrome. Synara has its own working header; neither belongs in the
+        // transcript as a fake tool call.
+        setStatus() {},
+        setWorkingMessage() {},
         setWorkingVisible() {},
         setWorkingIndicator() {},
         setHiddenThinkingLabel() {},
@@ -1602,9 +1667,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         setHeader() {
           warnUnsupported("setHeader");
         },
-        setTitle(title) {
-          if (title) emitPluginProgress(title);
-        },
+        // The browser owns document/thread chrome; do not turn terminal title
+        // changes into transcript rows.
+        setTitle() {},
         async custom() {
           warnUnsupported("custom");
           return undefined as never;
@@ -1648,19 +1713,92 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return uiContext;
     };
 
-    const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
-      if (context.activeTurnId !== turnId) {
-        return;
+    const completePrompt = (
+      context: PiSessionContext,
+      turnId: TurnId,
+      errorMessage: string | undefined,
+      cause?: unknown,
+    ) => {
+      if (context.stopped || context.activeTurnId !== turnId) return;
+      const raw = {
+        source: "pi.sdk.event" as const,
+        method: "prompt",
+        payload: cause ?? {},
+      };
+      const stats = context.runtime.session.getSessionStats();
+      const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
+      context.lastKnownTokenUsage = usage;
+      const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
+      const leafId = context.runtime.session.sessionManager.getLeafId();
+      const turn = context.turns.find((candidate) => candidate.id === turnId);
+      if (turn) turn.leafId = leafId;
+      if (context.activeAssistantItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeAssistantItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "assistant_message",
+            status: errorMessage ? "failed" : "completed",
+            title: "Assistant",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
       }
-
-      const message = toMessage(cause, "Pi turn failed.");
-      const failure = classifyPiTurnFailure(message);
+      if (context.activeReasoningItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeReasoningItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "reasoning",
+            status: errorMessage ? "failed" : "completed",
+            title: "Reasoning",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      if (usage) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "thread.token-usage.updated",
+          payload: { usage },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      if (errorMessage && failure?.state === "failed") {
+        offerRuntimeError(context, {
+          message: errorMessage,
+          method: "prompt",
+          cause,
+        });
+      }
       const completionBase = makeEventBase(context);
-      if (failure.state === "failed") {
-        offerRuntimeError(context, { message, method: "prompt", cause });
+      if (context.gatewaySessionLease && context.gatewayConnection) {
+        const outgoingLease = context.gatewaySessionLease;
+        const drainage = outgoingLease.retireTurn(turnId);
+        outgoingLease.release();
+        const replacementLease = acquireAgentGatewaySessionLease(
+          agentGatewayCredentials,
+          context.session.threadId,
+          PROVIDER,
+        );
+        if (replacementLease) {
+          context.gatewaySessionLease = replacementLease;
+          Object.assign(context.gatewayConnection, replacementLease.connection);
+        } else {
+          delete context.gatewaySessionLease;
+        }
+        Effect.runFork(
+          Effect.promise(() => drainage).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("pi.agent_gateway.turn_retirement_failed", { turnId, cause }),
+            ),
+          ),
+        );
       }
-      Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, turnId));
       context.activeTurnId = undefined;
+      delete context.activeTurnErrorMessage;
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
@@ -1668,20 +1806,50 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       offerRuntimeEvent({
         ...completionBase,
         type: "turn.completed",
-        payload: {
-          state: failure.state,
-          stopReason: failure.stopReason,
-          errorMessage: message,
-        },
-        raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
+        payload:
+          errorMessage && failure
+            ? {
+                state: failure.state,
+                stopReason: failure.stopReason,
+                errorMessage,
+                usage: stats,
+              }
+            : { state: "completed", stopReason: null, usage: stats },
+        raw,
       } satisfies ProviderRuntimeEvent);
     };
 
-    const recordItem = (context: PiSessionContext, item: unknown) => {
+    const startPrompt = (
+      context: PiSessionContext,
+      turnId: TurnId,
+      text: string,
+      images: ImageContent[],
+    ) => {
+      delete context.activeTurnErrorMessage;
+      // A prompt owns all SDK retries, compaction and queued continuations.
+      // agent_end is per attempt; agent_settled also fires before a rejection.
+      void context.runtime.session.prompt(text, images.length > 0 ? { images } : undefined).then(
+        () => completePrompt(context, turnId, context.activeTurnErrorMessage),
+        (cause) => completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause),
+      );
+    };
+
+    const recordItem = (context: PiSessionContext, item: unknown, toolCallId?: string) => {
       const turn = context.activeTurnId
         ? context.turns.find((candidate) => candidate.id === context.activeTurnId)
         : context.turns.at(-1);
-      turn?.items.push(item);
+      if (!turn) return;
+      if (toolCallId !== undefined) {
+        const index = turn.toolItemIndexes.get(toolCallId);
+        if (index !== undefined) {
+          const previous = turn.items[index];
+          turn.items[index] =
+            isRecord(previous) && isRecord(item) ? { ...previous, ...item } : item;
+          return;
+        }
+        turn.toolItemIndexes.set(toolCallId, turn.items.length);
+      }
+      turn.items.push(item);
     };
 
     const requireSession = Effect.fn("PiAdapter.requireSession")(function* (threadId: ThreadId) {
@@ -1695,8 +1863,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return context;
     });
 
+    const abortSessionTurn = (context: PiSessionContext) => {
+      // Otherwise the SDK can start a queued continuation after aborting backoff.
+      context.runtime.session.clearQueue();
+      return context.runtime.session.abort();
+    };
+
     const disposeSessionContext = async (context: PiSessionContext) => {
       try {
+        // Stop retry and queued continuation before waiting for gateway drainage.
+        context.runtime.session.clearQueue();
+        context.runtime.session.abortRetry();
         await Effect.runPromise(
           cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId),
         );
@@ -1833,12 +2010,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           };
           context.activeToolItems.set(event.toolCallId, tracked);
           const title = toolTitle(event.toolName, event.args);
-          recordItem(context, {
-            type: "tool_call",
-            status: "started",
-            toolName: event.toolName,
-            args: event.args,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: "started",
+              toolName: event.toolName,
+              args: event.args,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId,
@@ -1862,12 +2044,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const tracked = context.activeToolItems.get(event.toolCallId);
           if (!tracked) return;
           const detail = textFromToolResult(event.partialResult);
-          recordItem(context, {
-            type: "tool_call",
-            status: "updated",
-            toolName: event.toolName,
-            output: detail,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: "updated",
+              toolName: event.toolName,
+              args: tracked.args,
+              output: detail,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId: tracked.itemId,
@@ -1899,13 +2087,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           };
           context.activeToolItems.delete(event.toolCallId);
           const detail = textFromToolResult(event.result);
-          recordItem(context, {
-            type: "tool_call",
-            status: event.isError ? "failed" : "completed",
-            toolName: event.toolName,
-            output: detail,
-            result: event.result,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: event.isError ? "failed" : "completed",
+              toolName: event.toolName,
+              ...(tracked.args !== undefined ? { args: tracked.args } : {}),
+              output: detail,
+              result: event.result,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId: tracked.itemId,
@@ -1960,102 +2154,29 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         case "agent_end": {
-          const stats = context.runtime.session.getSessionStats();
-          const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
-          context.lastKnownTokenUsage = usage;
-          const turnId = context.activeTurnId;
+          // Capture this run's outcome without settling its retries/continuations.
+          // A handled extension command may resolve without running the agent.
           const errorMessage = context.runtime.session.agent.state.errorMessage;
-          const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
-          const leafId = context.runtime.session.sessionManager.getLeafId();
-          const turn = turnId
-            ? context.turns.find((candidate) => candidate.id === turnId)
-            : undefined;
-          if (turn) turn.leafId = leafId;
-          if (context.activeAssistantItemId) {
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              itemId: context.activeAssistantItemId,
-              type: "item.completed",
-              payload: {
-                itemType: "assistant_message",
-                status: errorMessage ? "failed" : "completed",
-                title: "Assistant",
-              },
-              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-            } satisfies ProviderRuntimeEvent);
+          if (errorMessage) context.activeTurnErrorMessage = errorMessage;
+          else delete context.activeTurnErrorMessage;
+          return;
+        }
+        case "auto_retry_start": {
+          const delaySecs = event.delayMs / 1000;
+          offerPiRetryWarning(context, {
+            message: `Pi retrying after provider error (attempt ${event.attempt}/${event.maxAttempts}, retrying in ${delaySecs.toFixed(delaySecs < 10 ? 1 : 0)}s): ${event.errorMessage}`,
+            method: "prompt/retry",
+            messageType: event.type,
+            detail: event,
+          });
+          return;
+        }
+        case "auto_retry_end": {
+          // Cancelling backoff resolves prompt() without another agent_end,
+          // while agent.state.errorMessage still contains the provider error.
+          if (!event.success && event.finalError === "Retry cancelled") {
+            context.activeTurnErrorMessage = event.finalError;
           }
-          if (context.activeReasoningItemId) {
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              itemId: context.activeReasoningItemId,
-              type: "item.completed",
-              payload: {
-                itemType: "reasoning",
-                status: errorMessage ? "failed" : "completed",
-                title: "Reasoning",
-              },
-              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-            } satisfies ProviderRuntimeEvent);
-          }
-          if (usage) {
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              type: "thread.token-usage.updated",
-              payload: { usage },
-              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-            } satisfies ProviderRuntimeEvent);
-          }
-          if (errorMessage && failure?.state === "failed") {
-            offerRuntimeError(context, {
-              message: errorMessage,
-              method: "prompt",
-              messageType: event.type,
-              cause: event,
-            });
-          }
-          const completionBase = makeEventBase(context);
-          if (turnId && context.gatewaySessionLease && context.gatewayConnection) {
-            const outgoingLease = context.gatewaySessionLease;
-            const drainage = outgoingLease.retireTurn(turnId);
-            outgoingLease.release();
-            const replacementLease = acquireAgentGatewaySessionLease(
-              agentGatewayCredentials,
-              context.session.threadId,
-              PROVIDER,
-            );
-            if (replacementLease) {
-              context.gatewaySessionLease = replacementLease;
-              Object.assign(context.gatewayConnection, replacementLease.connection);
-            } else {
-              delete context.gatewaySessionLease;
-            }
-            Effect.runFork(
-              Effect.promise(() => drainage).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("pi.agent_gateway.turn_retirement_failed", { turnId, cause }),
-                ),
-              ),
-            );
-          }
-          context.activeTurnId = undefined;
-          context.activeAssistantItemId = undefined;
-          context.activeReasoningItemId = undefined;
-          context.activeToolItems.clear();
-          context.session = makeSessionSnapshot(context);
-          offerRuntimeEvent({
-            ...completionBase,
-            type: "turn.completed",
-            payload:
-              errorMessage && failure
-                ? {
-                    state: failure.state,
-                    stopReason: failure.stopReason,
-                    errorMessage,
-                    usage: stats,
-                  }
-                : { state: "completed", stopReason: null, usage: stats },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-          } satisfies ProviderRuntimeEvent);
           return;
         }
         default:
@@ -2072,8 +2193,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
+      signal?: AbortSignal;
     }) => {
-      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
+      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk, input.signal);
+      input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2086,6 +2209,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           modelRuntime,
         });
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
+        const requested = parseModelReference(input.modelId);
+        if (
+          requested?.provider === "openrouter" &&
+          !registry.find(requested.provider, requested.id)
+        ) {
+          await refreshPiOpenRouterModels(services.modelRuntime);
+        }
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
           throw new Error(
@@ -2207,8 +2337,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
           agentGatewaySessionLease,
           Effect.tryPromise({
-            try: () =>
+            try: (signal) =>
               createSdkRuntime({
+                signal,
                 sdk: piSdk,
                 cwd,
                 agentDir,
@@ -2280,7 +2411,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         sessions.set(input.threadId, context);
         yield* Effect.tryPromise({
           try: () =>
-            runtime.session.bindExtensions({ uiContext: makePiExtensionUIContext(context) }),
+            runtime.session.bindExtensions({
+              uiContext: makePiExtensionUIContext(context),
+              abortHandler: () => {
+                void abortSessionTurn(context).catch((cause) => {
+                  offerRuntimeError(context, {
+                    message: toMessage(cause, "Failed to interrupt Pi turn."),
+                    method: "turn/interrupt",
+                    cause,
+                  });
+                });
+              },
+            }),
           catch: (cause) =>
             new ProviderAdapterRequestError({
               provider: PROVIDER,
@@ -2316,7 +2458,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
+                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input and notifications are supported; terminal status, widgets, and editor hooks are ignored.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -2446,7 +2588,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const payload = yield* buildPromptPayload(input);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         context.activeTurnId = turnId;
-        context.turns.push({ id: turnId, items: [] });
+        context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
         context.session = makeSessionSnapshot(context);
         if (payload.images.length === 0 && isPiReloadCommand(payload.text)) {
           offerRuntimeEvent({
@@ -2513,11 +2655,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
         });
         const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        void context.runtime.session
-          .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
-          .catch((cause) => {
-            completePromptRejection(context, turnId, cause);
-          });
+        startPrompt(context, turnId, providerText, payload.images);
         return {
           threadId: input.threadId,
           turnId,
@@ -2537,7 +2675,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
-          context.turns.push({ id: turnId, items: [] });
+          context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
         }
         if (context.runtime.session.isStreaming) {
           yield* Effect.tryPromise({
@@ -2551,14 +2689,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               }),
           });
         } else {
-          void context.runtime.session
-            .prompt(
-              providerText,
-              payload.images.length > 0 ? { images: payload.images } : undefined,
-            )
-            .catch((cause) => {
-              completePromptRejection(context, turnId, cause);
-            });
+          startPrompt(context, turnId, providerText, payload.images);
         }
         return {
           threadId: input.threadId,
@@ -2583,7 +2714,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.gatewaySessionLease,
           activeTurnId,
           Effect.tryPromise({
-            try: () => context.runtime.session.abort(),
+            try: () => abortSessionTurn(context),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -2716,23 +2847,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const stopAll: PiAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.keys()), (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+      settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
+        try: async (signal) => {
           const piSdk = await loadPiCodingAgentModule();
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
+          const modelRuntime = await createPiModelRuntime(agentDir, piSdk, signal);
           const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,
             modelRuntime,
           });
+          await refreshPiOpenRouterModels(services.modelRuntime);
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
           const models = getPiDiscoverableModels(registry).flatMap((model) => {
@@ -2742,6 +2871,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             );
             return descriptor ? [descriptor] : [];
           });
+
           return {
             models,
             source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
@@ -2936,8 +3066,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       },
     } satisfies PiAdapterShape;
   });
-
-export const PiAdapterLive = Layer.effect(PiAdapter, makePiAdapter());
 
 export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
   return Layer.effect(PiAdapter, makePiAdapter(options));

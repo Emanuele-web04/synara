@@ -9,23 +9,23 @@ const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
   "provider.user-input.respond.failed",
 ]);
 
-const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+export const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.created",
   "thread.meta-updated",
   "thread.pinned-message-added",
   "thread.pinned-message-removed",
   "thread.pinned-message-done-set",
   "thread.pinned-message-label-set",
-  "thread.marker-added",
-  "thread.marker-removed",
-  "thread.marker-done-set",
-  "thread.marker-label-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.turn-start-requested",
+  "thread.session-set",
+  "thread.turn-diff-completed",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
+  "thread.sidechat-activity-recorded",
+  "thread.sidechat-expired",
 ]);
 
 const OTHER_THREAD_SHELL_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
@@ -38,27 +38,17 @@ const OTHER_THREAD_SHELL_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.turn-diff-completed",
 ]);
 
+export const DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.message-sent",
+  "thread.proposed-plan-upserted",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+  "thread.session-set",
+  "thread.turn-diff-completed",
+]);
+
 export function shouldApplyThreadsProjection(event: OrchestrationEvent): boolean {
   return THREAD_PROJECTION_EVENT_TYPES.has(event.type);
-}
-
-export function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
-  switch (event.type) {
-    case "thread.message-sent":
-      return event.payload.role === "user";
-    case "thread.proposed-plan-upserted":
-    case "thread.approval-response-requested":
-    case "thread.user-input-response-requested":
-    case "thread.reverted":
-    case "thread.conversation-rolled-back":
-    case "thread.session-set":
-    case "thread.turn-diff-completed":
-      return true;
-    case "thread.activity-appended":
-      return THREAD_SHELL_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
-    default:
-      return false;
-  }
 }
 
 /**
@@ -69,14 +59,10 @@ export function shouldRefreshThreadShellSummary(event: OrchestrationEvent): bool
  * them out of the deferred projector avoids rescanning activity history.
  */
 export function shouldApplyDeferredThreadShellSummary(event: OrchestrationEvent): boolean {
-  if (!shouldRefreshThreadShellSummary(event)) {
+  if (!DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES.has(event.type)) {
     return false;
   }
-  return (
-    event.type !== "thread.activity-appended" &&
-    event.type !== "thread.approval-response-requested" &&
-    event.type !== "thread.user-input-response-requested"
-  );
+  return event.type !== "thread.message-sent" || event.payload.role === "user";
 }
 
 /** True only when an event can change the persisted thread shell sent to sidebar clients. */

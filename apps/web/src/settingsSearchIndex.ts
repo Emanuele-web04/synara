@@ -47,6 +47,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
   },
   {
+    id: "general:welcome-tour",
+    section: "general",
+    title: "Welcome tour",
+    keywords:
+      "Replay the first-run setup: feature tour, provider selection, appearance, and first project. onboarding welcome wizard getting started setup",
+  },
+  {
     id: "general:project-order",
     section: "general",
     title: "Project order",
@@ -71,6 +78,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "Studio",
     keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
+  },
+  {
+    id: "general:automation-run-threads",
+    section: "general",
+    title: "Automation runs",
+    keywords:
+      "Show the thread each standalone automation run creates in the sidebar. hide automation run threads clutter scheduled",
   },
   {
     id: "general:environment-default-open",
@@ -118,12 +132,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the pinned-messages checklist in the Environment panel.",
   },
   {
-    id: "general:environment-markers",
-    section: "general",
-    title: "Text markers",
-    keywords: "Show highlighted and underlined transcript text in the Environment panel.",
-  },
-  {
     id: "general:environment-instructions",
     section: "general",
     title: "Project instructions",
@@ -144,6 +152,21 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Choose how Synara looks across the app. dark light system color",
   },
   {
+    id: "appearance:app-icon",
+    section: "appearance",
+    title: "App icon",
+    keywords: "Choose the icon Synara uses in the dock or taskbar desktop application logo.",
+    target: null,
+  },
+  {
+    id: "appearance:custom-title-bar",
+    section: "appearance",
+    title: "Use custom title bar",
+    keywords:
+      "frameless window system title bar Windows Linux caption controls minimize maximize close chrome",
+    target: null,
+  },
+  {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",
@@ -155,6 +178,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "UI density",
     keywords:
       "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size. compact comfortable",
+  },
+  {
+    id: "appearance:chat-width",
+    section: "appearance",
+    title: "Chat width",
+    keywords:
+      "Control how wide the chat column grows so tables and wide content get more room. standard wide full",
   },
   {
     id: "appearance:base-font-size",
@@ -259,6 +289,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show token-by-token output while a response is in progress. streaming",
   },
   {
+    id: "behavior:effort-slider",
+    section: "behavior",
+    title: "Effort slider",
+    keywords:
+      "Show reasoning effort as a slider in the composer model menu once a chat has started. fast mode reasoning thinking level picker",
+  },
+  {
+    id: "behavior:auto-open-simulator",
+    section: "behavior",
+    title: "Automatically open simulator",
+    keywords:
+      "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
+  },
+  {
     id: "behavior:diff-line-wrapping",
     section: "behavior",
     title: "Diff line wrapping",
@@ -283,11 +327,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
 
-  // ── Keyboard Shortcuts ────────────────────────────────────────────────────────
+  // ── Keybindings ───────────────────────────────────────────────────────────────
   {
     id: "shortcuts:keyboard-shortcuts",
     section: "shortcuts",
-    title: "Keyboard Shortcuts",
+    title: "Keybindings",
     keywords:
       "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
     target: null,

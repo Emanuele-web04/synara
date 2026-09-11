@@ -15,17 +15,29 @@ export interface ProviderDescriptor {
    * can route steers without a runtime round-trip; keep the two in sync.
    */
   readonly supportsNativeTurnSteering: boolean;
+  /** Synara docs page covering install, sign-in, and verification for this runtime. */
+  readonly setupDocsHref: string;
   readonly usage: {
     readonly signInCommand: string;
     readonly learnMoreHref: string;
   } | null;
 }
 
-export const PROVIDER_DESCRIPTORS = [
+type ExhaustiveProviderDescriptors<Descriptors extends readonly ProviderDescriptor[]> =
+  Exclude<ProviderKind, Descriptors[number]["kind"]> extends never ? Descriptors : never;
+
+function defineProviderDescriptors<const Descriptors extends readonly ProviderDescriptor[]>(
+  descriptors: ExhaustiveProviderDescriptors<Descriptors>,
+): Descriptors {
+  return descriptors;
+}
+
+export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
   {
     kind: "codex",
     displayName: PROVIDER_DISPLAY_NAMES.codex,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/codex",
     supportsNativeTurnSteering: true,
     usage: {
       signInCommand: "codex login",
@@ -36,6 +48,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "claudeAgent",
     displayName: PROVIDER_DISPLAY_NAMES.claudeAgent,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/claude-code",
     supportsNativeTurnSteering: true,
     usage: {
       signInCommand: "claude",
@@ -46,6 +59,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "cursor",
     displayName: PROVIDER_DISPLAY_NAMES.cursor,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/cursor",
     supportsNativeTurnSteering: false,
     usage: {
       signInCommand: "cursor-agent login",
@@ -56,41 +70,51 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "antigravity",
     displayName: PROVIDER_DISPLAY_NAMES.antigravity,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/antigravity",
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "agy",
+      learnMoreHref: "https://antigravity.google",
+    },
   },
   {
     kind: "grok",
     displayName: PROVIDER_DISPLAY_NAMES.grok,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/grok",
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "grok login",
+      learnMoreHref: "https://console.x.ai",
+    },
   },
   {
     kind: "droid",
     displayName: PROVIDER_DISPLAY_NAMES.droid,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/factory-droid",
     supportsNativeTurnSteering: false,
-    usage: null,
-  },
-  {
-    kind: "kilo",
-    displayName: PROVIDER_DISPLAY_NAMES.kilo,
-    available: true,
-    supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "droid",
+      learnMoreHref: "https://docs.factory.ai/pricing",
+    },
   },
   {
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/opencode",
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "opencode auth login",
+      learnMoreHref: "https://opencode.ai",
+    },
   },
   {
     kind: "commandcode",
     displayName: PROVIDER_DISPLAY_NAMES.commandcode,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/command-code",
     supportsNativeTurnSteering: false,
     usage: {
       signInCommand: "cmd login",
@@ -101,10 +125,25 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/pi",
     supportsNativeTurnSteering: true,
-    usage: null,
+    usage: {
+      signInCommand: "pi",
+      learnMoreHref: "https://pi.dev",
+    },
   },
-] as const satisfies readonly ProviderDescriptor[];
+  {
+    kind: "devin",
+    displayName: PROVIDER_DISPLAY_NAMES.devin,
+    available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/devin",
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "devin auth login",
+      learnMoreHref: "https://app.devin.ai/usage",
+    },
+  },
+] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
   PROVIDER_DESCRIPTORS.map((descriptor) => [descriptor.kind, descriptor]),

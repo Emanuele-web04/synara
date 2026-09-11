@@ -36,11 +36,6 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.droid,
           binaryPath: "",
         },
-        kilo: {
-          ...DEFAULT_SERVER_SETTINGS.providers.kilo,
-          binaryPath: "",
-          serverUrl: "",
-        },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
           binaryPath: "",
@@ -54,6 +49,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.pi,
           binaryPath: "",
           agentDir: "",
+        },
+        devin: {
+          ...DEFAULT_SERVER_SETTINGS.providers.devin,
+          binaryPath: "",
         },
       },
     };
@@ -74,10 +73,10 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.antigravity).toEqual({});
     expect(providerOptions.grok).toEqual({});
     expect(providerOptions.droid).toEqual({});
-    expect(providerOptions.kilo).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.commandcode).toEqual({});
     expect(providerOptions.pi).toEqual({});
+    expect(providerOptions.devin).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -96,6 +95,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           serverUrl: "http://127.0.0.1:4096",
           experimentalWebSockets: true,
         },
+        devin: {
+          ...DEFAULT_SERVER_SETTINGS.providers.devin,
+          binaryPath: "/custom/bin/devin",
+        },
       },
     };
 
@@ -110,5 +113,6 @@ describe("providerStartOptionsFromServerSettings", () => {
       serverUrl: "http://127.0.0.1:4096",
       experimentalWebSockets: true,
     });
+    expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
   });
 });

@@ -13,123 +13,9 @@ export interface TranscriptSelectionActionLayout {
   placement: "top" | "bottom";
 }
 
-const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 292;
-const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 32;
+const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 336;
+export const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 38;
 const TRANSCRIPT_SELECTION_ACTION_GAP_PX = 8;
-const NON_BREAKING_SPACE_PATTERN = /\u00a0/g;
-const WHITESPACE_PATTERN = /\s/;
-const INLINE_MARKDOWN_DELIMITER_CHARS = new Set(["*", "_", "`", "~"]);
-
-interface NormalizedSourceText {
-  text: string;
-  rawStarts: number[];
-  rawEnds: number[];
-}
-
-function normalizeSelectionText(value: string): string {
-  return value
-    .replace(/\r\n/g, "\n")
-    .replace(NON_BREAKING_SPACE_PATTERN, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Browser selections read rendered text, while marker offsets must point back into raw markdown.
-function buildNormalizedSourceText(
-  value: string,
-  options: { ignoreInlineMarkdownDelimiters?: boolean | undefined } = {},
-): NormalizedSourceText {
-  const text: string[] = [];
-  const rawStarts: number[] = [];
-  const rawEnds: number[] = [];
-  let pendingSpaceStart: number | null = null;
-  let pendingSpaceEnd = 0;
-
-  const pushPendingSpace = () => {
-    if (pendingSpaceStart === null) {
-      return;
-    }
-    text.push(" ");
-    rawStarts.push(pendingSpaceStart);
-    rawEnds.push(pendingSpaceEnd);
-    pendingSpaceStart = null;
-    pendingSpaceEnd = 0;
-  };
-
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index] ?? "";
-    if (options.ignoreInlineMarkdownDelimiters && INLINE_MARKDOWN_DELIMITER_CHARS.has(char)) {
-      continue;
-    }
-    if (char === "\u00a0" || WHITESPACE_PATTERN.test(char)) {
-      pendingSpaceStart ??= index;
-      pendingSpaceEnd = index + 1;
-      continue;
-    }
-    pushPendingSpace();
-    text.push(char);
-    rawStarts.push(index);
-    rawEnds.push(index + 1);
-  }
-  pushPendingSpace();
-
-  return { text: text.join(""), rawStarts, rawEnds };
-}
-
-export function resolveTranscriptMarkerRange(input: {
-  messageText: string;
-  selectedText: string;
-}): { startOffset: number; endOffset: number } | null {
-  const selectedText = input.selectedText.trim();
-  if (selectedText.length === 0) {
-    return null;
-  }
-  const firstIndex = input.messageText.indexOf(selectedText);
-  if (
-    firstIndex >= 0 &&
-    input.messageText.indexOf(selectedText, firstIndex + selectedText.length) < 0
-  ) {
-    return {
-      startOffset: firstIndex,
-      endOffset: firstIndex + selectedText.length,
-    };
-  }
-  return (
-    resolveNormalizedTranscriptMarkerRange(input) ??
-    resolveNormalizedTranscriptMarkerRange({
-      ...input,
-      ignoreInlineMarkdownDelimiters: true,
-    })
-  );
-}
-
-function resolveNormalizedTranscriptMarkerRange(input: {
-  messageText: string;
-  selectedText: string;
-  ignoreInlineMarkdownDelimiters?: boolean;
-}): { startOffset: number; endOffset: number } | null {
-  const selectedText = normalizeSelectionText(input.selectedText);
-  if (selectedText.length === 0) {
-    return null;
-  }
-
-  const source = buildNormalizedSourceText(input.messageText, {
-    ignoreInlineMarkdownDelimiters: input.ignoreInlineMarkdownDelimiters,
-  });
-  const firstIndex = source.text.indexOf(selectedText);
-  if (firstIndex < 0) {
-    return null;
-  }
-  if (source.text.indexOf(selectedText, firstIndex + selectedText.length) >= 0) {
-    return null;
-  }
-
-  const lastIndex = firstIndex + selectedText.length - 1;
-  const startOffset = source.rawStarts[firstIndex];
-  const endOffset = source.rawEnds[lastIndex];
-  return startOffset === undefined || endOffset === undefined ? null : { startOffset, endOffset };
-}
-
 function getSelectionRect(selection: Selection): DOMRect | null {
   if (selection.rangeCount === 0 || selection.isCollapsed) {
     return null;
@@ -219,7 +105,10 @@ export function resolveTranscriptSelectionActionLayout(input: {
   selectionRect: DOMRect | null;
   pointer: { x: number; y: number };
   viewport?: { width: number; height: number } | null;
+  size?: { width: number; height: number } | null;
 }): TranscriptSelectionActionLayout {
+  const surfaceWidth = input.size?.width ?? TRANSCRIPT_SELECTION_ACTION_WIDTH_PX;
+  const surfaceHeight = input.size?.height ?? TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX;
   const viewportWidth =
     input.viewport?.width ??
     (typeof window === "undefined" ? input.pointer.x + 8 : window.innerWidth);
@@ -236,29 +125,26 @@ export function resolveTranscriptSelectionActionLayout(input: {
   const availableAbove = selectionTop;
   const availableBelow = viewportHeight - selectionBottom;
   const placement =
-    availableAbove >= TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX + TRANSCRIPT_SELECTION_ACTION_GAP_PX ||
+    availableAbove >= surfaceHeight + TRANSCRIPT_SELECTION_ACTION_GAP_PX ||
     availableAbove >= availableBelow
       ? "top"
       : "bottom";
   const unclampedTop =
     placement === "top"
-      ? selectionTop - TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX - TRANSCRIPT_SELECTION_ACTION_GAP_PX
+      ? selectionTop - surfaceHeight - TRANSCRIPT_SELECTION_ACTION_GAP_PX
       : selectionBottom + TRANSCRIPT_SELECTION_ACTION_GAP_PX;
 
   return {
     left: Math.max(
       8,
       Math.min(
-        Math.round(anchorCenterX - TRANSCRIPT_SELECTION_ACTION_WIDTH_PX / 2),
-        Math.max(viewportWidth - TRANSCRIPT_SELECTION_ACTION_WIDTH_PX - 8, 8),
+        Math.round(anchorCenterX - surfaceWidth / 2),
+        Math.max(viewportWidth - surfaceWidth - 8, 8),
       ),
     ),
     top: Math.max(
       8,
-      Math.min(
-        Math.round(unclampedTop),
-        Math.max(viewportHeight - TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX - 8, 8),
-      ),
+      Math.min(Math.round(unclampedTop), Math.max(viewportHeight - surfaceHeight - 8, 8)),
     ),
     placement,
   };

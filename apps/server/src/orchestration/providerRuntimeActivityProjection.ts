@@ -9,6 +9,11 @@ import {
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
+import {
+  sanitizeUnmappedProviderData,
+  sanitizeUnmappedProviderDetail,
+} from "../provider/unmappedProviderEvents.ts";
+
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
@@ -104,7 +109,33 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
-function stringifyJsonLike(value: unknown): string {
+function isPlainJsonTree(value: unknown, seen: Set<object>): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isPlainJsonTree(entry, seen));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  return Object.values(value).every((entry) => isPlainJsonTree(entry, seen));
+}
+
+function stringifyJsonLikeFallback(value: unknown): string {
   const seen = new WeakSet<object>();
   return (
     JSON.stringify(value, (_key, entry) => {
@@ -123,6 +154,21 @@ function stringifyJsonLike(value: unknown): string {
       return entry;
     }) ?? "null"
   );
+}
+
+function serializeJsonLike(value: unknown): {
+  readonly text: string;
+  readonly plain: boolean;
+} {
+  const plain = isPlainJsonTree(value, new Set<object>());
+  return {
+    text: plain ? (JSON.stringify(value) ?? "null") : stringifyJsonLikeFallback(value),
+    plain,
+  };
+}
+
+function stringifyJsonLike(value: unknown): string {
+  return serializeJsonLike(value).text;
 }
 
 function truncateJsonString(value: string, limit: number): string {
@@ -245,9 +291,10 @@ function truncateJsonValue(
 }
 
 function boundActivityData(value: unknown): unknown {
-  const serialized = stringifyJsonLike(value);
+  const serialization = serializeJsonLike(value);
+  const serialized = serialization.text;
   if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
-    return JSON.parse(serialized);
+    return serialization.plain ? value : JSON.parse(serialized);
   }
 
   const withTruncationMetadata = (bounded: unknown): Record<string, unknown> => {
@@ -335,13 +382,25 @@ function buildContextWindowActivityPayload(
   const hasPercentUsage =
     typeof usage.usedPercent === "number" && Number.isFinite(usage.usedPercent);
   const hasKnownWindow = typeof usage.maxTokens === "number" && Number.isFinite(usage.maxTokens);
-  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
+  const hasProcessedTokens =
+    typeof usage.totalProcessedTokens === "number" &&
+    Number.isFinite(usage.totalProcessedTokens) &&
+    usage.totalProcessedTokens > 0;
+  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow && !hasProcessedTokens) {
     return undefined;
   }
   // Stamp the emitting provider so token stats can attribute usage to the
   // provider that actually processed the turn, not the thread's persisted
   // model selection (which can drift, e.g. across future per-turn providers).
-  return toActivityPayload({ ...usage, provider: event.provider });
+  return toActivityPayload({
+    ...usage,
+    provider: event.provider,
+    ...(event.providerRefs?.providerThreadId
+      ? {
+          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
+        }
+      : {}),
+  });
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -349,6 +408,8 @@ function asPositiveFiniteNumber(value: unknown): number | undefined {
 }
 
 interface CompactModelUsage {
+  readonly cacheReadInputTokens?: number;
+  readonly cacheCreationInputTokens?: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
@@ -379,7 +440,24 @@ function compactTurnModelUsage(
     if (totalTokens <= 0) {
       continue;
     }
-    compact[model] = { inputTokens, outputTokens, totalTokens };
+    // Preserve reported zeroes; missing cache counters must remain unknown.
+    const cacheReadInputTokens = usage.cacheReadInputTokens;
+    const cacheCreationInputTokens = usage.cacheCreationInputTokens;
+    compact[model] = {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      ...(typeof cacheReadInputTokens === "number" &&
+      Number.isFinite(cacheReadInputTokens) &&
+      cacheReadInputTokens >= 0
+        ? { cacheReadInputTokens }
+        : {}),
+      ...(typeof cacheCreationInputTokens === "number" &&
+      Number.isFinite(cacheCreationInputTokens) &&
+      cacheCreationInputTokens >= 0
+        ? { cacheCreationInputTokens }
+        : {}),
+    };
   }
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
@@ -464,15 +542,14 @@ function sessionApprovalAvailable(
 
 export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
+  sessionSequence?: number,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  const maybeSequence = (() => {
-    const sequence = (event as ProviderRuntimeEvent & { sessionSequence?: number }).sessionSequence;
-    // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
-    // counter has to be dropped: carrying it invalidates the whole command.
-    return typeof sequence === "number" && Number.isInteger(sequence) && sequence >= 0
-      ? { sequence }
+  // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
+  // counter has to be dropped: carrying it invalidates the whole command.
+  const maybeSequence =
+    typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
+      ? { sequence: sessionSequence }
       : {};
-  })();
   // Codex and Antigravity only render completed reasoning items with a readable summary.
   // Empty starts/completions are private/encrypted reasoning boundaries, not
   // transcript rows. Waiting for the authoritative completion also avoids
@@ -611,6 +688,10 @@ export function projectProviderRuntimeActivities(
       // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
+      const isPiInfoNotification =
+        event.provider === "pi" &&
+        raw?.method === "extension/ui/notify" &&
+        asObject(event.payload.detail)?.type === "info";
       const message = truncateDetail(event.payload.message);
       return [
         {
@@ -618,14 +699,14 @@ export function projectProviderRuntimeActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: isBackgroundMove
-            ? "Moved to background"
-            : (event.provider === "opencode" || event.provider === "kilo") &&
-                (nativeType === "session.next.retried" || nativeType === "session.status")
-              ? event.provider === "opencode"
+          summary: isPiInfoNotification
+            ? "Pi extension"
+            : isBackgroundMove
+              ? "Moved to background"
+              : event.provider === "opencode" &&
+                  (nativeType === "session.next.retried" || nativeType === "session.status")
                 ? "OpenCode retrying"
-                : "Kilo retrying"
-              : "Runtime warning",
+                : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
@@ -916,7 +997,7 @@ export function projectProviderRuntimeActivities(
     case "item.updated":
     case "item.completed":
     case "item.started": {
-      if (event.type !== "item.started" && event.payload.itemType === "context_compaction") {
+      if (event.payload.itemType === "context_compaction") {
         const failed = event.type === "item.completed" && event.payload.status === "failed";
         return [
           {
@@ -925,8 +1006,8 @@ export function projectProviderRuntimeActivities(
             tone: failed ? "error" : "info",
             kind: "context-compaction",
             summary:
-              event.type === "item.updated"
-                ? "Compacting conversation..."
+              event.type !== "item.completed"
+                ? "Compacting context"
                 : failed
                   ? "Context compaction failed"
                   : "Context compacted",
@@ -1013,6 +1094,10 @@ export function projectProviderRuntimeActivities(
           summary,
           payload: toActivityPayload({
             state,
+            ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
+            ...(event.payload.tokenAccountingVersion === 1
+              ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
+              : {}),
             ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
@@ -1021,6 +1106,62 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "hook.started":
+    case "hook.progress":
+      // Hook lifecycle is operational evidence, not transcript content. The
+      // canonical runtime journal retains it for replay and diagnostics.
+      return [];
+
+    case "hook.completed": {
+      const status = event.payload.status;
+      // Successful hooks are routine, and cancelled hooks normally reflect an
+      // interrupted turn. Neither should add rows or transcript height churn.
+      if (
+        event.payload.outcome === "success" ||
+        (event.payload.outcome === "cancelled" && !status)
+      ) {
+        return [];
+      }
+      const hookLabel = event.payload.hookEvent ?? "Lifecycle";
+      const summary =
+        status === "blocked"
+          ? `${hookLabel} hook blocked an action`
+          : status === "stopped"
+            ? `${hookLabel} hook stopped execution`
+            : `${hookLabel} hook failed`;
+      const message = truncateDetail(
+        event.payload.statusMessage ??
+          event.payload.stderr ??
+          event.payload.output ??
+          event.payload.stdout ??
+          summary,
+        500,
+      );
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: status === "failed" || event.payload.outcome === "error" ? "error" : "info",
+          kind: "runtime.warning",
+          summary,
+          payload: toActivityPayload({
+            message,
+            detail: message,
+            hookId: event.payload.hookId,
+            ...(event.payload.hookName ? { hookName: event.payload.hookName } : {}),
+            ...(event.payload.hookEvent ? { hookEvent: event.payload.hookEvent } : {}),
+            outcome: event.payload.outcome,
+            ...(status ? { status } : {}),
+            ...(event.payload.durationMs !== undefined
+              ? { durationMs: event.payload.durationMs }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1111,6 +1252,32 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             ...normalizedPayload,
             status,
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "event.unmapped": {
+      const payload = runtimePayloadRecord(event);
+      const nativeType = asString(payload?.nativeType);
+      if (!nativeType) {
+        return [];
+      }
+      const detail = asString(payload?.detail);
+      const rawData = payload?.data;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.event.unmapped",
+          summary: nativeType,
+          payload: toActivityPayload({
+            nativeEventType: nativeType,
+            ...(detail ? { detail: sanitizeUnmappedProviderDetail(detail) } : {}),
+            ...(rawData !== undefined ? { data: sanitizeUnmappedProviderData(rawData) } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

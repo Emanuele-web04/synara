@@ -7,6 +7,7 @@ import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport.ts";
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
+  isGrokSessionStoragePathNotFoundError,
   resolveGrokAcpAuthMethodId,
   runGrokAcpCompactionCommand,
 } from "./GrokAcpSupport.ts";
@@ -70,6 +71,30 @@ describe("buildGrokAcpSpawnInput", () => {
     expect(spawn.args).not.toContain("--always-approve");
   });
 
+  it("passes Grok 4.6 extra-high reasoning effort to the CLI", () => {
+    expect(
+      buildGrokAcpSpawnInput(
+        {
+          binaryPath: "/usr/local/bin/grok",
+          model: "grok-4.6",
+          reasoningEffort: "xhigh",
+        },
+        "/tmp/project",
+        "approval-required",
+      ).args,
+    ).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "--no-leader",
+      "-m",
+      "grok-4.6",
+      "--reasoning-effort",
+      "xhigh",
+      "stdio",
+    ]);
+  });
+
   it("uses Grok's process-scoped approval override only for Full Access", () => {
     expect(buildGrokAcpSpawnInput(undefined, "/tmp/project", "full-access").args).toEqual([
       "--permission-mode",
@@ -79,6 +104,40 @@ describe("buildGrokAcpSpawnInput", () => {
       "--always-approve",
       "stdio",
     ]);
+  });
+});
+
+describe("isGrokSessionStoragePathNotFoundError", () => {
+  it("matches Grok's stable persistence code", () => {
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpRequestError({
+          code: -32603,
+          errorMessage: "Path not found.",
+          data: { code: "FS_NOT_FOUND", detail: "No such file or directory (os error 2)" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not retry other ACP or filesystem failures", () => {
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpRequestError({
+          code: -32603,
+          errorMessage: "Permission denied.",
+          data: { code: "FS_PERMISSION_DENIED" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpTransportError({
+          detail: "connection closed",
+          cause: new Error("connection closed"),
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

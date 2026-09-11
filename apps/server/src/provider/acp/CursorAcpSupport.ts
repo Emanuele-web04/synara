@@ -49,7 +49,7 @@ export interface CursorAcpRuntimeInput extends Omit<
 
 export interface CursorAcpModelSelectionErrorContext {
   readonly cause: AcpErrors.AcpError;
-  readonly step: "set-config-option" | "set-model";
+  readonly step: "read-config-options" | "set-config-option" | "set-model";
   readonly configId?: string;
 }
 
@@ -744,15 +744,6 @@ function cursorReasoningLabel(value: string): string {
   }
 }
 
-function cursorContextLabel(
-  value: string,
-  contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>,
-): string {
-  return (
-    contextWindowOptions.find((option) => option.value === value)?.label ?? value.toUpperCase()
-  );
-}
-
 function isCursorEffortConfigOption(option: Acp.SessionConfigOption): boolean {
   const id = option.id.trim().toLowerCase();
   const name = option.name.trim().toLowerCase();
@@ -784,217 +775,6 @@ function isCursorContextConfigOption(option: Acp.SessionConfigOption): boolean {
   const id = option.id.trim().toLowerCase();
   const name = option.name.trim().toLowerCase();
   return id === "context" || id === "context_size" || name.includes("context");
-}
-
-function withCursorVariantName(
-  baseName: string,
-  effort: string | undefined,
-  defaultEffort: string | undefined,
-  contextWindow: string | undefined,
-  defaultContextWindow: string | undefined,
-  contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>,
-  fastMode: boolean | undefined,
-): string {
-  const suffixes: Array<string> = [];
-  if (effort && effort !== defaultEffort) {
-    suffixes.push(cursorReasoningLabel(effort));
-  }
-  if (contextWindow && contextWindow !== defaultContextWindow) {
-    suffixes.push(cursorContextLabel(contextWindow, contextWindowOptions));
-  }
-  if (fastMode) {
-    suffixes.push("Fast");
-  }
-  return suffixes.length === 0 ? baseName : `${baseName} ${suffixes.join(" ")}`;
-}
-
-function buildCursorAcpModelDescriptor(input: {
-  readonly choice: CursorAcpModelChoice;
-  readonly slug: string;
-  readonly name: string;
-  readonly supportedReasoningEfforts: NonNullable<
-    ProviderModelDescriptor["supportedReasoningEfforts"]
-  >;
-  readonly defaultReasoningEffort?: string;
-  readonly contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>;
-  readonly defaultContextWindow?: string;
-}): ProviderModelDescriptor {
-  return {
-    slug: input.slug,
-    name: input.name,
-    ...(input.choice.upstreamProviderId
-      ? { upstreamProviderId: input.choice.upstreamProviderId }
-      : {}),
-    ...(input.choice.upstreamProviderName
-      ? { upstreamProviderName: input.choice.upstreamProviderName }
-      : {}),
-    ...(input.supportedReasoningEfforts.length > 0 && input.defaultReasoningEffort
-      ? {
-          supportedReasoningEfforts: input.supportedReasoningEfforts,
-          defaultReasoningEffort: input.defaultReasoningEffort,
-        }
-      : {}),
-    ...(input.contextWindowOptions.length > 0 && input.defaultContextWindow
-      ? {
-          contextWindowOptions: input.contextWindowOptions.map((option) => ({
-            value: option.value,
-            label: option.label,
-            ...(option.value === input.defaultContextWindow ? { isDefault: true as const } : {}),
-          })),
-          defaultContextWindow: input.defaultContextWindow,
-        }
-      : {}),
-  };
-}
-
-function expandCursorParameterizedModelDescriptors(input: {
-  readonly choice: CursorAcpModelChoice;
-  readonly supportedReasoningEfforts: NonNullable<
-    ProviderModelDescriptor["supportedReasoningEfforts"]
-  >;
-  readonly defaultReasoningEffort?: string;
-  readonly contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>;
-  readonly defaultContextWindow?: string;
-}): ReadonlyArray<ProviderModelDescriptor> {
-  const params = cursorModelParametersToObject(input.choice.slug);
-  const reasoningKey =
-    params.reasoning !== undefined ? "reasoning" : params.effort !== undefined ? "effort" : null;
-  const parameterReasoningEffort = normalizeCursorReasoningValue(
-    reasoningKey ? params[reasoningKey] : undefined,
-  );
-  const parameterContextWindow = params.context;
-  const hasFastParameter = params.fast !== undefined;
-  const canExpandReasoning = Boolean(reasoningKey && input.supportedReasoningEfforts.length > 0);
-  const canExpandContext = Boolean(parameterContextWindow && input.contextWindowOptions.length > 1);
-  const canExpandFast = hasFastParameter;
-
-  if (!canExpandReasoning && !canExpandContext && !canExpandFast) {
-    return [
-      buildCursorAcpModelDescriptor({
-        choice: input.choice,
-        slug: input.choice.slug,
-        name: input.choice.name,
-        supportedReasoningEfforts: input.supportedReasoningEfforts,
-        ...(parameterReasoningEffort ? { defaultReasoningEffort: parameterReasoningEffort } : {}),
-        contextWindowOptions: input.contextWindowOptions,
-        ...(parameterContextWindow ? { defaultContextWindow: parameterContextWindow } : {}),
-      }),
-    ];
-  }
-
-  const baseModel = stripCursorParameterizedSuffix(input.choice.slug);
-  const reasoningValues = canExpandReasoning
-    ? input.supportedReasoningEfforts.map((effort) => effort.value)
-    : [parameterReasoningEffort].filter((value): value is string => Boolean(value));
-  const contextValues = canExpandContext
-    ? input.contextWindowOptions.map((contextWindow) => contextWindow.value)
-    : [parameterContextWindow].filter((value): value is string => Boolean(value));
-  const fastValues = canExpandFast ? [false, true] : [undefined];
-  const variantDefaultEffort = parameterReasoningEffort ?? input.defaultReasoningEffort;
-  const variantDefaultContextWindow = parameterContextWindow ?? input.defaultContextWindow;
-  const descriptors: Array<ProviderModelDescriptor> = [];
-  const seen = new Set<string>();
-
-  for (const effort of reasoningValues.length > 0 ? reasoningValues : [undefined]) {
-    for (const contextWindow of contextValues.length > 0 ? contextValues : [undefined]) {
-      for (const fastMode of fastValues) {
-        const variantParams = { ...params };
-        if (reasoningKey && effort) {
-          variantParams[reasoningKey] = cursorReasoningParameterValue(effort);
-        }
-        if (contextWindow) {
-          variantParams.context = contextWindow;
-        }
-        if (fastMode !== undefined) {
-          variantParams.fast = String(fastMode);
-        }
-        const slug = buildCursorParameterizedModelSlug(baseModel, variantParams);
-        if (seen.has(slug)) {
-          continue;
-        }
-        seen.add(slug);
-        descriptors.push(
-          buildCursorAcpModelDescriptor({
-            choice: input.choice,
-            slug,
-            name: withCursorVariantName(
-              input.choice.name,
-              effort,
-              variantDefaultEffort,
-              contextWindow,
-              variantDefaultContextWindow,
-              input.contextWindowOptions,
-              fastMode,
-            ),
-            supportedReasoningEfforts: [],
-            contextWindowOptions: [],
-          }),
-        );
-      }
-    }
-  }
-
-  return descriptors;
-}
-
-export function buildCursorAcpModelDescriptors(
-  configOptions: ReadonlyArray<Acp.SessionConfigOption>,
-): ReadonlyArray<ProviderModelDescriptor> {
-  const choices = flattenCursorAcpModelChoices(configOptions);
-  if (choices.length === 0) {
-    return [];
-  }
-
-  const effortOption = findCursorEffortConfigOption(configOptions);
-  const supportedReasoningEfforts =
-    effortOption?.type === "select"
-      ? flattenSessionConfigSelectOptions(effortOption).flatMap((entry) => {
-          const value = normalizeCursorReasoningValue(entry.value);
-          if (!value) {
-            return [];
-          }
-          return [
-            {
-              value,
-              label: entry.name || value,
-            },
-          ];
-        })
-      : [];
-  const defaultReasoningEffort =
-    effortOption?.type === "select"
-      ? normalizeCursorReasoningValue(effortOption.currentValue)
-      : undefined;
-  const contextOption = configOptions.find(
-    (option) => option.category === "model_config" && isCursorContextConfigOption(option),
-  );
-  const contextWindowOptions =
-    contextOption?.type === "select"
-      ? flattenSessionConfigSelectOptions(contextOption).map((entry) => ({
-          value: entry.value,
-          label: entry.name || entry.value,
-          ...(contextOption.currentValue === entry.value ? { isDefault: true as const } : {}),
-        }))
-      : [];
-  const defaultContextWindow = contextWindowOptions.find((option) => option.isDefault)?.value;
-
-  const descriptors = choices.flatMap((choice) =>
-    expandCursorParameterizedModelDescriptors({
-      choice,
-      supportedReasoningEfforts,
-      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
-      contextWindowOptions,
-      ...(defaultContextWindow ? { defaultContextWindow } : {}),
-    }),
-  );
-  const seen = new Set<string>();
-  return descriptors.filter((descriptor) => {
-    if (seen.has(descriptor.slug)) {
-      return false;
-    }
-    seen.add(descriptor.slug);
-    return true;
-  });
 }
 
 function toConfigValue(
@@ -1068,6 +848,18 @@ function resolveCursorChoiceParameterValue(input: {
   return sawParameterizedChoice ? undefined : input.requestedValue;
 }
 
+function cursorBooleanParameterExposed(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+  baseModel: string,
+  parameterKey: string,
+): boolean {
+  return choices.some(
+    (choice) =>
+      cursorChoiceMatchesBase(choice, baseModel) &&
+      parseCursorModelParameters(choice.slug).has(parameterKey),
+  );
+}
+
 function cursorModelOptionValueSupported(input: {
   readonly configOptions: ReadonlyArray<Acp.SessionConfigOption>;
   readonly choices: ReadonlyArray<CursorAcpModelChoice>;
@@ -1081,11 +873,13 @@ function cursorModelOptionValueSupported(input: {
     return toConfigValue(option, input.value) !== undefined;
   }
   if (typeof input.value === "boolean") {
-    if (
-      input.value === false &&
-      (input.parameterKey === "fast" || input.parameterKey === "thinking")
-    ) {
-      return true;
+    if (input.parameterKey === "fast" || input.parameterKey === "thinking") {
+      // Off is always pass-through-safe. On is also valid when ACP advertises
+      // the parameter at all (often as false); parameterized slugs can flip it.
+      return (
+        input.value === false ||
+        cursorBooleanParameterExposed(input.choices, input.baseModel, input.parameterKey)
+      );
     }
     return (
       resolveCursorChoiceParameterValue({
@@ -1185,7 +979,6 @@ function collectCursorAcpConfigUpdates(
   configOptions: ReadonlyArray<Acp.SessionConfigOption>,
   options: CursorModelOptions | null | undefined,
 ): ReadonlyArray<{ readonly configId: string; readonly value: string | boolean }> {
-  if (!options) return [];
   const updates: Array<{ readonly configId: string; readonly value: string | boolean }> = [];
   const pushUpdate = (
     aliases: ReadonlyArray<string>,
@@ -1199,10 +992,15 @@ function collectCursorAcpConfigUpdates(
     updates.push({ configId: option.id, value: configValue });
   };
 
-  pushUpdate(["effort", "reasoning", "thought level"], options.reasoningEffort);
-  pushUpdate(["context", "context size", "context window"], options.contextWindow);
-  pushUpdate(["fast", "fast mode"], options.fastMode);
-  pushUpdate(["thinking"], options.thinking);
+  // Cursor's persisted/current preference can be true even when Synara has no
+  // fast-mode override. The composer treats the lightning bolt as off unless
+  // fastMode is explicitly true, so make that default authoritative whenever
+  // the selected model exposes a dedicated ACP option. Apply effort last:
+  // Cursor's fast variants default to a lower reasoning level (Grok fast → low).
+  pushUpdate(["fast", "fast mode"], options?.fastMode ?? false);
+  pushUpdate(["thinking"], options?.thinking);
+  pushUpdate(["context", "context size", "context window"], options?.contextWindow);
+  pushUpdate(["effort", "reasoning", "thought level"], options?.reasoningEffort);
   return updates;
 }
 
@@ -1239,6 +1037,44 @@ function mergeCursorModelOptions(
     ...(override ?? {}),
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function defaultCursorReasoningEffortForBaseModel(baseModel: string): string | undefined {
+  const lower = stripCursorParameterizedSuffix(baseModel).toLowerCase();
+  if (lower.includes("gpt") || lower.includes("codex")) {
+    return "medium";
+  }
+  if (lower.includes("claude") || lower.includes("grok")) {
+    return "high";
+  }
+  return undefined;
+}
+
+function withCursorDefaultReasoningEffort(
+  baseModel: string,
+  options: CursorModelOptions | undefined,
+): CursorModelOptions | undefined {
+  if (!options || options.reasoningEffort || options.fastMode === undefined) {
+    return options;
+  }
+  const defaultEffort = defaultCursorReasoningEffortForBaseModel(baseModel);
+  return defaultEffort ? { ...options, reasoningEffort: defaultEffort } : options;
+}
+
+function withCursorFastModeDefault(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+  baseModel: string,
+  options: CursorModelOptions | undefined,
+): CursorModelOptions | undefined {
+  if (options?.fastMode !== undefined) {
+    return options;
+  }
+  const exposesFastParameter = choices.some(
+    (choice) =>
+      cursorChoiceMatchesBase(choice, baseModel) &&
+      parseCursorModelParameters(choice.slug).has("fast"),
+  );
+  return exposesFastParameter ? { ...(options ?? {}), fastMode: false } : options;
 }
 
 function cursorModelParametersEqualExceptFast(left: string, right: string): boolean {
@@ -1279,7 +1115,12 @@ function cursorModelChoiceSupportsRequestedParameters(choice: string, requested:
     if (choiceValue === requestedValue) {
       continue;
     }
-    if ((key === "fast" || key === "thinking") && requestedValue === "false") {
+    // Thinking-off is often omitted from advertised ACP slugs, so a requested
+    // thinking=false still matches the advertised thinking=true default.
+    // Fast mode must not follow that path: Cursor's advertised slugs frequently
+    // bake in fast=true, and substituting that value would keep fast mode on
+    // after the composer lightning bolt is turned off.
+    if (key === "thinking" && requestedValue === "false") {
       continue;
     }
     return false;
@@ -1343,10 +1184,6 @@ function resolveCursorAcpModelSelection(
   }
 
   const exactChoice = choices.find((choice) => choice.slug === trimmed);
-  if (exactChoice) {
-    return { _tag: "Resolved", value: exactChoice.slug };
-  }
-
   const baseModel = resolveCursorAcpBaseModelId(trimmed);
   if (baseModel === "auto") {
     return { _tag: "None" };
@@ -1354,6 +1191,7 @@ function resolveCursorAcpModelSelection(
   const cliBaseModel = normalizeCursorCliBaseModelId(baseModel);
 
   const acpModelValue =
+    exactChoice?.slug ??
     choices.find((choice) => choice.slug === baseModel)?.slug ??
     choices.find((choice) => resolveCursorAcpBaseModelId(choice.slug) === baseModel)?.slug ??
     choices.find((choice) => resolveCursorAcpBaseModelId(choice.slug) === cliBaseModel)?.slug ??
@@ -1374,9 +1212,19 @@ function resolveCursorAcpModelSelection(
     return { _tag: "Resolved", value: resolvedModel };
   }
 
-  const relaxedMatch =
-    findCursorModelChoiceIgnoringFast(choices, resolvedModel) ??
-    findCursorModelChoiceWithSupportedParameters(choices, resolvedModel);
+  const relaxedIgnoringFast = findCursorModelChoiceIgnoringFast(choices, resolvedModel);
+  if (relaxedIgnoringFast) {
+    const hasFastConfig = findCursorFastConfigOption(configOptions) !== undefined;
+    const requestedFast = parseCursorModelParameters(resolvedModel).get("fast");
+    const advertisedFast = parseCursorModelParameters(relaxedIgnoringFast).get("fast");
+    // Without a dedicated fast config option, substituting the advertised slug
+    // would keep whatever fast= Cursor baked in. Only reuse it when we can
+    // still apply the requested value via session/set_config_option.
+    if (hasFastConfig || requestedFast === advertisedFast) {
+      return { _tag: "Resolved", value: relaxedIgnoringFast };
+    }
+  }
+  const relaxedMatch = findCursorModelChoiceWithSupportedParameters(choices, resolvedModel);
   if (relaxedMatch) {
     return { _tag: "Resolved", value: relaxedMatch };
   }
@@ -1429,6 +1277,32 @@ function makeCursorRejectedModelNotice(
   };
 }
 
+function resolveCursorMergedSessionOptions(input: {
+  readonly configOptions: ReadonlyArray<Acp.SessionConfigOption>;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly model: string | null | undefined;
+  readonly options: CursorModelOptions | null | undefined;
+}): CursorModelOptions | undefined {
+  const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    configOptions: input.configOptions,
+    choices: input.choices,
+    baseModel: input.baseModel,
+    options: mergeCursorModelOptions(
+      cursorModelOptionsFromModelParameters(input.model),
+      input.options,
+    ),
+  });
+  return withCursorDefaultReasoningEffort(
+    input.baseModel,
+    withCursorFastModeDefault(
+      input.choices,
+      input.baseModel,
+      mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
+    ),
+  );
+}
+
 export function applyCursorAcpModelSelection<E>(input: {
   readonly runtime: CursorAcpModelSelectionRuntime;
   readonly model: string | null | undefined;
@@ -1439,23 +1313,20 @@ export function applyCursorAcpModelSelection<E>(input: {
 }): Effect.Effect<void, E> {
   const notify = (notice: CursorAcpModelSelectionNotice): Effect.Effect<void> =>
     input.onNotice ? input.onNotice(notice) : Effect.void;
+  const readConfigOptions = input.runtime.getConfigOptions.pipe(
+    Effect.mapError((cause) => input.mapError({ cause, step: "read-config-options" })),
+  );
   return Effect.gen(function* () {
-    const initialConfigOptions = yield* input.runtime.getConfigOptions;
+    const initialConfigOptions = yield* readConfigOptions;
     const choices = flattenCursorAcpModelChoices(initialConfigOptions);
     const baseModel = resolveCursorAcpBaseModelId(input.model);
-    const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    const mergedOptions = resolveCursorMergedSessionOptions({
       configOptions: initialConfigOptions,
       choices,
       baseModel,
-      options: mergeCursorModelOptions(
-        cursorModelOptionsFromModelParameters(input.model),
-        input.options,
-      ),
+      model: input.model,
+      options: input.options,
     });
-    const mergedOptions = mergeCursorModelOptions(
-      cursorModelOptionsFromCliModelId(input.model),
-      runtimeSafeOptions,
-    );
     const selection = resolveCursorAcpModelSelection(
       initialConfigOptions,
       input.model,
@@ -1464,13 +1335,16 @@ export function applyCursorAcpModelSelection<E>(input: {
     if (selection._tag === "Fallback" || selection._tag === "Unavailable") {
       yield* notify(makeCursorUnavailableModelNotice(selection));
     }
+    let shouldApplyRequestedOptions = selection._tag === "None";
     if (selection._tag === "Resolved" || selection._tag === "Fallback") {
       const modelValue = selection.value;
-      yield* input.runtime.setModel(modelValue).pipe(
-        Effect.asVoid,
+      const modelApplied = yield* input.runtime.setModel(modelValue).pipe(
+        Effect.as(true),
         Effect.catch((cause) =>
           isCursorModelRejection(cause)
-            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause))
+            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause)).pipe(
+                Effect.as(false),
+              )
             : Effect.fail(
                 input.mapError({
                   cause,
@@ -1479,12 +1353,29 @@ export function applyCursorAcpModelSelection<E>(input: {
               ),
         ),
       );
+      shouldApplyRequestedOptions = selection._tag === "Resolved" && modelApplied;
     }
 
-    const configUpdates = collectCursorAcpConfigUpdates(
-      yield* input.runtime.getConfigOptions,
-      mergedOptions,
-    );
+    // A fallback keeps a different model than the one whose options were
+    // requested. Applying the requested fast/effort values to that model can
+    // silently mutate an unrelated session configuration.
+    if (!shouldApplyRequestedOptions) {
+      return;
+    }
+
+    // Re-read after setModel: Auto/default often has no fast/effort options,
+    // so the first pass would drop fast=true and then write fast=false once
+    // GPT/Grok's dedicated toggles appear.
+    const appliedConfigOptions = yield* readConfigOptions;
+    const appliedChoices = flattenCursorAcpModelChoices(appliedConfigOptions);
+    const appliedOptions = resolveCursorMergedSessionOptions({
+      configOptions: appliedConfigOptions,
+      choices: appliedChoices,
+      baseModel,
+      model: input.model,
+      options: input.options,
+    });
+    const configUpdates = collectCursorAcpConfigUpdates(appliedConfigOptions, appliedOptions);
     for (const update of configUpdates) {
       yield* input.runtime.setConfigOption(update.configId, update.value).pipe(
         Effect.mapError((cause) =>

@@ -94,6 +94,20 @@ it.effect("accepts project script discovery requests", () =>
   }),
 );
 
+it.effect("accepts bounded project file watch requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-project-file-watch-1",
+      body: {
+        _tag: WS_METHODS.projectsSubscribeFileChange,
+        cwd: "/repo",
+        relativePath: "src/app.ts",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.projectsSubscribeFileChange);
+  }),
+);
+
 it.effect("accepts automation create requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {
@@ -195,6 +209,27 @@ it.effect("accepts git.actionProgress push envelopes", () =>
     }
 
     assert.strictEqual(parsed.channel, WS_CHANNELS.gitActionProgress);
+  }),
+);
+
+it.effect("accepts git.worktreeSetupProgress push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 5,
+      channel: WS_CHANNELS.gitWorktreeSetupProgress,
+      data: {
+        progressId: "progress-1",
+        kind: "phase_started",
+        phase: "branch",
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.gitWorktreeSetupProgress);
   }),
 );
 

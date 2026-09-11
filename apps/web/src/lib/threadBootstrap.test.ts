@@ -17,7 +17,7 @@ const PROJECT_ID = ProjectId.makeUnsafe("project-bootstrap");
 const THREAD_ID = ThreadId.makeUnsafe("thread-bootstrap");
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -57,6 +57,7 @@ function makeComposerDraftState(
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -258,6 +259,38 @@ describe("threadBootstrap", () => {
     });
   });
 
+  it.each(["local", "worktree"] as const)(
+    "starts fresh chats in the preferred %s mode without inheriting a worktree",
+    (defaultEnvMode) => {
+      expect(
+        createFreshDraftThreadSeed({
+          createdAt: "2026-04-05T10:00:00.000Z",
+          entryPoint: "chat",
+          options: undefined,
+          defaultEnvMode,
+        }),
+      ).toMatchObject({ envMode: defaultEnvMode, branch: null, worktreePath: null });
+    },
+  );
+
+  it("keeps explicit workspace targets ahead of the preferred mode", () => {
+    const input = {
+      createdAt: "2026-04-05T10:00:00.000Z",
+      entryPoint: "chat" as const,
+      defaultEnvMode: "worktree" as const,
+    };
+    expect(createFreshDraftThreadSeed({ ...input, options: { envMode: "local" } }).envMode).toBe(
+      "local",
+    );
+    expect(
+      createFreshDraftThreadSeed({
+        ...input,
+        defaultEnvMode: "local",
+        options: { worktreePath: "/repo/.worktrees/explicit" },
+      }),
+    ).toMatchObject({ envMode: "worktree", worktreePath: "/repo/.worktrees/explicit" });
+  });
+
   it("marks fresh draft seeds as temporary when requested", () => {
     expect(
       createFreshDraftThreadSeed({
@@ -328,6 +361,37 @@ describe("threadBootstrap", () => {
     ).toBe("default");
   });
 
+  it.each([null, undefined])(
+    "inherits an active draft PR when the active PR is %s",
+    (lastKnownPr) => {
+      const pullRequest = {
+        number: 42,
+        title: "Keep PR context",
+        url: "https://github.com/example/repo/pull/42",
+        baseBranch: "main",
+        headBranch: "feature/context",
+        state: "open" as const,
+      };
+      expect(
+        resolveTerminalThreadCreationState({
+          activeDraftThread: makeDraftThread({ lastKnownPr: pullRequest }),
+          activeThread: {
+            projectId: PROJECT_ID,
+            modelSelection: modelSelection("codex", "gpt-5"),
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            ...(lastKnownPr === undefined ? {} : { lastKnownPr }),
+          },
+          draftComposerState: null,
+          draftThread: null,
+          options: undefined,
+          projectDefaultModelSelection: null,
+          projectId: PROJECT_ID,
+        }).lastKnownPr,
+      ).toEqual(pullRequest);
+    },
+  );
+
   it("preserves explicit draft plan mode when resolving terminal creation payloads", () => {
     expect(
       resolveTerminalThreadCreationState({
@@ -371,5 +435,24 @@ describe("threadBootstrap", () => {
       worktreePath: null,
       branch: "feature/terminal-bootstrap",
     });
+  });
+
+  it("restores the last-used model and options for a fresh bootstrap ahead of project and global defaults", () => {
+    const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProvider: "codex",
+        draftComposerState: makeComposerDraftState({
+          modelSelectionByProvider: { claudeAgent: lastUsed },
+          activeProvider: "claudeAgent",
+        }),
+        draftThread: makeDraftThread(),
+        options: undefined,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.5"),
+        projectId: PROJECT_ID,
+      }).modelSelection,
+    ).toEqual(lastUsed);
   });
 });

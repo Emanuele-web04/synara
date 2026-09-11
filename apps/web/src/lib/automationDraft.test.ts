@@ -13,7 +13,6 @@ import {
   hasBlockingAutomationDraftWarnings,
   maxIterationsForFastIntervalApproval,
   updateAutomationDraftWarningAcknowledgement,
-  warningIdsForAcknowledgedRisks,
   type AutomationDraftWarningId,
 } from "./automationDraft";
 
@@ -102,14 +101,6 @@ describe("automation draft warnings", () => {
     ).toEqual(["fast-interval", "full-access", "local-checkout"]);
   });
 
-  it("maps persisted risk ids back to warning acknowledgements", () => {
-    expect(
-      Array.from(
-        warningIdsForAcknowledgedRisks(["fast-interval", "full-access", "local-checkout"]),
-      ),
-    ).toEqual(["fast-recurring-interval", "full-access", "local-checkout"]);
-  });
-
   it("immutably updates warning acknowledgements", () => {
     const initial = new Set<AutomationDraftWarningId>(["full-access"]);
     const added = updateAutomationDraftWarningAcknowledgement(initial, "local-checkout", true);
@@ -187,6 +178,30 @@ describe("automation draft warnings", () => {
     });
     expect(Array.from(standaloneIds)).toEqual([]);
     expect(hasBlockingAutomationDraftWarnings(standaloneWarnings, standaloneIds)).toBe(true);
+  });
+
+  it("mentions a manual schedule without blocking submission", () => {
+    const warnings = buildAutomationDraftWarnings({
+      schedule: { type: "manual" },
+      mode: "standalone",
+      runtimeMode: "approval-required",
+      worktreeMode: "worktree",
+      hasEphemeralContext: false,
+      generatedConfidence: null,
+      generatedNeedsConfirmation: false,
+      prompt: "Summarize open reviews.",
+    });
+
+    expect(warnings).toMatchObject([
+      {
+        id: "missing-schedule",
+        title: "Manual runs only",
+        detail: "This automation only runs when you press Run now.",
+        requiresAcknowledgement: false,
+      },
+      { id: "worktree-cleanup", requiresAcknowledgement: false },
+    ]);
+    expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(false);
   });
 
   it("does not show worktree cleanup risk for heartbeat runs", () => {

@@ -211,13 +211,16 @@ export function createFreshDraftThreadSeed(input: {
   createdAt: string;
   entryPoint: ThreadPrimarySurface;
   options: NewThreadOptions | undefined;
+  defaultEnvMode?: DraftThreadEnvMode;
 }): Omit<DraftThreadState, "projectId" | "interactionMode"> {
   return {
     createdAt: input.createdAt,
     branch: input.options?.branch ?? null,
     worktreePath: input.options?.worktreePath ?? null,
     workingDirectory: input.options?.workingDirectory ?? null,
-    envMode: input.options?.envMode ?? "local",
+    envMode:
+      input.options?.envMode ??
+      (input.options?.worktreePath ? "worktree" : (input.defaultEnvMode ?? "local")),
     runtimeMode: DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
     ...(input.options?.temporary ? { isTemporary: true } : {}),
@@ -324,11 +327,9 @@ export function resolveTerminalThreadCreationState(
       input.draftThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     lastKnownPr:
       input.draftThread?.lastKnownPr ??
-      (input.activeThread?.projectId === input.projectId
-        ? (input.activeThread.lastKnownPr ?? null)
-        : null) ??
+      (input.activeThread?.projectId === input.projectId ? input.activeThread.lastKnownPr : null) ??
       (input.activeDraftThread?.projectId === input.projectId
-        ? (input.activeDraftThread.lastKnownPr ?? null)
+        ? input.activeDraftThread.lastKnownPr
         : null) ??
       null,
     envMode: hasExplicitEnvModeOverride

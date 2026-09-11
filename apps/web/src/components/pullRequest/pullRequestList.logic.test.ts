@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
 
 import {
-  countUniqueViewerReviewRequests,
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
   matchesPullRequestSearchQuery,
@@ -38,6 +37,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     isPinned: false,
     projectContexts: [],
     mergeability: "unknown",
+    stack: null,
     labels: [],
     ...overrides,
   };
@@ -149,16 +149,6 @@ describe("pull request list identity", () => {
       projectTitle: "Project Two",
     });
     expect(pullRequestListEntryKey(first)).toBe(pullRequestListEntryKey(second));
-  });
-
-  it("counts one review request once across shared-project rows", () => {
-    const first = makeEntry({ viewerReviewRequested: true });
-    const duplicate = makeEntry({
-      projectId: "project-2" as PullRequestListEntry["projectId"],
-      viewerReviewRequested: true,
-    });
-    const other = makeEntry({ number: 2, viewerReviewRequested: true });
-    expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
   });
 });
 

@@ -7,9 +7,12 @@ import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 
+import { resolveExecutable } from "@synara/shared/executable";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import {
   type DroidModelOptions,
   type ProviderListModelsResult,
+  type ProviderInteractionMode,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -74,26 +77,32 @@ export function hasDroidApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean
   return getDroidApiKeyEnv(env) !== undefined;
 }
 
-/** Honors PATH first, then falls back to Factory's common `~/.local/bin` install location. */
-export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
+export interface DroidCliResolutionOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+  readonly homeDir?: string;
+  readonly pathExists?: (candidate: string) => boolean;
+}
+
+/** Uses shared executable resolution, then Factory's provider-specific POSIX fallback. */
+export function resolveDroidCliBinaryPath(
+  binaryPath?: string | null,
+  options: DroidCliResolutionOptions = {},
+): string {
   const configured = binaryPath?.trim();
   if (configured) {
     return configured;
   }
   const name = "droid";
-  const searchPath = process.env.PATH ?? "";
-  for (const directory of searchPath.split(nodePath.delimiter)) {
-    if (!directory.trim()) {
-      continue;
-    }
-    const candidate = nodePath.join(directory, name);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const resolved = resolveExecutable(name, { platform, env });
+  if (resolved) {
+    return resolved;
   }
-  if (process.platform !== "win32") {
-    const localBin = nodePath.join(nodeOs.homedir(), ".local", "bin", name);
-    if (existsSync(localBin)) {
+  if (supportsPosixPermissions(platform)) {
+    const localBin = nodePath.join(options.homeDir ?? nodeOs.homedir(), ".local", "bin", name);
+    if ((options.pathExists ?? existsSync)(localBin)) {
       return localBin;
     }
   }
@@ -206,7 +215,7 @@ export function applyDroidAcpModelSelection<E>(input: {
 /** Applies Droid's native read-only spec mode before a Plan-mode prompt is dispatched. */
 export function applyDroidAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: ProviderInteractionMode;
   readonly runtimeMode?: "approval-required" | "full-access";
   readonly mapError: (context: DroidAcpModeSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {

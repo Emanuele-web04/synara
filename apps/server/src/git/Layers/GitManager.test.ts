@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
 import type { GitActionProgressEvent } from "@synara/contracts";
 import type {
@@ -304,6 +304,10 @@ function runStackedAction(
     commitMessage?: string;
     featureBranch?: boolean;
     filePaths?: readonly string[];
+    prTitle?: string;
+    prBody?: string;
+    prDraft?: boolean;
+    allowDirtyWorkingTree?: boolean;
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
 ) {
@@ -378,6 +382,88 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("routes file-scoped working-tree diffs and rejects other scopes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-file-diff-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "selected.txt"), "selected\n");
+        fs.writeFileSync(path.join(repoDir, "other.txt"), "other\n");
+      });
+      const { manager } = yield* makeManager();
+      const { patch } = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir,
+        scope: "workingTree",
+        filePath: "selected.txt",
+      });
+      expect(patch).toContain("selected.txt");
+      expect(patch).not.toContain("other.txt");
+      for (const scope of ["staged", "unstaged", "branch", "ref"] as const) {
+        const exit = yield* manager
+          .readWorkingTreeDiff({
+            cwd: repoDir,
+            scope,
+            filePath: "selected.txt",
+            compareRef: "HEAD",
+          })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit))
+          expect(String(exit.cause)).toContain("only supported for the working tree");
+      }
+      expect(
+        Exit.isFailure(
+          yield* manager
+            .readWorkingTreeDiffStats({
+              cwd: repoDir,
+              scope: "workingTree",
+              filePath: "selected.txt",
+            })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("refuses to summarize a working-tree patch whose capture was truncated", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-truncated-summary-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "oversized.txt"), "generated line\n".repeat(100_000));
+      });
+      let generationCalls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateDiffSummary: () => {
+            generationCalls += 1;
+            return Effect.succeed({ summary: "## Summary\n- Partial input" });
+          },
+        },
+      });
+
+      const captured = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir,
+        scope: "workingTree",
+      });
+      expect(captured.truncated).toBe(true);
+
+      const result = yield* Effect.result(
+        manager.summarizeDiff({ cwd: repoDir, scope: "workingTree" }),
+      );
+
+      expect(result._tag).toBe("Failure");
+      expect(generationCalls).toBe(0);
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "GitManagerError",
+          operation: "summarizeDiff",
+        });
+        expect(result.failure.message).toContain("truncated diff");
+      }
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -423,6 +509,24 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         deletions: 36,
         changedFiles: 3,
       });
+    }),
+  );
+
+  it.effect("status exposes the configured PR merge base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/configured-pr-base"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/configured-pr-base.gh-merge-base",
+        "release",
+      ]);
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.configuredPrBaseBranch).toBe("release");
     }),
   );
 
@@ -1293,6 +1397,163 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             call.includes("pr create --base main --head feature/create-pr-only"),
           ),
         ).toBe(true);
+      }),
+    30_000,
+  );
+
+  it.effect(
+    "uses provided PR title, body, and draft flag without generating content",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/custom-pr-content"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "custom-pr.txt"), "custom pr\n");
+        yield* runGit(repoDir, ["add", "custom-pr.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Custom PR content"]);
+
+        let generateCalls = 0;
+        const { manager, ghCalls } = yield* makeManager({
+          textGeneration: {
+            generatePrContent: () => {
+              generateCalls += 1;
+              return Effect.succeed({ title: "Generated title", body: "Generated body" });
+            },
+          },
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([
+                {
+                  number: 91,
+                  title: "Custom PR title",
+                  url: "https://github.com/example-org/sample-repo/pull/91",
+                  baseRefName: "main",
+                  headRefName: "feature/custom-pr-content",
+                },
+              ]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          prTitle: "Custom PR title",
+          prBody: "Custom PR body.",
+          prDraft: true,
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.pr.title).toBe("Custom PR title");
+        expect(generateCalls).toBe(0);
+        const createCall = ghCalls.find((call) => call.startsWith("pr create "));
+        expect(createCall).toContain(
+          "pr create --base main --head feature/custom-pr-content --title Custom PR title",
+        );
+        expect(createCall).toContain("--draft");
+      }),
+    30_000,
+  );
+
+  it.effect(
+    "rejects create_pr with uncommitted changes unless the caller opts out of the guard",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/dirty-create-pr"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "committed.txt"), "committed\n");
+        yield* runGit(repoDir, ["add", "committed.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Committed work"]);
+        fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "left out\n");
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([
+                {
+                  number: 92,
+                  title: "Committed work",
+                  url: "https://github.com/example-org/sample-repo/pull/92",
+                  baseRefName: "main",
+                  headRefName: "feature/dirty-create-pr",
+                },
+              ]),
+            ],
+          },
+        });
+        const guardedError = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+        expect(guardedError).toContain("Commit local changes before creating a PR.");
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          allowDirtyWorkingTree: true,
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(result.pr.status).toBe("created");
+        const status = yield* runGit(repoDir, ["status", "--porcelain"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout),
+        );
+        expect(status).toContain("uncommitted.txt");
+      }),
+    30_000,
+  );
+
+  it.effect(
+    "rejects push with uncommitted changes unless the caller opts out of the guard",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/dirty-push"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "committed.txt"), "committed\n");
+        yield* runGit(repoDir, ["add", "committed.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Committed work"]);
+        fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "left out\n");
+
+        const { manager } = yield* makeManager();
+        const guardedError = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+        expect(guardedError).toContain("Commit or stash local changes before pushing.");
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+          allowDirtyWorkingTree: true,
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        const status = yield* runGit(repoDir, ["status", "--porcelain"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout),
+        );
+        expect(status).toContain("uncommitted.txt");
       }),
     30_000,
   );

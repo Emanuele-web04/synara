@@ -4,6 +4,16 @@
 // Exports: command parsing plus resolved terminal presentation metadata for web/server consumers.
 
 export const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
+export const DOCK_TERMINAL_SCOPE_PREFIX = "dock-terminal:";
+
+export function dockTerminalScopeId(hostThreadId: string): string {
+  return `${DOCK_TERMINAL_SCOPE_PREFIX}${hostThreadId}`;
+}
+
+export function terminalScopeIdsForThread(hostThreadId: string): readonly string[] {
+  return [hostThreadId, dockTerminalScopeId(hostThreadId)];
+}
+
 export type TerminalCliKind = "codex" | "claude" | "antigravity" | "commandcode";
 export type TerminalIconKey = "terminal" | "openai" | "claude" | "antigravity" | "commandcode";
 export type TerminalActivityState = "running" | "attention" | "review";
@@ -39,13 +49,9 @@ const CODEX_COMMAND_NAMES = new Set(["codex", "codex-cli"]);
 const CLAUDE_COMMAND_NAMES = new Set(["claude", "claude-code", "claude_code"]);
 const ANTIGRAVITY_COMMAND_NAMES = new Set(["agy", "antigravity", "antigravity-cli"]);
 // Command Code ships as the `cmd` binary. Bare `cmd` is also the Windows shell,
-// so output/title detection only trusts the "Command Code" product banner while
-// the command-token path accepts the binary name (the primary signal).
+// so identity detection only trusts explicit command-code command names and the
+// "Command Code" product title, never a bare `cmd` token.
 const COMMANDCODE_COMMAND_NAMES = new Set(["cmd", "command-code", "command_code", "commandcode"]);
-const OUTPUT_CODEX_TEXT_PATTERNS = [/\bopenai codex\b(?:\s*\(|\s+v)/i, /\bcodex cli\b/i];
-const OUTPUT_CLAUDE_TEXT_PATTERNS = [/\bclaude code\b(?:\s+v\d|\s*$)/i];
-const OUTPUT_ANTIGRAVITY_TEXT_PATTERNS = [/\bantigravity cli\b/i];
-const OUTPUT_COMMANDCODE_TEXT_PATTERNS = [/\bcommand code\b(?:\s+v\d|\s*\(|\s*$)/i, /\bcmd cli\b/i];
 const TITLE_CODEX_TEXT_PATTERNS = [/\bopenai codex\b/i, /\bcodex cli\b/i];
 const TITLE_CLAUDE_TEXT_PATTERNS = [/\bclaude code\b/i];
 const TITLE_ANTIGRAVITY_TEXT_PATTERNS = [/\bantigravity(?: cli)?\b/i, /^agy(?: cli)?$/i];
@@ -77,17 +83,6 @@ function truncateTerminalTitle(title: string): string {
   return title.length <= MAX_TERMINAL_TITLE_LENGTH
     ? title
     : title.slice(0, MAX_TERMINAL_TITLE_LENGTH).trimEnd();
-}
-
-function normalizeTextForIdentityDetection(value: string): string {
-  return value
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, " ")
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, " ")
-    .replace(/\u001b[P^_].*?(?:\u001b\\|\u0007|\u009c)/g, " ")
-    .replace(/\u001b[@-_]/g, " ")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function normalizeCommandToken(token: string): string {
@@ -150,19 +145,6 @@ function textMatchesCliPatterns(
     }
   }
   return null;
-}
-
-function deriveCliKindFromOutputText(text: string | null | undefined): TerminalCliKind | null {
-  const normalizedText = text?.trim();
-  if (!normalizedText) {
-    return null;
-  }
-  return (
-    textMatchesCliPatterns(normalizedText, OUTPUT_CODEX_TEXT_PATTERNS, "codex") ??
-    textMatchesCliPatterns(normalizedText, OUTPUT_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(normalizedText, OUTPUT_ANTIGRAVITY_TEXT_PATTERNS, "antigravity") ??
-    textMatchesCliPatterns(normalizedText, OUTPUT_COMMANDCODE_TEXT_PATTERNS, "commandcode")
-  );
 }
 
 function deriveCliKindFromProcessText(text: string | null | undefined): TerminalCliKind | null {
@@ -484,22 +466,6 @@ export function consumeTerminalTitleInput(
     buffer: nextIdentityState.buffer,
     title: nextIdentityState.identity?.title ?? null,
   };
-}
-
-// Detect provider identity from CLI banners or other high-confidence visible output.
-export function deriveTerminalOutputIdentity(output: string): TerminalCommandIdentity | null {
-  const cliKind = deriveCliKindFromOutputText(normalizeTextForIdentityDetection(output));
-  return cliKind
-    ? createTerminalCommandIdentity(defaultTerminalTitleForCliKind(cliKind), cliKind)
-    : null;
-}
-
-// Detect provider identity from terminal title signals without trusting the title as a tab name.
-export function deriveTerminalTitleSignalIdentity(title: string): TerminalCommandIdentity | null {
-  const cliKind = inferCliKindFromTitle(title);
-  return cliKind
-    ? createTerminalCommandIdentity(defaultTerminalTitleForCliKind(cliKind), cliKind)
-    : null;
 }
 
 // Resolve terminal label, icon, and activity state from persisted metadata plus runtime status.

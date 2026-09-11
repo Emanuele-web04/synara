@@ -4,18 +4,15 @@
 // Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @synara/contracts tool lifecycle item types
 
-import {
-  BROWSER_TOOL_NAMES,
-  type BrowserToolName,
-  type ToolLifecycleItemType,
-} from "@synara/contracts";
+import type { ToolLifecycleItemType } from "@synara/contracts";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
 import { basenameOfPath } from "../file-icons";
 import { extractToolArgumentField } from "./toolArgumentSummary";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
-    .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
+    .trimEnd()
+    .replace(/\s(?:complete|completed|done|finished|success|succeeded|started|running)$/i, "")
     .trim();
 }
 
@@ -119,12 +116,30 @@ interface SynaraMcpToolPresentation {
   readonly failed: string;
 }
 
-type SynaraBrowserToolName = `synara_${BrowserToolName}`;
-const BROWSER_TOOL_NAME_SET = new Set<string>(BROWSER_TOOL_NAMES);
+// Historical messages still contain retired tools; presentation does not expose them to agents.
+const BROWSER_HISTORY_TITLES = {
+  ...BROWSER_TOOL_TITLES,
+  browser_snapshot: "Snapshot browser page",
+  browser_webmcp_tools: "Discover page WebMCP tools",
+  browser_webmcp_call: "Call page WebMCP tool",
+  browser_click: "Click browser target",
+  browser_hover: "Hover browser target",
+  browser_drag: "Drag between browser targets",
+  browser_type: "Type into browser target",
+  browser_select: "Select browser options",
+  browser_press: "Press browser keys",
+  browser_scroll: "Scroll browser page",
+  browser_wait: "Wait for browser condition",
+  browser_evaluate: "Evaluate browser expression",
+} as const;
+type BrowserHistoryToolName = keyof typeof BROWSER_HISTORY_TITLES;
+type SynaraBrowserToolName = `synara_${BrowserHistoryToolName}`;
+const BROWSER_HISTORY_TOOL_NAMES = Object.keys(BROWSER_HISTORY_TITLES) as BrowserHistoryToolName[];
+const BROWSER_TOOL_NAME_SET = new Set<string>(BROWSER_HISTORY_TOOL_NAMES);
 
 const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
-  BROWSER_TOOL_NAMES.map((toolName) => {
-    const title = BROWSER_TOOL_TITLES[toolName];
+  BROWSER_HISTORY_TOOL_NAMES.map((toolName) => {
+    const title = BROWSER_HISTORY_TITLES[toolName];
     return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
   }),
 ) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
@@ -281,8 +296,8 @@ function normalizeSynaraMcpIdentifier(value: string): string {
 }
 
 const SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION = new Map<string, SynaraBrowserToolName>(
-  BROWSER_TOOL_NAMES.map((toolName) => [
-    normalizeSynaraMcpIdentifier(BROWSER_TOOL_TITLES[toolName]),
+  BROWSER_HISTORY_TOOL_NAMES.map((toolName) => [
+    normalizeSynaraMcpIdentifier(BROWSER_HISTORY_TITLES[toolName]),
     `synara_${toolName}`,
   ]),
 );
@@ -842,13 +857,6 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
   return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
-// Whether a shell command is a read-only inspection (read/search/find/list).
-// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
-// timeline search icon stays in sync with the derived command label.
-export function isInspectCommand(rawCommand: string): boolean {
-  return resolveCommandVisualKind(rawCommand) === "inspect";
-}
-
 // Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
 // This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
@@ -1245,7 +1253,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     break;
   }
 
-  const pipeIndex = value.search(/\s*\|\s*/);
+  const pipeIndex = value.indexOf("|");
   if (pipeIndex > 0) {
     value = value.slice(0, pipeIndex).trim();
   }

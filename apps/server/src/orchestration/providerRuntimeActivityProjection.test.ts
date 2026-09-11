@@ -47,13 +47,34 @@ function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unk
   });
 }
 
-function expectSchemaValidActivities(event: ProviderRuntimeEvent): void {
-  const activities = projectProviderRuntimeActivities(event);
+function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequence?: number): void {
+  const activities = projectProviderRuntimeActivities(event, sessionSequence);
   expect(activities.length).toBeGreaterThan(0);
   for (const activity of activities) {
     expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
   }
 }
+
+it.each(["info", "warning", "error"])("projects Pi %s notifications as notices", (type) => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "pi",
+      type: "runtime.warning",
+      eventId: "pi-notification",
+      turnId: TURN_ID,
+      payload: { message: "Extension notification", detail: { type } },
+      raw: { source: "pi.sdk.event", method: "extension/ui/notify", payload: { type } },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    tone: "info",
+    kind: "runtime.warning",
+    summary: type === "info" ? "Pi extension" : "Runtime warning",
+    payload: { message: "Extension notification", detail: "Extension notification" },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
 
 describe("projected activities satisfy the orchestration command schema", () => {
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
@@ -154,9 +175,9 @@ describe("projected activities satisfy the orchestration command schema", () => 
         type: "turn.steered",
         eventId: "turn-steered-fractional-sequence",
         turnId: TURN_ID,
-        sessionSequence: 12.5,
         payload: { message: "keep going" },
       }),
+      12.5,
     );
   });
 
@@ -352,6 +373,44 @@ describe("provider runtime activity projection", () => {
       `${THREAD_ID}:codex:tool.updated:tool-1`,
     );
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
+  });
+
+  it("keeps the fast JSON fingerprint byte-identical to the legacy JSON-like serializer", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "tool.progress",
+        eventId: "tool-progress-fingerprint",
+        turnId: TURN_ID,
+        payload: {
+          toolUseId: "tool-fingerprint",
+          toolName: "mcp__github__fetch_pr",
+          summary: "Fetching PR",
+          elapsedSeconds: 2.4,
+        },
+      }),
+    );
+    const legacyFingerprint = JSON.stringify(
+      {
+        kind: activity!.kind,
+        summary: activity!.summary,
+        payload: activity!.payload,
+        turnId: activity!.turnId,
+      },
+      (() => {
+        const seen = new WeakSet<object>();
+        return (_key: string, entry: unknown) => {
+          if (typeof entry === "bigint") return entry.toString();
+          if (typeof entry === "function" || typeof entry === "symbol") return undefined;
+          if (entry && typeof entry === "object") {
+            if (seen.has(entry)) return "[Circular]";
+            seen.add(entry);
+          }
+          return entry;
+        };
+      })(),
+    );
+
+    expect(providerActivityUpdateFingerprint(activity!)).toBe(legacyFingerprint);
   });
 
   it.each(["antigravity", "codex"] as const)(
@@ -567,6 +626,23 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    const [accountingOnlyUsage] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "thread.token-usage.updated",
+        eventId: "context-usage-accounting-only",
+        provider: "claudeAgent",
+        payload: { usage: { usedTokens: 0, totalProcessedTokens: 340_000 } },
+      }),
+    );
+    expect(accountingOnlyUsage).toMatchObject({
+      kind: "context-window.updated",
+      payload: {
+        usedTokens: 0,
+        totalProcessedTokens: 340_000,
+        provider: "claudeAgent",
+      },
+    });
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
@@ -614,6 +690,8 @@ describe("provider runtime activity projection", () => {
         turnId: TURN_ID,
         payload: {
           state: "completed",
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 1_000,
           modelUsage: {
             "claude-fable-5": {
               inputTokens: 100,
@@ -630,13 +708,188 @@ describe("provider runtime activity projection", () => {
       kind: "turn.completed",
       payload: {
         state: "completed",
+        provider: "claudeAgent",
+        tokenAccountingVersion: 1,
+        mainLoopTokens: 1_000,
         modelUsage: {
-          "claude-fable-5": { inputTokens: 960, outputTokens: 40, totalTokens: 1_000 },
+          "claude-fable-5": {
+            inputTokens: 960,
+            outputTokens: 40,
+            totalTokens: 1_000,
+            cacheReadInputTokens: 800,
+            cacheCreationInputTokens: 60,
+          },
         },
       },
     });
     expect(
       Object.keys((turn?.payload as { modelUsage?: Record<string, unknown> }).modelUsage ?? {}),
     ).toEqual(["claude-fable-5"]);
+  });
+
+  it("projects unmapped passthrough events instead of dropping them", () => {
+    const oversizedDiagnostic = "x".repeat(64_000);
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "event.unmapped",
+        eventId: "unmapped-native-event",
+        turnId: TURN_ID,
+        payload: {
+          nativeType: "item/agentMessage/completed",
+          detail: "Finished the refactor",
+          data: {
+            secretKey: "must-not-reach-the-activity-snapshot",
+            note: "api_key=another-secret",
+            output: oversizedDiagnostic,
+          },
+        },
+      }),
+    );
+    expect(activity).toMatchObject({
+      tone: "info",
+      kind: "provider.event.unmapped",
+      // Raw native type/label is the row title.
+      summary: "item/agentMessage/completed",
+      turnId: TURN_ID,
+      payload: {
+        nativeEventType: "item/agentMessage/completed",
+        detail: "Finished the refactor",
+        data: expect.objectContaining({ __synaraTruncated: true }),
+      },
+    });
+    const serializedPayload = JSON.stringify(activity?.payload);
+    expect(serializedPayload.length).toBeLessThan(17_000);
+    expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
+    expect(serializedPayload).not.toContain("another-secret");
+    // The activity must survive the schema of the command that carries it.
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+    // A passthrough event without a native type is the one case still dropped.
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "event.unmapped",
+          eventId: "unmapped-without-type",
+          payload: { detail: "no type" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps routine hook lifecycle internal and surfaces only consequential completions", () => {
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.started",
+          eventId: "hook-started",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            hookName: "/Users/example/.codex/hooks.json",
+            hookEvent: "preToolUse",
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.progress",
+          eventId: "hook-progress",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            stdout: "Still running.",
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.completed",
+          eventId: "hook-success",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            hookName: "/Users/example/.codex/hooks.json",
+            hookEvent: "preToolUse",
+            outcome: "success",
+            status: "completed",
+            durationMs: 8,
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.completed",
+          eventId: "hook-cancelled",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-2",
+            outcome: "cancelled",
+          },
+        }),
+      ),
+    ).toEqual([]);
+
+    const [failed] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "hook.completed",
+        eventId: "hook-failed",
+        turnId: TURN_ID,
+        payload: {
+          hookId: "hook-run-3",
+          hookName: "/Users/example/.codex/hooks.json",
+          hookEvent: "postToolUse",
+          outcome: "error",
+          status: "failed",
+          statusMessage: "Hook process exited with code 1.",
+          durationMs: 20,
+        },
+      }),
+    );
+    expect(failed).toMatchObject({
+      tone: "error",
+      kind: "runtime.warning",
+      summary: "postToolUse hook failed",
+      payload: {
+        message: "Hook process exited with code 1.",
+        hookId: "hook-run-3",
+        hookEvent: "postToolUse",
+        outcome: "error",
+        status: "failed",
+        durationMs: 20,
+      },
+    });
+    expect(() => decodeActivityAppendCommand(failed!)).not.toThrow();
+
+    const [blocked] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "hook.completed",
+        eventId: "hook-blocked",
+        turnId: TURN_ID,
+        payload: {
+          hookId: "hook-run-4",
+          hookEvent: "preToolUse",
+          outcome: "cancelled",
+          status: "blocked",
+          statusMessage: "Policy blocked the command.",
+        },
+      }),
+    );
+    expect(blocked).toMatchObject({
+      tone: "info",
+      kind: "runtime.warning",
+      summary: "preToolUse hook blocked an action",
+      payload: {
+        message: "Policy blocked the command.",
+        outcome: "cancelled",
+        status: "blocked",
+      },
+    });
+    expect(() => decodeActivityAppendCommand(blocked!)).not.toThrow();
   });
 });

@@ -16,10 +16,10 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "commandcode",
   "pi",
+  "devin",
 ];
 
 export const MODEL_SELECTION_INPUT_SCHEMA = {

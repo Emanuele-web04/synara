@@ -35,6 +35,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
+import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
@@ -107,6 +108,7 @@ function ActivityThreadRow({
   pr,
   status,
   onOpen,
+  onOpenPullRequest,
   onSetSettled,
   onTogglePinned,
   onArchive,
@@ -123,6 +125,7 @@ function ActivityThreadRow({
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
+  onOpenPullRequest: (event: MouseEvent<HTMLElement>, pr: OrchestrationThreadPullRequest) => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
   onArchive: () => void;
@@ -214,7 +217,13 @@ function ActivityThreadRow({
               {resolveThreadProjectLabel(project)}
             </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
+              {pr ? (
+                <PrStateChip
+                  pr={pr}
+                  className="[&_svg]:size-2.5"
+                  onOpen={(event) => onOpenPullRequest(event, pr)}
+                />
+              ) : null}
               {branch ? (
                 <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
                   <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
@@ -524,6 +533,7 @@ export function SidebarActivityView({
   threadsHydrated,
   resolveThreadStatus,
   onOpenThread,
+  onOpenThreadPullRequest,
   onSetThreadSettled,
   onToggleThreadPinned,
   onArchiveThread,
@@ -548,6 +558,12 @@ export function SidebarActivityView({
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
+  /** PR chip click: plain click opens it in the thread, cmd/ctrl/middle-click on GitHub. */
+  onOpenThreadPullRequest: (
+    event: MouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled: (threadId: ThreadId, settled: boolean) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
@@ -700,9 +716,22 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={prByThreadId.get(thread.id) ?? thread.lastKnownPr ?? null}
+      pr={
+        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
+        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
+        // catches up) get the same resolution without live status instead.
+        prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : resolveThreadPullRequestFallback({
+              branch: thread.branch,
+              hasDedicatedWorktree: thread.worktreePath !== null,
+              lastKnownPr: thread.lastKnownPr ?? null,
+            })
+      }
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
+      onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
         onSetThreadSettled(thread.id, settled);

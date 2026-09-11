@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 import {
   renderSynaraHarnessPolicy,
@@ -9,6 +10,34 @@ import {
 } from "./harnessPolicy.ts";
 
 describe("Synara harness policy", () => {
+  it("defers duplicate automation authoring text while preserving tool routing and run rules", () => {
+    const inline = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const deferred = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      automationAuthoring: "tool-descriptions",
+    });
+    assert.equal(deferred, inline.replace(`${AUTOMATION_AUTHORING_GUIDANCE}\n`, ""));
+    assert.include(deferred, "synara_create_automation");
+    assert.include(deferred, "synara_view_automation");
+    assert.include(deferred, "synara_report_automation_result");
+  });
+  it("includes honest completion evidence and opt-in delegated E2E testing", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    for (const text of [
+      "completion report",
+      "artifactPath",
+      "![Result description]",
+      "explicitly asked",
+      "synara_e2e_review",
+      "Do not load it for unrelated work",
+    ]) {
+      assert.include(policy, text);
+    }
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "browser_screenshot({kind:'proof'})",
+    );
+  });
   it("identifies Synara and explains exact batch coordination when MCP is available", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);
@@ -16,25 +45,46 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
-    assert.include(policy, "Use the browser_* tools");
-    assert.include(policy, "exact thread-scoped Electron page Synara surfaces to the user");
-    assert.include(policy, "continue in the background");
-    assert.include(policy, "must never change the user's active chat");
-    assert.include(policy, "in any language");
-    assert.include(policy, "canonical and complete control surface");
-    assert.include(policy, "start with browser_open");
-    assert.include(policy, "do not load or use a generic Browser");
-    assert.include(policy, "workspace-relative paths");
-    assert.include(policy, "BrowserInterruptedByHuman");
-    assert.include(policy, "BrowserDownloadApprovalRequired");
-    assert.include(policy, "OAuth popup requiring human action");
-    assert.include(policy, "stop using tools and answer");
+    assert.include(policy, "synara_set_thread_pull_request");
+    assert.include(policy, "current thread's own deliverable");
+    assert.include(policy, "only reviews, references, or discusses");
+    assert.include(policy, "use browser_* autonomously");
+    assert.include(policy, "canonical, complete control surface");
+    assert.include(policy, "never substitute Chrome");
+    assert.include(policy, "user's active chat");
+    assert.include(policy, "Detailed rules live in each tool description");
+    assert.notInclude(policy, "BrowserInterruptedByHuman");
+    assert.notInclude(policy, "start with browser_open");
     assert.include(policy, "do not create Synara threads");
-    assert.include(policy, "3–8 word outcome-oriented task label");
-    assert.include(policy, "no assumed chat context");
-    assert.include(policy, "notifying the user versus staying silent");
+    assert.include(policy, "specific 3–8 word outcome label");
+    assert.include(policy, "Assume no chat context");
+    assert.include(policy, "notify-versus-silent criteria");
     assert.include(policy, 'later manual follow-up such as "continue"');
     assert.include(policy, "Never call this tool for a manual follow-up turn");
+  });
+
+  it("asks agents to emit known absolute file URLs instead of invented relative links", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, "[config.ts](file:///absolute/path/config.ts)");
+      assert.include(policy, "Relative links are only for the session working directory");
+      assert.include(policy, "use plain text and never invent a path");
+    }
+  });
+
+  it("keeps final answers self-contained when intermediate progress is collapsed", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, 'under "Worked for..."');
+      assert.include(policy, "Final responses must restate every needed scope");
+      assert.include(policy, 'Never request approval using "this", "the above"');
+      assert.include(policy, "structured user-input tool");
+      assert.include(policy, "include all decision context");
+    }
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {
@@ -53,15 +103,7 @@ describe("Synara harness policy", () => {
   });
 
   it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of [
-      "antigravity",
-      "cursor",
-      "grok",
-      "droid",
-      "opencode",
-      "kilo",
-      "pi",
-    ] as const) {
+    for (const provider of ["antigravity", "cursor", "grok", "droid", "opencode", "pi"] as const) {
       for (const lifecycle of ["fresh", "load", "fork"] as const) {
         const state: { harnessPolicyDelivered?: boolean } = {};
         const first =
@@ -82,8 +124,8 @@ describe("Synara harness policy", () => {
     }
   });
 
-  it("keeps OpenCode, Kilo, and Pi identity-only until scoped setup succeeds", () => {
-    for (const provider of ["opencode", "kilo", "pi"] as const) {
+  it("keeps OpenCode and Pi identity-only until scoped setup succeeds", () => {
+    for (const provider of ["opencode", "pi"] as const) {
       const text =
         takeSynaraHarnessPolicyForProviderSession(
           {},
@@ -93,5 +135,28 @@ describe("Synara harness policy", () => {
       assert.include(text, "Synara MCP control is unavailable", provider);
       assert.notInclude(text, "one exact synara_create_threads plan", provider);
     }
+  });
+
+  it("routes iOS work to device tools without embedding per-tool instructions", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    assert.include(policy, "any-language iOS app or simulator request");
+    assert.include(policy, "call device_* directly and autonomously");
+    assert.include(policy, "never use xcrun simctl");
+    assert.include(policy, "open Simulator.app");
+    assert.include(policy, "user watches the streamed pane");
+    assert.notInclude(policy, "device_list first");
+    assert.notInclude(policy, "com.apple.Preferences");
+  });
+
+  it("keeps the gateway policy below its prompt budget", () => {
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_000);
+  });
+
+  it("withholds device guidance from sessions with no gateway control", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    // Promising tools this session cannot reach would be a lie.
+    assert.notInclude(policy, "device_list");
+    assert.notInclude(policy, "device_describe_ui");
   });
 });

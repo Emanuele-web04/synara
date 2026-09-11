@@ -105,6 +105,20 @@ import Migration0086 from "./Migrations/086_NormalizeStudioThreadWorkspaces.ts";
 import Migration0087 from "./Migrations/087_DropUnusedOrchestrationEventIndexes.ts";
 import Migration0088 from "./Migrations/088_ProjectionThreadsSettledAt.ts";
 import Migration0089 from "./Migrations/089_RecoverRetentionHiddenThreads.ts";
+import Migration0090 from "./Migrations/090_ProjectionThreadMessageTextSegments.ts";
+import Migration0091 from "./Migrations/091_AutomationFailureTolerance.ts";
+import Migration0092 from "./Migrations/092_BackfillAutomationRunThreadSource.ts";
+import Migration0093 from "./Migrations/093_BackfillMaxIterationsDisabledReason.ts";
+import Migration0094 from "./Migrations/094_ProjectionThreadsGoal.ts";
+import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
+import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
+import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
+import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
+import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts";
+import Migration0100 from "./Migrations/100_MessageTextChunks.ts";
+import Migration0101 from "./Migrations/101_RemoveTranscriptMarkers.ts";
+import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary.ts";
+import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -209,6 +223,21 @@ export const migrationEntries = [
   [87, "DropUnusedOrchestrationEventIndexes", Migration0087],
   [88, "ProjectionThreadsSettledAt", Migration0088],
   [89, "RecoverRetentionHiddenThreads", Migration0089],
+  [90, "ProjectionThreadMessageTextSegments", Migration0090],
+  [91, "AutomationFailureTolerance", Migration0091],
+  [92, "BackfillAutomationRunThreadSource", Migration0092],
+  [93, "BackfillMaxIterationsDisabledReason", Migration0093],
+  [94, "ProjectionThreadsGoal", Migration0094],
+  [95, "ProjectionThreadsGoalTiming", Migration0095],
+  [96, "ProjectionThreadsGoalAchievements", Migration0096],
+  [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
+  [98, "MigrateKiloToOpenCode", Migration0098],
+  [99, "InvalidateProjectionThreadsCursor", Migration0099],
+  [100, "MessageTextChunks", Migration0100],
+  [101, "RemoveTranscriptMarkers", Migration0101],
+  [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
+  // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
+  [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -239,6 +268,25 @@ const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
+
+const IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID = 32;
+
+export function planLegacyMigration32Rename(
+  recordedNamesById: ReadonlyMap<number, string>,
+): string | null {
+  const canonicalName = canonicalMigrationNamesById.get(
+    IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID,
+  );
+  if (canonicalName === undefined) return null;
+
+  const hasCanonicalPrefix = migrationEntries
+    .filter(([id]) => id < IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID)
+    .every(([id, name]) => recordedNamesById.get(id) === name);
+  const recordedName = recordedNamesById.get(IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID);
+  return hasCanonicalPrefix && recordedName !== undefined && recordedName !== canonicalName
+    ? canonicalName
+    : null;
+}
 
 /**
  * First canonical entry whose name is not recorded at the same ID, considering
@@ -388,19 +436,12 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   const recordedNamesBeforeCanonicalization = new Map(
     recorded.map((row) => [row.migration_id, row.name]),
   );
-  const hasCanonicalPrefixThrough31 = migrationEntries
-    .filter(([id]) => id < 32)
-    .every(([id, name]) => recordedNamesBeforeCanonicalization.get(id) === name);
-  const migration32Name = recordedNamesBeforeCanonicalization.get(32);
-  if (
-    hasCanonicalPrefixThrough31 &&
-    migration32Name !== undefined &&
-    migration32Name !== "ReconcileImportedSchemaLineage"
-  ) {
+  const migration32Rename = planLegacyMigration32Rename(recordedNamesBeforeCanonicalization);
+  if (migration32Rename !== null) {
     yield* sql`
       UPDATE effect_sql_migrations
-      SET name = 'ReconcileImportedSchemaLineage'
-      WHERE migration_id = 32
+      SET name = ${migration32Rename}
+      WHERE migration_id = ${IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID}
     `;
     recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
       SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC

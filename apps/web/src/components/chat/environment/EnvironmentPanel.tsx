@@ -17,8 +17,6 @@ import type {
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
-  ThreadMarker,
-  ThreadMarkerId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -32,6 +30,7 @@ import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolb
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
+import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
 import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
@@ -40,6 +39,8 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
+import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
 import {
@@ -49,8 +50,11 @@ import {
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
-import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentStudioOutputsSection } from "./EnvironmentStudioOutputsSection";
+import {
+  EnvironmentSidechatsSection,
+  type EnvironmentSidechatPanelItem,
+} from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
@@ -95,7 +99,7 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
-  /** Active provider for the usage row (same chip the header used to show). */
+  /** Active provider for the usage row (same chip the header shows). */
   activeProvider: ProviderKind;
   /**
    * Whether the active thread is a Studio chat. Studio chats show the Output section:
@@ -110,6 +114,8 @@ export interface EnvironmentPanelProps {
   diffOpen: boolean;
   /** Heartbeat automations whose target is the active thread. */
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
+  /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
+  sidechats: readonly EnvironmentSidechatPanelItem[] | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -124,12 +130,8 @@ export interface EnvironmentPanelProps {
   } | null;
   /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
-  /** Per-thread text markers (server-synced). */
-  threadMarkers: readonly ThreadMarker[];
   /** Live text of pinned messages still present in the transcript (for labels/availability). */
   pinnedMessageTextById: ReadonlyMap<MessageId, string>;
-  /** Live text of marked messages still present in the transcript (for labels/availability). */
-  markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
   /** Active project whose local instructions should be edited. */
@@ -156,14 +158,6 @@ export interface EnvironmentPanelProps {
   onUnpinMessage: (messageId: MessageId) => void;
   /** Set (`null` clears to auto) a pinned message's label. */
   onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
-  /** Scroll the transcript to a text marker. */
-  onJumpToThreadMarker: (marker: ThreadMarker) => void;
-  /** Toggle a marker's done state. */
-  onToggleThreadMarkerDone: (markerId: ThreadMarkerId) => void;
-  /** Remove a text marker. */
-  onRemoveThreadMarker: (markerId: ThreadMarkerId) => void;
-  /** Set (`null` clears to auto) a marker label. */
-  onRenameThreadMarker: (markerId: ThreadMarkerId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
   /** Open the in-app editor workspace view (the Editor section's default first row). */
@@ -221,14 +215,13 @@ export function EnvironmentPanel({
   showGitActions,
   diffOpen,
   threadAutomations,
+  sidechats,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
   recap: recapProp,
   pinnedMessages,
-  threadMarkers,
   pinnedMessageTextById,
-  markerMessageTextById,
   notes,
   activeProjectId,
   projectInstructions,
@@ -242,10 +235,6 @@ export function EnvironmentPanel({
   onTogglePinnedMessageDone,
   onUnpinMessage,
   onRenamePinnedMessage,
-  onJumpToThreadMarker,
-  onToggleThreadMarkerDone,
-  onRemoveThreadMarker,
-  onRenameThreadMarker,
   onNotesChange,
   onOpenEditorView: onOpenEditorViewProp,
   onClose,
@@ -259,6 +248,7 @@ export function EnvironmentPanel({
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
@@ -347,14 +337,7 @@ export function EnvironmentPanel({
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label="Changes"
-          trailing={
-            hasChanges ? (
-              <>
-                <span className="text-success">+{additions}</span>
-                <span className="text-destructive">-{deletions}</span>
-              </>
-            ) : null
-          }
+          trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
           disabled={changesDisabled}
           onClick={() => {
             onToggleDiff();
@@ -375,6 +358,43 @@ export function EnvironmentPanel({
       ) : null}
 
       <EnvironmentLocalServersSection enabled={open} />
+
+      {sidechats && activeThreadId ? (
+        <EnvironmentSidechatsSection
+          sidechats={sidechats}
+          onCreate={() => {
+            void waitForSidechatCreator(activeThreadId)
+              .then((createSidechat) => {
+                if (!createSidechat) {
+                  toastManager.add({
+                    type: "warning",
+                    title: "Side chat is unavailable",
+                    description: "Open a server-backed main thread before starting a side chat.",
+                  });
+                  return;
+                }
+                return createSidechat();
+              })
+              .catch((error) => {
+                toastManager.add({
+                  type: "error",
+                  title: "Could not start side chat",
+                  description:
+                    error instanceof Error
+                      ? error.message
+                      : "An error occurred while creating the side chat.",
+                });
+              });
+          }}
+          onOpen={(sidechatThreadId) => {
+            openRightDockPane(activeThreadId, {
+              kind: "sidechat",
+              threadId: sidechatThreadId,
+            });
+            onClose();
+          }}
+        />
+      ) : null}
 
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
@@ -447,20 +467,6 @@ export function EnvironmentPanel({
             onToggleDone={onTogglePinnedMessageDone}
             onUnpin={onUnpinMessage}
             onRename={onRenamePinnedMessage}
-          />
-        </>
-      ) : null}
-
-      {settings.showEnvironmentMarkers && threadMarkers.length > 0 ? (
-        <>
-          <EnvironmentSectionDivider />
-          <EnvironmentMarkersSection
-            markers={threadMarkers}
-            messageTextById={markerMessageTextById}
-            onJump={onJumpToThreadMarker}
-            onToggleDone={onToggleThreadMarkerDone}
-            onRemove={onRemoveThreadMarker}
-            onRename={onRenameThreadMarker}
           />
         </>
       ) : null}

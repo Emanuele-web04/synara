@@ -3,11 +3,14 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@synara/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "@synara/contracts";
 import {
   type ConsoleState,
   createOpencodeClient,
@@ -36,11 +39,12 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -50,7 +54,6 @@ import { isWindowsShellCommandMissingResult } from "../shell-command-detection.t
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 export const OPENCODE_LOCAL_SERVER_IDLE_TTL_MS = 5 * 60_000;
-export const KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS = [500, 1_500] as const;
 const OPENCODE_STARTUP_OUTPUT_MAX_CHARS = 4_000;
 const REDACTED_STARTUP_SECRET = "[redacted]";
 const STARTUP_OUTPUT_AUTHORIZATION_PATTERN =
@@ -74,15 +77,6 @@ export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
   dataDirectoryName: "opencode",
   serverAuthUsername: "opencode",
-};
-
-export const KILO_CLI_SPEC: OpenCodeCompatibleCliSpec = {
-  defaultBinaryPath: "kilo",
-  displayName: "Kilo",
-  serverReadyPrefix: "kilo server listening",
-  configContentEnvVar: "KILO_CONFIG_CONTENT",
-  dataDirectoryName: "kilo",
-  serverAuthUsername: "kilo",
 };
 
 export interface OpenCodeServerProcess {
@@ -134,7 +128,7 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
 
 export const runOpenCodeSdk = <A>(
   operation: string,
-  fn: () => Promise<A>,
+  fn: (signal: AbortSignal) => Promise<A>,
 ): Effect.Effect<A, OpenCodeRuntimeError> =>
   Effect.tryPromise({
     try: fn,
@@ -177,7 +171,6 @@ export interface OpenCodeCliModelDescriptor {
     readonly isDefault?: true;
   }>;
   readonly defaultContextWindow?: string;
-  readonly isFree?: boolean;
 }
 
 export interface OpenCodePathInfo {
@@ -332,25 +325,6 @@ function pooledOpenCodeServerKey(input: {
   });
 }
 
-function isRetryableKiloCredentialStartupFailure(
-  cliSpec: OpenCodeCompatibleCliSpec,
-  cause: unknown,
-): boolean {
-  if (cliSpec.dataDirectoryName !== KILO_CLI_SPEC.dataDirectoryName) {
-    return false;
-  }
-
-  const detail = openCodeRuntimeErrorDetail(cause).toLowerCase();
-  return (
-    detail.includes('failed query: update "credential" set') ||
-    detail.includes("failed query: update 'credential' set") ||
-    detail.includes("failed query: update `credential` set") ||
-    detail.includes("sqlite_busy") ||
-    detail.includes("database is busy") ||
-    detail.includes("database is locked")
-  );
-}
-
 export function parseOpenCodeModelSlug(
   slug: string | null | undefined,
 ): ParsedOpenCodeModelSlug | null {
@@ -485,28 +459,6 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-function resolveOpenCodeDataDirectory(
-  homeDirectory: string,
-  dataDirectoryName = "opencode",
-): string {
-  if (process.platform === "win32") {
-    const appDataDirectory =
-      trimToNull(process.env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming");
-    return join(appDataDirectory, dataDirectoryName);
-  }
-
-  const xdgDataHome =
-    trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
-  return join(xdgDataHome, dataDirectoryName);
-}
-
-export function resolveOpenCodeAuthFilePath(
-  pathInfo: Pick<OpenCodePathInfo, "home">,
-  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
-): string {
-  return join(resolveOpenCodeDataDirectory(pathInfo.home, cliSpec.dataDirectoryName), "auth.json");
-}
-
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
   const parsed = JSON.parse(content) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -634,7 +586,6 @@ function parseOpenCodeCliModelJson(
       : null) ??
     undefined;
   const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
-  const isFree = object.isFree;
 
   return {
     slug,
@@ -645,7 +596,6 @@ function parseOpenCodeCliModelJson(
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(contextWindowOptions ?? {}),
-    ...(typeof isFree === "boolean" ? { isFree } : {}),
   };
 }
 
@@ -778,7 +728,7 @@ export function toOpenCodeFileParts(input: {
 
 export function buildOpenCodePermissionRules(
   runtimeMode: RuntimeMode,
-  interactionMode: "default" | "plan" = "default",
+  interactionMode: ProviderInteractionMode = "default",
 ): PermissionRuleset {
   if (interactionMode === "plan") {
     // OpenCode evaluates the last matching rule. Start closed, then allow only
@@ -819,13 +769,11 @@ export function buildOpenCodePermissionRules(
 }
 
 export function buildOpenCodeServerProcessEnv(input: {
-  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
   return buildProviderChildEnvironment({
-    provider:
-      input.cliSpec?.dataDirectoryName === KILO_CLI_SPEC.dataDirectoryName ? "kilo" : "opencode",
+    provider: "opencode",
     baseEnv: input.baseEnv ?? process.env,
     overrides: input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {},
   });
@@ -899,17 +847,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
-        const childEnv = buildOpenCodeServerProcessEnv({
-          ...(input.cliSpec ? { cliSpec: input.cliSpec } : {}),
-        });
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
+        const childEnv = buildOpenCodeServerProcessEnv({});
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.binaryPath, input.args, {
             ...(input.cwd ? { cwd: input.cwd } : {}),
             env: childEnv,
           }),
@@ -967,16 +907,15 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
-
+        const childEnv = buildOpenCodeServerProcessEnv({
+          ...(input.experimentalWebSockets !== undefined
+            ? { experimentalWebSockets: input.experimentalWebSockets }
+            : {}),
+        });
         const child = yield* spawner
           .spawn(
-            ChildProcess.make(input.binaryPath, args, {
-              env: buildOpenCodeServerProcessEnv({
-                cliSpec,
-                ...(input.experimentalWebSockets !== undefined
-                  ? { experimentalWebSockets: input.experimentalWebSockets }
-                  : {}),
-              }),
+            makeEffectProcessCommand(input.binaryPath, args, {
+              env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,
               killSignal: "SIGKILL",
@@ -1237,50 +1176,24 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           // Start lazily on first real use, then keep warm only while recent sessions need it.
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-              const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
-              let retryIndex = 0;
-              let started: { server: OpenCodeServerProcess; scope: Scope.Closeable } | undefined;
-
-              while (!started) {
-                const serverScope = yield* Scope.make();
-                const startedExit = yield* Effect.exit(
-                  restore(
-                    startOpenCodeServerProcess(input).pipe(
-                      Effect.provideService(Scope.Scope, serverScope),
-                    ),
+              const serverScope = yield* Scope.make();
+              const startedExit = yield* Effect.exit(
+                restore(
+                  startOpenCodeServerProcess(input).pipe(
+                    Effect.provideService(Scope.Scope, serverScope),
                   ),
-                );
+                ),
+              );
 
-                if (Exit.isSuccess(startedExit)) {
-                  started = { server: startedExit.value, scope: serverScope };
-                  break;
-                }
-
+              if (Exit.isFailure(startedExit)) {
                 yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
-                const retryDelayMs = KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS[retryIndex];
-                const failure = Cause.squash(startedExit.cause);
-                if (
-                  retryDelayMs === undefined ||
-                  !isRetryableKiloCredentialStartupFailure(cliSpec, failure)
-                ) {
-                  return yield* Effect.failCause(startedExit.cause);
-                }
-
-                retryIndex += 1;
-                yield* Effect.logWarning(
-                  "Kilo credential reconciliation failed during startup; retrying",
-                  {
-                    attempt: retryIndex + 1,
-                    delayMs: retryDelayMs,
-                  },
-                );
-                yield* restore(Effect.sleep(retryDelayMs));
+                return yield* Effect.failCause(startedExit.cause);
               }
 
               const pooledServer: PooledOpenCodeServer = {
                 key,
-                server: started.server,
-                scope: started.scope,
+                server: startedExit.value,
+                scope: serverScope,
                 closeOnRelease: input.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
@@ -1371,7 +1284,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       });
 
     const loadProviders = (client: OpencodeClient) =>
-      runOpenCodeSdk("provider.list", () => client.provider.list()).pipe(
+      runOpenCodeSdk("provider.list", (signal) => client.provider.list(undefined, { signal })).pipe(
         Effect.filterMapOrFail(
           (list) =>
             list.data
@@ -1387,7 +1300,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       );
 
     const loadAgents = (client: OpencodeClient) =>
-      runOpenCodeSdk("app.agents", () => client.app.agents()).pipe(
+      runOpenCodeSdk("app.agents", (signal) => client.app.agents(undefined, { signal })).pipe(
         Effect.map((result) => result.data ?? []),
       );
 
@@ -1403,9 +1316,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       );
 
     const loadConsoleState = (client: OpencodeClient) =>
-      runOpenCodeSdk("experimental.console.get", () => client.experimental.console.get()).pipe(
+      runOpenCodeSdk("experimental.console.get", (signal) =>
+        client.experimental.console.get(undefined, { signal }),
+      ).pipe(
         Effect.map((result) => result.data ?? null),
         // Console metadata is optional and should not block model discovery.
+        Effect.timeoutOption("2 seconds"),
+        Effect.map(Option.getOrElse(() => null)),
         Effect.catch(() => Effect.succeed(null)),
       );
 
@@ -1502,7 +1419,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         loadOpenCodePaths(client).pipe(
           Effect.flatMap((pathInfo) =>
             Effect.tryPromise({
-              try: () => readFile(resolveOpenCodeAuthFilePath(pathInfo, cliSpec), "utf8"),
+              try: () =>
+                readOpenCodeAuthFileUtf8({
+                  homeDir: pathInfo.home,
+                  env: process.env,
+                  platform: process.platform,
+                  dataDirectoryName: cliSpec.dataDirectoryName,
+                }),
               catch: (cause) =>
                 new OpenCodeRuntimeError({
                   operation: "readOpenCodeCredentialProviderIDs",

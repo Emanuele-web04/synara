@@ -11,10 +11,9 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
@@ -80,6 +79,7 @@ describe("store event reducer", () => {
         text: "Use @linear",
         attachments: [],
         mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        startsNewTurn: true,
         turnId: null,
         streaming: false,
         source: "native",
@@ -91,6 +91,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
+    expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
   });
 
   it("updates thread error and marks the running latest turn failed from session-set events", () => {
@@ -520,16 +521,77 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.runtimeMode).toBe("full-access");
   });
 
-  it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
+  it("replaces streamed assistant text when a non-streaming completion diverges from the local prefix", () => {
     const assistantId = MessageId.makeUnsafe("assistant-message");
     const turnId = TurnId.makeUnsafe("turn-1");
+    const localText = "The reply begins here and then drifts.";
+    const serverText = "The reply begins here, then continues to the end.";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const initialState = makeState(
+        makeThread({
+          messages: [
+            {
+              id: assistantId,
+              role: "assistant",
+              text: localText,
+              turnId,
+              createdAt: "2026-02-27T00:01:05.000Z",
+              streaming: true,
+              source: "native",
+            },
+          ],
+          latestTurn: {
+            turnId,
+            state: "running",
+            requestedAt: "2026-02-27T00:01:00.000Z",
+            startedAt: "2026-02-27T00:01:05.000Z",
+            completedAt: null,
+            assistantMessageId: assistantId,
+          },
+        }),
+      );
+
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.message-sent", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantId,
+          role: "assistant",
+          text: serverText,
+          turnId,
+          streaming: false,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:06.000Z",
+          attachments: [],
+          source: "native",
+        }),
+      ]);
+
+      expect(threadsOf(next)[0]?.messages).toMatchObject([
+        {
+          id: assistantId,
+          text: serverText,
+          streaming: false,
+          completedAt: "2026-02-27T00:01:06.000Z",
+        },
+      ]);
+      expect(threadsOf(next)[0]?.messages[0]?.text).not.toBe(`${localText}${serverText}`);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("replaces duplicated local streamed text with the authoritative completion", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-message");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const serverText = "final text";
     const initialState = makeState(
       makeThread({
         messages: [
           {
             id: assistantId,
             role: "assistant",
-            text: "Hello",
+            text: `${serverText}${serverText}`,
             turnId,
             createdAt: "2026-02-27T00:01:05.000Z",
             streaming: true,
@@ -546,30 +608,33 @@ describe("store event reducer", () => {
         },
       }),
     );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.message-sent", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: assistantId,
-        role: "assistant",
-        text: " world",
-        turnId,
-        streaming: false,
-        createdAt: "2026-02-27T00:01:05.000Z",
-        updatedAt: "2026-02-27T00:01:06.000Z",
-        attachments: [],
-        source: "native",
-      }),
-    ]);
+    try {
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.message-sent", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantId,
+          role: "assistant",
+          text: serverText,
+          turnId,
+          streaming: false,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:06.000Z",
+          attachments: [],
+          source: "native",
+        }),
+      ]);
 
-    expect(threadsOf(next)[0]?.messages).toMatchObject([
-      {
+      expect(threadsOf(next)[0]?.messages[0]).toMatchObject({
         id: assistantId,
-        text: "Hello world",
+        text: serverText,
         streaming: false,
         completedAt: "2026-02-27T00:01:06.000Z",
-      },
-    ]);
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
@@ -683,7 +748,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(true);
   });
 
-  it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
+  it("surfaces thread annotations from a live thread.meta-updated event", () => {
     const initialState = makeState(makeThread());
     const messageId = MessageId.makeUnsafe("assistant-pin-2");
     const pinnedMessages = [
@@ -700,12 +765,14 @@ describe("store event reducer", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         pinnedMessages,
         notes: "scratch",
+        goal: "Ship the whole feature",
         updatedAt: "2026-02-27T00:02:00.000Z",
       }),
     ]);
 
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("scratch");
+    expect(threadsOf(next)[0]?.goal).toBe("Ship the whole feature");
   });
 
   it("applies live pinned-message operation events without replacing the whole list", () => {
@@ -759,84 +826,6 @@ describe("store event reducer", () => {
         label: "Follow up",
         done: true,
         pinnedAt: "2026-02-27T00:03:00.000Z",
-      },
-    ]);
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
-  });
-
-  it("applies live thread marker operation events without replacing the whole list", () => {
-    const initialState = makeState(makeThread());
-    const markerId = ThreadMarkerId.makeUnsafe("marker-op-1");
-    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-op-2");
-    const messageId = MessageId.makeUnsafe("assistant-marker-op");
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: markerId,
-          messageId,
-          startOffset: 6,
-          endOffset: 20,
-          selectedText: "important text",
-          style: "highlight",
-          color: "yellow",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:00.000Z",
-          updatedAt: "2026-02-27T00:03:00.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:00.000Z",
-      }),
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: secondMarkerId,
-          messageId,
-          startOffset: 30,
-          endOffset: 39,
-          selectedText: "underline",
-          style: "underline",
-          color: "blue",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:05.000Z",
-          updatedAt: "2026-02-27T00:03:05.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:05.000Z",
-      }),
-      makeDomainEvent("thread.marker-done-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        done: true,
-        updatedAt: "2026-02-27T00:03:10.000Z",
-      }),
-      makeDomainEvent("thread.marker-label-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        label: "Follow up",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      }),
-      makeDomainEvent("thread.marker-removed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId: secondMarkerId,
-        updatedAt: "2026-02-27T00:03:20.000Z",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.threadMarkers).toEqual([
-      {
-        id: markerId,
-        messageId,
-        startOffset: 6,
-        endOffset: 20,
-        selectedText: "important text",
-        style: "highlight",
-        color: "yellow",
-        label: "Follow up",
-        done: true,
-        createdAt: "2026-02-27T00:03:00.000Z",
-        updatedAt: "2026-02-27T00:03:15.000Z",
       },
     ]);
     expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
@@ -1452,14 +1441,14 @@ describe("store event reducer", () => {
     expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
   });
 
-  it("replaces provider-local activity sequences with durable orchestration sequences", () => {
+  it("preserves canonical activity sequences in sequential and batched live updates", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const events = [
       makeDomainEvent(
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-before-restart", sequence: 99 }),
+          activity: makeActivity({ id: "activity-first", sequence: 99 }),
         },
         { sequence: 40 },
       ),
@@ -1467,7 +1456,7 @@ describe("store event reducer", () => {
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-after-restart", sequence: 0 }),
+          activity: makeActivity({ id: "activity-second", sequence: 100 }),
         },
         { sequence: 41 },
       ),
@@ -1481,10 +1470,10 @@ describe("store event reducer", () => {
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
     expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
     expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
   });
 
@@ -2064,6 +2053,73 @@ describe("store event reducer", () => {
       turnId,
       state: "running",
       completedAt: null,
+    });
+  });
+
+  it("projects side chat activity and expiry into the live pane and its parent list row", () => {
+    const threadId = ThreadId.makeUnsafe("thread-sidechat");
+    const sourceThreadId = ThreadId.makeUnsafe("thread-source");
+    const initialActivityAt = "2026-02-27T00:00:00.000Z";
+    const latestActivityAt = "2026-02-27T00:30:00.000Z";
+    const expiredAt = "2026-02-27T01:30:00.000Z";
+    const initialState = syncServerReadModel(
+      makeState(
+        makeThread({
+          id: threadId,
+          sidechatSourceThreadId: sourceThreadId,
+          sidechatLastActivityAt: initialActivityAt,
+          sidechatExpiredAt: null,
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          sidechatSourceThreadId: sourceThreadId,
+          sidechatLastActivityAt: initialActivityAt,
+          sidechatExpiredAt: null,
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.sidechat-activity-recorded", {
+          threadId,
+          lastActivityAt: latestActivityAt,
+        }),
+        makeDomainEvent("thread.sidechat-expired", {
+          threadId,
+          expectedLastActivityAt: latestActivityAt,
+          expiredAt,
+        }),
+        makeDomainEvent(
+          "thread.session-set",
+          {
+            threadId,
+            session: {
+              threadId,
+              status: "stopped",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-27T01:30:01.000Z",
+            },
+          },
+          { occurredAt: "2026-02-27T01:30:01.000Z" },
+        ),
+      ],
+      { updateSidebarSummary: true },
+    );
+
+    expect(threadsOf(next).find((thread) => thread.id === threadId)).toMatchObject({
+      sidechatLastActivityAt: latestActivityAt,
+      sidechatExpiredAt: expiredAt,
+    });
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      sidechatLastActivityAt: latestActivityAt,
+      sidechatExpiredAt: expiredAt,
     });
   });
 

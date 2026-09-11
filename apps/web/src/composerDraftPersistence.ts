@@ -1,3 +1,4 @@
+import { normalizePendingUserInputDrafts } from "./pendingUserInputRecovery";
 // FILE: composerDraftPersistence.ts
 // Purpose: Owns composer draft schema v6, migrations, partialization, merge normalization, and hydration.
 // Exports: Persist middleware transitions and persisted state type.
@@ -53,6 +54,12 @@ import {
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
 import { normalizePastedTextContent } from "./lib/composerPastedText";
+import {
+  isPullRequestContextScope,
+  normalizePullRequestContexts,
+  PULL_REQUEST_CONTEXT_SCOPES,
+  type PullRequestContextDraft,
+} from "./lib/pullRequestContext";
 import { normalizeFileCommentSelection } from "./lib/fileComments";
 import {
   ensureInlineTerminalContextPlaceholders,
@@ -62,6 +69,26 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
+
+function normalizePersistedModelSelectionMap(
+  value: unknown,
+): Partial<Record<ProviderKind, ModelSelection>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+  for (const [legacyProvider, rawSelection] of Object.entries(value)) {
+    const selection = normalizeModelSelection(rawSelection, {
+      provider: legacyProvider,
+      model:
+        rawSelection !== null && typeof rawSelection === "object" && !Array.isArray(rawSelection)
+          ? (rawSelection as Record<string, unknown>).model
+          : undefined,
+    });
+    if (selection && !(legacyProvider === "kilo" && result.opencode !== undefined)) {
+      result[selection.provider] = selection;
+    }
+  }
+  return result;
+}
 
 function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnnotationDraft {
   return {
@@ -113,6 +140,19 @@ const PersistedPastedTextDraft = Schema.Struct({
 
 type PersistedPastedTextDraft = typeof PersistedPastedTextDraft.Type;
 
+const PersistedPullRequestContextDraft = Schema.Struct({
+  id: Schema.String,
+  createdAt: Schema.String,
+  scope: Schema.Literals(PULL_REQUEST_CONTEXT_SCOPES),
+  prNumber: Schema.Number,
+  prUrl: Schema.String,
+  title: Schema.String,
+  subtitle: Schema.String,
+  text: Schema.String,
+});
+
+type PersistedPullRequestContextDraft = typeof PersistedPullRequestContextDraft.Type;
+
 const PersistedSourceProposedPlanReference = Schema.Struct({
   threadId: ThreadId,
   planId: OrchestrationProposedPlanId,
@@ -163,6 +203,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
+  pullRequestContexts: Schema.optionalKey(Schema.Array(PersistedPullRequestContextDraft)),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
   selectedProvider: ProviderKind,
@@ -184,7 +225,7 @@ const PersistedQueuedComposerPlanFollowUp = Schema.Struct({
   createdAt: Schema.String,
   previewText: Schema.String,
   text: Schema.String,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: Schema.Literals(["default", "plan"]),
   selectedProvider: ProviderKind,
   selectedModel: Schema.NullOr(Schema.String),
   selectedPromptEffort: Schema.NullOr(Schema.String),
@@ -212,6 +253,7 @@ const PersistedComposerPromptHistorySavedDraft = Schema.Union([
     terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
     fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
     pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
+    pullRequestContexts: Schema.optionalKey(Schema.Array(PersistedPullRequestContextDraft)),
     skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   }),
@@ -221,6 +263,7 @@ type PersistedComposerPromptHistorySavedDraft =
   typeof PersistedComposerPromptHistorySavedDraft.Type;
 
 const PersistedComposerThreadDraftState = Schema.Struct({
+  pendingUserInputDrafts: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: Schema.String,
   // Set only while composer prompt-history browsing is active: the user's real
   // draft snapshot, kept safe while `prompt` temporarily holds a recalled history entry.
@@ -239,6 +282,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
+  pullRequestContexts: Schema.optionalKey(Schema.Array(PersistedPullRequestContextDraft)),
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
@@ -299,6 +343,7 @@ const PersistedDraftThreadState = Schema.Struct({
   workingDirectory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
+  goal: Schema.optionalKey(Schema.String),
   isTemporary: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(ThreadId),
 });
@@ -372,6 +417,12 @@ function normalizePersistedPromptHistorySavedDraft(
         return normalized ? [normalized] : [];
       })
     : [];
+  const pullRequestContexts = Array.isArray(candidate.pullRequestContexts)
+    ? candidate.pullRequestContexts.flatMap((entry) => {
+        const normalized = normalizePersistedPullRequestContextDraft(entry);
+        return normalized ? [normalized] : [];
+      })
+    : [];
   const skills = Array.isArray(candidate.skills)
     ? candidate.skills.filter(Schema.is(ProviderSkillReference))
     : [];
@@ -386,6 +437,7 @@ function normalizePersistedPromptHistorySavedDraft(
     ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
     ...(fileComments.length > 0 ? { fileComments } : {}),
     ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
+    ...(pullRequestContexts.length > 0 ? { pullRequestContexts } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
   };
@@ -513,6 +565,54 @@ function normalizePersistedPastedTextDraft(value: unknown): PersistedPastedTextD
   return { id, createdAt, text };
 }
 
+function normalizePersistedPullRequestContextDraft(
+  value: unknown,
+): PersistedPullRequestContextDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = typeof candidate.id === "string" ? candidate.id : "";
+  const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
+  const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+  const prNumber = typeof candidate.prNumber === "number" ? candidate.prNumber : 0;
+  if (
+    id.length === 0 ||
+    text.length === 0 ||
+    title.length === 0 ||
+    !isPullRequestContextScope(candidate.scope) ||
+    !Number.isInteger(prNumber) ||
+    prNumber <= 0
+  ) {
+    return null;
+  }
+  return {
+    id,
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
+    scope: candidate.scope,
+    prNumber,
+    prUrl: typeof candidate.prUrl === "string" ? candidate.prUrl : "",
+    title,
+    subtitle: typeof candidate.subtitle === "string" ? candidate.subtitle : "",
+    text,
+  };
+}
+
+function toPersistedPullRequestContext(
+  context: PullRequestContextDraft,
+): PersistedPullRequestContextDraft {
+  return {
+    id: context.id,
+    createdAt: context.createdAt,
+    scope: context.scope,
+    prNumber: context.prNumber,
+    prUrl: context.prUrl,
+    title: context.title,
+    subtitle: context.subtitle,
+    text: context.text,
+  };
+}
+
 function normalizePersistedQueuedTurns(
   rawQueuedTurns: unknown,
 ): DeepMutable<NonNullable<PersistedComposerThreadDraftState["queuedTurns"]>> | undefined {
@@ -605,16 +705,21 @@ function normalizePersistedQueuedTurns(
             return normalized ? [normalized] : [];
           })
         : [];
+      const pullRequestContexts = Array.isArray(candidate.pullRequestContexts)
+        ? candidate.pullRequestContexts.flatMap((entry) => {
+            const normalized = normalizePersistedPullRequestContextDraft(entry);
+            return normalized ? [normalized] : [];
+          })
+        : [];
       const skills = Array.isArray(candidate.skills)
         ? candidate.skills.filter(Schema.is(ProviderSkillReference))
         : [];
       const mentions = Array.isArray(candidate.mentions)
         ? candidate.mentions.filter(Schema.is(ProviderMentionReference))
         : [];
-      const interactionMode =
-        candidate.interactionMode === "default" || candidate.interactionMode === "plan"
-          ? candidate.interactionMode
-          : null;
+      const interactionMode = Schema.is(ProviderInteractionMode)(candidate.interactionMode)
+        ? candidate.interactionMode
+        : null;
       const envMode =
         candidate.envMode === "local" || candidate.envMode === "worktree"
           ? candidate.envMode
@@ -634,6 +739,7 @@ function normalizePersistedQueuedTurns(
         terminalContexts,
         ...(fileComments.length > 0 ? { fileComments } : {}),
         ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
+        ...(pullRequestContexts.length > 0 ? { pullRequestContexts } : {}),
         skills: [...skills],
         mentions: [...mentions],
         selectedProvider,
@@ -726,6 +832,10 @@ function normalizePersistedDraftThreads(
         }
       }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
+      const goal =
+        typeof candidateDraftThread.goal === "string" && candidateDraftThread.goal.trim().length > 0
+          ? candidateDraftThread.goal
+          : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
@@ -744,17 +854,16 @@ function normalizePersistedDraftThreads(
         runtimeMode: Schema.is(RuntimeMode)(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
-        interactionMode:
-          candidateDraftThread.interactionMode === "plan" ||
-          candidateDraftThread.interactionMode === "default"
-            ? candidateDraftThread.interactionMode
-            : DEFAULT_INTERACTION_MODE,
+        interactionMode: Schema.is(ProviderInteractionMode)(candidateDraftThread.interactionMode)
+          ? candidateDraftThread.interactionMode
+          : DEFAULT_INTERACTION_MODE,
         entryPoint: normalizeDraftThreadEntryPoint(candidateDraftThread.entryPoint),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         workingDirectory: typeof workingDirectory === "string" ? workingDirectory : null,
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
+        ...(goal ? { goal } : {}),
         ...(isTemporary ? { isTemporary: true } : {}),
         ...(promotedTo ? { promotedTo } : {}),
       };
@@ -825,6 +934,9 @@ function normalizePersistedDraftsByThreadId(
       continue;
     }
     const draftCandidate = draftValue as PersistedComposerThreadDraftState;
+    const pendingUserInputDrafts = normalizePendingUserInputDrafts(
+      draftCandidate.pendingUserInputDrafts,
+    );
     const promptCandidate = typeof draftCandidate.prompt === "string" ? draftCandidate.prompt : "";
     const promptHistorySavedDraft = normalizePersistedPromptHistorySavedDraft(
       draftCandidate.promptHistorySavedDraft,
@@ -862,6 +974,12 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const pullRequestContexts = Array.isArray(draftCandidate.pullRequestContexts)
+      ? draftCandidate.pullRequestContexts.flatMap((entry) => {
+          const normalized = normalizePersistedPullRequestContextDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const skills = Array.isArray(draftCandidate.skills)
       ? draftCandidate.skills.filter(Schema.is(ProviderSkillReference))
       : [];
@@ -872,10 +990,9 @@ function normalizePersistedDraftsByThreadId(
     const runtimeMode = Schema.is(RuntimeMode)(draftCandidate.runtimeMode)
       ? draftCandidate.runtimeMode
       : null;
-    const interactionMode =
-      draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
-        ? draftCandidate.interactionMode
-        : null;
+    const interactionMode = Schema.is(ProviderInteractionMode)(draftCandidate.interactionMode)
+      ? draftCandidate.interactionMode
+      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -890,9 +1007,9 @@ function normalizePersistedDraftsByThreadId(
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
       // v3 format
-      modelSelectionByProvider = draftCandidate.modelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+      modelSelectionByProvider = normalizePersistedModelSelectionMap(
+        draftCandidate.modelSelectionByProvider,
+      );
       activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
     } else {
       // v2 or legacy format: migrate
@@ -937,6 +1054,7 @@ function normalizePersistedDraftsByThreadId(
     const hasQueuedTurns = normalizedQueuedTurns.length > 0;
     const hasReferenceData = skills.length > 0 || mentions.length > 0;
     if (
+      Object.keys(pendingUserInputDrafts).length === 0 &&
       promptCandidate.length === 0 &&
       promptHistorySavedDraft === null &&
       attachments.length === 0 &&
@@ -945,6 +1063,7 @@ function normalizePersistedDraftsByThreadId(
       browserAnnotations.length === 0 &&
       fileComments.length === 0 &&
       pastedTexts.length === 0 &&
+      pullRequestContexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
       restoredSourceProposedPlan === null &&
@@ -955,6 +1074,7 @@ function normalizePersistedDraftsByThreadId(
       continue;
     }
     nextDraftsByThreadId[threadId as ThreadId] = {
+      ...(Object.keys(pendingUserInputDrafts).length > 0 ? { pendingUserInputDrafts } : {}),
       prompt,
       ...(promptHistorySavedDraft !== null ? { promptHistorySavedDraft } : {}),
       attachments,
@@ -963,6 +1083,7 @@ function normalizePersistedDraftsByThreadId(
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(fileComments.length > 0 ? { fileComments } : {}),
       ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
+      ...(pullRequestContexts.length > 0 ? { pullRequestContexts } : {}),
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
@@ -1055,6 +1176,13 @@ export function partializeComposerDraftStoreState(
                 })),
               }
             : {}),
+          ...(queuedTurn.pullRequestContexts.length > 0
+            ? {
+                pullRequestContexts: queuedTurn.pullRequestContexts.map(
+                  toPersistedPullRequestContext,
+                ),
+              }
+            : {}),
           skills: [...queuedTurn.skills],
           mentions: [...queuedTurn.mentions],
           selectedProvider: queuedTurn.selectedProvider,
@@ -1095,6 +1223,7 @@ export function partializeComposerDraftStoreState(
     const hasQueuedTurns = persistedQueuedTurns.length > 0;
     const hasReferenceData = draft.skills.length > 0 || draft.mentions.length > 0;
     if (
+      Object.keys(draft.pendingUserInputDrafts ?? {}).length === 0 &&
       draft.prompt.length === 0 &&
       draft.promptHistorySavedDraft === null &&
       draft.persistedAttachments.length === 0 &&
@@ -1103,6 +1232,7 @@ export function partializeComposerDraftStoreState(
       draft.terminalContexts.length === 0 &&
       draft.fileComments.length === 0 &&
       draft.pastedTexts.length === 0 &&
+      draft.pullRequestContexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
       draft.restoredSourceProposedPlan == null &&
@@ -1113,6 +1243,9 @@ export function partializeComposerDraftStoreState(
       continue;
     }
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
+      ...(Object.keys(draft.pendingUserInputDrafts ?? {}).length > 0
+        ? { pendingUserInputDrafts: draft.pendingUserInputDrafts }
+        : {}),
       prompt: draft.prompt,
       ...(draft.promptHistorySavedDraft !== null
         ? {
@@ -1173,6 +1306,13 @@ export function partializeComposerDraftStoreState(
                     })),
                   }
                 : {}),
+              ...(draft.promptHistorySavedDraft.pullRequestContexts.length > 0
+                ? {
+                    pullRequestContexts: draft.promptHistorySavedDraft.pullRequestContexts.map(
+                      toPersistedPullRequestContext,
+                    ),
+                  }
+                : {}),
               ...(draft.promptHistorySavedDraft.skills.length > 0
                 ? { skills: [...draft.promptHistorySavedDraft.skills] }
                 : {}),
@@ -1230,6 +1370,11 @@ export function partializeComposerDraftStoreState(
             })),
           }
         : {}),
+      ...(draft.pullRequestContexts.length > 0
+        ? {
+            pullRequestContexts: draft.pullRequestContexts.map(toPersistedPullRequestContext),
+          }
+        : {}),
       ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
       ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
@@ -1276,10 +1421,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
   ) {
-    stickyModelSelectionByProvider =
-      normalizedPersistedState.stickyModelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+    stickyModelSelectionByProvider = normalizePersistedModelSelectionMap(
+      normalizedPersistedState.stickyModelSelectionByProvider,
+    );
     stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
   } else {
     // Legacy migration path
@@ -1335,6 +1479,7 @@ function hydrateQueuedTurnsFromPersisted(
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         fileComments: normalizeFileComments(queuedTurn.fileComments ?? []),
         pastedTexts: hydratePastedTextsFromPersisted(queuedTurn.pastedTexts),
+        pullRequestContexts: normalizePullRequestContexts(queuedTurn.pullRequestContexts ?? []),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
       };
@@ -1361,6 +1506,7 @@ function hydratePromptHistorySavedDraft(
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       skills: [],
       mentions: [],
     };
@@ -1381,6 +1527,7 @@ function hydratePromptHistorySavedDraft(
       })) ?? [],
     fileComments: normalizeFileComments(savedDraft.fileComments ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(savedDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts ?? []),
     skills: [...(savedDraft.skills ?? [])],
     mentions: [...(savedDraft.mentions ?? [])],
   };
@@ -1396,6 +1543,13 @@ export function toHydratedThreadDraft(
   const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
 
   return {
+    ...(persistedDraft.pendingUserInputDrafts
+      ? {
+          pendingUserInputDrafts: normalizePendingUserInputDrafts(
+            persistedDraft.pendingUserInputDrafts,
+          ),
+        }
+      : {}),
     prompt: persistedDraft.prompt,
     promptHistorySavedDraft: hydratePromptHistorySavedDraft(persistedDraft.promptHistorySavedDraft),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
@@ -1411,6 +1565,7 @@ export function toHydratedThreadDraft(
       })) ?? [],
     fileComments: normalizeFileComments(persistedDraft.fileComments ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(persistedDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(persistedDraft.pullRequestContexts ?? []),
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),

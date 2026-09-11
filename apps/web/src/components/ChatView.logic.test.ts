@@ -4,6 +4,7 @@ import {
   MessageId,
   ThreadId,
   TurnId,
+  type GitWorktreeSetupProgressEvent,
   type ModelSlug,
   type RuntimeMode,
 } from "@synara/contracts";
@@ -13,8 +14,8 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
-  buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
@@ -24,6 +25,8 @@ import {
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  threadHasProviderLockingActivity,
+  threadHasProviderLockingMessages,
   hasFileUndoSettled,
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
@@ -40,6 +43,7 @@ import {
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveComposerStripWorkLogEntries,
@@ -53,8 +57,10 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveSettledThreadBranchMismatch,
   resolveThreadDetailHydration,
   resolveThreadArtifactWorkspaceRoot,
+  runWorktreeCreationFlow,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
@@ -124,6 +130,49 @@ describe("thread artifact workspace root", () => {
   });
 });
 
+describe("settled thread branch mismatch", () => {
+  it("describes a settled local thread whose branch differs from the checkout", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toEqual({
+      threadBranch: "feature/finished",
+      currentBranch: "feature/current",
+    });
+  });
+
+  it("does not warn when the branch is current or the workspace is not local", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "main",
+        currentBranch: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: false,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: false,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("transcript auto-follow signal", () => {
   it("stays stable when only non-message turn activity changes", () => {
     const before = buildTranscriptAutoFollowSignal({
@@ -158,17 +207,74 @@ describe("transcript auto-follow signal", () => {
     ).not.toBe(streaming);
   });
 
-  it("changes as the streaming assistant tail grows", () => {
+  it("changes when the tail key reports a lifecycle transition", () => {
     const firstChunk = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:120",
+      tailKey: "assistant-3:assistant:streaming:content:",
     });
-    const nextChunk = buildTranscriptAutoFollowSignal({
+    const settled = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:240",
+      tailKey: "assistant-3:assistant:settled:content:2026-01-01T00:00:00Z",
     });
 
-    expect(nextChunk).not.toBe(firstChunk);
+    expect(settled).not.toBe(firstChunk);
+  });
+});
+
+describe("transcript tail key", () => {
+  const streamingTail = {
+    id: "assistant-3",
+    role: "assistant",
+    streaming: true,
+    text: "hello",
+    completedAt: null,
+  };
+
+  it("returns the empty key without a tail message", () => {
+    expect(buildTranscriptTailKey(null)).toBe("empty");
+  });
+
+  it("stays stable while the same streaming message only grows", () => {
+    const before = buildTranscriptTailKey(streamingTail);
+    const after = buildTranscriptTailKey({ ...streamingTail, text: "hello world, more text" });
+
+    expect(after).toBe(before);
+  });
+
+  it("changes when the first content lands on an empty streaming tail", () => {
+    const empty = buildTranscriptTailKey({ ...streamingTail, text: "" });
+
+    expect(buildTranscriptTailKey(streamingTail)).not.toBe(empty);
+  });
+
+  it("changes when the tail message settles or completes", () => {
+    const streaming = buildTranscriptTailKey(streamingTail);
+
+    expect(buildTranscriptTailKey({ ...streamingTail, streaming: false })).not.toBe(streaming);
+    expect(
+      buildTranscriptTailKey({ ...streamingTail, completedAt: "2026-01-01T00:00:00Z" }),
+    ).not.toBe(streaming);
+  });
+
+  it("changes when a different message becomes the tail", () => {
+    const streaming = buildTranscriptTailKey(streamingTail);
+
+    expect(
+      buildTranscriptTailKey({ id: "user-4", role: "user", text: "next", completedAt: null }),
+    ).not.toBe(streaming);
+  });
+
+  it("changes when a settled tail is replaced with different text under the same id", () => {
+    const settledTail = {
+      ...streamingTail,
+      streaming: false,
+      completedAt: "2026-01-01T00:00:00Z",
+    };
+    const before = buildTranscriptTailKey(settledTail);
+
+    // Projection repair can rewrite a settled message in place; the follow
+    // effect must re-stick because maintainScrollAtEnd is off once settled.
+    expect(buildTranscriptTailKey({ ...settledTail, text: "hello, repaired" })).not.toBe(before);
   });
 });
 
@@ -283,60 +389,6 @@ describe("file undo completion", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("composer menu selection", () => {
-  const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
-
-  it("builds a stable key from query and displayed item order", () => {
-    const baseKey = buildComposerMenuSelectionKey({
-      menuOpen: true,
-      picker: null,
-      triggerKind: "slash-command",
-      triggerQuery: "check",
-      items,
-    });
-
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items],
-      }),
-    ).toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "chec",
-        items,
-      }),
-    ).not.toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items].reverse(),
-      }),
-    ).not.toBe(baseKey);
-  });
-
-  it("returns null while the menu is closed", () => {
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: false,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items,
-      }),
-    ).toBeNull();
   });
 });
 
@@ -795,6 +847,56 @@ describe("voice helpers", () => {
       "message-imported",
       "message-native",
     ]);
+  });
+
+  it("does not lock Side chat providers on fork-import history alone", () => {
+    const importedOnly = {
+      sidechatSourceThreadId: ThreadId.makeUnsafe("source-thread"),
+      latestTurn: null,
+      session: null,
+      messages: [
+        {
+          id: "message-imported" as never,
+          role: "assistant" as const,
+          text: "Previous context",
+          turnId: null,
+          streaming: false,
+          source: "fork-import" as const,
+          createdAt: "2026-05-02T10:00:00.000Z",
+          completedAt: "2026-05-02T10:00:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(importedOnly)).toBe(false);
+    expect(threadHasProviderLockingActivity(importedOnly)).toBe(false);
+
+    const withNative = {
+      ...importedOnly,
+      messages: [
+        ...importedOnly.messages,
+        {
+          id: "message-native" as never,
+          role: "user" as const,
+          text: "Fresh side question",
+          turnId: null,
+          streaming: false,
+          source: "native" as const,
+          createdAt: "2026-05-02T10:01:00.000Z",
+          completedAt: "2026-05-02T10:01:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(withNative)).toBe(true);
+    expect(threadHasProviderLockingActivity(withNative)).toBe(true);
+
+    expect(
+      threadHasProviderLockingMessages({
+        sidechatSourceThreadId: null,
+        messages: importedOnly.messages,
+      }),
+    ).toBe(true);
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
@@ -1447,6 +1549,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -1476,6 +1579,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -1493,6 +1597,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1508,6 +1613,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 1,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1523,6 +1629,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1538,6 +1645,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1717,23 +1825,49 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
 describe("worktree setup snapshots", () => {
   it("marks earlier steps done, the active step active, and later steps pending", () => {
     expect(createWorktreeSetupSnapshot("prepare-thread").steps).toEqual([
-      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
       { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
       { id: "start-session", label: "Starting session", status: "pending" },
     ]);
   });
 
   it("starts with every step pending except the first when setup begins", () => {
-    expect(createWorktreeSetupSnapshot("create-worktree").steps.map((step) => step.status)).toEqual(
-      ["active", "pending", "pending"],
-    );
+    expect(createWorktreeSetupSnapshot("create-branch").steps.map((step) => step.status)).toEqual([
+      "active",
+      "pending",
+      "pending",
+      "pending",
+    ]);
   });
 
   it("ends with every step done except the last when the session starts", () => {
     expect(createWorktreeSetupSnapshot("start-session").steps.map((step) => step.status)).toEqual([
       "done",
       "done",
+      "done",
       "active",
+    ]);
+  });
+
+  it("inserts the copy step when the worktree copies local changes", () => {
+    expect(createWorktreeSetupSnapshot("copy-changes").steps).toEqual([
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
+      { id: "copy-changes", label: "Copying local changes", status: "active" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "pending" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+    expect(
+      createWorktreeSetupSnapshot("create-branch", { copyLocalChanges: true }).steps.map(
+        (step) => step.id,
+      ),
+    ).toEqual([
+      "create-branch",
+      "create-worktree",
+      "copy-changes",
+      "prepare-thread",
+      "start-session",
     ]);
   });
 
@@ -1741,7 +1875,8 @@ describe("worktree setup snapshots", () => {
     expect(
       createWorktreeSetupSnapshot("run-setup-action", { setupScriptName: "Setup" }).steps,
     ).toEqual([
-      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
       { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
       { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
       { id: "start-session", label: "Starting session", status: "pending" },
@@ -1753,7 +1888,7 @@ describe("worktree setup snapshots", () => {
       createWorktreeSetupSnapshot("start-session", { setupScriptName: "Setup" }).steps.map(
         (step) => step.status,
       ),
-    ).toEqual(["done", "done", "done", "active"]);
+    ).toEqual(["done", "done", "done", "done", "active"]);
   });
 
   it("preserves setup action metadata while advancing local worktree setup", () => {
@@ -1769,7 +1904,8 @@ describe("worktree setup snapshots", () => {
     });
 
     expect(next.worktreeSetup?.steps).toEqual([
-      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
       { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
       { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
       { id: "start-session", label: "Starting session", status: "pending" },
@@ -1778,7 +1914,7 @@ describe("worktree setup snapshots", () => {
 
   it("fails only the active step and leaves the rest untouched", () => {
     const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
-    expect(failed.steps.map((step) => step.status)).toEqual(["done", "error", "pending"]);
+    expect(failed.steps.map((step) => step.status)).toEqual(["done", "done", "error", "pending"]);
     expect(worktreeSetupHasError(failed)).toBe(true);
   });
 
@@ -1879,10 +2015,125 @@ describe("worktree setup snapshots", () => {
 
     expect(next).not.toBe(current);
     expect(next.worktreeSetup?.steps.map((step) => step.status)).toEqual([
+      "done",
       "active",
       "pending",
       "pending",
     ]);
+  });
+});
+
+describe("runWorktreeCreationFlow", () => {
+  interface FlowHarness {
+    emit: (event: GitWorktreeSetupProgressEvent) => void;
+    resolution: ReturnType<typeof createWorktreeSetupResolution>;
+    steps: string[];
+    removedPaths: string[];
+    unsubscribeCount: () => number;
+    settleCreation: (worktreePath: string) => void;
+    rejectCreation: (error: unknown) => void;
+    flow: ReturnType<typeof runWorktreeCreationFlow<{ worktree: { path: string } }>>;
+  }
+
+  function startFlowHarness(): FlowHarness {
+    const listeners: Array<(event: GitWorktreeSetupProgressEvent) => void> = [];
+    let unsubscribes = 0;
+    let settle!: (result: { worktree: { path: string } }) => void;
+    let reject!: (error: unknown) => void;
+    const resolution = createWorktreeSetupResolution();
+    const steps: string[] = [];
+    const removedPaths: string[] = [];
+    const flow = runWorktreeCreationFlow({
+      progressId: "progress-1",
+      subscribeToProgress: (listener) => {
+        listeners.push(listener);
+        return () => {
+          unsubscribes += 1;
+        };
+      },
+      startCreation: () =>
+        new Promise<{ worktree: { path: string } }>((resolveCreation, rejectCreation) => {
+          settle = resolveCreation;
+          reject = rejectCreation;
+        }),
+      resolution,
+      onCreationStep: (stepId) => steps.push(stepId),
+      removeWorktree: (worktreePath) => {
+        removedPaths.push(worktreePath);
+        return Promise.resolve();
+      },
+    });
+    return {
+      emit: (event) => {
+        for (const listener of listeners) {
+          listener(event);
+        }
+      },
+      resolution,
+      steps,
+      removedPaths,
+      unsubscribeCount: () => unsubscribes,
+      settleCreation: (worktreePath) => settle({ worktree: { path: worktreePath } }),
+      rejectCreation: (error) => reject(error),
+      flow,
+    };
+  }
+
+  it("advances steps only for this creation's phase-started events", async () => {
+    const harness = startFlowHarness();
+
+    harness.emit({ progressId: "progress-1", kind: "phase_started", phase: "branch" });
+    harness.emit({ progressId: "progress-other", kind: "phase_started", phase: "worktree" });
+    harness.emit({
+      progressId: "progress-1",
+      kind: "completed",
+      result: { worktree: { path: "/wt", ref: "abc123", branch: "synara/x" } },
+    });
+    harness.emit({ progressId: "progress-1", kind: "phase_started", phase: "copy-changes" });
+
+    expect(harness.steps).toEqual(["create-branch", "copy-changes"]);
+
+    harness.settleCreation("/wt");
+    await expect(harness.flow).resolves.toEqual({
+      outcome: "created",
+      result: { worktree: { path: "/wt" } },
+    });
+    expect(harness.removedPaths).toEqual([]);
+    expect(harness.unsubscribeCount()).toBe(1);
+  });
+
+  it("stops advancing steps once the setup card is resolved", async () => {
+    const harness = startFlowHarness();
+
+    harness.emit({ progressId: "progress-1", kind: "phase_started", phase: "branch" });
+    harness.resolution.resolve("cancel");
+    harness.emit({ progressId: "progress-1", kind: "phase_started", phase: "worktree" });
+
+    expect(harness.steps).toEqual(["create-branch"]);
+    await expect(harness.flow).resolves.toEqual({ outcome: "resolved" });
+  });
+
+  it("tears down the worktree once creation lands after a resolution won the race", async () => {
+    const harness = startFlowHarness();
+
+    harness.resolution.resolve("work-locally");
+    await expect(harness.flow).resolves.toEqual({ outcome: "resolved" });
+    expect(harness.unsubscribeCount()).toBe(1);
+    expect(harness.removedPaths).toEqual([]);
+
+    harness.settleCreation("/late-worktree");
+    await Promise.resolve();
+    expect(harness.removedPaths).toEqual(["/late-worktree"]);
+  });
+
+  it("unsubscribes and rethrows when creation fails", async () => {
+    const harness = startFlowHarness();
+
+    harness.rejectCreation(new Error("worktree add failed"));
+
+    await expect(harness.flow).rejects.toThrow("worktree add failed");
+    expect(harness.unsubscribeCount()).toBe(1);
+    expect(harness.removedPaths).toEqual([]);
   });
 });
 
@@ -2236,6 +2487,39 @@ describe("resolveWorkingLabel", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
     expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
+  });
+
+  it("shows Starting provider… during the connecting phase", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Loading");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
+    ).toBe("Thinking");
   });
 });
 
@@ -2660,5 +2944,61 @@ describe("thread detail hydration", () => {
         detailSyncState: "failed",
       }),
     ).toBe("failed");
+  });
+});
+
+describe("resolveDraftFallbackModelSelection", () => {
+  it("prefers an explicit project default over the settings default provider", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "codex", model: "gpt-5.5" },
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+  });
+
+  it("uses the settings default provider when the project has no default", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "devin", model: "adaptive" });
+  });
+
+  it("keeps the project default model when it matches the settings provider", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "devin", model: "swe-1-7" },
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "devin", model: "swe-1-7" });
+  });
+
+  it("uses the project default provider when the settings default is pi", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        settingsDefaultProvider: "pi",
+      }),
+    ).toEqual({ provider: "claudeAgent", model: "claude-sonnet-5" });
+  });
+
+  it("falls back to codex when the settings default is pi and no project default exists", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        settingsDefaultProvider: "pi",
+      }),
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+  });
+
+  it("uses the settings provider default model when no project default exists", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: undefined,
+        settingsDefaultProvider: "grok",
+      }),
+    ).toEqual({ provider: "grok", model: "grok-4.6" });
   });
 });

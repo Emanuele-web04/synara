@@ -39,9 +39,9 @@ import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
+  type SizedProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
 } from "../providerRuntimeEventIngress.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 import { nonNegativeInteger } from "../tokenUsage.ts";
@@ -333,14 +333,14 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
     );
     const sessions = new Map<ThreadId, CommandCodeSessionContext>();
 
-    const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
-      (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
+    const eventIngress = yield* makeBoundedCallbackIngress<SizedProviderRuntimeEvent, never, never>(
+      (sized) => Queue.offer(eventQueue, sized.event).pipe(Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (sized) => isTerminalProviderRuntimeEvent(sized.event),
+        sizeOf: (sized) => sized.bytes,
       },
     );
 

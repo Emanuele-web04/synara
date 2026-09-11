@@ -2,9 +2,10 @@
 // Purpose: Verify the shortcuts sheet builder reflects current context and dynamic script bindings.
 // Layer: UI helper tests
 
+import { STATIC_KEYBINDING_COMMANDS } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildShortcutSheetSections } from "./shortcutsSheet";
+import { buildShortcutSheetSections, listEditableShortcutDefinitions } from "./shortcutsSheet";
 import type { ProjectScript } from "./types";
 
 const PROJECT_SCRIPTS: ProjectScript[] = [
@@ -55,18 +56,28 @@ describe("buildShortcutSheetSections", () => {
     ).toBe(true);
     expect(
       sections[0]?.entries.some(
+        (entry) => entry.id === "chat.find" && entry.shortcutLabel === "⌘F",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
         (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "editor.file.save" && entry.label === "Save file",
       ),
     ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });
 
-  it("switches to workspace shortcuts when the workspace is open", () => {
+  it("separates macOS workspace tabs from thread jumps while the workspace is open", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [],
       projectScripts: [],
-      platform: "Linux",
+      platform: "MacIntel",
       context: {
         terminalFocus: false,
         terminalOpen: true,
@@ -76,13 +87,13 @@ describe("buildShortcutSheetSections", () => {
 
     expect(
       sections[0]?.entries.some(
-        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "⌃1",
       ),
     ).toBe(true);
     expect(sections[1]?.title).toBe("Outside workspace mode");
     expect(
       sections[1]?.entries.some(
-        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "⌘1",
       ),
     ).toBe(true);
   });
@@ -143,5 +154,13 @@ describe("buildShortcutSheetSections", () => {
     });
 
     expect(sections[0]?.entries.some((entry) => entry.id === "sidebar.toggle")).toBe(true);
+  });
+});
+
+describe("listEditableShortcutDefinitions", () => {
+  it("includes every built-in keybinding command", () => {
+    expect(listEditableShortcutDefinitions().map((definition) => definition.command)).toEqual(
+      STATIC_KEYBINDING_COMMANDS,
+    );
   });
 });

@@ -13,12 +13,13 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import {
   type DockPaneRuntimeMode,
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { Maximize2, Minimize2, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -56,6 +57,15 @@ import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDeskto
 export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
 export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 
+// Pane kinds whose content has a natural width, opened at that size rather than
+// at the even split. The device pane frames a portrait phone, so its useful
+// width is whatever lets the phone reach full height: a ~19.5:9 chassis stays
+// height-bound well past 480px, and opening narrower only shrinks the device
+// while leaving empty space above and below it.
+const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
+  device: 38 * 16,
+};
+
 interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
@@ -76,6 +86,7 @@ interface RightDockProps {
   onAddPane: (kind: RightDockPaneKind) => void;
   motionKey?: string;
   activePaneRuntimeMode?: DockPaneRuntimeMode;
+  browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
@@ -174,6 +185,7 @@ export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  const browserRuntimeMode = props.browserRuntimeMode ?? "live";
   // The dock is the right-most surface when open, so its header sits under the
   // fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
@@ -186,7 +198,53 @@ export function RightDock(props: RightDockProps) {
   // pin the dock width to exactly half of it. Mid-session drags still resize
   // freely; the next open re-centers the split.
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const expansionKey = props.motionKey ?? "dock";
+  const isMobile = useIsMobile();
+  const maximized = !isMobile && props.state.open && expandedKey === expansionKey;
+  const [expandedWidth, setExpandedWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (maximized && props.state.panes.length === 0) {
+      setExpandedKey(null);
+      props.onCollapse();
+    }
+  }, [maximized, props.state.panes.length, props.onCollapse]);
+  useLayoutEffect(() => {
+    if (!maximized) return;
+    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const shell = wrapper?.parentElement;
+    if (!shell || !wrapper) return;
+    const update = () => setExpandedWidth(shell.getBoundingClientRect().width);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(shell);
+    // The chat stays mounted and running underneath, but must leave tab order.
+    const siblings = Array.from(shell.children).filter(
+      (element): element is HTMLElement => element instanceof HTMLElement && element !== wrapper,
+    );
+    const previous = siblings.map((element) => ({
+      inert: element.inert,
+      visibility: element.style.visibility,
+    }));
+    siblings.forEach((element) => {
+      element.inert = true;
+      // Electron drag regions can intercept clicks through an overlapping panel.
+      // Hide the covered surface as well as removing it from keyboard navigation.
+      element.style.visibility = "hidden";
+    });
+    return () => {
+      observer.disconnect();
+      siblings.forEach((element, index) => {
+        element.inert = previous[index]?.inert ?? false;
+        element.style.visibility = previous[index]?.visibility ?? "";
+      });
+    };
+  }, [maximized]);
+  useEffect(() => {
+    if (!props.state.open) setExpandedKey(null);
+  }, [props.state.open]);
   const minWidth = props.minWidth;
+  const activePaneKind = activePane?.kind ?? null;
   useEffect(() => {
     if (!props.state.open) {
       return;
@@ -196,11 +254,15 @@ export function RightDock(props: RightDockProps) {
     if (!wrapper || !shell) {
       return;
     }
-    const halfWidth = Math.round(shell.getBoundingClientRect().width / 2);
-    if (halfWidth > 0) {
-      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, halfWidth)}px`);
+    // A phone-shaped pane has a natural width: half the shell leaves the device
+    // stranded in empty space, so kinds that render a fixed-aspect object open
+    // at their own comfortable size instead of the even split.
+    const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
+    const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
+    if (openWidth > 0) {
+      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
     }
-  }, [props.state.open, minWidth]);
+  }, [props.state.open, minWidth, activePaneKind]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
@@ -247,6 +309,8 @@ export function RightDock(props: RightDockProps) {
           "border-l border-[var(--app-surface-divider)] text-foreground",
           chromeMotionClass,
         )}
+        style={maximized ? { width: expandedWidth || undefined, zIndex: 30 } : undefined}
+        data-dock-maximized={maximized ? "true" : undefined}
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
@@ -263,7 +327,7 @@ export function RightDock(props: RightDockProps) {
           <div
             className={cn(
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-              "gap-1 px-1.5",
+              "gap-1 px-1.5 [-webkit-app-region:no-drag]",
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
@@ -308,6 +372,20 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
+            {!isMobile &&
+            (maximized || activePane?.kind === "file" || activePane?.kind === "explorer") ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label={maximized ? "Restore panel" : "Maximize panel"}
+                tooltip={maximized ? "Restore panel" : "Maximize panel"}
+                aria-pressed={maximized}
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                onClick={() => setExpandedKey(maximized ? null : expansionKey)}
+              >
+                {maximized ? <Minimize2 /> : <Maximize2 />}
+              </IconButton>
+            ) : null}
             <IconButton
               variant="chrome"
               size="icon-xs"
@@ -328,9 +406,14 @@ export function RightDock(props: RightDockProps) {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;
               // Keep-mounted panes that are not the active tab are already
-              // hydrated, so they render live (just hidden); the active pane uses
-              // the deferred-aware runtime mode from the activation hook.
-              const runtimeMode: DockPaneRuntimeMode = isActive ? activePaneRuntimeMode : "live";
+              // hydrated; browser panes may use an explicit runtime mode so a
+              // floating browser can own the live guest while the dock stays preview-only.
+              const runtimeMode: DockPaneRuntimeMode =
+                pane.kind === "browser"
+                  ? browserRuntimeMode
+                  : isActive
+                    ? activePaneRuntimeMode
+                    : "live";
               return (
                 <div
                   key={pane.id}
@@ -352,7 +435,7 @@ export function RightDock(props: RightDockProps) {
             })}
           </div>
         </div>
-        <SidebarRail />
+        {!maximized && <SidebarRail />}
       </Sidebar>
     </SidebarProvider>
   );
