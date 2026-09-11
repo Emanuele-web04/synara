@@ -3,6 +3,7 @@ import "../../index.css";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX } from "./chatSelectionActions";
 import { TranscriptSelectionActionLayer } from "./TranscriptSelectionActionLayer";
 
 const action = {
@@ -40,6 +41,13 @@ it("shows the three segmented actions and routes the quote to Side", async () =>
     await expect.element(toolbar).toBeVisible();
     expect(toolbar.element().textContent).toBe("Add to ChatAdd to SideAdd to new Chat");
     expect(toolbar.element().querySelectorAll("svg")).toHaveLength(0);
+    // Labels must never clip, and the rendered height must match the height the
+    // layout reserves when placing the toolbar above the selection.
+    for (const button of toolbar.element().querySelectorAll("button")) {
+      expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth);
+    }
+    const bar = toolbar.element().firstElementChild!;
+    expect(bar.getBoundingClientRect().height).toBe(TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX);
     await page.getByRole("button", { name: "Add to Side", exact: true }).click();
     expect(callbacks.onAddToSide).toHaveBeenCalledExactlyOnceWith(action.selection);
   } finally {
