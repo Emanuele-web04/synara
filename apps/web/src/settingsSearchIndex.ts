@@ -132,12 +132,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the pinned-messages checklist in the Environment panel.",
   },
   {
-    id: "general:environment-markers",
-    section: "general",
-    title: "Text markers",
-    keywords: "Show highlighted and underlined transcript text in the Environment panel.",
-  },
-  {
     id: "general:environment-instructions",
     section: "general",
     title: "Project instructions",
