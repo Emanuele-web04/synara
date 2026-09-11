@@ -77,6 +77,7 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
@@ -363,6 +364,11 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  // The turn whose prompt() has been dispatched but has not committed a run
+  // yet — the SDK's isStreaming flag only flips deep inside prompt()'s async
+  // preflight, so a concurrent send must treat this as still-live rather than
+  // settled.
+  promptCommitting: TurnId | undefined;
   activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
@@ -1389,6 +1395,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
+    // Serializes turn dispatch per thread: the activeTurnId/isStreaming check
+    // and the resulting prompt()/steer()/followUp() call stay atomic, so two
+    // overlapping sends cannot both read "idle" and race prompt()'s preflight.
+    const dispatchLock = makeKeyedLock<ThreadId>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1827,12 +1837,41 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       images: ImageContent[],
     ) => {
       delete context.activeTurnErrorMessage;
+      // Marks the prompt as dispatched-but-not-yet-streaming: the SDK's
+      // isStreaming flag only flips deep inside prompt()'s async preflight, so
+      // a concurrent sendTurn/steerTurn must not read the gap as "settled".
+      context.promptCommitting = turnId;
+      const settled = () => {
+        if (context.promptCommitting === turnId) context.promptCommitting = undefined;
+      };
       // A prompt owns all SDK retries, compaction and queued continuations.
       // agent_end is per attempt; agent_settled also fires before a rejection.
       void context.runtime.session.prompt(text, images.length > 0 ? { images } : undefined).then(
-        () => completePrompt(context, turnId, context.activeTurnErrorMessage),
-        (cause) => completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause),
+        () => {
+          settled();
+          completePrompt(context, turnId, context.activeTurnErrorMessage);
+        },
+        (cause) => {
+          settled();
+          completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
+        },
       );
+    };
+
+    // A turn whose run fully settled but whose completion is still queued on
+    // the prompt() promise is stale — close it out so the next dispatch starts
+    // clean instead of joining a dead turn. A still-committing prompt
+    // (isStreaming has not flipped yet) is live, not stale.
+    const closeSettledActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId === undefined ||
+        context.runtime.session.isStreaming ||
+        context.promptCommitting === turnId
+      ) {
+        return;
+      }
+      completePrompt(context, turnId, context.activeTurnErrorMessage);
     };
 
     const buildProviderText = (context: PiSessionContext, text: string) =>
@@ -2521,6 +2560,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           session,
           turns: [],
           activeTurnId: undefined,
+          promptCommitting: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
@@ -2674,44 +2714,55 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        if (context.activeTurnId) {
-          return yield* sendTurnBusyError();
-        }
-        if (input.modelSelection?.provider === "pi") {
-          yield* applyPiModelSelection(context, input.modelSelection);
-        }
-        const payload = yield* buildPromptPayload(input);
-        const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        context.activeTurnId = turnId;
-        context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-        context.session = makeSessionSnapshot(context);
-        if (isPiReloadPayload(payload)) {
-          yield* runPiReload(context, payload.text);
-          return dispatchResult(context, turnId);
-        }
-        startPrompt(context, turnId, buildProviderText(context, payload.text), payload.images);
-        return dispatchResult(context, turnId);
-      });
-
-    const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        const payload = yield* buildPromptPayload(input);
-        const providerText = buildProviderText(context, payload.text);
-        const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
-        if (!context.activeTurnId) {
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          if (input.modelSelection?.provider === "pi") {
+            yield* applyPiModelSelection(context, input.modelSelection);
+          }
+          const payload = yield* buildPromptPayload(input);
+          closeSettledActiveTurn(context);
+          if (context.activeTurnId !== undefined) {
+            return yield* sendTurnBusyError();
+          }
+          const turnId = TurnId.makeUnsafe(crypto.randomUUID());
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-        }
-        if (context.runtime.session.isStreaming) {
-          yield* steerPiTurn(context, providerText, payload.images);
-        } else {
-          startPrompt(context, turnId, providerText, payload.images);
-        }
-        return dispatchResult(context, turnId);
-      });
+          context.session = makeSessionSnapshot(context);
+          if (isPiReloadPayload(payload)) {
+            yield* runPiReload(context, payload.text);
+            return dispatchResult(context, turnId);
+          }
+          startPrompt(context, turnId, buildProviderText(context, payload.text), payload.images);
+          return dispatchResult(context, turnId);
+        }),
+      );
+
+    const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          const payload = yield* buildPromptPayload(input);
+          closeSettledActiveTurn(context);
+          const providerText = buildProviderText(context, payload.text);
+          const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+          if (!context.activeTurnId) {
+            context.activeTurnId = turnId;
+            context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
+          }
+          if (
+            context.runtime.session.isStreaming ||
+            context.promptCommitting === context.activeTurnId
+          ) {
+            yield* steerPiTurn(context, providerText, payload.images);
+          } else {
+            startPrompt(context, turnId, providerText, payload.images);
+          }
+          return dispatchResult(context, turnId);
+        }),
+      );
 
     const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
