@@ -15,12 +15,6 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@synara/shared/threadMarkers";
 
 import { isSessionRunningTurn } from "./session-logic";
 import {
@@ -959,8 +953,6 @@ function applyOrchestrationEvent(
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
             (event.payload.pinnedMessages === undefined ||
               deepEqualJson(event.payload.pinnedMessages, thread.pinnedMessages ?? null)) &&
-            (event.payload.threadMarkers === undefined ||
-              deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
             (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
             (event.payload.goal === undefined || event.payload.goal === (thread.goal ?? "")) &&
             (event.payload.goalStartedAt === undefined ||
@@ -1013,13 +1005,7 @@ function applyOrchestrationEvent(
                   >,
                 }
               : {}),
-            ...(event.payload.threadMarkers !== undefined
-              ? {
-                  threadMarkers: event.payload.threadMarkers as NonNullable<
-                    Thread["threadMarkers"]
-                  >,
-                }
-              : {}),
+
             ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
             ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
             ...(event.payload.goalStartedAt !== undefined
@@ -1126,92 +1112,6 @@ function applyOrchestrationEvent(
           return {
             ...thread,
             pinnedMessages,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-added":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = addThreadMarker(thread.threadMarkers, event.payload.marker);
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-removed":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = removeThreadMarker(thread.threadMarkers, event.payload.markerId);
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-done-set":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = setThreadMarkerDone(
-            thread.threadMarkers,
-            event.payload.markerId,
-            event.payload.done,
-            event.payload.updatedAt,
-          );
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-label-set":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = setThreadMarkerLabel(
-            thread.threadMarkers,
-            event.payload.markerId,
-            event.payload.label,
-            event.payload.updatedAt,
-          );
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
             updatedAt,
           };
         },

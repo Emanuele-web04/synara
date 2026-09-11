@@ -31,11 +31,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
   ThreadId,
-  ThreadMarkerId,
   type ThreadGoalAchievement,
-  type ThreadMarker,
-  type ThreadMarkerColor,
-  type ThreadMarkerStyle,
   type TurnId,
   type EditorId,
   type KeybindingCommand,
@@ -176,9 +172,12 @@ import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReco
 import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
+  clearQueuedComposerAutoDispatchRetry,
   clearQueuedComposerSteerGate,
+  getQueuedComposerAutoDispatchRetryDelay,
   getQueuedComposerSteerGate,
   isQueuedComposerAwaitingTurnStart,
+  recordQueuedComposerAutoDispatchFailure,
   releaseQueuedComposerAutoDispatch,
   runLockedQueuedComposerAutoDispatch,
   tryBeginQueuedComposerAutoDispatch,
@@ -571,13 +570,7 @@ import {
   scrollTranscriptToSettledEnd,
   stopTranscriptScrollAtCurrentOffset,
 } from "./chat/transcriptScroll";
-import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
-import {
-  dispatchThreadMarkerAdd,
-  dispatchThreadMarkerDoneSet,
-  dispatchThreadMarkerLabelSet,
-  dispatchThreadMarkerRemove,
-} from "../threadMarkers";
+import { addSelectionToSide, startSelectionChat } from "../lib/selectionChat";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
 import {
@@ -675,7 +668,6 @@ const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_PINNED_MESSAGES: readonly PinnedMessage[] = [];
-const EMPTY_THREAD_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -3562,42 +3554,20 @@ export default function ChatView({
   const tailAnchorScrollInFlightRef = useRef(false);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
-  const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
   const goalAchievements = activeThread?.goalAchievements ?? EMPTY_GOAL_ACHIEVEMENTS;
   const threadNotes = activeThread?.notes ?? "";
   const pinnedMessageIds = useMemo(
     () => new Set(pinnedMessages.map((pin) => pin.messageId)),
     [pinnedMessages],
   );
-  const markerMessageIds = useMemo(
-    () => new Set(threadMarkers.map((marker) => marker.messageId)),
-    [threadMarkers],
-  );
-  // Resolve live text for the Environment panel in one transcript pass.
-  const { markerMessageTextById, pinnedMessageTextById } = useMemo(() => {
-    const needsPinnedText = pinnedMessageIds.size > 0;
-    const needsMarkerText = markerMessageIds.size > 0;
-    if (!needsPinnedText && !needsMarkerText) {
-      return {
-        pinnedMessageTextById: EMPTY_PINNED_TEXT,
-        markerMessageTextById: EMPTY_PINNED_TEXT,
-      };
-    }
-    const pinnedTextById = new Map<MessageId, string>();
-    const markerTextById = new Map<MessageId, string>();
+  const pinnedMessageTextById = useMemo(() => {
+    if (pinnedMessageIds.size === 0) return EMPTY_PINNED_TEXT;
+    const textById = new Map<MessageId, string>();
     for (const message of timelineMessages) {
-      if (needsPinnedText && pinnedMessageIds.has(message.id)) {
-        pinnedTextById.set(message.id, message.text);
-      }
-      if (needsMarkerText && markerMessageIds.has(message.id)) {
-        markerTextById.set(message.id, message.text);
-      }
+      if (pinnedMessageIds.has(message.id)) textById.set(message.id, message.text);
     }
-    return {
-      pinnedMessageTextById: needsPinnedText ? pinnedTextById : EMPTY_PINNED_TEXT,
-      markerMessageTextById: needsMarkerText ? markerTextById : EMPTY_PINNED_TEXT,
-    };
-  }, [markerMessageIds, pinnedMessageIds, timelineMessages]);
+    return textById;
+  }, [pinnedMessageIds, timelineMessages]);
   const {
     handleTogglePinMessage,
     handleTogglePinnedMessageDone,
@@ -3646,58 +3616,7 @@ export default function ChatView({
   const handleJumpToPinnedMessage = useCallback((messageId: MessageId) => {
     timelineControllerRef.current?.scrollToMessage(messageId);
   }, []);
-  const handleJumpToThreadMarker = useCallback((marker: ThreadMarker) => {
-    timelineControllerRef.current?.scrollToMarker(marker);
-  }, []);
-  const handleRemoveThreadMarker = useCallback(
-    (markerId: ThreadMarkerId) => {
-      if (!activeThreadId) {
-        return;
-      }
-      void dispatchThreadMarkerRemove(activeThreadId, markerId).catch((error) => {
-        console.error("Failed to remove thread marker", error);
-        toastManager.add({
-          type: "error",
-          title: "Could not remove marker.",
-        });
-      });
-    },
-    [activeThreadId],
-  );
-  const handleToggleThreadMarkerDone = useCallback(
-    (markerId: ThreadMarkerId) => {
-      if (!activeThreadId) {
-        return;
-      }
-      const marker = threadMarkers.find((candidate) => candidate.id === markerId);
-      if (!marker) {
-        return;
-      }
-      void dispatchThreadMarkerDoneSet(activeThreadId, markerId, !marker.done).catch((error) => {
-        console.error("Failed to update thread marker", error);
-        toastManager.add({
-          type: "error",
-          title: "Could not update marker.",
-        });
-      });
-    },
-    [activeThreadId, threadMarkers],
-  );
-  const handleRenameThreadMarker = useCallback(
-    (markerId: ThreadMarkerId, label: string | null) => {
-      if (!activeThreadId) {
-        return;
-      }
-      void dispatchThreadMarkerLabelSet(activeThreadId, markerId, label).catch((error) => {
-        console.error("Failed to rename thread marker", error);
-        toastManager.add({
-          type: "error",
-          title: "Could not rename marker.",
-        });
-      });
-    },
-    [activeThreadId],
-  );
+
   // Before treating an empty timeline as a genuinely new thread, wait for the
   // detail snapshot: a server thread whose history has not synced yet must show
   // a loading (or failed) transcript state instead of the empty landing.
@@ -5715,6 +5634,9 @@ export default function ChatView({
       window.cancelAnimationFrame(frameId);
     };
   }, [activeThread?.id, scrollToEnd, transcriptAutoFollowSignal]);
+  const selectionChatEnvMode = useProjectEnvironmentStore((state) =>
+    activeProject ? state.envModeByProjectId[activeProject.id] : undefined,
+  );
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -5734,6 +5656,7 @@ export default function ChatView({
     enabled:
       Boolean(activeThread) &&
       !isInactiveSplitPane &&
+      !isSidechatExpired &&
       pendingUserInputs.length === 0 &&
       !isComposerApprovalState,
     composerImagesRef,
@@ -5753,92 +5676,6 @@ export default function ChatView({
     onMessagesTouchStartBase,
     onMessagesWheelBase,
   });
-  const createMarkerFromPendingSelection = useCallback(
-    (style: ThreadMarkerStyle, color: ThreadMarkerColor) => {
-      const pendingSelection = pendingTranscriptSelectionAction;
-      if (!pendingSelection || !activeThreadId) {
-        return;
-      }
-      const messageId = MessageId.makeUnsafe(pendingSelection.selection.assistantMessageId);
-      if (isPendingSetupBubbleId(messageId)) {
-        // Don't mark an ephemeral automation-setup bubble; it disappears when setup ends.
-        dismissTranscriptSelectionAction();
-        window.getSelection()?.removeAllRanges();
-        return;
-      }
-      const message = timelineMessages.find((candidate) => candidate.id === messageId);
-      if (!message) {
-        toastManager.add({
-          type: "warning",
-          title: "Could not find the selected message.",
-        });
-        return;
-      }
-      const range = resolveTranscriptMarkerRange({
-        messageText: message.text,
-        selectedText: pendingSelection.selection.text,
-      });
-      if (!range) {
-        toastManager.add({
-          type: "warning",
-          title: "Select a unique phrase to mark it.",
-          description: "Try including a few more words so Synara can find the exact place.",
-        });
-        return;
-      }
-      dismissTranscriptSelectionAction();
-      window.getSelection()?.removeAllRanges();
-      const sameStyleOverlappingMarkers = threadMarkers.filter(
-        (marker) =>
-          marker.messageId === messageId &&
-          marker.style === style &&
-          marker.startOffset < range.endOffset &&
-          range.startOffset < marker.endOffset,
-      );
-      if (sameStyleOverlappingMarkers.length > 0) {
-        for (const marker of sameStyleOverlappingMarkers) {
-          void dispatchThreadMarkerRemove(activeThreadId, marker.id).catch((error) => {
-            console.error("Failed to remove thread marker", error);
-            toastManager.add({
-              type: "error",
-              title: "Could not remove marker.",
-            });
-          });
-        }
-        return;
-      }
-      void dispatchThreadMarkerAdd({
-        threadId: activeThreadId,
-        markerId: ThreadMarkerId.makeUnsafe(crypto.randomUUID()),
-        messageId,
-        startOffset: range.startOffset,
-        endOffset: range.endOffset,
-        selectedText: message.text.slice(range.startOffset, range.endOffset),
-        style,
-        color,
-      }).catch((error) => {
-        console.error("Failed to create thread marker", error);
-        toastManager.add({
-          type: "error",
-          title: "Could not create marker.",
-        });
-      });
-    },
-    [
-      activeThreadId,
-      dismissTranscriptSelectionAction,
-      isPendingSetupBubbleId,
-      pendingTranscriptSelectionAction,
-      threadMarkers,
-      timelineMessages,
-    ],
-  );
-  const createHighlightFromPendingSelection = useCallback(() => {
-    createMarkerFromPendingSelection("highlight", "yellow");
-  }, [createMarkerFromPendingSelection]);
-  const createUnderlineFromPendingSelection = useCallback(() => {
-    createMarkerFromPendingSelection("underline", "blue");
-  }, [createMarkerFromPendingSelection]);
 
   useLayoutEffect(() => {
     if (isInactiveSplitPane) return;
@@ -9131,6 +8968,15 @@ export default function ChatView({
             );
         }
       }
+      if (queuedChatTurn !== null && !turnStartSucceeded) {
+        // The queued snapshot remains available for retry/edit after a rejected
+        // dispatch. Drop only this attempt's optimistic transcript row; its
+        // attachment preview URLs still belong to the queued snapshot.
+        setOptimisticUserMessages((existing) => {
+          const next = existing.filter((message) => message.id !== messageIdForSend);
+          return next.length === existing.length ? existing : next;
+        });
+      }
       if (
         queuedChatTurn === null &&
         !turnStartSucceeded &&
@@ -9832,9 +9678,12 @@ export default function ChatView({
       removeQueuedComposerTurnFromDraft(threadId, queuedTurn.id);
       const succeeded = await dispatchQueuedComposerTurn(queuedTurn, "steer");
       if (succeeded) {
+        clearQueuedComposerAutoDispatchRetry(threadId);
         return;
       }
       insertQueuedComposerTurn(threadId, queuedTurn, queuedIndex);
+      recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
+      setQueuedAutoDispatchTick((tick) => tick + 1);
     },
     [
       dispatchQueuedComposerTurn,
@@ -9896,7 +9745,8 @@ export default function ChatView({
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
-        phase,
+        // A mini-composer submission queues the first turn before the draft has a session.
+        phase: isLocalDraftThread ? "ready" : phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -9927,6 +9777,17 @@ export default function ChatView({
     if (!nextQueuedTurn) {
       return;
     }
+    const retryDelay = getQueuedComposerAutoDispatchRetryDelay(threadId, nextQueuedTurn.id);
+    if (retryDelay === null) {
+      return;
+    }
+    if (retryDelay !== undefined && retryDelay > 0) {
+      const timer = window.setTimeout(
+        () => setQueuedAutoDispatchTick((tick) => tick + 1),
+        retryDelay,
+      );
+      return () => window.clearTimeout(timer);
+    }
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
       // The watcher already owns this thread's queue head (background drain
       // started before this ChatView claimed). Poll until that send settles.
@@ -9939,8 +9800,12 @@ export default function ChatView({
       run: async () => {
         const succeeded = await dispatchQueuedComposerTurn(nextQueuedTurn, "queue");
         if (succeeded) {
+          clearQueuedComposerAutoDispatchRetry(threadId);
           removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
+          return;
         }
+        recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        setQueuedAutoDispatchTick((tick) => tick + 1);
       },
       onSettled: () => {
         autoDispatchingQueuedTurnRef.current = false;
@@ -9955,6 +9820,7 @@ export default function ChatView({
     activeThread?.session,
     dispatchQueuedComposerTurn,
     isConnecting,
+    isLocalDraftThread,
     localDispatch,
     pendingUserInputs.length,
     phase,
@@ -11844,9 +11710,7 @@ export default function ChatView({
     branchToolbar: branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
-    threadMarkers,
     pinnedMessageTextById,
-    markerMessageTextById,
     notes: threadNotes,
     activeProjectId,
     projectInstructions,
@@ -11860,10 +11724,6 @@ export default function ChatView({
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
     onUnpinMessage: handleUnpinMessage,
     onRenamePinnedMessage: handleRenamePinnedMessage,
-    onJumpToThreadMarker: handleJumpToThreadMarker,
-    onToggleThreadMarkerDone: handleToggleThreadMarkerDone,
-    onRemoveThreadMarker: handleRemoveThreadMarker,
-    onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
     onClose: closeEnvironmentPanelAfterAction,
@@ -12839,7 +12699,6 @@ export default function ChatView({
                     canPinMessage={canPinMessage}
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     onForkFromMessage={handleForkFromMessage}
-                    threadMarkers={threadMarkers}
                     goalAchievements={goalAchievements}
                     enteringUserMessageIds={enteringUserMessageIds}
                     tailAnchorMessageId={
@@ -13060,14 +12919,40 @@ export default function ChatView({
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />
-      {isInactiveSplitPane ? null : (
+      {!isInactiveSplitPane && activeProject && !isSidechatExpired ? (
         <TranscriptSelectionActionLayer
+          key={threadId}
           action={pendingTranscriptSelectionAction}
-          onHighlight={createHighlightFromPendingSelection}
-          onUnderline={createUnderlineFromPendingSelection}
+          defaultEnvMode={selectionChatEnvMode ?? settings.defaultThreadEnvMode}
+          canUseWorktree={isGitRepo && !isContainerLandingProject}
+          canAddToSide={isServerThread && !activeThread.sidechatSourceThreadId}
+          onDismiss={dismissTranscriptSelectionAction}
           onAddToChat={commitTranscriptAssistantSelection}
+          onAddToSide={(selection) =>
+            addSelectionToSide({
+              selection,
+              project: activeProject,
+              sourceThread: activeThread,
+              selectedModelSelection,
+            })
+          }
+          onNewChat={(selection, prompt, envMode, intent) =>
+            startSelectionChat({
+              selection,
+              prompt,
+              envMode,
+              intent,
+              projectId: activeProject.id,
+              projectCwd: activeProject.cwd,
+              modelSelection: selectedModelSelection,
+              selectedPromptEffort,
+              providerOptionsForDispatch,
+              runtimeMode,
+              createThread: handleNewThread,
+            })
+          }
         />
-      )}
+      ) : null}
       <ExpandedImageOverlay
         expandedImage={expandedImage}
         onClose={closeExpandedImage}
