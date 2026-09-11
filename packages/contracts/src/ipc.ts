@@ -48,8 +48,8 @@ import type {
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
-  GitHubRepositoryInput,
-  GitHubRepositoryResult,
+  GitRepositoryInput,
+  GitRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
@@ -92,10 +92,10 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
-  GitHubProjectProvisionInput,
-  GitHubProjectProvisionProgressEvent,
-  GitHubProjectProvisionResult,
-} from "./githubProjectProvisioning";
+  ProjectProvisionInput,
+  ProjectProvisionProgressEvent,
+  ProjectProvisionResult,
+} from "./projectProvisioning";
 import type {
   PullRequestActionInput,
   PullRequestActionResult,
@@ -736,13 +736,11 @@ export interface NativeApi {
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
-    provisionFromGitHub: (
-      input: GitHubProjectProvisionInput,
+    provisionFromRepository: (
+      input: ProjectProvisionInput,
       options?: { readonly signal?: AbortSignal },
-    ) => Promise<GitHubProjectProvisionResult>;
-    onProvisionProgress: (
-      callback: (event: GitHubProjectProvisionProgressEvent) => void,
-    ) => () => void;
+    ) => Promise<ProjectProvisionResult>;
+    onProvisionProgress: (callback: (event: ProjectProvisionProgressEvent) => void) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
@@ -759,7 +757,7 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
-    githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
+    repository: (input: GitRepositoryInput) => Promise<GitRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;

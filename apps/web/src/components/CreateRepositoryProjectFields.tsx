@@ -1,6 +1,7 @@
+import { gitHostCliName, type GitHostKind } from "@synara/shared/gitHostRepository";
 import type { KeyboardEvent, ReactNode } from "react";
 
-import { GitHubIcon } from "~/lib/icons";
+import { gitHostIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
@@ -10,7 +11,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 
 export const PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-foreground/12";
 
-export function CreateGitHubProjectFields(props: {
+export function CreateRepositoryProjectFields(props: {
+  readonly host: GitHostKind;
   readonly repositoryInputId: string;
   readonly destinationParentInputId: string;
   readonly directoryNameInputId: string;
@@ -30,6 +32,10 @@ export function CreateGitHubProjectFields(props: {
   readonly onBrowse: () => void;
   readonly onSubmitKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 }) {
+  const HostIcon = gitHostIcon(props.host);
+  const cliName = gitHostCliName(props.host);
+  const isGitLab = props.host === "gitlab";
+
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-foreground/10 bg-foreground/[0.025] px-3.5 py-3">
@@ -37,18 +43,27 @@ export function CreateGitHubProjectFields(props: {
           What you need
         </p>
         <ol className="mt-2.5 space-y-2">
-          <GitHubRequirement index={1} title="Repository">
-            Paste an <span className="font-medium text-foreground">owner/repository</span> name or
-            its GitHub URL.
-          </GitHubRequirement>
-          <GitHubRequirement index={2} title="Destination">
+          <ProjectRequirement index={1} title={isGitLab ? "Project" : "Repository"}>
+            {isGitLab ? (
+              <>
+                Paste a <span className="font-medium text-foreground">group/project</span> path or
+                its GitLab URL.
+              </>
+            ) : (
+              <>
+                Paste an <span className="font-medium text-foreground">owner/repository</span> name
+                or its GitHub URL.
+              </>
+            )}
+          </ProjectRequirement>
+          <ProjectRequirement index={2} title="Destination">
             Choose the parent folder where Synara should create the checkout.
-          </GitHubRequirement>
-          <GitHubRequirement index={3} title="Private access">
+          </ProjectRequirement>
+          <ProjectRequirement index={3} title="Private access">
             Public repositories work immediately. For private repositories, run{" "}
-            <code className="font-mono text-foreground">gh auth login</code> or configure Git
+            <code className="font-mono text-foreground">{cliName} auth login</code> or configure Git
             credentials.
-          </GitHubRequirement>
+          </ProjectRequirement>
         </ol>
       </div>
 
@@ -61,18 +76,20 @@ export function CreateGitHubProjectFields(props: {
             "text-[length:var(--app-font-size-ui,12px)] text-foreground",
           )}
         >
-          Repository
+          {isGitLab ? "Project" : "Repository"}
         </label>
         <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
           <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-            <GitHubIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
+            <HostIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
           </InputGroupAddon>
           <InputGroupInput
             id={props.repositoryInputId}
             value={props.repositoryInput}
             aria-invalid={props.formError ? true : undefined}
             {...(props.formError ? { "aria-describedby": props.errorId } : {})}
-            placeholder="owner/repository or GitHub URL"
+            placeholder={
+              isGitLab ? "group/project or GitLab URL" : "owner/repository or GitHub URL"
+            }
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
@@ -165,7 +182,7 @@ export function CreateGitHubProjectFields(props: {
   );
 }
 
-function GitHubRequirement(props: {
+function ProjectRequirement(props: {
   readonly index: number;
   readonly title: string;
   readonly children: ReactNode;

@@ -1,9 +1,9 @@
 import { Effect } from "effect";
 
-import type { GitHubProjectCheckoutResult } from "./githubProjectProvisioning";
+import type { ProjectCheckoutResult } from "./projectProvisioning";
 
-export function recoverUnregisteredGitHubCheckout(input: {
-  readonly checkout: GitHubProjectCheckoutResult;
+export function recoverUnregisteredCheckout(input: {
+  readonly checkout: ProjectCheckoutResult;
   readonly registrationCommitted: boolean;
   readonly moveWorkspaceRoot: (
     workspaceRoot: string,
@@ -21,13 +21,13 @@ export function recoverUnregisteredGitHubCheckout(input: {
 
   return input.moveWorkspaceRoot(input.checkout.workspaceRoot, recoveryPath).pipe(
     Effect.tap(() =>
-      Effect.logWarning("Moved an unregistered GitHub checkout to recovery storage.", {
+      Effect.logWarning("Moved an unregistered checkout to recovery storage.", {
         workspaceRoot: input.checkout.workspaceRoot,
         recoveryPath,
       }),
     ),
     Effect.catch((cause) =>
-      Effect.logWarning("Failed to recover an unregistered GitHub checkout.", {
+      Effect.logWarning("Failed to recover an unregistered checkout.", {
         workspaceRoot: input.checkout.workspaceRoot,
         recoveryPath,
         cause: String(cause),

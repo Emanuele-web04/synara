@@ -24,6 +24,18 @@
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
     },
+    "./gitlabRepository": {
+      "types": "./src/gitlabRepository.ts",
+      "import": "./src/gitlabRepository.ts"
+    },
+    "./gitHostRepository": {
+      "types": "./src/gitHostRepository.ts",
+      "import": "./src/gitHostRepository.ts"
+    },
+    "./pullRequestList": {
+      "types": "./src/pullRequestList.ts",
+      "import": "./src/pullRequestList.ts"
+    },
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"

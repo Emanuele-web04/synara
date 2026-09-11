@@ -1,6 +1,8 @@
-const GITHUB_PULL_REQUEST_URL_PATTERN =
-  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/i;
-const PULL_REQUEST_NUMBER_PATTERN = /^#?(\d+)$/;
+import { parsePullRequestUrl } from "@synara/shared/gitHostRepository";
+
+// `#12` (GitHub) and `!12` (GitLab) both mean "this repository's request number 12"; the server
+// normalizes either sigil to the bare number before it reaches gh or glab.
+const PULL_REQUEST_NUMBER_PATTERN = /^[#!]?(\d+)$/;
 
 export function parsePullRequestReference(input: string): string | null {
   const trimmed = input.trim();
@@ -8,14 +10,14 @@ export function parsePullRequestReference(input: string): string | null {
     return null;
   }
 
-  const urlMatch = GITHUB_PULL_REQUEST_URL_PATTERN.exec(trimmed);
-  if (urlMatch?.[1]) {
+  // A pull-request or merge-request URL is passed through verbatim: it carries its own host.
+  if (parsePullRequestUrl(trimmed)) {
     return trimmed;
   }
 
   const numberMatch = PULL_REQUEST_NUMBER_PATTERN.exec(trimmed);
   if (numberMatch?.[1]) {
-    return trimmed.startsWith("#") ? trimmed : numberMatch[1];
+    return /^[#!]/.test(trimmed) ? `#${numberMatch[1]}` : numberMatch[1];
   }
 
   return null;

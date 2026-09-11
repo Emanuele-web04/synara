@@ -35,7 +35,7 @@ export const gitQueryKeys = {
   all: ["git"] as const,
   statuses: ["git", "status"] as const,
   pullRequests: ["git", "pull-request"] as const,
-  githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
+  repository: (cwd: string | null) => ["git", "repository", cwd] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   recentCommits: (cwd: string | null, limit: number) =>
@@ -172,7 +172,7 @@ async function refetchFreshGitQueries(
 async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({
-      queryKey: gitQueryKeys.githubRepository(cwd),
+      queryKey: gitQueryKeys.repository(cwd),
       exact: true,
       refetchType: "none",
     }),
@@ -192,7 +192,7 @@ async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Pr
     }),
   ]);
   await Promise.all([
-    refetchFreshGitQueries(queryClient, gitQueryKeys.githubRepository(cwd)),
+    refetchFreshGitQueries(queryClient, gitQueryKeys.repository(cwd)),
     refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
     refetchFreshGitQueries(queryClient, gitQueryKeys.branches(cwd)),
     ...queryClient
@@ -322,7 +322,7 @@ export function refreshGitActionAvailability(queryClient: QueryClient, cwd: stri
 
 function cachedGitCwds(queryClient: QueryClient): string[] {
   const cwdFamilies = new Set([
-    "github-repository",
+    "repository",
     "status",
     "branches",
     "recent-commits",
@@ -395,13 +395,13 @@ export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   });
 }
 
-export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
+export function gitRepositoryQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
-    queryKey: gitQueryKeys.githubRepository(cwd),
+    queryKey: gitQueryKeys.repository(cwd),
     queryFn: async () => {
       const api = ensureNativeApi();
-      if (!cwd) throw new Error("GitHub repository is unavailable.");
-      return api.git.githubRepository({ cwd });
+      if (!cwd) throw new Error("Repository is unavailable.");
+      return api.git.repository({ cwd });
     },
     enabled: enabled && cwd !== null,
     staleTime: 5 * 60_000,

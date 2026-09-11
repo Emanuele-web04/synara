@@ -91,7 +91,7 @@ import {
   type ProviderKind,
   ThreadId,
   type ResolvedKeybindingsConfig,
-  WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
+  WS_REPOSITORY_PROJECT_PROVISIONING_CAPABILITY,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
@@ -447,7 +447,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const subscribeGitHubProvisioningCapability = (listener: () => void) =>
   onNativeApiServerCapabilitiesChange(listener);
 const readGitHubProvisioningCapability = () =>
-  readNativeApiServerCapability(WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY);
+  readNativeApiServerCapability(WS_REPOSITORY_PROJECT_PROVISIONING_CAPABILITY);
 const readGitHubProvisioningServerCapability = () => false;
 const THREAD_PREVIEW_LIMIT = 5;
 // Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
@@ -1353,7 +1353,7 @@ export function SidebarSurfacePicker({
 }
 
 export default function Sidebar() {
-  const githubProvisioningAvailable = useSyncExternalStore(
+  const repositoryProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
     readGitHubProvisioningServerCapability,
@@ -2206,7 +2206,7 @@ export default function Sidebar() {
   // Cancellation can arrive while the server is committing project.create. Give
   // that durable commit and its read-model projection enough time to become
   // observable before reporting the clone as cancelled.
-  const waitForCancelledGitHubProjectInSnapshot = useCallback(
+  const waitForCancelledProvisionedProjectInSnapshot = useCallback(
     async (
       api: NonNullable<ReturnType<typeof readNativeApi>>,
       projectId: ProjectId,
@@ -3386,7 +3386,7 @@ export default function Sidebar() {
         ? (existingProject.spaceId ?? null)
         : value.spaceId;
       const runCreateProject = async () => {
-        if (value.source === "github") {
+        if (value.source !== "local") {
           const api = readNativeApi();
           if (!api) throw new Error("The app server is unavailable.");
           await runExclusiveProjectAddition(projectAdditionLockRef, async () => {
@@ -3412,9 +3412,10 @@ export default function Sidebar() {
             const provision = await runProjectProvisionWithCancellationRecovery({
               signal: options.signal,
               provision: () =>
-                api.projects.provisionFromGitHub(
+                api.projects.provisionFromRepository(
                   {
                     operationId: value.operationId,
+                    host: value.source,
                     repository: value.repository,
                     destinationParent: value.destinationParent,
                     directoryName: value.directoryName,
@@ -3436,7 +3437,7 @@ export default function Sidebar() {
                 openProvisionedProject(
                   requestedProjectId,
                   requestedWorkspaceRoot,
-                  waitForCancelledGitHubProjectInSnapshot,
+                  waitForCancelledProvisionedProjectInSnapshot,
                 ),
             });
             if (provision.status === "recovered") return;
@@ -3448,7 +3449,7 @@ export default function Sidebar() {
               ))
             ) {
               throw new Error(
-                "The GitHub project was added, but it has not synced into the sidebar yet. Try again in a moment.",
+                "The project was added, but it has not synced into the sidebar yet. Try again in a moment.",
               );
             }
           });
@@ -3481,7 +3482,7 @@ export default function Sidebar() {
       openExistingProjectFromSnapshot,
       projects,
       syncServerShellSnapshot,
-      waitForCancelledGitHubProjectInSnapshot,
+      waitForCancelledProvisionedProjectInSnapshot,
       waitForProjectInSnapshot,
     ],
   );
@@ -6484,7 +6485,7 @@ export default function Sidebar() {
 
       <CreateProjectDialog
         open={createProjectDialogOpen}
-        githubProvisioningAvailable={githubProvisioningAvailable}
+        repositoryProvisioningAvailable={repositoryProvisioningAvailable}
         spaces={spaces}
         activeSpaceId={activeSpaceId}
         defaultCloneParent={homeDir ?? "~"}

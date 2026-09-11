@@ -1,7 +1,8 @@
 import { type CSSProperties, type FC, type SVGProps } from "react";
+import type { GitHostKind } from "@synara/shared/gitHostRepository";
 import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
-import { SiGithub } from "react-icons/si";
+import { SiGithub, SiGitlab } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { cn } from "./utils";
 import { CentralIcon, type CentralIconVariant } from "./central-icons";
@@ -188,6 +189,12 @@ export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
+export const GitLabIcon: LucideIcon = (props) => (
+  <SiGitlab className={props.className} style={props.style} />
+);
+export function gitHostIcon(kind: GitHostKind): LucideIcon {
+  return kind === "gitlab" ? GitLabIcon : GitHubIcon;
+}
 export const GitPullRequestIcon = centralIconWrapper("pull-request");
 // Pull-request state glyphs from the same three-node Central family as "pull-request",
 // so draft/closed/merged read as variations of one icon rather than four styles.

@@ -7,8 +7,8 @@ import type {
   PullRequestState,
 } from "@synara/contracts";
 
-import type { GitHubPullRequestListItem } from "./git/Services/GitHubCli.ts";
-export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
+import type { GitHostPullRequestListItem } from "./git/Services/GitHostCli.ts";
+export { isValidRepositoryReference } from "@synara/shared/gitHostRepository";
 
 export function pullRequestListCacheKey(
   repository: string,
@@ -40,8 +40,8 @@ export function repositoryPullRequestIdentityKey(input: {
 }
 
 /** Stable project-local identity for a pull request. Repository casing is not significant on
- * GitHub, while the project id deliberately remains part of the key so two projects pointing at
- * the same repository can prioritize the same PR independently. */
+ * GitHub or GitLab, while the project id deliberately remains part of the key so two projects
+ * pointing at the same repository can prioritize the same PR independently. */
 export function projectPullRequestIdentityKey(input: {
   projectId: string;
   repository: string;
@@ -92,7 +92,7 @@ export function selectRecoverablePullRequestPins<
 export function buildPullRequestListEntry(input: {
   project: { id: PullRequestListEntry["projectId"]; title: string };
   repository: string;
-  pullRequest: GitHubPullRequestListItem;
+  pullRequest: GitHostPullRequestListItem;
   viewerReviewRequested: boolean;
   isPinned: boolean;
 }): PullRequestListEntry {
@@ -159,7 +159,7 @@ export function isViewerReviewRequested(
  * GitHub's authoritative search result when it is available, including team review requests that
  * cannot be inferred from the individual PR's user-only review-request logins. */
 export function pullRequestMatchesInvolvement(
-  pullRequest: Pick<GitHubPullRequestListItem, "author" | "reviewRequestLogins">,
+  pullRequest: Pick<GitHostPullRequestListItem, "author" | "reviewRequestLogins">,
   involvement: PullRequestInvolvement,
   viewer: string,
   matchedReviewingQuery = false,

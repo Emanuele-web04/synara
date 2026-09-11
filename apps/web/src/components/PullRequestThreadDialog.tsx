@@ -182,9 +182,9 @@ function PullRequestThreadDialogContent({
   const validationMessage = !referenceDirty
     ? null
     : reference.trim().length === 0
-      ? "Paste a GitHub pull request URL or enter 123 / #123."
+      ? "Paste a pull-request or merge-request URL, or enter 123 / #123 / !123."
       : parsedReference === null
-        ? "Use a GitHub pull request URL, 123, or #123."
+        ? "Use a GitHub pull-request URL, a GitLab merge-request URL, 123, #123, or !123."
         : null;
   const errorMessage =
     validationMessage ??
@@ -203,8 +203,8 @@ function PullRequestThreadDialogContent({
       <DialogHeader>
         <DialogTitle>Checkout Pull Request</DialogTitle>
         <DialogDescription>
-          Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-          dedicated worktree.
+          Resolve a GitHub pull request or a GitLab merge request, then create the draft thread in
+          the main repo or in a dedicated worktree.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="space-y-4">

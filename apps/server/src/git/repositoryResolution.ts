@@ -1,17 +1,30 @@
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import {
+  parseRepositoryIdentityFromRemoteUrl,
+  repositoryWebUrl,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
 import { Effect } from "effect";
 
-import type { GitCoreShape } from "../git/Services/GitCore";
+import type { GitCoreShape } from "./Services/GitCore";
 
-export interface GitHubRepositoryLink {
+export interface RepositoryLink {
+  readonly kind: GitHostKind;
+  /** Canonical identity: `owner/repo` on GitHub, `host/group/project` on GitLab. */
+  readonly reference: string;
+  /** Host-relative display path. */
   readonly nameWithOwner: string;
   readonly url: string;
 }
 
-export interface GitHubRepositoryInventory {
-  readonly repositories: ReadonlyArray<GitHubRepositoryLink>;
+export interface RepositoryInventory {
+  readonly repositories: ReadonlyArray<RepositoryLink>;
   /** False means discovery was incomplete and must never drive destructive cleanup. */
   readonly authoritative: boolean;
+}
+
+export interface ResolveRepositoriesOptions {
+  /** Hosts `glab` is configured for; an unlisted non-github host stays unsupported. */
+  readonly gitlabHosts: ReadonlySet<string>;
 }
 
 function normalizeGitRemoteName(value: string | null): string | null {
@@ -29,7 +42,7 @@ function uniqueRemoteCandidates(candidates: ReadonlyArray<string | null>): strin
 }
 
 function readCurrentBranch(git: GitCoreShape, cwd: string) {
-  const operation = "PullRequestService.githubRepository.currentBranch";
+  const operation = "GitHost.repository.currentBranch";
   return git
     .execute({
       operation,
@@ -61,9 +74,19 @@ type RepositoryConfig = {
   readonly remoteUrls: ReadonlyMap<string, string>;
 };
 
-function gitHubRepositoryLinkFromRemoteUrl(remoteUrl: string): GitHubRepositoryLink | null {
-  const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-  return nameWithOwner ? { nameWithOwner, url: `https://github.com/${nameWithOwner}` } : null;
+function repositoryLinkFromRemoteUrl(
+  remoteUrl: string,
+  gitlabHosts: ReadonlySet<string>,
+): RepositoryLink | null {
+  const identity = parseRepositoryIdentityFromRemoteUrl(remoteUrl, { gitlabHosts });
+  return identity
+    ? {
+        kind: identity.kind,
+        reference: identity.reference,
+        nameWithOwner: identity.path,
+        url: repositoryWebUrl(identity),
+      }
+    : null;
 }
 
 function parseRepositoryConfig(stdout: string, branch: string | null): RepositoryConfig {
@@ -103,7 +126,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
   const branchPattern = branch ? `branch\\.${escapeGitConfigKeyForRegex(branch)}\\.remote|` : "";
   return git
     .execute({
-      operation: "PullRequestService.githubRepository.config",
+      operation: "GitHost.repository.config",
       cwd,
       args: [
         "config",
@@ -125,7 +148,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
         return Effect.fail(
           new Error(
             result.stderr.trim() ||
-              `PullRequestService.githubRepository.config failed with exit code ${result.code}.`,
+              `GitHost.repository.config failed with exit code ${result.code}.`,
           ),
         );
       }),
@@ -133,7 +156,7 @@ function readRepositoryConfig(git: GitCoreShape, cwd: string, branch: string | n
 }
 
 function readExpandedRemoteUrl(git: GitCoreShape, cwd: string, remoteName: string) {
-  const operation = "PullRequestService.githubRepository.expandedRemoteUrl";
+  const operation = "GitHost.repository.expandedRemoteUrl";
   return git
     .execute({
       operation,
@@ -155,24 +178,29 @@ function readExpandedRemoteUrl(git: GitCoreShape, cwd: string, remoteName: strin
     );
 }
 
-function resolveGitHubRemote(
+function resolveRemote(
   git: GitCoreShape,
   cwd: string,
   remoteName: string,
   configuredUrl: string,
+  gitlabHosts: ReadonlySet<string>,
 ) {
-  const direct = gitHubRepositoryLinkFromRemoteUrl(configuredUrl);
+  const direct = repositoryLinkFromRemoteUrl(configuredUrl, gitlabHosts);
   if (direct) return Effect.succeed(direct);
 
   // Preserve the two-process common path. Only URLs the parser cannot understand need a
   // targeted Git call so aliases such as `gh:owner/repo.git` are expanded correctly.
   return readExpandedRemoteUrl(git, cwd, remoteName).pipe(
-    Effect.map(gitHubRepositoryLinkFromRemoteUrl),
+    Effect.map((expanded) => repositoryLinkFromRemoteUrl(expanded, gitlabHosts)),
   );
 }
 
-/** Resolve every unique GitHub repository configured by a workspace, in remote preference order. */
-export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
+/** Resolve every unique supported repository configured by a workspace, in remote preference order. */
+export function resolveRepositories(
+  git: GitCoreShape,
+  cwd: string,
+  options: ResolveRepositoriesOptions,
+) {
   return Effect.gen(function* () {
     // A branch query succeeds with empty output in detached/unborn repositories and fails when
     // `cwd` is not a repository, so it also preserves the old authoritative repo boundary.
@@ -200,27 +228,32 @@ export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
     });
     const resolved = yield* Effect.forEach(
       candidates,
-      ({ remoteName, configuredUrl }) => resolveGitHubRemote(git, cwd, remoteName, configuredUrl),
+      ({ remoteName, configuredUrl }) =>
+        resolveRemote(git, cwd, remoteName, configuredUrl, options.gitlabHosts),
       { concurrency: 6 },
     );
 
-    const repositories: GitHubRepositoryLink[] = [];
+    const repositories: RepositoryLink[] = [];
     const seen = new Set<string>();
     for (const repository of resolved) {
       if (!repository) continue;
-      const key = repository.nameWithOwner.toLowerCase();
+      const key = repository.reference.toLowerCase();
       if (!seen.has(key)) {
         seen.add(key);
         repositories.push(repository);
       }
     }
-    return { repositories, authoritative: true } satisfies GitHubRepositoryInventory;
+    return { repositories, authoritative: true } satisfies RepositoryInventory;
   });
 }
 
 /** Resolve the preferred link while retaining all configured repositories for callers that list. */
-export function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
-  return resolveGitHubRepositories(git, cwd).pipe(
+export function resolveRepository(
+  git: GitCoreShape,
+  cwd: string,
+  options: ResolveRepositoriesOptions,
+) {
+  return resolveRepositories(git, cwd, options).pipe(
     Effect.map(({ repositories }) => ({ repository: repositories[0] ?? null, repositories })),
   );
 }

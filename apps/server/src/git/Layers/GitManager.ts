@@ -14,7 +14,13 @@ import {
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@synara/shared/git";
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import {
+  gitHostKindForPullRequestUrl,
+  parseGitRemoteUrl,
+  parsePullRequestUrl,
+  parseRepositoryIdentityFromRemoteUrl,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";
@@ -25,7 +31,7 @@ import {
   type GitRunStackedActionOptions,
 } from "../Services/GitManager.ts";
 import { GitCore } from "../Services/GitCore.ts";
-import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
+import { GitHostCli, type GitHostPullRequestSummary } from "../Services/GitHostCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { detectPrTemplate } from "../PrTemplateDetection.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
@@ -41,8 +47,8 @@ type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 
 // GitManager's working PR shape: a GitHubPullRequestSummary whose state/updatedAt are
 // always resolved. Derived from the service summary so the shapes cannot drift field by field.
-interface PullRequestInfo extends Omit<GitHubPullRequestSummary, "state" | "updatedAt"> {
-  readonly state: NonNullable<GitHubPullRequestSummary["state"]>;
+interface PullRequestInfo extends Omit<GitHostPullRequestSummary, "state" | "updatedAt"> {
+  readonly state: NonNullable<GitHostPullRequestSummary["state"]>;
   readonly updatedAt: string | null;
 }
 
@@ -67,6 +73,7 @@ interface PullRequestHeadRemoteInfo {
 }
 
 interface BranchHeadContext {
+  kind: GitHostKind | null;
   localBranch: string;
   headBranch: string;
   headSelectors: ReadonlyArray<string>;
@@ -105,27 +112,12 @@ interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
 }
 
-// Host + owner/repo extraction from a PR web URL. Used to query the repository that owns
-// the PR even when the local checkout's remotes point at a fork or a GitHub Enterprise host.
-function parsePullRequestRepositoryFromUrl(
-  url: string,
-): { host: string; owner: string; repo: string } | null {
-  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(url.trim());
-  const host = match?.[1]?.trim() ?? "";
-  const owner = match?.[2]?.trim() ?? "";
-  const repo = match?.[3]?.trim() ?? "";
-  return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
-}
-
 // github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
-// which is only well-defined for PRs hosted on github.com.
+// which is only well-defined for pull requests hosted on github.com. GitLab merge requests are
+// resolved against the project glab infers from the checkout's remotes instead.
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
-  const trimmed = url.trim();
-  if (!/^https:\/\//i.test(trimmed)) {
-    return null;
-  }
-  const repository = parsePullRequestRepositoryFromUrl(trimmed);
-  return repository && repository.host.toLowerCase() === "github.com" ? repository.repo : null;
+  const parsed = parsePullRequestUrl(url);
+  return parsed?.identity.kind === "github" ? (parsed.identity.path.split("/")[1] ?? null) : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(
@@ -260,7 +252,7 @@ function matchesBranchHeadContext(
 }
 
 // Normalizes `gh pr view/list` service output into the richer internal PR shape.
-function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestInfo {
+function toPullRequestInfo(pullRequest: GitHostPullRequestSummary): PullRequestInfo {
   return {
     ...pullRequest,
     state: pullRequest.state ?? "open",
@@ -268,26 +260,32 @@ function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestIn
   };
 }
 
-// Detects GitHub's duplicate-PR response from `gh pr create`.
+// Detects a duplicate-PR/MR response from `gh pr create` or `glab mr create`.
 function isPullRequestAlreadyExistsError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
   const message = error.message.toLowerCase();
   return (
-    message.includes("pull request") &&
-    message.includes("branch") &&
+    (message.includes("pull request") || message.includes("merge request")) &&
     message.includes("already exists")
   );
 }
 
-// Pulls the existing PR URL out of GitHub's duplicate-PR error when present.
-function extractPullRequestUrlFromError(error: unknown): string | null {
+// Pulls the existing PR/MR out of the host's duplicate response: a web URL when the host prints
+// one, or GitLab's bare `!<iid>`, which `getPullRequest` resolves against the checkout's project.
+function extractPullRequestReferenceFromError(error: unknown): string | null {
   if (!(error instanceof Error)) {
     return null;
   }
-  const match = /https:\/\/github\.com\/[^\s)]+\/pull\/\d+/i.exec(error.message);
-  return match?.[0] ?? null;
+  const url =
+    /https?:\/\/[^\s)]+\/pull\/\d+/i.exec(error.message)?.[0] ??
+    /https?:\/\/[^\s)]+\/-\/merge_requests\/\d+/i.exec(error.message)?.[0];
+  if (url) {
+    return url;
+  }
+  const iid = /!(\d+)\b/.exec(error.message)?.[1];
+  return iid ? `#${iid}` : null;
 }
 
 function gitManagerError(operation: string, detail: string, cause?: unknown): GitManagerError {
@@ -557,8 +555,9 @@ function appendUnique(values: string[], next: string | null | undefined): void {
 
 function normalizePullRequestReference(reference: string): string {
   const trimmed = reference.trim();
-  const hashNumber = /^#(\d+)$/.exec(trimmed);
-  return hashNumber?.[1] ?? trimmed;
+  // `#12` (GitHub) and `!12` (GitLab) both denote a plain number to the underlying CLI.
+  const explicitNumber = /^[#!](\d+)$/.exec(trimmed);
+  return explicitNumber?.[1] ?? trimmed;
 }
 
 function canonicalizeExistingPath(value: string): string {
@@ -690,7 +689,7 @@ function inferPullRequestHeadRemoteInfoFromSelector(
 
 export const makeGitManager = Effect.gen(function* () {
   const gitCore = yield* GitCore;
-  const gitHubCli = yield* GitHubCli;
+  const gitHostCli = yield* GitHostCli;
   const textGeneration = yield* TextGeneration;
 
   const createProgressEmitter = (
@@ -727,7 +726,8 @@ export const makeGitManager = Effect.gen(function* () {
         return;
       }
 
-      const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
+      const selection = yield* gitHostCli.forReference(cwd, pullRequest.url);
+      const cloneUrls = yield* selection.cli.getRepositoryCloneUrls({
         cwd,
         repository: repositoryNameWithOwner,
       });
@@ -768,13 +768,15 @@ export const makeGitManager = Effect.gen(function* () {
       if (repositoryNameWithOwner.length === 0) {
         yield* gitCore.fetchPullRequestBranch({
           cwd,
+          host: gitHostKindForPullRequestUrl(pullRequest.url) ?? "github",
           prNumber: pullRequest.number,
           branch: localBranch,
         });
         return;
       }
 
-      const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
+      const selection = yield* gitHostCli.forReference(cwd, pullRequest.url);
+      const cloneUrls = yield* selection.cli.getRepositoryCloneUrls({
         cwd,
         repository: repositoryNameWithOwner,
       });
@@ -806,6 +808,7 @@ export const makeGitManager = Effect.gen(function* () {
       Effect.catch(() =>
         gitCore.fetchPullRequestBranch({
           cwd,
+          host: gitHostKindForPullRequestUrl(pullRequest.url) ?? "github",
           prNumber: pullRequest.number,
           branch: localBranch,
         }),
@@ -837,17 +840,17 @@ export const makeGitManager = Effect.gen(function* () {
   const resolveRemoteRepositoryContext = (cwd: string, remoteName: string | null) =>
     Effect.gen(function* () {
       if (!remoteName) {
-        return {
-          repositoryNameWithOwner: null,
-          ownerLogin: null,
-        };
+        return { kind: null, repositoryNameWithOwner: null, ownerLogin: null };
       }
 
       const remoteUrl = yield* readConfigValueNullable(cwd, `remote.${remoteName}.url`);
-      const repositoryNameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+      const gitlabHosts = yield* gitHostCli.knownGitLabHosts;
+      const identity = parseRepositoryIdentityFromRemoteUrl(remoteUrl, { gitlabHosts });
       return {
-        repositoryNameWithOwner,
-        ownerLogin: parseRepositoryOwnerLogin(repositoryNameWithOwner),
+        kind: identity?.kind ?? null,
+        repositoryNameWithOwner: identity?.reference ?? null,
+        // Owner-scoped head selectors (`owner:branch`) are a GitHub-only concept.
+        ownerLogin: identity?.kind === "github" ? parseRepositoryOwnerLogin(identity.path) : null,
       };
     });
 
@@ -880,13 +883,19 @@ export const makeGitManager = Effect.gen(function* () {
             remoteName !== "origin" &&
             remoteRepository.repositoryNameWithOwner !== null;
 
+      // GitLab merge requests take plain branch names: `glab mr list --source-branch <branch>`
+      // resolves against the project glab infers from the checkout, and `owner:branch` selectors
+      // do not exist there.
+      const hostKind = remoteRepository.kind ?? originRepository.kind;
       const ownerHeadSelector =
-        remoteRepository.ownerLogin && headBranch.length > 0
+        hostKind !== "gitlab" && remoteRepository.ownerLogin && headBranch.length > 0
           ? `${remoteRepository.ownerLogin}:${headBranch}`
           : null;
       const remoteAliasHeadSelector =
-        remoteName && headBranch.length > 0 ? `${remoteName}:${headBranch}` : null;
-      const shouldProbeRemoteOwnedSelectors = remoteName !== null;
+        hostKind !== "gitlab" && remoteName && headBranch.length > 0
+          ? `${remoteName}:${headBranch}`
+          : null;
+      const shouldProbeRemoteOwnedSelectors = hostKind !== "gitlab" && remoteName !== null;
 
       const headSelectors: string[] = [];
       if (isCrossRepository && shouldProbeRemoteOwnedSelectors) {
@@ -911,6 +920,7 @@ export const makeGitManager = Effect.gen(function* () {
       }
 
       return {
+        kind: hostKind,
         localBranch: details.branch,
         headBranch,
         headSelectors,
@@ -936,8 +946,9 @@ export const makeGitManager = Effect.gen(function* () {
     >,
   ) =>
     Effect.gen(function* () {
+      const { cli } = yield* gitHostCli.forWorkspace(cwd);
       for (const headSelector of headContext.headSelectors) {
-        const pullRequests = yield* gitHubCli.listOpenPullRequests({
+        const pullRequests = yield* cli.listOpenPullRequests({
           cwd,
           headSelector,
           limit: OPEN_PR_LOOKUP_LIMIT,
@@ -965,6 +976,7 @@ export const makeGitManager = Effect.gen(function* () {
 
   const findLatestPr = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
     Effect.gen(function* () {
+      const { cli } = yield* gitHostCli.forWorkspace(cwd);
       const headContext = yield* resolveBranchHeadContext(cwd, details);
       const parsedByNumber = new Map<number, PullRequestInfo>();
 
@@ -973,7 +985,7 @@ export const makeGitManager = Effect.gen(function* () {
           headSelector,
           headContext,
         );
-        const pullRequests = yield* gitHubCli.listPullRequests({
+        const pullRequests = yield* cli.listPullRequests({
           cwd,
           headSelector,
           limit: PR_LOOKUP_ALL_STATES_LIMIT,
@@ -1010,10 +1022,11 @@ export const makeGitManager = Effect.gen(function* () {
     headContext: BranchHeadContext,
   ) =>
     Effect.gen(function* () {
-      const pullRequestUrl = extractPullRequestUrlFromError(error);
-      if (pullRequestUrl) {
-        const pullRequest = yield* gitHubCli
-          .getPullRequest({ cwd, reference: pullRequestUrl })
+      const reference = extractPullRequestReferenceFromError(error);
+      if (reference) {
+        const { cli } = yield* gitHostCli.forReference(cwd, reference);
+        const pullRequest = yield* cli
+          .getPullRequest({ cwd, reference })
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (pullRequest) {
           const candidate = toPullRequestInfo(pullRequest);
@@ -1023,7 +1036,7 @@ export const makeGitManager = Effect.gen(function* () {
         }
       }
 
-      // `gh pr create` can race with an existing-PR probe. Treat GitHub's
+      // `gh pr create` / `glab mr create` can race with an existing-PR probe. Treat the host's
       // create-time duplicate response as success when the PR can be found.
       return yield* findOpenPr(cwd, headContext);
     });
@@ -1045,11 +1058,12 @@ export const makeGitManager = Effect.gen(function* () {
         }
       }
 
-      const defaultFromGh = yield* gitHubCli
+      const { cli } = yield* gitHostCli.forWorkspace(cwd);
+      const defaultFromHost = yield* cli
         .getDefaultBranch({ cwd })
         .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (defaultFromGh) {
-        return defaultFromGh;
+      if (defaultFromHost) {
+        return defaultFromHost;
       }
 
       return "main";
@@ -1299,7 +1313,9 @@ export const makeGitManager = Effect.gen(function* () {
           remoteBaseRef !== null && (yield* gitRefExists(cwd, remoteBaseRef));
         const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
         const prTemplate = Option.getOrUndefined(
-          yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
+          yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute, {
+            ...(headContext.kind ? { host: headContext.kind } : {}),
+          }),
         );
 
         const generated = yield* textGeneration.generatePrContent({
@@ -1324,7 +1340,8 @@ export const makeGitManager = Effect.gen(function* () {
             gitManagerError("runPrStep", "Failed to write pull request body temp file.", cause),
           ),
         );
-      const existingAfterCreateConflict = yield* gitHubCli
+      const { cli: createPrCli } = yield* gitHostCli.forWorkspace(cwd);
+      const existingAfterCreateConflict = yield* createPrCli
         .createPullRequest({
           cwd,
           baseBranch,
@@ -1503,11 +1520,10 @@ export const makeGitManager = Effect.gen(function* () {
 
   const resolvePullRequest: GitManagerShape["resolvePullRequest"] = Effect.fnUntraced(
     function* (input) {
-      const pullRequest = yield* gitHubCli
-        .getPullRequest({
-          cwd: input.cwd,
-          reference: normalizePullRequestReference(input.reference),
-        })
+      const reference = normalizePullRequestReference(input.reference);
+      const { cli } = yield* gitHostCli.forReference(input.cwd, reference);
+      const pullRequest = yield* cli
+        .getPullRequest({ cwd: input.cwd, reference })
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
       return { pullRequest };
@@ -1517,28 +1533,27 @@ export const makeGitManager = Effect.gen(function* () {
   const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
     function* (input) {
       const reference = normalizePullRequestReference(input.reference);
-      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
-      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
-      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+      const { cli } = yield* gitHostCli.forReference(input.cwd, reference);
+      // Summary + checks ride one host call: one process/API round trip per poll, and no separate
+      // checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* cli.getPullRequestWithChecks({
         cwd: input.cwd,
         reference,
       });
       const pullRequest = toResolvedPullRequest(summary);
 
-      const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
-      if (!repository) {
+      const parsedUrl = parsePullRequestUrl(pullRequest.url);
+      if (!parsedUrl) {
         return yield* gitManagerError(
           "pullRequestSnapshot",
           `Could not determine the repository from the pull request URL: ${pullRequest.url}`,
         );
       }
 
-      const commentsResult = yield* gitHubCli
+      const commentsResult = yield* cli
         .getPullRequestReviewComments({
           cwd: input.cwd,
-          host: repository.host,
-          owner: repository.owner,
-          repo: repository.repo,
+          repository: parsedUrl.identity.reference,
           number: pullRequest.number,
         })
         .pipe(
@@ -1570,14 +1585,15 @@ export const makeGitManager = Effect.gen(function* () {
     function* (input) {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = canonicalizeExistingPath(input.cwd);
-      const pullRequestSummary = yield* gitHubCli.getPullRequest({
+      const { cli } = yield* gitHostCli.forReference(input.cwd, normalizedReference);
+      const pullRequestSummary = yield* cli.getPullRequest({
         cwd: input.cwd,
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
 
       if (input.mode === "local") {
-        yield* gitHubCli.checkoutPullRequest({
+        yield* cli.checkoutPullRequest({
           cwd: input.cwd,
           reference: normalizedReference,
           force: true,

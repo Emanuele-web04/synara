@@ -8,14 +8,15 @@ const BoundedPath = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
 const BoundedDirectoryName = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
 
 /**
- * One server-owned GitHub checkout + project-registration operation.
+ * One server-owned repository checkout + project-registration operation.
  *
  * `destinationParent` is deliberately a parent directory. The server derives and
  * validates the final workspace root from it and `directoryName`, so the UI never
  * presents a parent path while the server interprets it as the clone target.
  */
-export const GitHubProjectProvisionInput = Schema.Struct({
+export const ProjectProvisionInput = Schema.Struct({
   operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  host: Schema.Literals(["github", "gitlab"]),
   repository: BoundedRepositoryInput,
   destinationParent: BoundedPath,
   directoryName: BoundedDirectoryName,
@@ -26,35 +27,35 @@ export const GitHubProjectProvisionInput = Schema.Struct({
   defaultModelSelection: ModelSelection,
   createdAt: IsoDateTime,
 });
-export type GitHubProjectProvisionInput = typeof GitHubProjectProvisionInput.Type;
+export type ProjectProvisionInput = typeof ProjectProvisionInput.Type;
 
-export const GitHubProjectProvisionResult = Schema.Struct({
+export const ProjectProvisionResult = Schema.Struct({
   operationId: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   projectId: ProjectId,
   checkout: Schema.Literals(["created", "reused"]),
 });
-export type GitHubProjectProvisionResult = typeof GitHubProjectProvisionResult.Type;
+export type ProjectProvisionResult = typeof ProjectProvisionResult.Type;
 
-export const GitHubProjectProvisionPhase = Schema.Literals([
+export const ProjectProvisionPhase = Schema.Literals([
   "validating",
   "resolving-access",
   "cloning",
   "verifying",
   "registering",
 ]);
-export type GitHubProjectProvisionPhase = typeof GitHubProjectProvisionPhase.Type;
+export type ProjectProvisionPhase = typeof ProjectProvisionPhase.Type;
 
 const GitHubProjectProvisionProgressBase = Schema.Struct({
   operationId: TrimmedNonEmptyString,
 });
 
-export const GitHubProjectProvisionProgressEvent = Schema.Union([
+export const ProjectProvisionProgressEvent = Schema.Union([
   Schema.Struct({
     ...GitHubProjectProvisionProgressBase.fields,
     kind: Schema.Literal("phase"),
-    phase: GitHubProjectProvisionPhase,
+    phase: ProjectProvisionPhase,
     message: TrimmedNonEmptyString,
   }),
   Schema.Struct({
@@ -66,7 +67,7 @@ export const GitHubProjectProvisionProgressEvent = Schema.Union([
   Schema.Struct({
     ...GitHubProjectProvisionProgressBase.fields,
     kind: Schema.Literal("completed"),
-    result: GitHubProjectProvisionResult,
+    result: ProjectProvisionResult,
   }),
 ]);
-export type GitHubProjectProvisionProgressEvent = typeof GitHubProjectProvisionProgressEvent.Type;
+export type ProjectProvisionProgressEvent = typeof ProjectProvisionProgressEvent.Type;

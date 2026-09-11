@@ -3,7 +3,7 @@
 //          live check status) that opens the PR action menu: view / code changes, the
 //          checks and review-comment lists, Repair (hands comments, failing checks, or
 //          conflicts to the composer as context cards), Merge, Add to chat, Status, and
-//          Open in GitHub.
+//          Open in GitHub/GitLab.
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers, the pull request action mutation,
 //             and the shared Environment row skin.
@@ -17,8 +17,13 @@ import type {
   PullRequestMergeMethod,
   ThreadId,
 } from "@synara/contracts";
+import {
+  gitHostDisplayName,
+  gitHostKindForPullRequestUrl,
+  parsePullRequestUrl,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
-import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
@@ -201,9 +206,11 @@ function ChecksMenuRow({
 
 function CommentsMenuRow({
   comment,
+  host,
   onOpenUrl,
 }: {
   comment: GitPullRequestComment;
+  host: GitHostKind;
   onOpenUrl: (url: string) => void;
 }) {
   const display = describePullRequestComment(comment);
@@ -235,8 +242,9 @@ function CommentsMenuRow({
                 login: comment.author,
                 name: null,
                 // Review-thread authors are users or bots, never team slugs, so the
-                // login-derived avatar is safe here (same as pullRequestOperations).
-                avatarUrl: githubAvatarUrlForLogin(comment.author),
+                // login-derived avatar is safe here (same as pullRequestOperations). GitLab
+                // has no login-derived avatar URL, so it falls back to the initials monogram.
+                avatarUrl: host === "github" ? githubAvatarUrlForLogin(comment.author) : null,
                 url: null,
               }}
             />
@@ -293,7 +301,7 @@ export function EnvironmentPullRequestSection({
   enabled: boolean;
   activeThreadId: ThreadId | null;
   projectId: ProjectId | null;
-  configuredRepositories: ReadonlyArray<{ readonly nameWithOwner: string }>;
+  configuredRepositories: ReadonlyArray<{ readonly reference: string }>;
   showDiffColors?: boolean;
   /** Open non-PR URLs in the in-app browser panel. */
   onOpenUrl: (url: string) => void;
@@ -323,12 +331,14 @@ export function EnvironmentPullRequestSection({
   const displayPr = pr?.state === "open" ? (livePr ?? pr) : pr;
 
   const pullRequestRepository = displayPr
-    ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(displayPr.url)
+    ? (parsePullRequestUrl(displayPr.url)?.identity.reference ?? null)
     : null;
+  const host: GitHostKind = gitHostKindForPullRequestUrl(displayPr?.url) ?? "github";
+  const hostName = gitHostDisplayName(host);
   const repositoryBelongsToProject = configuredRepositories.some(
-    (repository) => repository.nameWithOwner.toLowerCase() === pullRequestRepository?.toLowerCase(),
+    (repository) => repository.reference.toLowerCase() === pullRequestRepository?.toLowerCase(),
   );
-  // Merge / Status go through the GitHub-backed PR actions, which are keyed by project +
+  // Merge / Status go through the host-backed PR actions, which are keyed by project +
   // repository. A PR from a repository the project does not own only gets link actions.
   const actionInput: PullRequestDetailInput | null =
     displayPr && projectId && pullRequestRepository && repositoryBelongsToProject
@@ -379,13 +389,13 @@ export function EnvironmentPullRequestSection({
     onClose();
   };
 
-  const openInGitHub = () => {
+  const openOnHost = () => {
     void ensureNativeApi()
       .shell.openExternal(displayPr.url)
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Could not open GitHub",
+          title: `Could not open ${hostName}`,
           description: error instanceof Error ? error.message : "The link could not be opened.",
         });
       });
@@ -432,7 +442,7 @@ export function EnvironmentPullRequestSection({
         toastManager.add({
           type: "error",
           title: "Pull request action failed",
-          description: error instanceof Error ? error.message : "GitHub CLI action failed.",
+          description: error instanceof Error ? error.message : `${hostName} CLI action failed.`,
         });
       });
   };
@@ -442,7 +452,7 @@ export function EnvironmentPullRequestSection({
   const stackAssessment = detail?.stack ? assessPullRequestStack(detail.stack) : null;
   // Merge is gated on the detail query: the git snapshot knows nothing about allowed merge
   // methods, stack state, or review blockers, so offering Merge before detail resolves could
-  // send an action GitHub rejects. Until then the entry stays disabled with a status hint.
+  // send an action the host rejects. Until then the entry stays disabled with a status hint.
   const allowedMergeMethods: PullRequestMergeMethod[] = detail
     ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
     : [];
@@ -488,7 +498,7 @@ export function EnvironmentPullRequestSection({
     checksToneIcon(checksSummary.tone)
   );
   const rowTitle = settledState
-    ? `${stateLabel} on GitHub`
+    ? `${stateLabel} on ${hostName}`
     : loading
       ? "Loading checks and comments…"
       : failed
@@ -618,7 +628,7 @@ export function EnvironmentPullRequestSection({
                     <MenuPlaceholder
                       text={
                         commentsTruncated
-                          ? "Review comments may be hidden by the bounded preview. Open the PR on GitHub."
+                          ? `Review comments may be hidden by the bounded preview. Open the PR on ${hostName}.`
                           : "No unresolved review comments."
                       }
                     />
@@ -631,6 +641,7 @@ export function EnvironmentPullRequestSection({
                         <CommentsMenuRow
                           key={comment.id}
                           comment={comment}
+                          host={host}
                           onOpenUrl={(url) => {
                             onOpenUrl(url);
                             onClose();
@@ -638,7 +649,9 @@ export function EnvironmentPullRequestSection({
                         />
                       ))}
                       {commentsTruncated ? (
-                        <MenuPlaceholder text="More review comments may be available on GitHub." />
+                        <MenuPlaceholder
+                          text={`More review comments may be available on ${hostName}.`}
+                        />
                       ) : null}
                     </div>
                   )}
@@ -782,10 +795,10 @@ export function EnvironmentPullRequestSection({
               />
             </MenuItem>
           )}
-          <MenuItem onClick={openInGitHub}>
+          <MenuItem onClick={openOnHost}>
             <MenuRowLabel
               icon={<ExternalLinkIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-              label="Open in GitHub"
+              label={`Open in ${hostName}`}
             />
           </MenuItem>
         </ComposerPickerMenuPopup>
@@ -806,7 +819,7 @@ export function EnvironmentPullRequestSection({
               />
             )
           }
-          label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
+          label={settledState === "merged" ? `Merged on ${hostName}` : `Closed on ${hostName}`}
           onClick={() => {
             openPullRequest();
           }}

@@ -4,8 +4,10 @@
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
+import { type ProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
+import { gitHostDisplayName } from "@synara/shared/gitHostRepository";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
+import { parseGitLabRepositoryInput } from "@synara/shared/gitlabRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
@@ -22,10 +24,10 @@ import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
 import {
-  CreateGitHubProjectFields,
+  CreateRepositoryProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
-} from "./CreateGitHubProjectFields";
-import { ProjectSourceSegmentedPicker } from "./ProjectSourceSegmentedPicker";
+} from "./CreateRepositoryProjectFields";
+import { ProjectSourceSegmentedPicker, type ProjectSource } from "./ProjectSourceSegmentedPicker";
 import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";
@@ -53,8 +55,8 @@ interface CreateLocalProjectSubmitValue {
   readonly createIfMissing: boolean;
 }
 
-interface CreateGitHubProjectSubmitValue {
-  readonly source: "github";
+interface CreateRepositoryProjectSubmitValue {
+  readonly source: "github" | "gitlab";
   readonly operationId: string;
   readonly repository: string;
   readonly destinationParent: string;
@@ -64,7 +66,7 @@ interface CreateGitHubProjectSubmitValue {
 
 export type CreateProjectSubmitValue =
   | CreateLocalProjectSubmitValue
-  | CreateGitHubProjectSubmitValue;
+  | CreateRepositoryProjectSubmitValue;
 
 export interface CreateProjectSubmitOptions {
   readonly signal: AbortSignal;
@@ -72,14 +74,14 @@ export interface CreateProjectSubmitOptions {
 
 export function CreateProjectDialog(props: {
   open: boolean;
-  githubProvisioningAvailable: boolean;
+  repositoryProvisioningAvailable: boolean;
   spaces: ReadonlyArray<Space>;
   activeSpaceId: SpaceId | null;
   defaultCloneParent: string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (value: CreateProjectSubmitValue, options: CreateProjectSubmitOptions) => Promise<void>;
 }) {
-  const [source, setSource] = useState<"local" | "github">("local");
+  const [source, setSource] = useState<ProjectSource>("local");
   const [path, setPath] = useState("");
   const [repositoryInput, setRepositoryInput] = useState("");
   const [destinationParent, setDestinationParent] = useState("");
@@ -144,13 +146,17 @@ export function CreateProjectDialog(props: {
   }, [pathInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
 
   useEffect(() => {
-    if (!props.githubProvisioningAvailable && source === "github") {
+    if (!props.repositoryProvisioningAvailable && source !== "local") {
       setSource("local");
     }
-  }, [props.githubProvisioningAvailable, source]);
+  }, [props.repositoryProvisioningAvailable, source]);
 
   const trimmedPath = path.trim();
-  const parsedRepository = parseGitHubRepositoryInput(repositoryInput);
+  // A repository source is anything but a local folder; each host parses its own input surface.
+  const repositoryHost = source === "local" ? null : source;
+  const parseRepository = (value: string) =>
+    source === "gitlab" ? parseGitLabRepositoryInput(value) : parseGitHubRepositoryInput(value);
+  const parsedRepository = repositoryHost ? parseRepository(repositoryInput) : null;
   const trimmedDestinationParent = destinationParent.trim();
   const trimmedDirectoryName = directoryName.trim();
   const normalizedDirectoryName = normalizeProjectDirectoryName(directoryName);
@@ -165,7 +171,7 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     const api = readNativeApi();
     if (!api) return;
-    return api.projects.onProvisionProgress((event: GitHubProjectProvisionProgressEvent) => {
+    return api.projects.onProvisionProgress((event: ProjectProvisionProgressEvent) => {
       if (event.operationId !== activeOperationIdRef.current) return;
       if (event.kind === "completed") {
         setProvisionProgress("Project added");
@@ -207,7 +213,7 @@ export function CreateProjectDialog(props: {
     try {
       const picked = await api.dialogs.pickFolder();
       if (picked) {
-        if (source === "github") applyDestinationParent(picked);
+        if (repositoryHost) applyDestinationParent(picked);
         else applyPickedFolder(picked);
       }
     } catch (error) {
@@ -232,19 +238,25 @@ export function CreateProjectDialog(props: {
       setFormError("Type a folder path, or drop a folder above.");
       return;
     }
-    if (source === "github" && !parsedRepository) {
-      setFormError("Enter a GitHub repository as owner/repository or a GitHub.com repository URL.");
+    if (repositoryHost && !parsedRepository) {
+      setFormError(
+        repositoryHost === "gitlab"
+          ? "Enter a GitLab project as group/project, host/group/project, or a GitLab project URL."
+          : "Enter a GitHub repository as owner/repository or a GitHub.com repository URL.",
+      );
       return;
     }
-    if (source === "github" && !props.githubProvisioningAvailable) {
-      setFormError("Update the Synara server before adding a project from GitHub.");
+    if (repositoryHost && !props.repositoryProvisioningAvailable) {
+      setFormError(
+        `Update the Synara server before adding a project from ${gitHostDisplayName(repositoryHost)}.`,
+      );
       return;
     }
-    if (source === "github" && trimmedDestinationParent.length === 0) {
+    if (repositoryHost && trimmedDestinationParent.length === 0) {
       setFormError("Choose the parent folder where the repository should be cloned.");
       return;
     }
-    if (source === "github" && !normalizedDirectoryName) {
+    if (repositoryHost && !normalizedDirectoryName) {
       setFormError(
         "Choose a valid folder name without slashes, reserved device names, or a trailing dot.",
       );
@@ -252,17 +264,17 @@ export function CreateProjectDialog(props: {
     }
     setSubmitting(true);
     setFormError(null);
-    setProvisionProgress(source === "github" ? "Validating repository" : null);
+    setProvisionProgress(repositoryHost ? "Validating repository" : null);
     const abortController = new AbortController();
     submitAbortRef.current = abortController;
     try {
       const spaceId = spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null;
-      if (source === "github") {
+      if (repositoryHost) {
         const operationId = randomUUID();
         activeOperationIdRef.current = operationId;
         await props.onSubmit(
           {
-            source: "github",
+            source: repositoryHost,
             operationId,
             repository: parsedRepository ?? repositoryInput.trim(),
             destinationParent: trimmedDestinationParent,
@@ -289,8 +301,8 @@ export function CreateProjectDialog(props: {
       activeOperationIdRef.current = null;
       setFormError(
         abortController.signal.aborted
-          ? source === "github"
-            ? "GitHub clone cancelled. You can retry safely."
+          ? repositoryHost
+            ? `${gitHostDisplayName(repositoryHost)} clone cancelled. You can retry safely.`
             : "Project creation cancelled."
           : error instanceof Error
             ? error.message
@@ -351,7 +363,7 @@ export function CreateProjectDialog(props: {
             className="mt-4"
             value={source}
             disabled={submitting}
-            githubAvailable={props.githubProvisioningAvailable}
+            repositoryAvailable={props.repositoryProvisioningAvailable}
             onValueChange={(nextSource) => {
               setSource(nextSource);
               setFormError(null);
@@ -429,7 +441,8 @@ export function CreateProjectDialog(props: {
               ) : null}
             </>
           ) : (
-            <CreateGitHubProjectFields
+            <CreateRepositoryProjectFields
+              host={repositoryHost ?? "github"}
               repositoryInputId={repositoryInputId}
               destinationParentInputId={destinationParentInputId}
               directoryNameInputId={directoryNameInputId}
@@ -445,7 +458,7 @@ export function CreateProjectDialog(props: {
               submitting={submitting}
               onRepositoryChange={(nextInput) => {
                 setRepositoryInput(nextInput);
-                const nextRepository = parseGitHubRepositoryInput(nextInput);
+                const nextRepository = parseRepository(nextInput);
                 if (nextRepository && !directoryNameEdited) {
                   setDirectoryName(nextRepository.split("/").at(-1) ?? "");
                 }
@@ -548,7 +561,7 @@ export function CreateProjectDialog(props: {
             onClick={() => handleOpenChange(false)}
             disabled={submitting && source === "local"}
           >
-            {submitting && source === "github" ? "Cancel clone" : "Cancel"}
+            {submitting && repositoryHost ? "Cancel clone" : "Cancel"}
           </Button>
           <Button
             id={submitButtonId}
@@ -558,10 +571,10 @@ export function CreateProjectDialog(props: {
             disabled={submitting}
           >
             {submitting
-              ? source === "github"
+              ? repositoryHost
                 ? "Cloning…"
                 : "Creating…"
-              : source === "github"
+              : repositoryHost
                 ? "Clone and add"
                 : "Create project"}
           </Button>

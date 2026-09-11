@@ -734,13 +734,10 @@ function makeHarnessLayer(
           },
         };
       }),
-    fetchPullRequestCommit: (input: {
-      prNumber: number;
-      expectedRepositoryNameWithOwner?: string;
-    }) =>
+    fetchPullRequestCommit: (input: { prNumber: number; expectedRepository?: string }) =>
       Effect.sync(() => {
         fetchedPullRequests.push(input.prNumber);
-        fetchedPullRequestRepositories.push(input.expectedRepositoryNameWithOwner);
+        fetchedPullRequestRepositories.push(input.expectedRepository);
         return "fedcba9876543210fedcba9876543210fedcba98";
       }),
     recordWorktreeOwnership: (input: { path: string; branch: string | null; token: string }) =>

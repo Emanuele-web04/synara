@@ -121,7 +121,7 @@ describe("git query invalidation", () => {
     const queryClient = new QueryClient();
     const cwd = "/repo/all";
     const keys = [
-      gitQueryKeys.githubRepository(cwd),
+      gitQueryKeys.repository(cwd),
       gitQueryKeys.status(cwd),
       gitQueryKeys.branches(cwd),
       gitQueryKeys.workingTreeDiff(cwd, "workingTree"),
@@ -144,7 +144,7 @@ describe("git query invalidation", () => {
     const cwdA = "/repo/a";
     const cwdB = "/repo/b";
     const cwdAKeys = [
-      gitQueryKeys.githubRepository(cwdA),
+      gitQueryKeys.repository(cwdA),
       gitQueryKeys.status(cwdA),
       gitQueryKeys.branches(cwdA),
       gitQueryKeys.workingTreeDiff(cwdA, "workingTree"),
@@ -152,7 +152,7 @@ describe("git query invalidation", () => {
       ["git", "pull-request", cwdA, "https://example.test/pr/1"] as const,
     ];
     const cwdBKeys = [
-      gitQueryKeys.githubRepository(cwdB),
+      gitQueryKeys.repository(cwdB),
       gitQueryKeys.status(cwdB),
       gitQueryKeys.branches(cwdB),
       gitQueryKeys.workingTreeDiff(cwdB, "workingTree"),

@@ -28,7 +28,7 @@ describe("CreateProjectDialog GitHub source", () => {
     await render(
       <CreateProjectDialog
         open
-        githubProvisioningAvailable={false}
+        repositoryProvisioningAvailable={false}
         spaces={[]}
         activeSpaceId={null}
         defaultCloneParent="/Users/test/Developer"
@@ -48,7 +48,7 @@ describe("CreateProjectDialog GitHub source", () => {
     await render(
       <CreateProjectDialog
         open
-        githubProvisioningAvailable
+        repositoryProvisioningAvailable
         spaces={[]}
         activeSpaceId={null}
         defaultCloneParent="/Users/test/Developer"
@@ -84,7 +84,7 @@ describe("CreateProjectDialog GitHub source", () => {
     await render(
       <CreateProjectDialog
         open
-        githubProvisioningAvailable
+        repositoryProvisioningAvailable
         spaces={[]}
         activeSpaceId={null}
         defaultCloneParent="/Users/test/Developer"
@@ -119,7 +119,7 @@ describe("CreateProjectDialog GitHub source", () => {
       return (
         <CreateProjectDialog
           open={open}
-          githubProvisioningAvailable
+          repositoryProvisioningAvailable
           spaces={[]}
           activeSpaceId={null}
           defaultCloneParent="/Users/test"

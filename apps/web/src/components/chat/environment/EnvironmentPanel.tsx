@@ -20,6 +20,7 @@ import type {
   ThreadMarker,
   ThreadMarkerId,
 } from "@synara/contracts";
+import type { GitHostKind } from "@synara/shared/gitHostRepository";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useAppSettings } from "~/appSettings";
@@ -38,7 +39,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
+import { ArrowUpRightIcon, ChangesIcon, gitHostIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
@@ -93,11 +94,13 @@ export interface EnvironmentPanelProps {
   variant: "docked" | "floating";
   gitCwd: string | null;
   openInTarget: string | null;
-  githubRepository?: {
+  repository?: {
+    readonly host: GitHostKind;
+    readonly reference: string;
     readonly nameWithOwner: string;
     readonly url: string;
   } | null;
-  githubRepositories?: ReadonlyArray<{ readonly nameWithOwner: string }>;
+  repositories?: ReadonlyArray<{ readonly reference: string }>;
   isGitRepo: boolean;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -156,7 +159,7 @@ export interface EnvironmentPanelProps {
   /** Open the shared automation editor for a thread-bound automation row. */
   onOpenAutomation: (definition: AutomationDefinition) => void;
   /** Open the repository URL in the in-app browser panel. */
-  onOpenGithubRepository?: (url: string) => void;
+  onOpenRepository?: (url: string) => void;
   /** Scroll the transcript to a pinned message. */
   onJumpToPinnedMessage: (messageId: MessageId) => void;
   /** Toggle a pinned message's done state (strikethrough; stays pinned). */
@@ -218,8 +221,8 @@ export function EnvironmentPanel({
   variant,
   gitCwd,
   openInTarget,
-  githubRepository: githubRepositoryProp,
-  githubRepositories: githubRepositoriesProp,
+  repository: repositoryProp,
+  repositories: repositoriesProp,
   isGitRepo,
   keybindings,
   availableEditors,
@@ -247,7 +250,7 @@ export function EnvironmentPanel({
   onCopyProjectInstructionsToNotes,
   onToggleDiff,
   onOpenAutomation,
-  onOpenGithubRepository,
+  onOpenRepository,
   onJumpToPinnedMessage,
   onTogglePinnedMessageDone,
   onUnpinMessage,
@@ -261,8 +264,9 @@ export function EnvironmentPanel({
   onClose,
   onRegisterCommitAndPushTrigger,
 }: EnvironmentPanelProps) {
-  const githubRepository = githubRepositoryProp ?? null;
-  const githubRepositories = githubRepositoriesProp ?? [];
+  const repository = repositoryProp ?? null;
+  const repositories = repositoriesProp ?? [];
+  const RepositoryHostIcon = gitHostIcon(repository?.host ?? "github");
   const studioFolderPath = studioFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
@@ -424,29 +428,29 @@ export function EnvironmentPanel({
       */}
       {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
 
-      {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
+      {settings.showEnvironmentRepository && repository && onOpenRepository ? (
         <EnvironmentLabeledSection label="Repository">
           <EnvironmentRow
-            icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-            label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
+            icon={<RepositoryHostIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label={<span className="truncate">{repository.nameWithOwner}</span>}
             trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
-              onOpenGithubRepository(githubRepository.url);
+              onOpenRepository(repository.url);
               onClose();
             }}
           />
         </EnvironmentLabeledSection>
       ) : null}
 
-      {settings.showEnvironmentPullRequest && isGitRepo && onOpenGithubRepository ? (
+      {settings.showEnvironmentPullRequest && isGitRepo && onOpenRepository ? (
         <EnvironmentPullRequestSection
           gitCwd={gitCwd}
           enabled={open}
           activeThreadId={activeThreadId}
           projectId={activeProjectId}
-          configuredRepositories={githubRepositories}
+          configuredRepositories={repositories}
           showDiffColors={settings.showPullRequestDiffColors}
-          onOpenUrl={onOpenGithubRepository}
+          onOpenUrl={onOpenRepository}
           onClose={onClose}
         />
       ) : null}

@@ -13,9 +13,11 @@ import type {
   ProviderStartOptions,
 } from "@synara/contracts";
 
-import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
+import { GitCommandError, GitHostCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
 import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import { GitHostCli, type GitHostCliShape } from "../Services/GitHostCli.ts";
+import { createGitHostCliRouterForTests } from "../testing/fakeGitHostCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -351,6 +353,9 @@ function handoffThread(
 
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
+  glabService?: GitHostCliShape;
+  gitlabWorkspaces?: ReadonlyArray<string>;
+  gitlabHosts?: ReadonlyArray<string>;
   textGeneration?: Partial<FakeGitTextGeneration>;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
@@ -366,6 +371,15 @@ function makeManager(input?: {
 
   const managerLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(
+      GitHostCli,
+      createGitHostCliRouterForTests({
+        github: gitHubCli,
+        ...(input?.glabService ? { gitlab: input.glabService } : {}),
+        ...(input?.gitlabWorkspaces ? { gitlabWorkspaces: input.gitlabWorkspaces } : {}),
+        ...(input?.gitlabHosts ? { gitlabHosts: input.gitlabHosts } : {}),
+      }),
+    ),
     Layer.succeed(TextGeneration, textGeneration),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -700,7 +714,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         ghScenario: {
-          failWith: new GitHubCliError({
+          failWith: new GitHostCliError({
+            host: "github",
             operation: "execute",
             detail: "GitHub CLI (`gh`) is required but not available on PATH.",
           }),
@@ -1969,7 +1984,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
           prListSequence: ["[]"],
-          createPullRequestError: new GitHubCliError({
+          createPullRequestError: new GitHostCliError({
+            host: "github",
             operation: "execute",
             detail: `GitHub CLI command failed: gh pr create failed (code=1, signal=null). a pull request for branch "feature/already-created" into branch "main" already exists: ${existingPrUrl}`,
           }),
@@ -2108,7 +2124,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         ghScenario: {
-          failWith: new GitHubCliError({
+          failWith: new GitHostCliError({
+            host: "github",
             operation: "execute",
             detail: "GitHub CLI (`gh`) is required but not available on PATH.",
           }),
@@ -2137,7 +2154,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         ghScenario: {
-          failWith: new GitHubCliError({
+          failWith: new GitHostCliError({
+            host: "github",
             operation: "execute",
             detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
           }),
@@ -2220,7 +2238,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           pullRequest: {
             number: 42,
             title: "Snapshot PR",
-            url: "https://github.enterprise.test/example-org/sample-repo/pull/42",
+            url: "https://github.com/example-org/sample-repo/pull/42",
             baseRefName: "main",
             headRefName: "feature/snapshot-pr",
             state: "open",
@@ -2245,9 +2263,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
       );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
-      expect(ghCalls).toContain(
-        "api graphql reviewThreads github.enterprise.test/example-org/sample-repo#42",
-      );
+      expect(ghCalls).toContain("api graphql reviewThreads example-org/sample-repo#42");
     }),
   );
 
@@ -2270,7 +2286,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             state: "open",
           },
           pullRequestChecks: checks,
-          reviewCommentsError: new GitHubCliError({
+          reviewCommentsError: new GitHostCliError({
+            host: "github",
             operation: "getPullRequestReviewComments",
             detail: "GraphQL rate limit exceeded.",
           }),
@@ -3014,5 +3031,76 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ]),
       );
     }),
+  );
+
+  it.effect(
+    "creates a GitLab merge request with a bare branch selector",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/gitlab-mr"]);
+        const remoteDir = yield* createBareRemote();
+        // The fetch URL carries the GitLab identity while pushes land in a local bare repo, so
+        // the manager resolves a GitLab host without needing a reachable instance.
+        yield* runGit(repoDir, ["remote", "add", "origin", "git@gitlab.dotblocks.fr:acme/app.git"]);
+        yield* runGit(repoDir, ["config", "remote.origin.pushurl", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "gitlab.txt"), "gitlab\n");
+        yield* runGit(repoDir, ["add", "gitlab.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Add GitLab file"]);
+
+        const mergeRequest = {
+          number: 12,
+          title: "Add GitLab file",
+          url: "https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12",
+          baseRefName: "main",
+          headRefName: "feature/gitlab-mr",
+          state: "open" as const,
+          isDraft: false,
+          mergeability: "mergeable" as const,
+          additions: null,
+          deletions: null,
+          changedFiles: 1,
+          isCrossRepository: false,
+          updatedAt: "2026-09-01T10:00:00.000Z",
+        };
+        const createCalls: Array<{ headSelector: string; baseBranch: string }> = [];
+        let created = false;
+        const glabService = {
+          getDefaultBranch: () => Effect.succeed("main"),
+          listOpenPullRequests: () => Effect.succeed(created ? [mergeRequest] : []),
+          listPullRequests: () => Effect.succeed(created ? [mergeRequest] : []),
+          createPullRequest: (input: { headSelector: string; baseBranch: string }) =>
+            Effect.sync(() => {
+              createCalls.push({
+                headSelector: input.headSelector,
+                baseBranch: input.baseBranch,
+              });
+              created = true;
+            }),
+        } as unknown as GitHostCliShape;
+
+        const { manager } = yield* makeManager({
+          glabService,
+          gitlabWorkspaces: [repoDir],
+          gitlabHosts: ["gitlab.dotblocks.fr"],
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          prTitle: "Add GitLab file",
+          prBody: "Body.",
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.pr.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");
+        // GitLab has no `owner:branch` head selectors: the source branch is passed bare.
+        expect(createCalls).toEqual([{ headSelector: "feature/gitlab-mr", baseBranch: "main" }]);
+
+        const status = yield* manager.status({ cwd: repoDir });
+        expect(status.pr?.url).toBe("https://gitlab.dotblocks.fr/acme/app/-/merge_requests/12");
+        expect(status.pr?.number).toBe(12);
+      }),
+    30_000,
   );
 });

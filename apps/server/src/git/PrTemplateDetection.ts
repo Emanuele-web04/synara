@@ -2,6 +2,7 @@ import { Effect, Option } from "effect";
 
 import { GitCommandError } from "./Errors.ts";
 import type { ExecuteGitInput, ExecuteGitResult } from "./Services/GitCore.ts";
+import type { GitHostKind } from "@synara/shared/gitHostRepository";
 
 const TEMPLATE_MAX_BYTES = 8_000;
 const BLOB_READ_MAX_BYTES = 100_000;
@@ -12,6 +13,7 @@ const TRUNCATION_MARKER = "[truncated]";
 const TEMPLATE_ROOT_DIRECTORIES = [".github", "", "docs"] as const;
 const TEMPLATE_DIRECTORY_NAME = "PULL_REQUEST_TEMPLATE";
 const TEMPLATE_EXTENSIONS = [".md", ".txt"] as const;
+const GITLAB_TEMPLATE_DIRECTORY_NAME = "merge_request_templates";
 
 type ExecuteGit = (input: ExecuteGitInput) => Effect.Effect<ExecuteGitResult, GitCommandError>;
 
@@ -216,6 +218,7 @@ export const detectPrTemplate = Effect.fn("detectPrTemplate")(function* (
   cwd: string,
   treeish: string,
   executeGit: ExecuteGit,
+  options?: { readonly host?: GitHostKind },
 ) {
   return yield* Effect.gen(function* () {
     // Resolve once and traverse only committed tree objects. No worktree path is opened, so
@@ -227,6 +230,35 @@ export const detectPrTemplate = Effect.fn("detectPrTemplate")(function* (
       objectId: rootTreeId,
       operation: "PrTemplateDetection.listRoot",
     });
+
+    if (options?.host === "gitlab") {
+      // GitLab's own default lives in `.gitlab/merge_request_templates/`; fall through to the
+      // GitHub locations afterwards so repositories mirrored from GitHub still work.
+      const gitlabEntries = yield* listChildTree(
+        cwd,
+        executeGit,
+        rootEntries,
+        ".gitlab",
+        "PrTemplateDetection.listGitlab",
+      );
+      const mergeRequestTemplates = yield* listChildTree(
+        cwd,
+        executeGit,
+        gitlabEntries,
+        GITLAB_TEMPLATE_DIRECTORY_NAME,
+        "PrTemplateDetection.listGitlabTemplates",
+      );
+      const gitlabDefault = mergeRequestTemplates.find(
+        (entry) => isRegularBlob(entry) && entry.name.toLowerCase() === "default.md",
+      );
+      if (gitlabDefault && isRegularBlob(gitlabDefault)) {
+        const contents = yield* readTemplateBlob({ cwd, executeGit, entry: gitlabDefault });
+        if (Option.isSome(contents)) {
+          return contents;
+        }
+      }
+    }
+
     const githubEntries = yield* listChildTree(
       cwd,
       executeGit,

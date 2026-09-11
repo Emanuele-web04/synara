@@ -15,19 +15,19 @@ import type {
   PullRequestStack,
 } from "@synara/contracts";
 
-import { GitHubCliError } from "../Errors.ts";
+import { GitHostCliError } from "../Errors.ts";
 import {
   decodePullRequestListJson,
   decodeRepositoryPullRequestListJson,
   PULL_REQUEST_LIST_JSON_FIELDS,
 } from "../Layers/GitHubCli.ts";
+import { PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import {
-  type GitHubCliShape,
-  type GitHubPullRequestDetailData,
-  type GitHubPullRequestListItem,
-  type GitHubPullRequestSummary,
-  PULL_REQUEST_SUMMARY_JSON_FIELDS,
-} from "../Services/GitHubCli.ts";
+  type GitHostCliShape,
+  type GitHostPullRequestDetailData,
+  type GitHostPullRequestListItem,
+  type GitHostPullRequestSummary,
+} from "../Services/GitHostCli.ts";
 
 export interface FakeGhScenario {
   prListSequence?: string[];
@@ -49,14 +49,14 @@ export interface FakeGhScenario {
   pullRequestChecks?: GitPullRequestCheck[];
   pullRequestReviewComments?: GitPullRequestComment[];
   pullRequestReviewCommentsTruncated?: boolean;
-  failWith?: GitHubCliError;
-  reviewCommentsError?: GitHubCliError;
-  createPullRequestError?: GitHubCliError;
+  failWith?: GitHostCliError;
+  reviewCommentsError?: GitHostCliError;
+  createPullRequestError?: GitHostCliError;
   viewerLogin?: string;
   repositoryPullRequestListJson?: string;
-  pullRequestDetail?: GitHubPullRequestDetailData;
+  pullRequestDetail?: GitHostPullRequestDetailData;
   pullRequestStack?: PullRequestStack | null;
-  pullRequestListItems?: GitHubPullRequestListItem[];
+  pullRequestListItems?: GitHostPullRequestListItem[];
   reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
@@ -73,13 +73,14 @@ function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
   if (result.status === 0) {
     return;
   }
-  throw new GitHubCliError({
+  throw new GitHostCliError({
+    host: "github",
     operation: "execute",
     detail: `Failed to simulate gh checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
   });
 }
 
-function isGitHubCliError(error: unknown): error is GitHubCliError {
+function isGitHubCliError(error: unknown): error is GitHostCliError {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -89,13 +90,13 @@ function isGitHubCliError(error: unknown): error is GitHubCliError {
 }
 
 export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
-  service: GitHubCliShape;
+  service: GitHostCliShape;
   ghCalls: string[];
 } {
   const prListQueue = [...(scenario.prListSequence ?? [])];
   const ghCalls: string[] = [];
 
-  const execute: GitHubCliShape["execute"] = (input) => {
+  const execute: GitHostCliShape["execute"] = (input) => {
     const args = [...input.args];
     ghCalls.push(args.join(" "));
 
@@ -202,7 +203,8 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         catch: (error) =>
           isGitHubCliError(error)
             ? error
-            : new GitHubCliError({
+            : new GitHostCliError({
+                host: "github",
                 operation: "execute",
                 detail:
                   error instanceof Error
@@ -218,7 +220,8 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         const cloneUrls = scenario.repositoryCloneUrls?.[repository];
         if (!cloneUrls) {
           return Effect.fail(
-            new GitHubCliError({
+            new GitHostCliError({
+              host: "github",
               operation: "execute",
               detail: `Unexpected repository lookup: ${repository}`,
             }),
@@ -247,7 +250,8 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     }
 
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "execute",
         detail: `Unexpected gh command: ${args.join(" ")}`,
       }),
@@ -303,7 +307,8 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         return detail
           ? Effect.succeed(detail)
           : Effect.fail(
-              new GitHubCliError({
+              new GitHostCliError({
+                host: "github",
                 operation: "getPullRequestDetail",
                 detail: "Fake pull request detail was not configured.",
               }),
@@ -345,7 +350,8 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           ? Effect.succeed(item)
           : Effect.fail(
               scenario.failWith ??
-                new GitHubCliError({
+                new GitHostCliError({
+                  host: "github",
                   operation: "getPullRequestListItem",
                   detail: "Pull request not found.",
                   reason: "other",
@@ -399,7 +405,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         execute({
           cwd: input.cwd,
           args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
+        }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHostPullRequestSummary)),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,
@@ -422,14 +428,12 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           ],
         }).pipe(
           Effect.map((result) => ({
-            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
+            summary: JSON.parse(result.stdout) as GitHostPullRequestSummary,
             checks: scenario.pullRequestChecks ?? [],
           })),
         ),
       getPullRequestReviewComments: (input) => {
-        ghCalls.push(
-          `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
-        );
+        ghCalls.push(`api graphql reviewThreads ${input.repository}#${input.number}`);
         return scenario.reviewCommentsError
           ? Effect.fail(scenario.reviewCommentsError)
           : Effect.succeed({

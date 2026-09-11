@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isPullRequestMergeMethodAllowed,
-  isValidGitHubRepositoryNameWithOwner,
+  isValidRepositoryReference,
   isViewerReviewRequested,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
@@ -52,7 +52,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
 
 describe("isValidGitHubRepositoryNameWithOwner", () => {
   it.each(["openai/codex", "OpenAI/Codex.js", "owner-1/repo_name"])("accepts %s", (repository) =>
-    expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(true),
+    expect(isValidRepositoryReference(repository)).toBe(true),
   );
 
   it.each([
@@ -62,9 +62,7 @@ describe("isValidGitHubRepositoryNameWithOwner", () => {
     "owner repo/name",
     "-owner/name",
     "owner/--flag value",
-  ])("rejects %s", (repository) =>
-    expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(false),
-  );
+  ])("rejects %s", (repository) => expect(isValidRepositoryReference(repository)).toBe(false));
 });
 
 describe("pullRequestListCacheKey", () => {
