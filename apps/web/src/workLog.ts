@@ -1151,11 +1151,14 @@ function mergeTaskListEntries(
   };
 }
 
-// Ingestion emits compaction progress ("Compacting conversation...") and its
+// Ingestion emits compaction progress ("Compacting context") and its
 // terminal row ("Context compacted" / "... failed" / "... manually") as separate
 // activities; fold the terminal row into the in-progress one so the work log
 // shows a single resolving compaction entry instead of a stale spinner row.
-const CONTEXT_COMPACTION_PROGRESS_LABEL = "Compacting conversation...";
+function isContextCompactionProgressLabel(label: string): boolean {
+  // Keep resolving progress rows persisted by older servers, too.
+  return label === "Compacting context" || label === "Compacting conversation...";
+}
 
 function shouldCollapseContextCompactionEntries(
   previous: DerivedWorkLogEntry,
@@ -1172,7 +1175,7 @@ function shouldCollapseContextCompactionEntries(
   }
   // Only merge into a row that is still in progress; a terminal row belongs to
   // an earlier compaction and must not swallow the next one's progress row.
-  return previous.label === CONTEXT_COMPACTION_PROGRESS_LABEL;
+  return isContextCompactionProgressLabel(previous.label);
 }
 
 function shouldCollapseToolLifecycleEntries(
@@ -2265,7 +2268,7 @@ function compareActivitiesByOrder(
 }
 
 function contextCompactionOrderRank(summary: string): number {
-  return summary === CONTEXT_COMPACTION_PROGRESS_LABEL ? 0 : 1;
+  return isContextCompactionProgressLabel(summary) ? 0 : 1;
 }
 
 function compareActivityLifecycleRank(kind: string): number {
