@@ -750,6 +750,11 @@ const makeWsRpcHandlersLayer = () =>
           toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
         ),
       );
+      const getOrchestrationLowWaterSequence = orchestrationEngine.getEventLowWaterSequence.pipe(
+        Effect.mapError((cause) =>
+          toWsRpcError(cause, "Failed to capture orchestration low-water sequence"),
+        ),
+      );
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
@@ -943,6 +948,17 @@ const makeWsRpcHandlersLayer = () =>
               // otherwise pull a thread's entire history in one request. The
               // caller treats this failure as transient and falls back to the
               // full snapshot reconcile.
+              const lowWaterSequence = yield* getOrchestrationLowWaterSequence;
+              if (fromSequenceExclusive + 1 < lowWaterSequence) {
+                return yield* new WsRpcError({
+                  message:
+                    `Replay cursor ${fromSequenceExclusive} is below the journal floor ` +
+                    `${lowWaterSequence}; pruned events cannot be replayed — ` +
+                    "refresh the detail snapshot instead.",
+                  code: "ORCHESTRATION_REPLAY_OVERFLOW",
+                  retryable: true,
+                });
+              }
               const collected = yield* Stream.runCollect(
                 replay.pipe(Stream.take(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 1)),
               );
@@ -1033,6 +1049,7 @@ const makeWsRpcHandlersLayer = () =>
                 ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
+              getLowWaterSequence: getOrchestrationLowWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
                   .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
@@ -1140,6 +1157,7 @@ const makeWsRpcHandlersLayer = () =>
               ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
+              getLowWaterSequence: getOrchestrationLowWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
                   .readThreadEventsThrough(

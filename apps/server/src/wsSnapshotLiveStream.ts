@@ -93,6 +93,13 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
    * and stream an empty replay forever instead of surfacing the deletion.
    */
   readonly resumeSubjectExists?: Effect.Effect<boolean, E>;
+  /**
+   * Oldest surviving journal sequence. Journal retention prunes the prefix
+   * below the projection watermarks, so a cursor whose next needed event is
+   * below the floor can never be satisfied by a gap replay — it must take the
+   * snapshot path instead of silently missing pruned events.
+   */
+  readonly getLowWaterSequence?: Effect.Effect<number, E>;
   readonly onResnapshotRequired?: (report: ResnapshotReport) => Effect.Effect<void, never>;
   /**
    * Loop guard: pairs a stable stream key with a process-wide tracker so a
@@ -130,7 +137,18 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         // gap cannot silently alias deleted history onto new events.
         const subjectExists =
           input.resumeSubjectExists === undefined ? true : yield* input.resumeSubjectExists;
-        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+        // A cursor below the journal floor points into pruned history: the gap
+        // replay would return only surviving rows and the client would silently
+        // miss the deleted events. Fall through to the authoritative snapshot.
+        const lowWaterSequence =
+          input.getLowWaterSequence === undefined ? 0 : yield* input.getLowWaterSequence;
+        const cursorBelowFloor = resumeFromSequence + 1 < lowWaterSequence;
+        if (
+          subjectExists &&
+          !cursorBelowFloor &&
+          resumeGap >= 0 &&
+          resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT
+        ) {
           input.resnapshotEscalation?.tracker.recordHealthyStart(
             input.resnapshotEscalation.streamKey,
           );
