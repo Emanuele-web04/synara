@@ -8,7 +8,12 @@ import type {
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
-import { gitQueryKeys } from "./gitReactQuery";
+import {
+  optimisticallyPatchPullRequestGitCaches,
+  pullRequestGitQueryFilters,
+  rollbackPullRequestGitCaches,
+  type GitPullRequestActionRollback,
+} from "./pullRequestGitCache";
 import {
   cancelPullRequestListScopes,
   invalidateOtherPullRequestListQueries,
@@ -68,6 +73,7 @@ type ActionOwnedFields = { state?: PullRequestState; isDraft?: boolean; closedAt
 type ActionMutationContext = {
   previousDetailFields: ActionOwnedFields | null;
   listRollbackByQuery: ActionListCacheRollback[];
+  gitRollbackByQuery: GitPullRequestActionRollback[];
   optimisticListPatch: PullRequestActionListPatch;
   affectedScopes: PullRequestListQueryScope[];
   protection: PullRequestActionProtectionContext;
@@ -173,6 +179,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
         await Promise.all([
           queryClient.cancelQueries({ queryKey: detailKey, exact: true }),
           cancelPullRequestListScopes(queryClient, affectedScopes),
+          queryClient.cancelQueries(pullRequestGitQueryFilters(input)),
         ]);
         const previousDetail = queryClient.getQueryData<
           ActionOwnedFields & Record<string, unknown>
@@ -191,6 +198,11 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           previousDetailFields,
           optimisticListPatch,
           listRollbackByQuery: optimisticallyPatchPullRequestActionFieldsInListCaches(
+            queryClient,
+            input,
+            optimisticListPatch,
+          ),
+          gitRollbackByQuery: optimisticallyPatchPullRequestGitCaches(
             queryClient,
             input,
             optimisticListPatch,
@@ -219,6 +231,12 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           optimisticPatch: context.optimisticListPatch,
           rollbackByQuery: context.listRollbackByQuery,
         });
+        rollbackPullRequestGitCaches({
+          queryClient,
+          identity: input,
+          optimisticPatch: context.optimisticListPatch,
+          rollback: context.gitRollbackByQuery,
+        });
       }
       // The command may have reached GitHub even when transport failed. Mark the rollback
       // provisional so reconnect/refetch converges on server truth instead of assuming failure.
@@ -227,6 +245,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
           ? invalidatePullRequestListScopes(queryClient, context.affectedScopes)
           : Promise.resolve(),
         invalidatePullRequestActionDetails(queryClient, input),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input)),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },
@@ -234,9 +253,7 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
       await Promise.all([
         invalidatePullRequestListScopes(queryClient, context.affectedScopes),
         invalidatePullRequestActionDetails(queryClient, input),
-        queryClient.invalidateQueries({
-          queryKey: gitQueryKeys.pullRequest(result.workspaceRoot),
-        }),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input, result.workspaceRoot)),
       ]);
       refreshPullRequestReviewRequestCounts(queryClient);
     },

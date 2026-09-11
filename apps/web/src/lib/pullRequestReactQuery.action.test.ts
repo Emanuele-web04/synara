@@ -6,40 +6,203 @@ import { gitQueryKeys } from "./gitReactQuery";
 import { pullRequestActionMutationOptions, pullRequestQueryKeys } from "./pullRequestReactQuery";
 
 describe("pullRequestActionMutationOptions", () => {
-  it("cancels an ordinary list refetch before applying optimistic fields", async () => {
+  it.each(["ready", "draft"] as const)(
+    "immediately applies %s to Environment caches across worktrees and rolls back only its fields",
+    async (action) => {
+      const queryClient = new QueryClient();
+      const input = {
+        projectId: "project-a" as ProjectId,
+        repository: "acme/widgets",
+        number: 42,
+        action,
+      };
+      const pr = {
+        number: 42,
+        url: "https://github.com/Acme/Widgets/pull/42",
+        state: "open",
+        isDraft: action === "ready",
+      };
+      const statusKey = gitQueryKeys.status("/worktree");
+      const snapshotKey = [...gitQueryKeys.pullRequest("/worktree"), "snapshot", pr.url];
+      const otherSnapshotKey = [
+        ...gitQueryKeys.pullRequest("/second-worktree"),
+        "snapshot",
+        pr.url,
+      ];
+      const unrelatedStatusKey = gitQueryKeys.status("/other-repo");
+      queryClient.setQueryData(statusKey, { pr, aheadCount: 1 });
+      for (const key of [snapshotKey, otherSnapshotKey]) {
+        queryClient.setQueryData(key, { pullRequest: pr, checks: [] });
+      }
+      queryClient.setQueryData(unrelatedStatusKey, {
+        pr: { ...pr, url: "https://github.com/other/repo/pull/42" },
+      });
+      const options = pullRequestActionMutationOptions(queryClient);
+      const context = await Reflect.apply(options.onMutate!, undefined, [input, undefined]);
+
+      expect(queryClient.getQueryData(statusKey)).toMatchObject({
+        pr: { isDraft: action === "draft" },
+      });
+      for (const key of [snapshotKey, otherSnapshotKey]) {
+        expect(queryClient.getQueryData(key)).toMatchObject({
+          pullRequest: { isDraft: action === "draft" },
+        });
+      }
+      expect(queryClient.getQueryData(unrelatedStatusKey)).toMatchObject({
+        pr: { isDraft: pr.isDraft },
+      });
+
+      // Git activity and check updates must survive a failed status change.
+      queryClient.setQueryData<Record<string, unknown>>(statusKey, (current) =>
+        current ? { ...current, aheadCount: 2 } : current,
+      );
+      queryClient.setQueryData<Record<string, unknown>>(snapshotKey, (current) =>
+        current ? { ...current, checks: ["new check"] } : current,
+      );
+      await Reflect.apply(options.onError!, undefined, [
+        new Error("rejected"),
+        input,
+        context,
+        undefined,
+      ]);
+      expect(queryClient.getQueryData(statusKey)).toMatchObject({ pr, aheadCount: 2 });
+      expect(queryClient.getQueryData(snapshotKey)).toMatchObject({
+        pullRequest: pr,
+        checks: ["new check"],
+      });
+      for (const key of [statusKey, snapshotKey, otherSnapshotKey]) {
+        expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+      }
+      expect(queryClient.getQueryState(unrelatedStatusKey)?.isInvalidated).toBe(false);
+      queryClient.clear();
+    },
+  );
+
+  it("refreshes the affected worktree caches after success even when the action returns the project root", async () => {
     const queryClient = new QueryClient();
-    const projectId = "project-a" as ProjectId;
-    const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, state: "open", isDraft: false, isPinned: false }],
-    });
-    let listRequestAborted = false;
-    const refetch = queryClient
-      .fetchQuery({
-        queryKey: listKey,
-        queryFn: ({ signal }) =>
-          new Promise<never>((_resolve, reject) => {
-            signal.addEventListener("abort", () => {
-              listRequestAborted = true;
-              reject(new Error("aborted"));
-            });
-          }),
-      })
-      .catch(() => undefined);
-    await vi.waitFor(() => expect(queryClient.isFetching({ queryKey: listKey })).toBe(1));
-    const input = { ...identity, action: "draft" } as const;
+    const input = {
+      projectId: "project-a" as ProjectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "ready",
+    } as const;
+    const pr = {
+      number: 42,
+      url: "https://github.com/acme/widgets/pull/42",
+      state: "open",
+      isDraft: true,
+    };
+    const keys = [
+      gitQueryKeys.status("/worktree"),
+      [...gitQueryKeys.pullRequest("/worktree"), "snapshot", pr.url],
+    ];
+    queryClient.setQueryData(keys[0]!, { pr });
+    queryClient.setQueryData(keys[1]!, { pullRequest: pr });
     const options = pullRequestActionMutationOptions(queryClient);
-    if (!options.onMutate) throw new Error("Action onMutate hook is missing.");
-
-    await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-
-    expect(listRequestAborted).toBe(true);
-    expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, state: "open", isDraft: true, isPinned: false }],
-    });
-    await refetch;
+    const context = await Reflect.apply(options.onMutate!, undefined, [input, undefined]);
+    await Reflect.apply(options.onSuccess!, undefined, [
+      { workspaceRoot: "/repo" },
+      input,
+      context,
+      undefined,
+    ]);
+    for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    queryClient.clear();
   });
+
+  it("preserves a different branch PR when an earlier action fails after checkout", async () => {
+    const queryClient = new QueryClient();
+    const input = {
+      projectId: "project-a" as ProjectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "draft",
+    } as const;
+    const statusKey = gitQueryKeys.status("/worktree");
+    queryClient.setQueryData(statusKey, {
+      pr: { number: 42, url: "https://github.com/acme/widgets/pull/42", isDraft: false },
+    });
+    const options = pullRequestActionMutationOptions(queryClient);
+    const context = await Reflect.apply(options.onMutate!, undefined, [input, undefined]);
+    const checkedOutStatus = {
+      pr: { number: 43, url: "https://github.com/acme/widgets/pull/43", isDraft: true },
+    };
+    queryClient.setQueryData(statusKey, checkedOutStatus);
+
+    await Reflect.apply(options.onError!, undefined, [
+      new Error("rejected"),
+      input,
+      context,
+      undefined,
+    ]);
+
+    expect(queryClient.getQueryData(statusKey)).toEqual(checkedOutStatus);
+    expect(queryClient.getQueryState(statusKey)?.isInvalidated).toBe(false);
+    queryClient.clear();
+  });
+
+  it.each(["list", "git-status", "git-snapshot"] as const)(
+    "cancels an ordinary %s refetch before applying optimistic fields",
+    async (cache) => {
+      const queryClient = new QueryClient();
+      const projectId = "project-a" as ProjectId;
+      const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
+      const pr = {
+        ...identity,
+        url: "https://github.com/acme/widgets/pull/42",
+        state: "open",
+        isDraft: false,
+      };
+      const queryKey =
+        cache === "list"
+          ? pullRequestQueryKeys.list({ state: "open", projectId })
+          : cache === "git-status"
+            ? gitQueryKeys.status("/worktree")
+            : [...gitQueryKeys.pullRequest("/worktree"), "snapshot", pr.url];
+      queryClient.setQueryData(
+        queryKey,
+        cache === "git-status"
+          ? { pr }
+          : cache === "git-snapshot"
+            ? { pullRequest: pr }
+            : {
+                entries: [{ ...identity, state: "open", isDraft: false, isPinned: false }],
+              },
+      );
+      let requestAborted = false;
+      const refetch = queryClient
+        .fetchQuery({
+          queryKey: queryKey,
+          queryFn: ({ signal }) =>
+            new Promise<never>((_resolve, reject) => {
+              signal.addEventListener("abort", () => {
+                requestAborted = true;
+                reject(new Error("aborted"));
+              });
+            }),
+        })
+        .catch(() => undefined);
+      await vi.waitFor(() => expect(queryClient.isFetching({ queryKey: queryKey })).toBe(1));
+      const input = { ...identity, action: "draft" } as const;
+      const options = pullRequestActionMutationOptions(queryClient);
+      if (!options.onMutate) throw new Error("Action onMutate hook is missing.");
+
+      await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+
+      expect(requestAborted).toBe(true);
+      expect(queryClient.getQueryData(queryKey)).toEqual(
+        cache === "git-status"
+          ? { pr: { ...pr, isDraft: true } }
+          : cache === "git-snapshot"
+            ? { pullRequest: { ...pr, isDraft: true } }
+            : {
+                entries: [{ ...identity, state: "open", isDraft: true, isPinned: false }],
+              },
+      );
+      await refetch;
+      queryClient.clear();
+    },
+  );
 
   it("invalidates only repository scopes, matching detail, and the affected git PR cache", async () => {
     const queryClient = new QueryClient();
