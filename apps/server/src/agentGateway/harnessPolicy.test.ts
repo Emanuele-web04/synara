@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 import {
   renderSynaraHarnessPolicy,
@@ -9,6 +10,17 @@ import {
 } from "./harnessPolicy.ts";
 
 describe("Synara harness policy", () => {
+  it("defers duplicate automation authoring text while preserving tool routing and run rules", () => {
+    const inline = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const deferred = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      automationAuthoring: "tool-descriptions",
+    });
+    assert.equal(deferred, inline.replace(`${AUTOMATION_AUTHORING_GUIDANCE}\n`, ""));
+    assert.include(deferred, "synara_create_automation");
+    assert.include(deferred, "synara_view_automation");
+    assert.include(deferred, "synara_report_automation_result");
+  });
   it("includes honest completion evidence and opt-in delegated E2E testing", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     for (const text of [

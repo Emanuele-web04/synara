@@ -21,6 +21,7 @@ import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "./config";
+import { claudeTokenActivityCtes } from "./claudeTokenStats";
 
 const HEATMAP_WINDOW_DAYS = 274; // ~9 months, GitHub-style contribution grid.
 const SKILL_RESULT_LIMIT = 12;
@@ -696,7 +697,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       `,
     );
 
-  // Token usage for EVERY provider, straight from Synara's own DB (no external
+  // Claude uses versioned turn results (including subagents once), with retained
+  // main-loop results as a partial historical fallback; see claudeTokenStats.ts.
+  // Other providers' token usage comes straight from Synara's own DB (no external
   // ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
   // `context-window.updated` activity carries a running per-thread token counter;
   // the positive delta is the tokens processed in that step, bucketed by the
@@ -714,6 +717,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         WITH turn_model AS (
           ${turnModelSelectionCte(sql)}
         ),
+        ${claudeTokenActivityCtes(sql)},
         ev AS (
           SELECT
             a.thread_id AS thread_id,
@@ -880,10 +884,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         ),
         all_tokens AS (
           SELECT day, provider, model, d FROM cumulative_delta
-          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+          WHERE provider != 'claudeAgent'
+            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
           UNION ALL
           SELECT day, provider, model, d FROM used_only_delta
-          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+          WHERE provider != 'claudeAgent'
+            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+          UNION ALL
+          SELECT STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})),
+            'claudeAgent', model, tokens
+          FROM claude_token_rows
           UNION ALL
           SELECT
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
@@ -891,6 +901,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             COALESCE(a.model, 'unknown') AS model,
             a.tokens AS d
           FROM profile_stats_deleted_tokens a
+          WHERE COALESCE(a.provider, 'unknown') != 'claudeAgent' OR a.token_accounting_version = 1
         )
         SELECT day, provider, model, SUM(d) AS tokens
         FROM all_tokens

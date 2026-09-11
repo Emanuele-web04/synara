@@ -28,6 +28,7 @@ import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profile
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { isProviderIntentEventType } from "./orchestration/providerIntentClassification";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
+import { claudeTokenActivityCtes } from "./claudeTokenStats";
 
 interface PurgeThreadRow {
   readonly projectId: string | null;
@@ -318,6 +319,7 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
+    if (provider === "claudeAgent") continue;
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
@@ -345,6 +347,7 @@ export function aggregateThreadTokenRows(
         : Math.max(0, total - previousUsedTotal);
     previousUsedTotal = total;
     previousUsedProviderModelKey = providerModelKey;
+    if (provider === "claudeAgent") continue;
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -663,6 +666,15 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         provider: threadSelection?.provider ?? null,
         model: threadSelection?.model ?? null,
       });
+      // Preserve the same verified Claude rows as the live profile before the
+      // retained runtime fallback is purged along with this thread.
+      const claudeTokenRows = yield* sql<ThreadTokenSnapshotRow>`
+        WITH turn_model AS (${turnModelSelectionCte(sql, { threadId })}),
+          ${claudeTokenActivityCtes(sql, { threadId })}
+        SELECT created_at AS createdAt, 'claudeAgent' AS provider, model, tokens
+        FROM claude_token_rows
+      `;
+      tokenRows.push(...claudeTokenRows);
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
       const hasStatsContribution = hasProfileStatsContribution({
         promptRows: skillMessageRows,
@@ -712,8 +724,10 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           tokenRows,
           (row) => sql`
-            INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, model, tokens)
-            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.model}, ${row.tokens})
+            INSERT INTO profile_stats_deleted_tokens
+              (thread_id, created_at, provider, model, tokens, token_accounting_version)
+            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.model}, ${row.tokens},
+              ${row.provider === "claudeAgent" ? 1 : null})
           `,
           { concurrency: 1, discard: true },
         );
@@ -802,6 +816,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_pending_interactions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_activities WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM profile_stats_claude_legacy_usage WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM message_text_segments WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}`;

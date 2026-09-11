@@ -296,14 +296,14 @@ describe("ProfileStatsArchive", () => {
       {
         totalProcessedTokens: null,
         usedTokens: 700,
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         createdAt: "2026-06-13T12:11:00.000Z",
       },
       {
         totalProcessedTokens: null,
         usedTokens: 1700,
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         createdAt: "2026-06-13T12:12:00.000Z",
       },
@@ -324,13 +324,13 @@ describe("ProfileStatsArchive", () => {
       },
       {
         createdAt: "2026-06-13T12:11:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         tokens: 700,
       },
       {
         createdAt: "2026-06-13T12:12:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
         model: "claude-haiku-4-5",
         tokens: 1000,
       },
@@ -377,7 +377,7 @@ describe("ProfileStatsArchive", () => {
         {
           totalProcessedTokens: 1_500,
           usedTokens: null,
-          provider: "claudeAgent",
+          provider: "pi",
           model: null,
           createdAt: "2026-06-13T12:00:00.000Z",
         },
@@ -388,11 +388,65 @@ describe("ProfileStatsArchive", () => {
     expect(rows).toEqual([
       {
         createdAt: "2026-06-13T12:00:00.000Z",
-        provider: "claudeAgent",
+        provider: "pi",
         model: null,
         tokens: 1_500,
       },
     ]);
+  });
+
+  it("archives verified Claude results and legacy evidence without reintroducing block totals", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        yield* sql`
+        UPDATE projection_thread_activities SET payload_json = '{"provider":"claudeAgent","totalProcessedTokens":999999}'
+        WHERE thread_id = 'thread-purge'
+      `;
+        for (const [turnId, payload] of [
+          [
+            "verified",
+            {
+              provider: "claudeAgent",
+              tokenAccountingVersion: 1,
+              modelUsage: {
+                "claude-fable-5": { totalTokens: 1000, inputTokens: 900, outputTokens: 100 },
+              },
+            },
+          ],
+          ["legacy", { provider: "claudeAgent" }],
+        ] as const) {
+          yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${turnId}, 'thread-purge', ${turnId}, 'info', 'turn.completed', 'done',
+            ${JSON.stringify(payload)}, 100, '2026-06-13T18:45:00Z')
+        `;
+        }
+        yield* sql`
+        INSERT INTO profile_stats_claude_legacy_usage VALUES ('thread-purge', 'legacy', 500)
+      `;
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: ThreadId.makeUnsafe("thread-purge"),
+        });
+        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
+        expect(
+          yield* sql`
+        SELECT tokens, token_accounting_version AS version FROM profile_stats_deleted_tokens
+        WHERE provider = 'claudeAgent' ORDER BY tokens
+      `,
+        ).toEqual([
+          { tokens: 500, version: 1 },
+          { tokens: 1000, version: 1 },
+        ]);
+        expect(yield* sql`SELECT * FROM profile_stats_claude_legacy_usage`).toEqual([]);
+      }),
+    );
   });
 
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {
