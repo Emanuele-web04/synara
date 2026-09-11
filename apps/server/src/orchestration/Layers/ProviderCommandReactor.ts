@@ -798,7 +798,6 @@ const make = Effect.gen(function* () {
     });
   });
   const editResendTurnStartKeys = new Set<string>();
-  const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
   type BlockedGoalContinuation = Pick<
     Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>["payload"],
@@ -1441,7 +1440,6 @@ const make = Effect.gen(function* () {
           editResendTurnStartKeys.delete(key);
         }
       }
-      quarantinedThreads.delete(threadId);
       blockedGoalContinuations.delete(threadId);
       queuedGoalContinuationRetries.delete(threadId);
       // NOTE: `drainingQueuedTurns` is intentionally NOT cleared here. It is a
@@ -5003,17 +5001,14 @@ const make = Effect.gen(function* () {
           threadId,
         });
         if (Option.isNone(blocker)) {
-          quarantinedThreads.delete(threadId);
           return false;
         }
         if (yield* isBlockingDeliveryAmbiguityLive(blocker.value)) {
-          quarantinedThreads.add(threadId);
           return true;
         }
         // The blocking query only selects dead/uncertain rows; anything else
         // cannot be settled through reconciliation, so keep the fence.
         if (blocker.value.state !== "dead" && blocker.value.state !== "uncertain") {
-          quarantinedThreads.add(threadId);
           return true;
         }
         // The command's outcome stays ambiguous, so it is abandoned — never
@@ -5044,11 +5039,9 @@ const make = Effect.gen(function* () {
         if (reconciled.failed) {
           // The blocker could not be cleared durably; keep the fence rather
           // than spin on a write that may never apply.
-          quarantinedThreads.add(threadId);
           return true;
         }
         if (Option.isSome(reconciled.delivery)) {
-          quarantinedThreads.delete(threadId);
           yield* Effect.logInfo(
             "provider delivery blocker resolved after its target session ended",
             {
@@ -5091,7 +5084,6 @@ const make = Effect.gen(function* () {
           ),
         );
       }
-      quarantinedThreads.add(input.event.payload.threadId);
       yield* requireCursorAdvance(input.event);
     });
 
@@ -5167,7 +5159,6 @@ const make = Effect.gen(function* () {
           return;
         }
         if (existing.value.state === "dead" || existing.value.state === "uncertain") {
-          quarantinedThreads.add(threadId);
           yield* requireCursorAdvance(event);
           return;
         }
@@ -5439,7 +5430,6 @@ const make = Effect.gen(function* () {
       readonly eventSequence: number;
       readonly threadId: string;
     }) {
-      quarantinedThreads.delete(input.threadId);
       const event = yield* readProviderIntentEvent(input.eventSequence);
       if (!isClaimedProviderIntent(event)) {
         return yield* Effect.die(
@@ -5454,7 +5444,6 @@ const make = Effect.gen(function* () {
         eventSequence: input.eventSequence,
       });
       if (Option.isSome(delivery) && delivery.value.state === "succeeded") {
-        quarantinedThreads.delete(input.threadId);
         yield* replayQuarantinedThreadSideEffects({
           threadId: input.threadId,
           afterSequence: input.eventSequence,
@@ -5483,7 +5472,6 @@ const make = Effect.gen(function* () {
             if (input.outcome === "safe_retry") {
               yield* resumeRetryableDelivery(input);
             } else {
-              quarantinedThreads.delete(input.threadId);
               yield* replayQuarantinedThreadSideEffects({
                 threadId: input.threadId,
                 afterSequence: input.eventSequence,
@@ -5611,8 +5599,6 @@ const make = Effect.gen(function* () {
             reconciledAt: new Date().toISOString(),
           });
           if (Option.isNone(reconciled)) continue;
-
-          quarantinedThreads.delete(blocker.threadId);
           if (settledQuit) {
             const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
