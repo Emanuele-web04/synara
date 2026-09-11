@@ -542,6 +542,7 @@ describe("provider runtime activity projection", () => {
           args: {
             _meta: {
               tool_name: "computer_launch_app",
+              tool_title: "Open Calculator",
               tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
             },
           },
@@ -555,6 +556,7 @@ describe("provider runtime activity projection", () => {
         requestKind: "tool",
         requestType: "tool_approval",
         detail: "Allow Synara to launch the calculator?",
+        title: "Open Calculator",
         toolName: "computer_launch_app",
         toolParamsDisplay: [{ name: "app", value: "kcalc", display_name: "app" }],
       },

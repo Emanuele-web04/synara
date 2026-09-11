@@ -32,7 +32,52 @@ import {
   appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapterLive,
   normalizeOpenCodeTokenUsage,
+  resolveOpenCodePermissionPolicyReply,
 } from "./OpenCodeAdapter.ts";
+
+describe("OpenCode permission policy", () => {
+  const computerPermission = {
+    permission: "mcp__synara__computer_click",
+    metadata: {},
+  } as const;
+
+  it("lets active approval-required Computer calls reach the gateway once", () => {
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        activeTurn: true,
+        computerControlEnabled: true,
+        ...computerPermission,
+      }),
+    ).toBe("once");
+  });
+
+  it("preserves Plan, Auto, inactive-turn, disabled, and namespace boundaries", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: true,
+      ...computerPermission,
+    };
+
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, interactionMode: "plan" })).toBe(
+      "reject",
+    );
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, runtimeMode: "auto" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, activeTurn: false })).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({ ...base, computerControlEnabled: false }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__other__computer_click",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const OPEN_CODE_PLAN_PERMISSION_RULES = [

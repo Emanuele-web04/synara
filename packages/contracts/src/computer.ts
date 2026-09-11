@@ -566,6 +566,8 @@ export const ComputerState = Schema.Struct({
 export type ComputerState = typeof ComputerState.Type;
 
 export const ThreadComputerState = Schema.Struct({
+  /** Latest revocation generation, frozen by a newly invoked user request. */
+  controlGeneration: Schema.optional(NonNegativeInt),
   threadId: ThreadId,
   version: NonNegativeInt,
   computerId: ComputerId,

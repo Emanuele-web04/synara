@@ -9,6 +9,7 @@ Existing gateway credentials permanently lose Computer capability on disable. Re
 AppSnap: common provider finalization and subagent steering add bounded source/time metadata through the helper owned by provider_readiness_audit. One actual mock-provider dispatch verifies one image, one metadata block, and no Computer activation.
 
 Verification:
+
 - 294 tests passed across 7 owned suites: manager, durable control state, lease reactor, pane handlers, gateway session registry, decider, provider command reactor.
 - After final AppSnap hook and corrupt-state guard: 9 focused tests passed (2 files; 187 unrelated reactor tests unselected).
 - No provider/model call, native desktop capture/input, commit, push or heavyweight workspace check performed by this worker.

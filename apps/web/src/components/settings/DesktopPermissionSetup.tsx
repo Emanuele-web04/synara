@@ -74,7 +74,9 @@ export function DesktopPermissionSetup({
                 ? "Granted"
                 : running && state.current === permission
                   ? "Waiting for access…"
-                  : "Not granted"}
+                  : currentGrants[permission] === "denied"
+                    ? "Not granted"
+                    : "Not checked"}
             </span>
           </li>
         ))}
@@ -112,6 +114,9 @@ export function DesktopPermissionSetup({
               </Button>
             ) : null}
           </div>
+          {state.recoveryAdvice ? (
+            <p className="text-xs text-muted-foreground">{state.recoveryAdvice}</p>
+          ) : null}
         </>
       ) : (
         <p className="text-xs text-muted-foreground">

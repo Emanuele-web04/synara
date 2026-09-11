@@ -480,7 +480,7 @@ export class CuaComputerBackend implements ComputerBackend {
   async raiseWindow(windowId: string): Promise<void> {
     if (desktopDeliveryMode() !== "foreground")
       throw new CuaActionError(
-        "Window activation requires explicit foreground approval.",
+        "Window activation requires foreground delivery within an authorized Computer task.",
         "not-dispatched",
         "foreground_required",
       );
@@ -813,7 +813,7 @@ export class CuaComputerBackend implements ComputerBackend {
   ): Promise<ComputerBackendActionResult> {
     if (desktopDeliveryMode() !== "foreground")
       throw new CuaActionError(
-        "Cua 0.24.0 cannot drag in the background on macOS. Explicit foreground authorization is required.",
+        "Cua 0.24.0 cannot drag in the background on macOS. Use foreground delivery within the authorized Computer task.",
         "not-dispatched",
         "foreground_required",
       );

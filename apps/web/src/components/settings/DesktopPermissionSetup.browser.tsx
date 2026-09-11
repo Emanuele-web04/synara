@@ -63,6 +63,26 @@ afterEach(() => {
 });
 
 describe("shared native permission setup UI", () => {
+  it("keeps unverified permissions unchecked and shows recovery advice without claiming success", async () => {
+    const f = await fixture();
+    await expect.element(f.view.getByText("Not checked", { exact: true }).first()).toBeVisible();
+    await expect
+      .element(f.view.getByText("Permissions granted", { exact: true }))
+      .not.toBeInTheDocument();
+    f.push({
+      phase: "waiting",
+      current: "screenRecording",
+      grants: { accessibility: "granted", screenRecording: "denied" },
+      recoveryAdvice:
+        "Already switched on? Remove only Synara Cua from this list and add this copy again.",
+    });
+    await expect.element(f.view.getByText(/Already switched on/)).toBeVisible();
+    await expect.element(f.view.getByText("Waiting for access…")).toBeVisible();
+    await expect
+      .element(f.view.getByText("Permissions granted", { exact: true }))
+      .not.toBeInTheDocument();
+  });
+
   it("starts explicitly and receives Accessibility then Screen Recording grants without a focus event", async () => {
     const f = await fixture();
     await expect.element(f.view.getByRole("button", { name: "Set up permissions" })).toBeVisible();

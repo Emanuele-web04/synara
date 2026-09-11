@@ -94,6 +94,7 @@ import {
 
 import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
+import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
@@ -5190,6 +5191,25 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               }
 
               const runtimeMode = input.runtimeMode ?? "full-access";
+              const interactionTurnId =
+                context.turnState?.turnId ??
+                (callbackOptions.agentID !== undefined ? context.lastTurnId : undefined);
+              if (
+                shouldAllowSynaraComputerProviderTool({
+                  computerControlEnabled:
+                    input.enableComputerControl === true &&
+                    context.gatewaySessionLease !== undefined,
+                  activeTurn: context.turnState !== undefined && interactionTurnId !== undefined,
+                  interactionMode: context.turnState?.interactionMode,
+                  runtimeMode,
+                  permission: { name: toolName },
+                })
+              ) {
+                return {
+                  behavior: "allow",
+                  updatedInput: toolInput,
+                } satisfies PermissionResult;
+              }
               if (runtimeMode === "full-access" || context.approvalsAlwaysAllowedForSession) {
                 return {
                   behavior: "allow",
@@ -5205,9 +5225,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               const requestId = ApprovalRequestId.makeUnsafe(yield* Random.nextUUIDv4);
               const requestType = classifyRequestType(toolName);
               const detail = summarizeToolRequest(toolName, toolInput);
-              const interactionTurnId =
-                context.turnState?.turnId ??
-                (callbackOptions.agentID !== undefined ? context.lastTurnId : undefined);
               const decisionDeferred = yield* Deferred.make<ProviderApprovalDecision>();
               const settledDeferred = yield* Deferred.make<ProviderApprovalDecision>();
               const pendingApproval: PendingApproval = {

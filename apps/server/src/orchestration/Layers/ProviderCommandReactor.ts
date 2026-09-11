@@ -1,5 +1,6 @@
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
+import { isComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 // FILE: ProviderCommandReactor.ts
@@ -2020,6 +2021,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly messageId: string;
     readonly messageText: string;
+    readonly dispatchOrigin?: "user" | "automation" | "agent";
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
@@ -2155,6 +2157,9 @@ const make = Effect.gen(function* () {
                 input.threadId,
                 activation.computerControlMode,
                 activation.computerControlGeneration,
+                input.turnKind !== "goal-continuation" &&
+                  (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+                  isComputerInvocation({ text: input.messageText, skills: input.skills }),
               ),
             );
     const transcriptBoundaryMessageId =
@@ -3241,6 +3246,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         messageId: message.id,
         messageText: message.text,
+        dispatchOrigin: event.payload.dispatchOrigin ?? "user",
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
         ...(message.skills !== undefined ? { skills: message.skills } : {}),
         ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),

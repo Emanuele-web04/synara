@@ -1,10 +1,9 @@
+import { useComputerControlModeChange } from "~/hooks/useComputerControlModeChange";
 import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputNotice";
 import { usePendingUserInputDrafts } from "./chat/usePendingUserInputDrafts";
 import { expiredUserInputDrafts } from "../pendingUserInputRecovery";
-import {
-  resolveComputerControlMode,
-  type ComposerComputerControlMode,
-} from "../computerControlMode";
+import { resolveComputerControlMode } from "../computerControlMode";
+import { isComputerInvocation } from "@synara/shared/computerInvocation";
 import {
   type AutomationDefinition,
   type AutomationSchedule,
@@ -409,7 +408,10 @@ import {
   useComposerThreadDraft,
   useEffectiveComposerModelState,
 } from "../composerDraftStore";
-import { useThreadComputerAvailability } from "../computerStateStore";
+import {
+  useThreadComputerAvailability,
+  useThreadComputerControlGeneration,
+} from "../computerStateStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import { useWorkflowRunUiStore, useWorkflowRunUiThreadState } from "../workflowRunUiStore";
@@ -648,7 +650,6 @@ import {
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
   type QueuedSteerGate,
-  resolveEffectiveComputerControl,
   resolveQueuedSteerGateTransition,
   resolveQueuedComposerAutoDispatchHold,
   resolveQueuedTurnDispatchSettings,
@@ -1972,34 +1973,19 @@ export default function ChatView({
     [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
-  // The computer-control toggle needs availability before the Computer pane has
-  // ever been opened, so the composer seeds the snapshot itself.
+  // Invocation needs the current revocation generation even before the Computer pane opens.
   useThreadComputerStateSeed(threadId);
   const computerAvailability = useThreadComputerAvailability(threadId);
+  const computerControlGeneration =
+    useThreadComputerControlGeneration(threadId) ?? composerDraft.computerControlGeneration ?? 0;
   const computerControlAvailable = computerAvailability?.kind === "available";
-  // New chats follow the default even while permission setup is pending.
-  // First send records the choice; existing chats keep their saved override.
-  // `latestTurn` is in the shell, so this does not wait for message hydration.
-  const chatHasTurns =
-    activeThread !== undefined &&
-    (activeThread.latestTurn !== null || activeThread.messages.length > 0);
-  const enableComputerControl = resolveEffectiveComputerControl({
-    draftOverride: composerDraft.enableComputerControl,
-    mode: composerDraft.computerControlMode,
-    availability: computerAvailability,
-    allowInNewChats: settings.allowComputerControlInNewChats,
-    chatHasTurns,
+  // Computer is invoked for a task, like a skill. Old sticky composer defaults
+  // must not attach its schemas/instructions to unrelated coding messages.
+  const enableComputerControl = isComputerInvocation({
+    text: prompt,
+    skills: selectedComposerSkills,
   });
-  const computerControlMode = enableComputerControl
-    ? resolveComputerControlMode(composerDraft.computerControlMode, true)
-    : "off";
-  const computerControlDisabledReason = computerAvailability
-    ? computerAvailability.kind === "unsupported-platform"
-      ? "No computer backend is available on this server."
-      : computerAvailability.kind === "backend-unavailable"
-        ? computerAvailability.message
-        : undefined
-    : "Checking computer availability.";
+  const computerControlMode = enableComputerControl ? "request" : "off";
   // Local threads reconcile their stored branch to the shared checkout as soon as the
   // branch query resolves. Keep the branch seen when a thread becomes active so a settled
   // thread can explain that change before the user's first resumed message.
@@ -5143,46 +5129,17 @@ export default function ChatView({
     },
     [persistRuntimeModeChange],
   );
-  const computerControlChangeSequence = useRef(0);
-  const handleComputerControlModeChange = useCallback(
-    (mode: ComposerComputerControlMode) => {
-      const enabled = mode !== "off";
-      // A per-chat override only. It never rewrites the machine-wide default —
-      // that sticky write is what silently disabled computer control for every
-      // later chat after a single per-chat "off".
-      const api = readNativeApi();
-      if (!api) return;
-      const sequence = ++computerControlChangeSequence.current;
-      void api.computer
-        .setControlEnabled({ threadId, enabled })
-        .then(({ enabled: confirmed, generation }) => {
-          if (sequence !== computerControlChangeSequence.current) return;
-          setComposerDraftComputerControlMode(threadId, confirmed ? mode : "off", {
-            revokeQueued: mode === "off",
-            generation: generation ?? 0,
-          });
-          scheduleComposerFocus();
-        })
-        .catch((error) => {
-          if (sequence !== computerControlChangeSequence.current) return;
-          toastManager.add({
-            title: "Computer control could not be changed",
-            description: String(error),
-            type: "error",
-          });
-        });
-    },
-    [scheduleComposerFocus, setComposerDraftComputerControlMode, threadId],
-  );
-  // "Enable" on a computer-control denial card: switch control on for this chat
-  // and suggest a retry message when the composer is empty, so the user can just
-  // hit send. Deliberately not auto-sent: the user should see and approve what
-  // goes back to the agent.
+  const { change: handleComputerControlModeChange, sequence: computerControlChangeSequence } =
+    useComputerControlModeChange({
+      threadId,
+      setMode: setComposerDraftComputerControlMode,
+      focusComposer: scheduleComposerFocus,
+    });
+  // Prepare an explicit invocation from the denial card; the user sends the request.
   const handleEnableComputerControlFromDenial = useCallback(() => {
     handleComputerControlModeChange("request");
-    if (prompt.trim().length === 0) {
-      setPrompt("Computer control is on now — try again.");
-    }
+    if (!isComputerInvocation({ text: prompt }))
+      setPrompt(`/computer-use ${prompt.trim() || "Continue the requested desktop task."}`);
   }, [handleComputerControlModeChange, prompt, setPrompt]);
 
   useEffect(() => {
@@ -6243,7 +6200,7 @@ export default function ChatView({
       providerOptions: providerOptionsForDispatch,
       enableComputerControl,
       computerControlMode,
-      computerControlGeneration: composerDraft.computerControlGeneration ?? 0,
+      computerControlGeneration,
       assistantDeliveryMode,
       runtimeMode,
       interactionMode,
@@ -6252,7 +6209,7 @@ export default function ChatView({
     [
       assistantDeliveryMode,
       computerControlMode,
-      composerDraft.computerControlGeneration,
+      computerControlGeneration,
       enableComputerControl,
       envMode,
       interactionMode,
@@ -11654,12 +11611,6 @@ export default function ChatView({
     providerStatus: activeProviderStatus,
     runtimeMode,
     onRuntimeModeChange: handleRuntimeModeChange,
-    computerControlEnabled: enableComputerControl,
-    computerControlAvailable,
-    computerControlSupported: computerAvailability?.kind !== "unsupported-platform",
-    computerControlDisabledReason,
-    computerControlMode,
-    onComputerControlModeChange: handleComputerControlModeChange,
     contextWindow: runtimeUsageContextWindow,
     cumulativeCostUsd: activeCumulativeCostUsd,
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,

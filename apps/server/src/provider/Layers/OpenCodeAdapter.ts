@@ -16,6 +16,7 @@ import {
   type ProviderListCommandsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type RuntimeMode,
   RuntimeItemId,
   RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
@@ -48,6 +49,7 @@ import {
   SYNARA_HARNESS_POLICY_VERSION,
   takeSynaraHarnessPolicyForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
+import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
 import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -94,6 +96,31 @@ import {
 import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
 
 export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
+
+export function resolveOpenCodePermissionPolicyReply(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly activeTurn: boolean;
+  readonly computerControlEnabled: boolean;
+  readonly permission: unknown;
+  readonly metadata: unknown;
+}): "once" | "reject" | undefined {
+  if (input.interactionMode === undefined || input.interactionMode === "plan") {
+    return "reject";
+  }
+  if (
+    shouldAllowSynaraComputerProviderTool({
+      computerControlEnabled: input.computerControlEnabled,
+      activeTurn: input.activeTurn,
+      interactionMode: input.interactionMode,
+      runtimeMode: input.runtimeMode,
+      permission: { name: input.permission, metadata: input.metadata },
+    })
+  ) {
+    return "once";
+  }
+  return input.runtimeMode === "full-access" ? "once" : undefined;
+}
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode">;
 
@@ -2364,13 +2391,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             // A permission recovered without an active turn has no trustworthy interaction
             // mode. Fail closed so a request left by an interrupted Plan turn can never be
             // reinterpreted as Full Access after a process restart or reconnect.
-            const policyReply =
-              context.activeInteractionMode === undefined ||
-              context.activeInteractionMode === "plan"
-                ? "reject"
-                : context.session.runtimeMode === "full-access"
-                  ? "once"
-                  : undefined;
+            const policyReply = resolveOpenCodePermissionPolicyReply({
+              runtimeMode: context.session.runtimeMode,
+              interactionMode: context.activeInteractionMode,
+              activeTurn: turnId !== undefined && context.activeTurnId === turnId,
+              computerControlEnabled: context.enableComputerControl === true,
+              permission: event.properties.permission,
+              metadata: event.properties.metadata,
+            });
             if (policyReply !== undefined) {
               context.policyResolvedPermissionIds.add(event.properties.id);
               const replyExit = yield* Effect.exit(
@@ -2399,7 +2427,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 yield* completeOpenCodeTurn(context, {
                   turnId,
                   raw: event,
-                  errorMessage: `${adapterConfig.displayName} could not apply ${policyReply === "reject" ? "Plan-mode" : "Full-access"} permission policy: ${detail}`,
+                  errorMessage: `${adapterConfig.displayName} could not apply ${policyReply === "reject" ? "Plan-mode" : context.session.runtimeMode === "full-access" ? "Full-access" : "Computer"} permission policy: ${detail}`,
                 });
               } else {
                 yield* emit(context, {

@@ -573,7 +573,7 @@ function safeStringifyToolParamValue(value: unknown): string | undefined {
 
 function requestedMcpToolCallPresentation(
   event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
-): { toolName?: string; toolParamsDisplay?: unknown } {
+): { title?: string; toolName?: string; toolParamsDisplay?: unknown } {
   // "dynamic_tool_call" is the legacy Claude request type for the same approval.
   if (
     event.payload.requestType !== "tool_approval" &&
@@ -585,6 +585,7 @@ function requestedMcpToolCallPresentation(
   // Codex ships presentation through MCP elicitation `_meta`; Claude's canUseTool
   // request carries the tool name and the raw tool input instead.
   const metadata = asObject(args?._meta);
+  const title = asString(metadata?.tool_title);
   const toolName = asString(metadata?.tool_name) ?? asString(args?.toolName);
   const rawParams = Array.isArray(metadata?.tool_params_display)
     ? metadata.tool_params_display
@@ -601,6 +602,7 @@ function requestedMcpToolCallPresentation(
     };
   });
   return {
+    ...(title ? { title: truncateJsonString(title, 128) } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolParamsDisplay !== undefined ? { toolParamsDisplay } : {}),
   };

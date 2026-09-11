@@ -150,10 +150,12 @@ describe("ComputerSettingsPanel", () => {
     ).toContain("Open automatically");
   });
 
-  it("exposes the default preference and explains automatic tool access", () => {
+  it("explains invocation and task consent without offering a sticky default", () => {
     const markup = render({ status: status() });
-    expect(markup).toContain("Enable computer control by default");
-    expect(markup).toContain("Agents can call computer tools when they need them");
+    expect(markup).not.toContain("Enable computer control by default");
+    expect(markup).toContain("/computer-use");
+    expect(markup).toContain("approval mode asks once");
+    expect(markup).toContain("does not load Computer tools into ordinary messages");
     expect(markup).toContain("support images and tool calls");
   });
 });

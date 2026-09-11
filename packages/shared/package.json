@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./computerInvocation": {
+      "types": "./src/computerInvocation.ts",
+      "import": "./src/computerInvocation.ts"
+    },
     "./modelImageBudget": {
       "types": "./src/modelImageBudget.ts",
       "import": "./src/modelImageBudget.ts"

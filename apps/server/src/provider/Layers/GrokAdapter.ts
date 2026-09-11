@@ -1199,6 +1199,9 @@ export function makeGrokAdapter(
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
+                  computerControlEnabled: ctx?.enableComputerControl === true,
+                  activeTurn: ctx?.activeTurnId !== undefined,
+                  toolCall: params.toolCall,
                 });
                 if (policyOutcome !== undefined) {
                   if (policyOutcome.outcome === "selected") {

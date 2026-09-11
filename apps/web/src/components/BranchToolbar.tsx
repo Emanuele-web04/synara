@@ -1,4 +1,3 @@
-import type { ComposerComputerControlMode } from "../computerControlMode";
 import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
@@ -10,7 +9,7 @@ import type {
   ThreadId,
   RuntimeMode,
 } from "@synara/contracts";
-import { ChevronDownIcon, MonitorIcon, WorktreeIcon } from "~/lib/icons";
+import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -46,7 +45,6 @@ import {
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -139,13 +137,6 @@ export interface RuntimeUsageControlsProps {
   providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
-  computerControlMode?: ComposerComputerControlMode | undefined;
-  onComputerControlModeChange?: ((mode: ComposerComputerControlMode) => void) | undefined;
-  computerControlEnabled?: boolean | undefined;
-  computerControlAvailable?: boolean | undefined;
-  computerControlSupported?: boolean | undefined;
-  computerControlDisabledReason?: string | undefined;
-  onComputerControlChange?: ((enabled: boolean) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
   cumulativeCostUsd?: number | null | undefined;
   activeContextWindowLabel?: string | null | undefined;
@@ -163,13 +154,6 @@ export function RuntimeUsageControls({
   providerStatus,
   runtimeMode,
   onRuntimeModeChange,
-  computerControlEnabled = false,
-  computerControlMode = computerControlEnabled ? "chat" : "off",
-  onComputerControlModeChange,
-  computerControlAvailable = false,
-  computerControlSupported = computerControlAvailable,
-  computerControlDisabledReason = "Checking computer availability.",
-  onComputerControlChange,
   className,
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
@@ -198,7 +182,7 @@ export function RuntimeUsageControls({
                   runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={`${runtimePresentation.label}: ${runtimePresentation.description}.${computerControlEnabled ? " Computer control is on." : ""} Click to change permissions.`}
+                title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
               />
             }
           >
@@ -213,16 +197,6 @@ export function RuntimeUsageControls({
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
                 {runtimePresentation.label}
               </span>
-              {computerControlEnabled ? (
-                <>
-                  <MonitorIcon className="size-3.5 shrink-0" aria-hidden />
-                  <span className="text-xs">
-                    {computerControlMode === "request"
-                      ? "Computer for this request."
-                      : "Computer enabled for this chat."}
-                  </span>
-                </>
-              ) : null}
               <ChevronDownIcon
                 className={cn(
                   "size-3 shrink-0 opacity-70",
@@ -267,35 +241,6 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
-            {onComputerControlModeChange || onComputerControlChange ? (
-              <>
-                <MenuSeparator />
-                <MenuRadioGroup
-                  value={computerControlMode}
-                  onValueChange={(value) => {
-                    if (value !== "off" && value !== "request" && value !== "chat") return;
-                    if (onComputerControlModeChange) onComputerControlModeChange(value);
-                    else onComputerControlChange?.(value !== "off");
-                  }}
-                >
-                  <MenuRadioItem value="off">Computer: Off</MenuRadioItem>
-                  <MenuRadioItem
-                    value="request"
-                    disabled={!computerControlSupported}
-                    title={computerControlAvailable ? undefined : computerControlDisabledReason}
-                  >
-                    Computer: For this request
-                  </MenuRadioItem>
-                  <MenuRadioItem
-                    value="chat"
-                    disabled={!computerControlSupported}
-                    title={computerControlAvailable ? undefined : computerControlDisabledReason}
-                  >
-                    Computer: Keep enabled in this chat
-                  </MenuRadioItem>
-                </MenuRadioGroup>
-              </>
-            ) : null}
             {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
               <>
                 <MenuSeparator />

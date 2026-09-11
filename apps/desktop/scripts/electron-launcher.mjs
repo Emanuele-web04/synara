@@ -1,20 +1,23 @@
 // This file mostly exists because we want dev mode to say "Synara (Dev)" instead of "electron"
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const desktopFlavor = resolveSynaraDesktopFlavor({
   // Packaged apps launch their bundled main directly; this launcher is source-only.
@@ -24,12 +27,34 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 3;
+const LAUNCHER_VERSION = 4;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const desktopDir = resolve(__dirname, "..");
+const bootstrapPath = join(__dirname, "source-desktop-bootstrap.cjs");
+
+export function configureMacLauncher(electronPath, environment = process.env) {
+  const bundle = resolve(electronPath, "../../..");
+  const configurationPath = join(dirname(bundle), `${basename(bundle)}.launch.json`);
+  const sourceEnvironment = createSourceDesktopEnvironment({ environment });
+  const configuration = Object.fromEntries(
+    [
+      "SYNARA_HOME",
+      "SYNARA_DESKTOP_FLAVOR",
+      "SYNARA_SOURCE_DESKTOP_BUILD_MARKER",
+      "VITE_DEV_SERVER_URL",
+    ].flatMap((name) =>
+      sourceEnvironment[name] === undefined ? [] : [[name, sourceEnvironment[name]]],
+    ),
+  );
+  // Keep mutable launch settings outside the signed bundle: changing a renderer
+  // port or home directory must not invalidate previously granted permissions.
+  const temporaryPath = `${configurationPath}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, JSON.stringify(configuration), { mode: 0o600 });
+  renameSync(temporaryPath, configurationPath);
+}
 
 function setPlistString(plistPath, key, value, runCommand) {
   const replaceResult = runCommand("plutil", ["-replace", key, "-string", value, plistPath], {
@@ -160,6 +185,7 @@ export function buildMacLauncher(
   const targetBinaryPath = join(targetAppBundlePath, "Contents", "MacOS", "Electron");
   const iconPath = join(desktopDirectory, "resources", "icon.icns");
   const metadataPath = join(runtimeDir, "metadata.json");
+  const desktopPackage = JSON.parse(readFileSync(join(desktopDirectory, "package.json"), "utf8"));
 
   mkdirSync(runtimeDir, { recursive: true });
 
@@ -168,6 +194,8 @@ export function buildMacLauncher(
     sourceAppBundlePath,
     sourceAppMtimeMs: statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: statSync(iconPath).mtimeMs,
+    bootstrapHash: createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex"),
+    appVersion: desktopPackage.version,
   };
 
   const currentMetadata = readJson(metadataPath);
@@ -185,6 +213,13 @@ export function buildMacLauncher(
   copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath, runCommand);
   patchMainBundleInfoPlist(targetAppBundlePath, iconPath, runCommand);
   patchHelperBundleInfoPlists(targetAppBundlePath, runCommand);
+  const applicationDirectory = join(targetAppBundlePath, "Contents", "Resources", "app");
+  mkdirSync(applicationDirectory, { recursive: true });
+  writeFileSync(
+    join(applicationDirectory, "package.json"),
+    JSON.stringify({ name: APP_DISPLAY_NAME, version: desktopPackage.version, main: "main.cjs" }),
+  );
+  copyFileSync(bootstrapPath, join(applicationDirectory, "main.cjs"));
   // Plist/icon changes invalidate Electron's signature. Sign only our generated
   // copy, once per rebuild, so ordinary launches retain a stable TCC identity.
   signMacLauncherBundle(targetAppBundlePath, runCommand);

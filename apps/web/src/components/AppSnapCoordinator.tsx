@@ -341,7 +341,11 @@ export function AppSnapCoordinator() {
   );
 
   const attachCapture = useCallback(
-    async (capture: DesktopAppSnapCapture, bridge: DesktopBridge["appSnap"], explicitTarget?: AppSnapThreadTarget) => {
+    async (
+      capture: DesktopAppSnapCapture,
+      bridge: DesktopBridge["appSnap"],
+      explicitTarget?: AppSnapThreadTarget,
+    ) => {
       const captureAtMs = captureTimestampMs(capture);
       const resolvedTarget = resolveAppSnapTarget({
         captureAtMs,
@@ -380,18 +384,19 @@ export function AppSnapCoordinator() {
       );
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
       if (!explicitTarget) requestComposerFocus(target.threadId);
-      if (explicitTarget) toastManager.add({
-        type: persistenceResult === "unverified" ? "warning" : "success",
-        title:
-          persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
-        description:
-          persistenceResult === "unverified"
-            ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
-            : capture.sourceAppName
-              ? `Captured ${capture.sourceAppName} and added it to the composer.`
-              : "The frontmost window was added to the composer.",
-        data: { allowCrossThreadVisibility: true },
-      });
+      if (explicitTarget)
+        toastManager.add({
+          type: persistenceResult === "unverified" ? "warning" : "success",
+          title:
+            persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
+          description:
+            persistenceResult === "unverified"
+              ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
+              : capture.sourceAppName
+                ? `Captured ${capture.sourceAppName} and added it to the composer.`
+                : "The frontmost window was added to the composer.",
+          data: { allowCrossThreadVisibility: true },
+        });
       return persistenceResult;
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],

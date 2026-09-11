@@ -39,7 +39,7 @@ import {
   BROWSER_SCRIPT_API_GUIDANCE,
   BROWSER_SCRIPT_BATCH_GUIDANCE,
 } from "@synara/shared/browserAutomationCatalogue";
-import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import { normalizeModelSlug } from "@synara/shared/model";
 import {
   JsonRpcStdioRequestRegistry,
   type JsonRpcPendingRequest,
@@ -58,7 +58,9 @@ import {
 import {
   buildCodexMcpConfigToml,
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+  SYNARA_MCP_SERVER_NAME,
 } from "./agentGateway/mcpInjection.ts";
+import { shouldAllowSynaraComputerProviderTool } from "./agentGateway/computerToolPermission.ts";
 import {
   SYNARA_GATEWAY_HARNESS_POLICY,
   renderSynaraHarnessPolicy,
@@ -170,6 +172,7 @@ interface CodexSessionContext {
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
   gatewayCredentialRetired?: boolean;
+  activeInteractionMode?: ProviderInteractionMode | undefined;
   session: ProviderSession;
   lifecycleGeneration?: string;
   account: CodexAccountSnapshot;
@@ -1437,6 +1440,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       turnStartParams.collaborationMode = collaborationMode;
     }
 
+    context.activeInteractionMode = input.interactionMode ?? "default";
     const response = await this.sendRequest(context, "turn/start", turnStartParams);
     const turnIdRaw = this.readString(this.readObject(this.readObject(response), "turn"), "id");
     if (!turnIdRaw) {
@@ -3443,6 +3447,35 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const isMcpToolCallApproval =
       request.method === MCP_SERVER_ELICITATION_REQUEST_METHOD &&
       this.isMcpToolCallApprovalRequest(request.params);
+    if (
+      isMcpToolCallApproval &&
+      this.readString(request.params, "serverName") === SYNARA_MCP_SERVER_NAME &&
+      context.gatewaySessionLease !== undefined &&
+      context.gatewayCredentialRetired !== true &&
+      !context.stopping &&
+      context.activeInteractionMode === "default" &&
+      shouldAllowSynaraComputerProviderTool({
+        computerControlEnabled: context.enableComputerControl === true,
+        activeTurn:
+          context.session.status === "running" &&
+          rawRoute.turnId !== undefined &&
+          rawRoute.turnId === context.session.activeTurnId &&
+          providerThreadId === readResumeCursorThreadId(context.session.resumeCursor),
+        interactionMode: context.activeInteractionMode,
+        runtimeMode: context.session.runtimeMode,
+        permission: {
+          name: this.readSynaraMcpApprovalToolName(request.params),
+        },
+      })
+    ) {
+      // This exact call still passes through the gateway's task consent and
+      // revocation checks. Never grant persistence to unrelated MCP tools.
+      await this.writeMessage(context, {
+        id: request.id,
+        result: { action: "accept", content: null, _meta: null },
+      });
+      return;
+    }
     if (request.method === MCP_SERVER_ELICITATION_REQUEST_METHOD && !isMcpToolCallApproval) {
       await this.writeMessage(context, {
         id: request.id,
@@ -3843,6 +3876,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...updates,
       updatedAt: new Date().toISOString(),
     };
+    if (context.session.activeTurnId === undefined || context.session.status !== "running") {
+      context.activeInteractionMode = undefined;
+    }
   }
 
   private requestKindForMethod(method: string): ProviderRequestKind | undefined {
@@ -3870,6 +3906,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.readString(this.readObject(params, "_meta"), "codex_approval_kind") ===
       MCP_TOOL_CALL_APPROVAL_KIND
     );
+  }
+
+  private readSynaraMcpApprovalToolName(params: unknown): string | undefined {
+    const meta = this.readObject(params, "_meta");
+    const explicitName = this.readString(meta, "tool_name");
+    if (explicitName !== undefined) return `mcp__synara__${explicitName}`;
+    // Current Codex builds omit tool_name from native MCP approvals. Accept
+    // only their complete generated message, after checking the reserved
+    // server and native approval kind above; never infer from descriptions.
+    const name = /^Allow the synara MCP server to run tool "([a-z_]+)"\?$/.exec(
+      this.readString(params, "message") ?? "",
+    )?.[1];
+    return name === undefined ? undefined : `mcp__synara__${name}`;
   }
 
   private parseThreadSnapshot(method: string, response: unknown): CodexThreadSnapshot {

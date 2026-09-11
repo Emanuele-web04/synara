@@ -800,6 +800,100 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("preserves Codex MCP and dynamic tool identity in lifecycle titles", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-start"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_1",
+            server: "computer-use",
+            tool: "get_app_state",
+            arguments: { app: "com.apple.Safari" },
+            status: "inProgress",
+            appContext: {
+              connectorId: "computer-use",
+              actionName: "Read the screen",
+              appName: "Safari",
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-dynamic-start"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("dynamic_1"),
+        payload: {
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic_1",
+            tool: "read_workspace_file",
+            arguments: {},
+            status: "inProgress",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events[0]?.type, "item.started");
+      assert.equal(events[1]?.type, "item.started");
+      if (events[0]?.type === "item.started") {
+        assert.equal(events[0].payload.title, "Read the screen in Safari");
+      }
+      if (events[1]?.type === "item.started") {
+        assert.equal(events[1].payload.title, "read_workspace_file");
+      }
+    }),
+  );
+
+  it.effect("maps current Codex MCP progress itemId and message fields", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-progress"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/mcpToolCall/progress",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          itemId: "mcp_1",
+          message: "Waiting for Safari",
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "tool.progress") return;
+      assert.equal(firstEvent.value.payload.toolUseId, "mcp_1");
+      assert.equal(firstEvent.value.payload.summary, "Waiting for Safari");
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
