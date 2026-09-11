@@ -3795,6 +3795,82 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each([false, true])(
+    "keeps tools and plans after repeated steering messages (later narration: %s)",
+    (hasLaterNarration) => {
+      const turnId = TurnId.makeUnsafe("steered-turn");
+      const messages = [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user" as const,
+          text: "Investigate usage",
+          createdAt: "2026-09-11T00:00:00Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("preamble"),
+          role: "assistant" as const,
+          turnId,
+          text: "Checking usage",
+          createdAt: "2026-09-11T00:00:01Z",
+          streaming: false,
+        },
+        ...[2, 4].map((second) => ({
+          id: MessageId.makeUnsafe(`steer-${second}`),
+          role: "user" as const,
+          dispatchMode: "steer" as const,
+          text: "Only Codex",
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          streaming: false,
+        })),
+        ...(hasLaterNarration
+          ? [
+              {
+                id: MessageId.makeUnsafe("continued"),
+                role: "assistant" as const,
+                turnId,
+                text: "Continuing the investigation",
+                createdAt: "2026-09-11T00:00:05Z",
+                streaming: false,
+              },
+            ]
+          : []),
+      ];
+      const entries = deriveTimelineEntries(
+        messages,
+        [
+          {
+            id: "steered-plan",
+            turnId,
+            planMarkdown: "# Fix usage",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-09-11T00:00:07Z",
+            updatedAt: "2026-09-11T00:00:07Z",
+          },
+        ],
+        [3, 6].map((second) => ({
+          id: `tool-${second}`,
+          turnId,
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          tone: "tool" as const,
+          label: "Running command",
+        })),
+      );
+
+      expect(entries.map((entry) => entry.id)).toEqual([
+        "request",
+        "preamble",
+        "steer-2",
+        "tool-3",
+        "steer-4",
+        ...(hasLaterNarration ? ["continued"] : []),
+        "tool-6",
+        "steered-plan",
+      ]);
+    },
+  );
+
   it("keeps late earlier-turn tool updates before the next user request", () => {
     const oldTurn = TurnId.makeUnsafe("old-turn");
     const newTurn = TurnId.makeUnsafe("new-turn");

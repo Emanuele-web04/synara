@@ -2433,7 +2433,10 @@ export function deriveTimelineEntries(
     ? messages
     : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const message of orderedMessages) {
-    if (message.role === "user") userStarts.push(message.createdAt);
+    // Steering continues the same turn; a new boundary would pull later tools above it.
+    if (message.role === "user" && message.dispatchMode !== "steer") {
+      userStarts.push(message.createdAt);
+    }
     const order = userStarts.length;
     messageOrder.set(message.id, order);
     if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);
