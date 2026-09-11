@@ -162,10 +162,6 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         <div className="px-1 pt-1 text-muted-foreground/80 text-xs">
           Remove Ultrathink from the prompt to change effort.
         </div>
-      ) : activeLevel?.description ? (
-        <div className="px-1 pt-1 text-center text-muted-foreground/70 text-xs">
-          {activeLevel.description}
-        </div>
       ) : null}
     </div>
   );
