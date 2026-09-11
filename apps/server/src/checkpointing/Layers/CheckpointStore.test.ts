@@ -4,7 +4,7 @@
 // Exports: Vitest coverage for CheckpointStoreLive.
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Fiber, Layer, ManagedRuntime, Option } from "effect";
@@ -15,6 +15,9 @@ import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { CheckpointRef } from "@synara/contracts";
+
+const CHECKPOINT_ADD_COMMAND = "add --no-warn-embedded-repo -A -- .";
+const UNSEEDED_CAPTURE_PREFLIGHT_COMMAND = "ls-files --cached --others --exclude-standard -z";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -48,7 +51,10 @@ describe("CheckpointStoreLive", () => {
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
-      if (args === "add -A -- .") {
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === CHECKPOINT_ADD_COMMAND) {
         return Effect.promise(() => addGate).pipe(Effect.as({ code: 0, stdout: "", stderr: "" }));
       }
       if (args === "write-tree") {
@@ -78,13 +84,15 @@ describe("CheckpointStoreLive", () => {
 
         const first = yield* store.captureCheckpoint(input).pipe(Effect.forkChild);
         yield* Effect.promise(() =>
-          waitFor(() => execute.mock.calls.some(([call]) => call.args.join(" ") === "add -A -- .")),
+          waitFor(() =>
+            execute.mock.calls.some(([call]) => call.args.join(" ") === CHECKPOINT_ADD_COMMAND),
+          ),
         );
         const second = yield* store.captureCheckpoint(input).pipe(Effect.forkChild);
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
 
         expect(
-          execute.mock.calls.filter(([call]) => call.args.join(" ") === "add -A -- ."),
+          execute.mock.calls.filter(([call]) => call.args.join(" ") === CHECKPOINT_ADD_COMMAND),
         ).toHaveLength(1);
 
         releaseAdd?.();
@@ -102,6 +110,7 @@ describe("CheckpointStoreLive", () => {
     utimesSync(workingIndexPath, workingIndexTime, workingIndexTime);
     let capturedSeed = "";
     let capturedIndexMtimeMs = 0;
+    let capturedAddInput: Parameters<GitCoreShape["execute"]>[0] | undefined;
 
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
@@ -114,7 +123,8 @@ describe("CheckpointStoreLive", () => {
         utimesSync(captureIndexPath, refreshTime, refreshTime);
         return Effect.succeed({ code: 1, stdout: "", stderr: "README.md: needs update\n" });
       }
-      if (args === "add -A -- .") {
+      if (args === CHECKPOINT_ADD_COMMAND) {
+        capturedAddInput = input;
         const captureIndexPath = input.env?.GIT_INDEX_FILE ?? "";
         capturedSeed = readFileSync(captureIndexPath, "utf8");
         capturedIndexMtimeMs = statSync(captureIndexPath).mtimeMs;
@@ -155,11 +165,288 @@ describe("CheckpointStoreLive", () => {
           ([call]) => call.args.join(" ") === "update-index --really-refresh",
         ),
       ).toBe(true);
+      expect(capturedAddInput).toMatchObject({
+        args: ["add", "--no-warn-embedded-repo", "-A", "--", "."],
+        maxOutputBytes: 64 * 1_024,
+        outputMode: "truncate",
+      });
+      expect(capturedAddInput?.env?.GIT_INDEX_FILE).not.toBe(workingIndexPath);
+      expect(readFileSync(workingIndexPath, "utf8")).toBe("working-index-stat-cache");
+      expect(statSync(workingIndexPath).mtimeMs).toBe(workingIndexTime.getTime());
       expect(
         execute.mock.calls.some(([call]) => call.args.join(" ") === "rev-parse --verify HEAD"),
       ).toBe(false);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds an unseeded workspace scan and cools down retries before git add", async () => {
+    let preflightInput: Parameters<GitCoreShape["execute"]>[0] | undefined;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        preflightInput = input;
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: "git ls-files --cached --others --exclude-standard -z",
+            cwd: input.cwd,
+            detail: "workspace listing exceeded the configured output limit",
+            reason: "output-limit",
+          }),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const results = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* Effect.forEach(
+          ["first", "second"],
+          (suffix) =>
+            store
+              .captureCheckpoint({
+                cwd: "/repo",
+                checkpointRef: CheckpointRef.makeUnsafe(`refs/synara-checkpoints/thread/${suffix}`),
+              })
+              .pipe(
+                Effect.map(() => "success"),
+                Effect.catch((error) => Effect.succeed(error.message)),
+              ),
+          { concurrency: 1 },
+        );
+      }),
+    );
+
+    expect(results[0]).toContain("safe scan budget");
+    expect(results[1]).toContain("temporarily paused");
+    expect(preflightInput).toMatchObject({
+      timeoutMs: 5_000,
+      maxOutputBytes: 1_000_000,
+    });
+    expect(
+      execute.mock.calls.filter(
+        ([call]) => call.args.join(" ") === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND,
+      ),
+    ).toHaveLength(1);
+    expect(
+      execute.mock.calls.some(([call]) => call.args.join(" ") === CHECKPOINT_ADD_COMMAND),
+    ).toBe(false);
+  });
+
+  it("serializes different checkpoint refs for one workspace and shares failure cooldown", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "synara-checkpoint-lane-test-"));
+    const workingIndexPath = join(tempDir, "index");
+    writeFileSync(workingIndexPath, "working-index-stat-cache");
+    let releaseFirstAdd: (() => void) | undefined;
+    const firstAddGate = new Promise<void>((resolve) => {
+      releaseFirstAdd = resolve;
+    });
+    let addCalls = 0;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: `${workingIndexPath}\n`, stderr: "" });
+      }
+      if (args === "update-index --really-refresh") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === CHECKPOINT_ADD_COMMAND) {
+        addCalls += 1;
+        return Effect.promise(() => firstAddGate).pipe(
+          Effect.flatMap(() =>
+            Effect.fail(
+              new GitCommandError({
+                operation: input.operation,
+                command: "git add",
+                cwd: input.cwd,
+                detail: "git add timed out during simulated expensive capture",
+                reason: "timeout",
+              }),
+            ),
+          ),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    try {
+      const results = await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          const capture = (suffix: string, cwd = tempDir) =>
+            store
+              .captureCheckpoint({
+                cwd,
+                checkpointRef: CheckpointRef.makeUnsafe(`refs/synara-checkpoints/thread/${suffix}`),
+              })
+              .pipe(
+                Effect.map(() => "success"),
+                Effect.catch((error) => Effect.succeed(error.message)),
+              );
+
+          const first = yield* capture("first").pipe(Effect.forkChild);
+          yield* Effect.promise(() => waitFor(() => addCalls === 1));
+          const workspaceAlias =
+            process.platform === "win32" ? `${tempDir.toUpperCase()}${sep}` : `${tempDir}${sep}`;
+          const second = yield* capture("second", workspaceAlias).pipe(Effect.forkChild);
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
+          expect(addCalls).toBe(1);
+
+          releaseFirstAdd?.();
+          return yield* Effect.all([Fiber.join(first), Fiber.join(second)]);
+        }),
+      );
+
+      expect(results[0]).toContain("simulated expensive capture");
+      expect(results[1]).toContain("temporarily paused");
+      expect(addCalls).toBe(1);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cool down ordinary Git failures from an unseeded preflight", async () => {
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: "git ls-files --cached --others --exclude-standard -z",
+            cwd: input.cwd,
+            detail: "fatal: hook said timed out but exited non-zero",
+            reason: "non-zero-exit",
+          }),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const results = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* Effect.forEach(
+          ["first", "second"],
+          (suffix) =>
+            store
+              .captureCheckpoint({
+                cwd: "/repo",
+                checkpointRef: CheckpointRef.makeUnsafe(`refs/synara-checkpoints/thread/${suffix}`),
+              })
+              .pipe(Effect.result),
+          { concurrency: 1 },
+        );
+      }),
+    );
+
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "GitCommandError",
+          reason: "non-zero-exit",
+          detail: "fatal: hook said timed out but exited non-zero",
+        });
+      }
+    }
+    expect(
+      execute.mock.calls.filter(
+        ([call]) => call.args.join(" ") === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("bounds remembered capture failures and evicts the oldest workspace deterministically", async () => {
+    let preflightCalls = 0;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: `${input.cwd}/.git/index\n`, stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        preflightCalls += 1;
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: "git ls-files --cached --others --exclude-standard -z",
+            cwd: input.cwd,
+            detail: "synthetic output overflow",
+            reason: "output-limit",
+          }),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const { oldestRetry, newestRetry } = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const cwdFor = (index: number) => join(tmpdir(), `synara-checkpoint-failure-${index}`);
+        const capture = (cwd: string, suffix: string) =>
+          store
+            .captureCheckpoint({
+              cwd,
+              checkpointRef: CheckpointRef.makeUnsafe(`refs/synara-checkpoints/thread/${suffix}`),
+            })
+            .pipe(Effect.result);
+
+        for (let index = 0; index < 65; index += 1) {
+          yield* capture(cwdFor(index), `initial-${index}`);
+        }
+        return {
+          oldestRetry: yield* capture(cwdFor(0), "oldest-retry"),
+          newestRetry: yield* capture(cwdFor(64), "newest-retry"),
+        };
+      }),
+    );
+
+    expect(preflightCalls).toBe(66);
+    expect(oldestRetry._tag).toBe("Failure");
+    if (oldestRetry._tag === "Failure") {
+      expect(oldestRetry.failure.message).toContain("safe scan budget");
+    }
+    expect(newestRetry._tag).toBe("Failure");
+    if (newestRetry._tag === "Failure") {
+      expect(newestRetry.failure.message).toContain("temporarily paused");
     }
   });
 
@@ -173,7 +460,10 @@ describe("CheckpointStoreLive", () => {
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
-      if (args === "add -A -- .") {
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === CHECKPOINT_ADD_COMMAND) {
         addCalls += 1;
         if (addCalls === 1) {
           return Effect.never;
@@ -246,7 +536,10 @@ describe("CheckpointStoreLive", () => {
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
-      if (args === "add -A -- .") {
+      if (args === UNSEEDED_CAPTURE_PREFLIGHT_COMMAND) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === CHECKPOINT_ADD_COMMAND) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
       if (args === "write-tree") {
@@ -277,14 +570,14 @@ describe("CheckpointStoreLive", () => {
           checkpointRef: CheckpointRef.makeUnsafe(existingRef),
           skipIfExists: true,
         });
-        expect(captureArgs("add -A -- .")).toHaveLength(0);
+        expect(captureArgs(CHECKPOINT_ADD_COMMAND)).toHaveLength(0);
 
         yield* store.captureCheckpoint({
           cwd: "/repo",
           checkpointRef: CheckpointRef.makeUnsafe(missingRef),
           skipIfExists: true,
         });
-        expect(captureArgs("add -A -- .")).toHaveLength(1);
+        expect(captureArgs(CHECKPOINT_ADD_COMMAND)).toHaveLength(1);
         expect(captureArgs(`update-ref ${missingRef} commit-oid`)).toHaveLength(1);
       }),
     );

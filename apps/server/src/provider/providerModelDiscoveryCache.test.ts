@@ -275,7 +275,7 @@ describe("makeProviderModelDiscoveryCache", () => {
     await Effect.runPromise(cache.lookup(KEY, discover));
     clock.advance(5_000);
     await Effect.runPromise(cache.lookup(KEY, discover));
-    await flush();
+    await expect.poll(() => cache.size(), { timeout: 5_000 }).toBe(0);
     const results = await Effect.runPromise(
       Effect.all([cache.lookup(KEY, discover), cache.lookup(KEY, discover)], {
         concurrency: "unbounded",
