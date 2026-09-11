@@ -46,7 +46,7 @@ The short jobs usually restore and install their workspace in 20–35 seconds. F
 3. Split server test files into two hosted jobs while retaining `--maxWorkers=1 --no-file-parallelism`.
 4. Replace the server test task's broad build prerequisite with the contracts build. Server tests consume web source and create their own static fixtures; production output remains covered by the required desktop build.
 5. Group contracts, shared, scripts, and desktop unit tests into one Turbo invocation. Total workflow jobs decrease from **17 to 16**, despite the extra parallelism on the critical path.
-6. Reuse the shared workspace setup on Windows, including OS-scoped caches and the frozen dependency install.
+6. Reuse the shared workspace setup on Windows, including the OS-scoped Bun package cache and the frozen dependency install. Recreate `node_modules` on each Windows runner; a restored tree failed to resolve a required dependency during postinstall.
 
 The required aggregate check name, docs-only behavior, failure propagation, and separate desktop build remain intact. Neither tests nor typechecks are cached as passing results.
 
@@ -70,7 +70,7 @@ Removing the redundant ~148s frontend build and dividing server tests removes th
 - The complete ChatView file took 214.01s locally; the larger final partition took 161.30s and its complement took 96.22s. That is a 24.6% reduction in this local file's critical path, not a measured whole-workflow or hosted improvement.
 - Both component shards pass: 42 files / 168 tests and 42 files / 193 tests, with the existing quarantined case retained. All four browser jobs pass locally (482 active cases total).
 
-These are local macOS results. Windows cache behavior and the end-to-end speedup require a hosted run. Full workspace format, lint, and typecheck remain pending because AGENTS.md requires an explicit user request before running them.
+These test timings are local macOS results. Hosted run [34608752703](https://github.com/Emanuele-web04/synara/actions/runs/34608752703) passed all browser, unit, static, and build checks, but Windows failed during dependency setup after restoring `node_modules`: Fumadocs could not resolve its declared `tinyglobby` dependency. The preceding cold Windows install succeeded. Windows now skips the installed-tree cache; this correction still needs a hosted run. The end-to-end speedup remains unverified across successful runs.
 
 ## Hosted acceptance
 
