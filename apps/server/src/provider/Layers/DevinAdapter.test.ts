@@ -295,7 +295,7 @@ describe("resolveDevinAdapterTimeouts", () => {
   it("uses the production defaults when overrides are absent", () => {
     expect(resolveDevinAdapterTimeouts({})).toEqual({
       turnIdleMs: 30 * 60 * 1000,
-      toolIdleMs: 60 * 60 * 1000,
+      toolIdleMs: 6 * 60 * 60 * 1000,
     });
   });
 
