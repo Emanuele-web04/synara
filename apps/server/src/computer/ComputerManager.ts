@@ -1110,10 +1110,14 @@ export class ComputerManager {
         action === "computer_click" &&
         !modifiers?.length &&
         resolved.semantic &&
-        ["menu-bar", "menu-bar-extra"].includes(resolved.semantic.node.accessibilityRoot ?? "")
+        (["menu-bar", "menu-bar-extra"].includes(resolved.semantic.node.accessibilityRoot ?? "") ||
+          this.backend.supportsAction?.(resolved.semantic, "AXPress"))
       ) {
         assertDesktopOperationActive();
-        const result = await this.backend.performAction(resolved.semantic, "press");
+        // Select one actuator before dispatch. An uncertain AX press must never
+        // fall through to a coordinate click (toggles could run twice).
+        const nativeAction = this.backend.agentDialect === "macos" ? "AXPress" : "press";
+        const result = await this.backend.performAction(resolved.semantic, nativeAction);
         return this.actionResult(threadId, action, resolved.point, result, resolved.windowId);
       }
       const result = await this.injectScoped(action, resolved, () =>

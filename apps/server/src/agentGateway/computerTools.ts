@@ -185,45 +185,44 @@ const SHARED_CLIPBOARD_NOTE =
 
 /** The short form each pointer tool carries in place of the paragraph above. */
 const POINTER_COORDINATE_HINT =
-  'x/y are pixels in a screenshot you were already given (the latest, or the one named by screenshot_id) — never desktop coordinates, and never converted by you. See "Pointing at the desktop" in the active Synara host context.';
+  'x/y are screenshot pixels, never desktop coordinates. See "Pointing at the desktop" in the active Synara host context.';
 
 /**
  * The parity lever for visual grounding: when the model knows a control's
  * label from get_state, label-targeting resolves to that exact control, while
  * a pixel estimate from a downscaled screenshot can land a few points off.
  */
-const SEMANTIC_TARGETING_NOTE =
-  'Prefer "label" (plus optional "role") from the latest computer_get_state elements list over raw x/y whenever the control appears there.';
+const SEMANTIC_TARGETING_NOTE = "Prefer label and role from computer_get_state over estimated x/y.";
 
 /** The short form the action tools carry. */
 const ACTION_SCREENSHOT_HINT =
-  'The result carries a screenshot taken shortly after the action, zoomed to the window it affected; read your next coordinates from it. See "The screenshot on every action" in the active Synara host context.';
+  'Returns a screenshot by default. See "The screenshot on every action" in the active Synara host context.';
 
 const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
   include_screenshot: {
     type: "boolean",
     description:
-      "Attach post-action screenshot (default true). Use false only for an intermediate action; read the final action's screenshot. Never pass false on the last action.",
+      "Post-action screenshot, default true. For a short sequence, use false then verify with fresh state or a final screenshot.",
   },
 } as const;
 
 const WINDOW_FOCUS_NOTE =
-  "A window's focused flag identifies Synara's selected input target; it does not prove that the window became frontmost. The optional active flag reports native activation; an absent active flag means activation is unknown.";
+  "focused means selected input target; active reports native activation when known.";
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  'Keys go where the agent seat is aimed: click into the window first, or pass window_id. A hover does not aim it. See "Aiming the keyboard" in the active Synara host context.';
+  'Pass window_id or use the last aimed window; hover does not aim keys. See "Aiming the keyboard".';
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
-  'The result may carry delivery.verified; delivery.effect distinguishes a verified outcome from an unknown dispatched effect; no verdict justifies a blind retry. See "Reading a delivery verdict" in the active Synara host context.';
+  'delivery.verified and delivery.effect report evidence, not retry permission. See "Reading a delivery verdict".';
 
 function keyboardTargetProperty(): Record<string, unknown> {
   return {
     window_id: {
       type: "string",
       description:
-        "Optional window id from computer_list_windows. This selects the exact target without authorizing foreground promotion. The result's screenshot is zoomed to it.",
+        "Exact target window from computer_list_windows; does not activate it. Screenshot is scoped to it.",
     },
   };
 }
@@ -241,7 +240,7 @@ const MODIFIERS_PROPERTY = {
     items: { type: "string", enum: ["ctrl", "alt", "shift", "meta"] },
     maxItems: COMPUTER_MODIFIERS_MAX_ITEMS,
     description:
-      'Modifier keys held down for the duration of this gesture and released after it — how shift-click extends a selection, ctrl-click (cmd-click on macOS: pass "meta") adds to one, and ctrl-scroll zooms. Omit it for a plain gesture. computer_hotkey cannot express this: it releases its keys before the gesture happens.',
+      'Keys held during the gesture and released afterward; "meta" is Command on macOS. Unlike computer_hotkey, modifiers stay held through the click or drag.',
   },
 } as const;
 
@@ -292,7 +291,7 @@ function targetProperties(): Record<string, unknown> {
     window_id: {
       type: "string",
       description:
-        "Optional window id from computer_list_windows. With a label it picks which window the label is resolved in. With x/y it scopes the coordinate to that window: input is scoped to that exact window and may be refused when background delivery cannot be established. Coordinates outside it are refused. For computer_scroll it is also a target on its own, scrolling the window itself.",
+        "Exact window for label or x/y targeting; outside coordinates are refused. Background input may be refused. For computer_scroll, window_id alone targets that window.",
     },
   };
 }
@@ -1188,18 +1187,35 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_list_windows",
-        description: `List visible desktop windows and their bounds without touching the pointer. Windows come back topmost-first: stackingIndex is 0 for the topmost window and grows downward, and occludedBy names the overlapping windows stacked above each one. A plain x/y click lands on whatever is topmost at that point, so when the window you want is occluded, pass its id as window_id alongside x/y to scope the click to it. ${WINDOW_FOCUS_NOTE} Selecting window_id scopes input without activating the window. When needed, use computer_activate_window within the active task's consent; never replay an uncertain input action.${windowListCompletenessNote(dialect)}`,
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        description: `List windows topmost-first with bounds, stackingIndex and occludedBy. Use app to avoid returning unrelated windows. Pass window_id to scope input; selection does not activate it. ${WINDOW_FOCUS_NOTE} Use computer_activate_window within task consent when needed; never replay uncertain input.${windowListCompletenessNote(dialect)}`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            app: { type: "string", description: "Filter by exact appName, ignoring case." },
+          },
+          additionalProperties: false,
+        },
         annotations: { title: "List computer windows", ...READ_ONLY_TOOL_ANNOTATIONS },
       },
-      handler: handle("computer_list_windows", async () => manager.listWindows()),
+      handler: handle("computer_list_windows", async (args) => {
+        const app = readStringArg(args, "app")?.toLocaleLowerCase();
+        const result = await manager.listWindows();
+        return app
+          ? {
+              ...result,
+              windows: result.windows.filter(
+                (window) => window.appName?.toLocaleLowerCase() === app,
+              ),
+            }
+          : result;
+      }),
     },
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
       definition: {
         name: "computer_get_state",
-        description: `Read the current desktop state before acting. ${WINDOW_FOCUS_NOTE} The result lists every labeled actionable control (buttons, text fields, checkboxes...) as "elements", and targeting those by label is far more reliable than estimating pixel coordinates from a screenshot. Each element carries role, label, windowId, and an editable control's current value. It returns no screenshot unless you ask for one, so it does not on its own give you a frame to point x/y into — the pointer tools need one. With include_screenshot it captures ${overviewScope}, scaled down; ${SCREENSHOT_FRAME_NOTE} Window bounds and cursor positions in the JSON are desktop coordinates, useful for telling windows apart but not for aiming: aim by label, or with screenshot pixels. Use computer_screenshot when workspace detail is too small to read. include_text adds a full accessibility-text rendering of the tree on top of the elements list; request it or a screenshot only when needed because both increase payload size. On a busy desktop the elements list is capped: when it reports elementsTruncated it also reports elementsOmitted, the number of matching controls it could not fit, and window_id or label_contains narrows the list rather than leaving you to guess which prefix you were shown.`,
+        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
         inputSchema: {
           type: "object",
           properties: {

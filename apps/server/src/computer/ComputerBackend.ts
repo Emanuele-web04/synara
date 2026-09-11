@@ -394,6 +394,8 @@ export interface ComputerBackend {
    * on a partially covered window reach the window the caller meant rather than
    * the one drawn on top of it.
    */
+  /** True only when this fresh target advertises the native semantic action. */
+  supportsAction?(target: ComputerResolvedTarget, action: string): boolean;
   click(
     point: ComputerPoint,
     windowId?: string,

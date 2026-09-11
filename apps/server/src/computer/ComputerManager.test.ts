@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ComputerWindow, ThreadComputerState } from "@synara/contracts";
 import { decodeComputerFrame } from "@synara/shared/computerFrame";
@@ -253,6 +253,33 @@ describe("ComputerManager and FakeComputerBackend", () => {
       expect(state.availability.message.length).toBeLessThanOrEqual(2_048);
     }
 
+    await manager.dispose();
+  });
+
+  it("dispatches a supported semantic click once and never retries an uncertain AX effect", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      agentDialect: "macos" as const,
+      supportsAction: (_target: unknown, action: string) => action === "AXPress",
+    });
+    const press = vi
+      .spyOn(backend, "performAction")
+      .mockResolvedValue({ effect: "dispatched-unknown", verified: "unverifiable" });
+    const manager = new ComputerManager({ backend });
+    await manager.click("thread-1", { label: "Calculate", role: "button" });
+    expect(press).toHaveBeenCalledTimes(1);
+    expect(press.mock.calls[0]?.[1]).toBe("AXPress");
+    expect(backend.callsFor("click")).toHaveLength(0);
+    press.mockRejectedValueOnce(new Error("Unknown dispatch"));
+    await expect(manager.click("thread-1", { label: "Calculate", role: "button" })).rejects.toThrow(
+      "Unknown dispatch",
+    );
+    expect(press).toHaveBeenCalledTimes(2);
+    expect(backend.callsFor("click")).toHaveLength(0);
+    await manager.doubleClick("thread-1", { label: "Calculate", role: "button" });
+    await manager.click("thread-1", { label: "Calculate", role: "button" }, ["shift"]);
+    expect(press).toHaveBeenCalledTimes(2);
+    expect(backend.callsFor("doubleClick")).toHaveLength(1);
+    expect(backend.callsFor("click")).toHaveLength(1);
     await manager.dispose();
   });
 

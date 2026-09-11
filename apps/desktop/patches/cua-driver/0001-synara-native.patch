@@ -99,7 +99,7 @@
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(3);
++        metadata["synara_native_revision"] = serde_json::json!(5);
 +    }
 +    DaemonResponse::ok(metadata)
  }
@@ -336,6 +336,284 @@
      fn history_reads_are_distinct_explicit_history_capabilities() {
          for (tool, capability) in [
              ("history_status", "history.status"),
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
+@@ -0,0 +1,123 @@
++//! Compact pointer based on the black arrow / white outline in Computer Use's
++//! SoftwareCursor artwork. Drawn as a vector at the actual input hotspot, with
++//! no badge from the source asset and no theme morph, rotation, or click bounce.
++
++use std::sync::OnceLock;
++use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
++
++fn arrow() -> &'static Path {
++    static PATH: OnceLock<Path> = OnceLock::new();
++    PATH.get_or_init(|| {
++        let mut p = PathBuilder::new();
++        p.move_to(0.0, 0.0);
++        p.line_to(0.0, 23.0);
++        p.line_to(6.0, 17.5);
++        p.line_to(11.0, 28.0);
++        p.line_to(15.0, 26.0);
++        p.line_to(10.0, 16.0);
++        p.line_to(18.5, 16.0);
++        p.close();
++        p.finish().expect("static compact cursor path")
++    })
++}
++
++pub fn paint(pm: &mut Pixmap, x: f32, y: f32, scale: f32, alpha: f32, pressed: bool) {
++    let transform = Transform::from_row(scale, 0.0, 0.0, scale, x, y);
++    let outline = Paint {
++        shader: tiny_skia::Shader::SolidColor(Color::from_rgba(1.0, 1.0, 1.0, alpha).unwrap()),
++        anti_alias: true,
++        ..Default::default()
++    };
++    pm.stroke_path(
++        arrow(),
++        &outline,
++        &Stroke {
++            width: 2.4,
++            line_join: tiny_skia::LineJoin::Round,
++            ..Default::default()
++        },
++        transform,
++        None,
++    );
++    let shade = if pressed { 0.25 } else { 0.06 };
++    let fill = Paint {
++        shader: tiny_skia::Shader::SolidColor(
++            Color::from_rgba(shade, shade, shade, alpha).unwrap(),
++        ),
++        anti_alias: true,
++        ..Default::default()
++    };
++    pm.fill_path(arrow(), &fill, FillRule::Winding, transform, None);
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{CursorAction, CursorConfig, OverlayCommand, RenderStateCore};
++
++    fn compact() -> RenderStateCore {
++        RenderStateCore::new(CursorConfig {
++            compact: true,
++            ..CursorConfig::default()
++        })
++    }
++
++    #[test]
++    fn compact_moves_and_clicks_use_exact_hotspot_without_a_path_or_pulse() {
++        let mut c = compact();
++        for (x, y) in [(20.0, 30.0), (1900.0, 100.0), (3.0, 4.0)] {
++            c.apply_command_base(
++                OverlayCommand::MoveTo {
++                    x,
++                    y,
++                    end_heading_radians: 2.0,
++                },
++                true,
++                true,
++            );
++            assert_eq!(c.pos, (x, y));
++            assert!(c.path.is_none());
++            c.apply_command_base(OverlayCommand::ClickPulse { x, y }, true, true);
++            assert_eq!(c.pos, (x, y));
++            assert!(c.click_t.is_none());
++            assert!(c.spring.is_none());
++        }
++    }
++
++    #[test]
++    fn compact_artwork_is_stable_across_actions_heading_and_time() {
++        let mut c = compact();
++        c.pos = (16.0, 16.0);
++        let mut baseline = Pixmap::new(128, 128).unwrap();
++        crate::paint_cursor(&mut baseline, &c, 0.0, 0.0, None, 2.0);
++        assert!(baseline.pixels().iter().any(|p| p.alpha() != 0));
++        for action in [
++            CursorAction::Click,
++            CursorAction::Navigate,
++            CursorAction::Text,
++            CursorAction::Scroll,
++        ] {
++            c.visual.begin(action, None, None);
++            c.visual.tick(0.15);
++            c.heading = 2.8;
++            let mut frame = Pixmap::new(128, 128).unwrap();
++            crate::paint_cursor(&mut frame, &c, 0.0, 0.0, None, 2.0);
++            assert_eq!(baseline.data(), frame.data());
++        }
++        if let Ok(path) = std::env::var("SYNARA_CURSOR_PREVIEW_PATH") {
++            image::save_buffer(path, baseline.data(), 128, 128, image::ColorType::Rgba8).unwrap();
++        }
++    }
++
++    #[test]
++    fn compact_hidden_pointer_has_no_pixels_or_hover_poll() {
++        let mut c = compact();
++        c.pos = (16.0, 16.0);
++        c.apply_command_base(OverlayCommand::SetSessionLabel("Synara".into()), true, true);
++        assert!(!c.session_badge_needs_hover_poll());
++        c.apply_command_base(OverlayCommand::SetEnabled(false), true, true);
++        let mut frame = Pixmap::new(128, 128).unwrap();
++        crate::paint_cursor(&mut frame, &c, 0.0, 0.0, None, 2.0);
++        assert!(frame.pixels().iter().all(|p| p.alpha() == 0));
++    }
++}
+--- a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
+@@ -9,6 +9,7 @@
+ pub mod badge_glyphs;
+ pub mod bezier;
+ pub mod capture_utils;
++pub mod compact_cursor;
+ pub mod motion;
+ pub mod path_planner;
+ pub mod render_state;
+@@ -52,6 +53,9 @@
+ /// platform backend when it initialises the overlay window.
+ #[derive(Debug, Clone)]
+ pub struct CursorConfig {
++    /// Compact, fixed-shape feedback that never gates native input on animation.
++    pub compact: bool,
++
+     /// Multi-cursor instance identifier. Defaults to `"default"`.
+     pub cursor_id: String,
+ 
+@@ -72,6 +76,7 @@
+ impl Default for CursorConfig {
+     fn default() -> Self {
+         Self {
++            compact: false,
+             cursor_id: "default".into(),
+             theme_id: DEFAULT_THEME_ID.into(),
+             reduced_motion: ReducedMotion::Auto,
+@@ -88,6 +93,7 @@
+     /// ```text
+     /// --cursor-theme <installed-theme-id>
+     /// --cursor-reduced-motion <auto|on|off>
++    /// --compact-cursor            (fixed pointer, no animation wait)
+     /// --no-overlay                (start with overlay disabled)
+     /// --glide-ms     <f64>        (glideDurationMs override)
+     /// --dwell-ms     <f64>        (dwellAfterClickMs override)
+@@ -125,6 +131,7 @@
+                         i += 1;
+                     }
+                 }
++                "--compact-cursor" => cfg.compact = true,
+                 "--no-overlay" => cfg.enabled = false,
+                 "--glide-ms" => {
+                     if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+--- a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
+@@ -109,16 +109,20 @@
+             reduced_motion: cfg.reduced_motion,
+             ..CursorVisualState::default()
+         };
+-        let (theme, theme_fallback) = match crate::load_installed_theme(&cfg.theme_id) {
+-            Ok(theme) => (theme, None),
+-            Err(error) => (
+-                Some(crate::embedded_default_theme()),
+-                Some(format!(
+-                    "theme `{}` could not be loaded; using {}: {error}",
+-                    cfg.theme_id,
+-                    crate::DEFAULT_THEME_ID
+-                )),
+-            ),
++        let (theme, theme_fallback) = if cfg.compact {
++            (None, None)
++        } else {
++            match crate::load_installed_theme(&cfg.theme_id) {
++                Ok(theme) => (theme, None),
++                Err(error) => (
++                    Some(crate::embedded_default_theme()),
++                    Some(format!(
++                        "theme `{}` could not be loaded; using {}: {error}",
++                        cfg.theme_id,
++                        crate::DEFAULT_THEME_ID
++                    )),
++                ),
++            }
+         };
+         Self {
+             cfg,
+@@ -202,7 +206,7 @@
+     /// from [`Self::session_badge_needs_frame_tick`]: a faded badge needs hover
+     /// hit-testing, not continuous 60 fps repainting.
+     pub fn session_badge_needs_hover_poll(&self) -> bool {
+-        self.session_label.is_some() && self.cursor_is_revealed()
++        !self.cfg.compact && self.session_label.is_some() && self.cursor_is_revealed()
+     }
+ 
+     /// Update hover state from a platform-native hardware pointer sample.
+@@ -245,6 +249,14 @@
+     /// Return the theme that is actually being painted, including any
+     /// non-fatal fallback from an unavailable launch-time selection.
+     pub fn active_theme_metadata(&self) -> (String, String, String, Option<String>) {
++        if self.cfg.compact {
++            return (
++                "synara.compact".into(),
++                "1".into(),
++                "static-vector".into(),
++                None,
++            );
++        }
+         match self.theme.as_deref() {
+             Some(theme) => (
+                 theme.id.clone(),
+@@ -549,6 +561,21 @@
+         move_to_snap_sentinel: bool,
+         click_pulse_sentinel_only: bool,
+     ) -> bool {
++        // Compact feedback keeps the exact hotspot and never plans a decorative path.
++        let cmd = if self.cfg.compact {
++            match cmd {
++                OverlayCommand::MoveTo { x, y, .. } | OverlayCommand::ClickPulse { x, y } => {
++                    OverlayCommand::SnapTo {
++                        x,
++                        y,
++                        heading_radians: None,
++                    }
++                }
++                other => other,
++            }
++        } else {
++            cmd
++        };
+         match cmd {
+             OverlayCommand::MoveTo {
+                 x,
+@@ -823,6 +850,28 @@
+     let heading = core.heading;
+     let alpha_scale = core.idle_alpha as f32;
+ 
++    if core.cfg.compact {
++        crate::compact_cursor::paint(pm, px as f32, py as f32, sf, alpha_scale, core.pressed);
++        if let Some(layout) = crate::session_badge_layout(crate::SessionBadgeInput {
++            label: core.session_label.as_deref(),
++            delivery: None,
++            target: None,
++            cursor: (px as f32, py as f32),
++            backing_scale: sf,
++            label_alpha: 1.0,
++            chip_alpha: 0.0,
++            clip: Some((pm.width() as f32, pm.height() as f32)),
++        }) {
++            crate::paint_session_badge(
++                pm,
++                &layout,
++                crate::session_fill_rgba(&core.cfg.cursor_id),
++                alpha_scale,
++            );
++        }
++        return;
++    }
++
+     // --- Focus rect highlight (macOS only — others pass None) ---
+     // Cyan glow border + faint fill, matching Swift AgentCursor.showFocusRect.
+     if let Some(fr) = focus_rect {
 --- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 @@ -280,6 +280,15 @@
@@ -365,7 +643,118 @@
  use std::time::{Duration, Instant};
  
  use cursor_overlay::{
-@@ -697,6 +697,7 @@
+@@ -390,6 +390,24 @@
+ pub async fn animate_cursor_to(key: CursorKey, x: f64, y: f64) {
+     // Empty key is the explicit no-cursor sentinel → nothing to animate.
+     if key.is_empty() {
++        return;
++    }
++    // Synara feedback is queued, never awaited. Input still performs its own
++    // target validation and cancellation checks after this function returns.
++    let compact = RENDER
++        .lock()
++        .unwrap()
++        .as_ref()
++        .is_some_and(|map| map.template.compact);
++    if compact {
++        send_command(
++            key,
++            OverlayCommand::SnapTo {
++                x,
++                y,
++                heading_radians: None,
++            },
++        );
+         return;
+     }
+     // Seed a sentinel cursor on-screen so the MoveTo below glides instead of
+@@ -497,6 +515,7 @@
+     focus_rect: Option<[f64; 4]>,
+     /// Fade progress for the focus rect: 0.0 = fully visible, 1.0 = gone.
+     focus_rect_t: f64,
++    compact_last_activity: Instant,
+ }
+ 
+ impl RenderState {
+@@ -505,6 +524,7 @@
+             core: RenderStateCore::new(cfg),
+             focus_rect: None,
+             focus_rect_t: 1.0,
++            compact_last_activity: Instant::now(),
+         }
+     }
+ 
+@@ -513,6 +533,15 @@
+     /// [`RenderStateCore::tick_swift_constants`].  Returns true if an
+     /// arrival signal should be fired (the path just ended).
+     fn tick(&mut self, dt: f64) -> bool {
++        if self.core.cfg.compact {
++            self.core.idle_secs = self.compact_last_activity.elapsed().as_secs_f64();
++            if self.core.motion.idle_hide_ms > 0.0
++                && self.core.idle_secs * 1000.0 >= self.core.motion.idle_hide_ms
++            {
++                self.core.idle_alpha = 0.0;
++            }
++            return false;
++        }
+         let fire_arrival = self.core.tick_swift_constants(dt);
+ 
+         // Advance focus-rect fade (fades out over ~600ms).  macOS-only —
+@@ -529,6 +558,17 @@
+     }
+ 
+     fn apply_command(&mut self, cmd: OverlayCommand) {
++        if self.core.cfg.compact
++            && matches!(
++                &cmd,
++                OverlayCommand::MoveTo { .. }
++                    | OverlayCommand::SnapTo { .. }
++                    | OverlayCommand::ClickPulse { .. }
++                    | OverlayCommand::SetPressed(_)
++            )
++        {
++            self.compact_last_activity = Instant::now();
++        }
+         // macOS uses the sentinel-snap variants of MoveTo / ClickPulse:
+         //   - MoveTo only snaps `self.pos` if the cursor is still at the
+         //     off-screen sentinel `(-200, -200)` (otherwise the path starts
+@@ -537,6 +577,9 @@
+         //     the sentinel (otherwise the animation already landed it there).
+         match cmd {
+             OverlayCommand::ShowFocusRect(rect) => {
++                if self.core.cfg.compact {
++                    return;
++                }
+                 self.focus_rect = rect;
+                 self.focus_rect_t = 0.0; // reset fade to fully visible
+             }
+@@ -550,7 +593,25 @@
+     /// tick can change pixels. A brand-new sentinel cursor is deliberately
+     /// quiescent, so `serve` with no agent activity can block on the command
+     /// channel instead of compositing an empty fullscreen pixmap at 60fps.
++    fn compact_hide_wait(&self) -> Option<Duration> {
++        (self.core.cfg.compact
++            && self.core.visible
++            && self.core.pos.0 >= -100.0
++            && self.core.idle_alpha >= 0.004
++            && self.core.motion.idle_hide_ms > 0.0)
++            .then(|| {
++                Duration::from_secs_f64(
++                    (self.core.motion.idle_hide_ms / 1000.0
++                        - self.compact_last_activity.elapsed().as_secs_f64())
++                    .max(0.0),
++                )
++            })
++    }
++
+     fn needs_frame_tick(&self) -> bool {
++        if self.core.cfg.compact {
++            return false;
++        }
+         self.core.path.is_some()
+             || self.core.spring.is_some()
+             || self.core.click_t.is_some()
+@@ -697,11 +758,13 @@
      _win_w: f64,
      _win_h: f64,
  ) {
@@ -373,7 +762,110 @@
      let target_frame_ms = Duration::from_millis(16); // ~60 fps while pixels can change
      let hover_poll_ms = Duration::from_millis(80);
      let mut last_tick = Instant::now();
-@@ -898,7 +899,7 @@
+     let mut frame_tick_needed = false;
+     let mut hover_poll_needed = false;
++    let mut compact_hide_wait: Option<Duration> = None;
+     // Repin bookkeeping: track last pinned wid and a frame counter for
+     // the periodic defensive-repin (every ~60 active frames ≈ 1 s).
+     let mut last_pinned: Option<u64> = None;
+@@ -711,20 +774,31 @@
+         // When no cursor animation/fade is active, block until the MCP side
+         // sends a command. This is the idle-server fast path: no fullscreen
+         // pixmap allocation, no CGImage conversion, no 60fps wakeup.
+-        let (first_msg, hover_poll_tick) = if frame_tick_needed {
+-            (None, hover_poll_needed)
+-        } else if hover_poll_needed {
+-            match rx.recv_timeout(hover_poll_ms) {
+-                Ok(msg) => (Some(msg), true),
+-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (None, true),
+-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+-            }
+-        } else {
+-            match rx.recv() {
+-                Ok(msg) => (Some(msg), false),
+-                Err(_) => break,
+-            }
+-        };
++        let mut compact_hide_tick = false;
++        let (first_msg, hover_poll_tick) =
++            if !frame_tick_needed && !hover_poll_needed && compact_hide_wait.is_some() {
++                match rx.recv_timeout(compact_hide_wait.unwrap()) {
++                    Ok(msg) => (Some(msg), false),
++                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
++                        compact_hide_tick = true;
++                        (None, false)
++                    }
++                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
++                }
++            } else if frame_tick_needed {
++                (None, hover_poll_needed)
++            } else if hover_poll_needed {
++                match rx.recv_timeout(hover_poll_ms) {
++                    Ok(msg) => (Some(msg), true),
++                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (None, true),
++                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
++                }
++            } else {
++                match rx.recv() {
++                    Ok(msg) => (Some(msg), false),
++                    Err(_) => break,
++                }
++            };
+ 
+         let woke_from_idle = first_msg.is_some();
+         let now = Instant::now();
+@@ -733,6 +807,8 @@
+             // Do not charge that time to the first animation tick after a command;
+             // let the wake-up frame render the newly-applied state at t=0.
+             0.0
++        } else if compact_hide_tick {
++            now.duration_since(last_tick).as_secs_f64()
+         } else {
+             now.duration_since(last_tick).as_secs_f64().min(0.05)
+         };
+@@ -752,6 +828,7 @@
+             hover_changed,
+             next_frame_tick_needed,
+             next_hover_poll_needed,
++            next_compact_hide_wait,
+         ) = {
+             let mut guard = RENDER.lock().unwrap();
+             match guard.as_mut() {
+@@ -777,7 +854,7 @@
+                     // latter lets a just-created path/click/focus rect start on
+                     // this frame without waiting for the next 16ms tick.
+                     let mut arrived: Vec<CursorKey> = Vec::new();
+-                    if frame_tick_needed || had_msg {
++                    if frame_tick_needed || had_msg || compact_hide_tick {
+                         for (k, rs) in map.cursors.iter_mut() {
+                             if rs.tick(dt) {
+                                 arrived.push(k.clone());
+@@ -825,6 +902,10 @@
+                         hover_changed,
+                         next_frame_tick_needed,
+                         next_hover_poll_needed,
++                        map.cursors
++                            .values()
++                            .filter_map(RenderState::compact_hide_wait)
++                            .min(),
+                     )
+                 }
+                 None => break,
+@@ -862,7 +943,12 @@
+         // Render only when a command arrived or the previous/next tick can
+         // change pixels. A final frame is emitted as animations/fades finish so
+         // the layer is left in the completed/cleared state before blocking.
+-        if had_msg || hover_changed || frame_tick_needed || next_frame_tick_needed {
++        if had_msg
++            || hover_changed
++            || frame_tick_needed
++            || next_frame_tick_needed
++            || compact_hide_tick
++        {
+             let pixmap = {
+                 let guard = RENDER.lock().unwrap();
+                 if let Some(map) = guard.as_ref() {
+@@ -898,11 +984,12 @@
              };
  
              // Convert to CGImage and update layer on the main queue.
@@ -382,7 +874,12 @@
          }
  
          frame_tick_needed = next_frame_tick_needed;
-@@ -933,17 +934,45 @@
+         hover_poll_needed = next_hover_poll_needed;
++        compact_hide_wait = next_compact_hide_wait;
+         if frame_tick_needed {
+             // Sleep remainder of frame budget.
+             let elapsed = Instant::now().duration_since(last_tick);
+@@ -933,17 +1020,45 @@
          && state.core.idle_alpha >= 0.004
  }
  
@@ -413,7 +910,7 @@
 +        self.pending = Some(frame);
 +        !std::mem::replace(&mut self.scheduled, true)
 +    }
- 
++
 +    fn take(&mut self) -> Option<T> {
 +        self.scheduled = false;
 +        self.pending.take()
@@ -430,14 +927,14 @@
 +    if !pending.lock().unwrap().submit(pixmap) {
 +        return;
 +    }
-+
+ 
      // Box the payload for the C callback.
 -    let payload = Box::new((layer_ptr, cg_image_ptr));
 +    let payload = Box::new((layer_ptr, Arc::clone(pending)));
  
      // GCD symbols from libdispatch (part of the macOS system library stubs).
      // `dispatch_get_main_queue()` is an inline C function; the underlying
-@@ -962,7 +991,14 @@
+@@ -962,7 +1077,14 @@
      }
  
      unsafe extern "C" fn set_contents_cb(ctx: *mut c_void) {
@@ -453,7 +950,7 @@
          let layer = layer_ptr as *mut objc2::runtime::AnyObject;
          // setContents: expects an `id` (type '@'), not a raw void pointer.
          // CGImageRef is toll-free bridged to NSObject, so we cast it to *mut AnyObject.
-@@ -1127,14 +1163,13 @@
+@@ -1127,14 +1249,13 @@
  
  /// Create a `CGImage` from a `tiny_skia::Pixmap` (premultiplied RGBA).
  /// Returns a `+1` retained pointer that the caller must release.
@@ -469,7 +966,7 @@
      let bytes_per_row = w * 4;
  
      // tiny-skia produces premultiplied RGBA with bytes in memory order [R, G, B, A].
-@@ -1180,21 +1215,26 @@
+@@ -1180,21 +1301,26 @@
              ) -> *mut c_void;
          }
  
@@ -506,7 +1003,7 @@
          let img = CGImageCreate(
              w,
              h,
-@@ -1211,7 +1251,7 @@
+@@ -1211,7 +1337,7 @@
  
          CGColorSpaceRelease(cs);
          CGDataProviderRelease(provider);
@@ -515,7 +1012,7 @@
  
          if img.is_null() {
              None
-@@ -1231,6 +1271,33 @@
+@@ -1231,6 +1357,33 @@
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -547,6 +1044,35 @@
 +        assert_eq!(dropped.load(Ordering::SeqCst), 1001);
 +    }
      use std::collections::HashMap;
+ 
+     #[test]
+@@ -1494,7 +1647,28 @@
+         assert!(
+             !map.cursors.contains_key("sessA"),
+             "ended session must not be resurrected"
++        );
++    }
++
++    #[test]
++    fn compact_feedback_sleeps_until_hide_and_does_not_resurrect_removed_cursors() {
++        let mut map = empty_map();
++        map.template.compact = true;
++        map.template.motion.idle_hide_ms = 900.0;
++        apply_msg(&mut map, move_msg("compact", 80.0, 80.0));
++        let rs = map.cursors.get_mut("compact").unwrap();
++        assert!(
++            !rs.needs_frame_tick(),
++            "compact feedback must not repaint at 60fps"
+         );
++        assert!(rs.compact_hide_wait().unwrap() <= Duration::from_millis(900));
++        rs.compact_last_activity = Instant::now() - Duration::from_millis(950);
++        rs.tick(0.9);
++        assert_eq!(rs.core.idle_alpha, 0.0);
++        assert_eq!(rs.compact_hide_wait(), None);
++        map.ended.insert("removed".into());
++        apply_msg(&mut map, move_msg("removed", 80.0, 80.0));
++        assert!(!map.cursors.contains_key("removed"));
+     }
  
      #[test]
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
@@ -3915,7 +4441,71 @@
  mod cursor_tools;
  mod get_accessibility_tree;
  mod get_config;
-@@ -957,6 +958,7 @@
+@@ -296,15 +297,63 @@
+     {
+         drop(snapshot);
+         crate::window_change_detector::Changes::no_change()
++    } else if let Some(timeout) = foreground_observation_timeout(
++        args,
++        std::env::var("SYNARA_CUA_FOREGROUND_OBSERVATION_MS")
++            .ok()
++            .and_then(|value| value.parse().ok()),
++    ) {
++        // Foreground input has already restored its activation guard. Observe
++        // prompt window changes here; Synara reads the target at task boundaries
++        // and before the next semantic action. Background suppression retains
++        // the full observation window, even with this host setting.
++        tokio::task::spawn_blocking(move || {
++            snapshot.detect_with(timeout, std::time::Duration::from_millis(25))
++        })
++        .await
++        .unwrap_or_else(|_| crate::window_change_detector::Changes::no_change())
+     } else {
+         snapshot.detect_async().await
++    }
++}
++
++fn foreground_observation_timeout(
++    args: &serde_json::Value,
++    host_timeout_ms: Option<u64>,
++) -> Option<std::time::Duration> {
++    if args.get("delivery_mode").and_then(serde_json::Value::as_str) != Some("foreground") {
++        return None;
+     }
++    host_timeout_ms.map(|ms| std::time::Duration::from_millis(ms.clamp(100, 1000)))
+ }
+ 
+ #[cfg(test)]
+ mod interactive_observation_tests {
+     use super::*;
+ 
++    #[test]
++    fn foreground_observation_is_bounded_and_never_shortens_background_suppression() {
++        use serde_json::json;
++        for mode in ["background", "invalid"] {
++            assert_eq!(
++                foreground_observation_timeout(&json!({"delivery_mode": mode}), Some(100)),
++                None,
++            );
++        }
++        let mut args = json!({
++            "delivery_mode": "foreground", "_synara_foreground_observation_ms": 0
++        });
++        // The real SDK strips private arguments; the host policy must survive.
++        cua_driver_core::tool_args::sanitize_reserved_args(&mut args);
++        assert_eq!(foreground_observation_timeout(&args, None), None);
++        for (requested, expected) in [(0, 100), (100, 100), (5000, 1000)] {
++            assert_eq!(
++                foreground_observation_timeout(&args, Some(requested)),
++                Some(std::time::Duration::from_millis(expected)),
++            );
++        }
++    }
++
+     #[tokio::test]
+     async fn embedded_interactive_input_can_finish_without_polling() {
+         let snapshot = crate::window_change_detector::WindowChangeDetector::snapshot(None);
+@@ -957,6 +1006,7 @@
      // register the MCP server under the `cua-computer-use` name, which is what
      // triggers Claude Code's computer-use beta-tool injection (see cli.rs).
      let _ = compat;

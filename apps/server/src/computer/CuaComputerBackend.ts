@@ -138,6 +138,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private snapshot: Promise<void> | undefined;
   private selectedWindow: string | undefined;
   private readonly elementTokens = new WeakMap<ComputerUiNode, string>();
+  private readonly pressableElements = new WeakSet<ComputerUiNode>();
   private readonly observedGeometry = new Map<string, ComputerRect>();
   private readonly stills: StillFramePublisher;
   private cachedImage: ComputerScreenshot | undefined;
@@ -462,7 +463,9 @@ export class CuaComputerBackend implements ComputerBackend {
     return { pid: window.pid, window_id: Number(windowId.split(":")[2]), window };
   }
   async focusWindow(windowId: string): Promise<void> {
-    await this.target(windowId);
+    // Selection sends no input. The actual actuator revalidates the exact
+    // window immediately before dispatch; reuse the just-observed identity here.
+    await this.target(windowId, !this.windows.some((window) => window.id === windowId));
     this.selectedWindow = windowId;
   }
   async checkInputReady(windowId: string): Promise<void> {
@@ -590,7 +593,7 @@ export class CuaComputerBackend implements ComputerBackend {
     windowId?: string;
   }): Promise<ComputerState> {
     await this.refresh();
-    const state: ComputerState = {
+    let state: ComputerState = {
       computerId: this.computerId,
       windows: this.windows,
       screenSize: this.size,
@@ -604,7 +607,10 @@ export class CuaComputerBackend implements ComputerBackend {
         ...(options.includeScreenshot ? { screenshot: await this.captureOverview() } : {}),
         accessibility: { status: "partial", unavailableWindowIds: this.windows.map((w) => w.id) },
       };
-    const { pid, window_id, window } = await this.target(options.windowId);
+    // refresh() already enumerated the windows. Native observation also
+    // verifies PID/window ownership, so a second desktop enumeration buys nothing.
+    const { pid, window_id, window } = await this.target(options.windowId, false);
+    state = { ...state, windows: [window] };
     if (!options.includeTree && !options.includeScreenshot) return state;
     const result = await this.call("get_window_state", {
       pid,
@@ -635,8 +641,11 @@ export class CuaComputerBackend implements ComputerBackend {
           windowId: window.id,
           children: [],
         };
-        if (typeof element.element_token === "string")
+        if (typeof element.element_token === "string") {
           this.elementTokens.set(node, element.element_token);
+          if (Array.isArray(element.actions) && element.actions.includes("AXPress"))
+            this.pressableElements.add(node);
+        }
         children.push(node);
       }
     const root: ComputerUiNode = {
@@ -950,6 +959,9 @@ export class CuaComputerBackend implements ComputerBackend {
         "stale_target",
       );
     return this.input("set_value", { element_token: token, value }, target.node.windowId);
+  }
+  supportsAction(target: ComputerResolvedTarget, action: string): boolean {
+    return action === "AXPress" && this.pressableElements.has(target.node);
   }
   async performAction(target: ComputerResolvedTarget, action: string) {
     if (action !== "AXPress")
