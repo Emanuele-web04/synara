@@ -997,7 +997,7 @@ export function projectProviderRuntimeActivities(
     case "item.updated":
     case "item.completed":
     case "item.started": {
-      if (event.type !== "item.started" && event.payload.itemType === "context_compaction") {
+      if (event.payload.itemType === "context_compaction") {
         const failed = event.type === "item.completed" && event.payload.status === "failed";
         return [
           {
@@ -1006,8 +1006,8 @@ export function projectProviderRuntimeActivities(
             tone: failed ? "error" : "info",
             kind: "context-compaction",
             summary:
-              event.type === "item.updated"
-                ? "Compacting conversation..."
+              event.type !== "item.completed"
+                ? "Compacting context"
                 : failed
                   ? "Context compaction failed"
                   : "Context compacted",

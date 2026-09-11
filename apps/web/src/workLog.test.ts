@@ -4181,55 +4181,63 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Compacting context");
   });
 
-  it("collapses a compaction progress row into its terminal row", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-progress-1",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "compaction-completed-1",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses a %s progress row into its terminal row",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "compaction-progress-1",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+          makeActivity({
+            id: "compaction-completed-1",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+      expect(entries[0]?.id).toBe("compaction-progress-1");
+      expect(entries[0]?.createdAt).toBe("2026-02-23T00:00:00.000Z");
+    },
+  );
 
-  it("collapses same-timestamp compaction rows regardless of event id order", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "a-compaction-completed",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "b-compaction-progress",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses same-timestamp %s rows regardless of event id order",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "a-compaction-completed",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+          makeActivity({
+            id: "b-compaction-progress",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+    },
+  );
 
   it("does not merge a new compaction progress row into an earlier terminal row", () => {
     const entries = deriveWorkLogEntries(
