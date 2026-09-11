@@ -8,6 +8,7 @@ export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HAR
 
 export interface SynaraHarnessCapabilities {
   readonly gatewayControlAvailable: boolean;
+  readonly automationAuthoring?: "tool-descriptions";
 }
 
 /**
@@ -36,7 +37,10 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "Mode controls execution: heartbeat appends to an idle target thread; standalone opens a fresh thread per independent run; dedicated reuses one automation-owned thread so runs build on each other without writing into another thread.",
         "Prefer dedicated for ongoing observation or tracking: standalone runs cannot see prior runs beyond memory, while dedicated keeps one growing thread.",
         'Mode does not restrict stop conditions. completionPolicy {"type":"ai-evaluated","stopWhen":"..."} works in both modes and disables the automation when the clause matches a successful run; prefer it over encoding the stop condition in the prompt. maxIterations remains the backstop, and an automation-dispatched run may always call synara_cancel_automation on its own automation.',
-        AUTOMATION_AUTHORING_GUIDANCE,
+        // Claude discovers these same instructions on create/update tool schemas.
+        ...(capabilities.automationAuthoring === "tool-descriptions"
+          ? []
+          : [AUTOMATION_AUTHORING_GUIDANCE]),
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation. Resend all mutable fields, including unchanged ones: updates replace, not merge.",
         'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
