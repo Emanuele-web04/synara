@@ -110,6 +110,7 @@ import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/La
 import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/QueuedTurnPromotions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import {
+  type OrchestrationEventDelivery,
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
   type ProviderBlockingDeliveryEvidence,
@@ -1261,18 +1262,38 @@ const make = Effect.gen(function* () {
     readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
     readonly createdAt: string;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.session.set",
-      commandId: serverCommandId("provider-session-set"),
-      threadId: input.threadId,
-      session: input.session,
-      ...(input.expectedSession !== undefined
-        ? {
-            expectedSessionStatus: input.expectedSession.status,
-            expectedSessionUpdatedAt: input.expectedSession.updatedAt,
-          }
-        : {}),
-      createdAt: input.createdAt,
+    Effect.gen(function* () {
+      // Fence redundant writes at the persistence point: the command read model
+      // is what the decider applies against, so a session row identical to the
+      // projected one would only emit journal noise (e.g. repeated `ready`
+      // writes). `updatedAt` is excluded on purpose — a pure timestamp bump is
+      // not new state.
+      const currentSession = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (candidate) => candidate.id === input.threadId,
+      )?.session;
+      if (
+        currentSession != null &&
+        currentSession.status === input.session.status &&
+        currentSession.providerName === input.session.providerName &&
+        currentSession.runtimeMode === input.session.runtimeMode &&
+        currentSession.activeTurnId === input.session.activeTurnId &&
+        currentSession.lastError === input.session.lastError
+      ) {
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.session.set",
+        commandId: serverCommandId("provider-session-set"),
+        threadId: input.threadId,
+        session: input.session,
+        ...(input.expectedSession !== undefined
+          ? {
+              expectedSessionStatus: input.expectedSession.status,
+              expectedSessionUpdatedAt: input.expectedSession.updatedAt,
+            }
+          : {}),
+        createdAt: input.createdAt,
+      });
     });
 
   const setThreadSessionError = Effect.fnUntraced(function* (input: {
@@ -3086,11 +3107,23 @@ const make = Effect.gen(function* () {
         sessionProviderEstablished,
       });
       if (turnStartSession !== null) {
+        // The placeholder carries the request's timestamp and can reach the
+        // decider after a fresher session write (e.g. a runtime bind); the
+        // expected-session check turns that race into a clean no-op instead of
+        // a ready → starting regression.
         yield* setThreadSession({
           threadId: event.payload.threadId,
           session: turnStartSession,
+          ...(thread.session !== null
+            ? {
+                expectedSession: {
+                  status: thread.session.status,
+                  updatedAt: thread.session.updatedAt,
+                },
+              }
+            : {}),
           createdAt: event.payload.createdAt,
-        });
+        }).pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
       }
 
       const resolvedAttachments = yield* resolveProviderDispatchAttachments({
@@ -3552,11 +3585,22 @@ const make = Effect.gen(function* () {
           requestedAt: createdAt,
         });
         if (turnStartSession !== null) {
+          // Same optimistic-placeholder fence as the user-message path: a
+          // session that bound after the projection read must not be regressed
+          // to "starting" by this stale-timestamped write.
           yield* setThreadSession({
             threadId: thread.id,
             session: turnStartSession,
+            ...(thread.session !== null
+              ? {
+                  expectedSession: {
+                    status: thread.session.status,
+                    updatedAt: thread.session.updatedAt,
+                  },
+                }
+              : {}),
             createdAt,
-          });
+          }).pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
         }
 
         const startedTurn = yield* dispatchTurnForThread({
@@ -4889,15 +4933,134 @@ const make = Effect.gen(function* () {
       }
     });
 
+    // A terminal-failure blocker only proves a command might still be
+    // in-flight to the provider. Delivery rows carry no lifecycle generation,
+    // so resolve the ambiguity against the session bound to the session-owning
+    // thread — live adapter state first, then the projected binding. Once that
+    // session is gone (stopped/exited/closed) — or was replaced by a runtime
+    // spawned after the failure — nothing can take the old command anymore,
+    // and keeping the quarantine would only dead-end the thread. Failures
+    // inside the check fail closed so a read error can never spring the fence.
+    const isBlockingDeliveryAmbiguityLive = (blocker: OrchestrationEventDelivery) =>
+      Effect.gen(function* () {
+        const sessionThread = yield* resolveProviderSessionThread(
+          ThreadId.makeUnsafe(blocker.threadId),
+        );
+        const sessionThreadId = sessionThread?.id ?? ThreadId.makeUnsafe(blocker.threadId);
+        const liveSession = yield* providerService.listSessions().pipe(
+          Effect.map((sessions) =>
+            sessions.find(
+              (session) =>
+                session.threadId === sessionThreadId &&
+                session.status !== "closed" &&
+                session.status !== "error",
+              // A listing failure must not spring the fence.
+            ),
+          ),
+          Effect.orElseSucceed((): ProviderSession | undefined => undefined),
+        );
+        if (liveSession !== undefined) {
+          const sessionCreatedAt = Date.parse(liveSession.createdAt);
+          const failedAt = Date.parse(blocker.updatedAt);
+          if (!Number.isFinite(sessionCreatedAt) || !Number.isFinite(failedAt)) {
+            // Cannot prove the bound runtime predates the failure.
+            return true;
+          }
+          // A session already live when the command failed can still hold it
+          // in-flight; a replacement spawned afterwards never saw it.
+          return sessionCreatedAt <= failedAt;
+        }
+        // No live runtime is left to receive the command. The projected
+        // binding must also prove the session ended: a still-ready/running row
+        // means the bound session outlived the adapter record (or the listing
+        // is incomplete), so the delivery may still be in flight.
+        const projectedStatus = sessionThread?.session?.status;
+        return (
+          projectedStatus !== undefined &&
+          projectedStatus !== "stopped" &&
+          projectedStatus !== "error"
+        );
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "provider delivery blocker ambiguity check failed; staying quarantined",
+            {
+              eventSequence: blocker.eventSequence,
+              threadId: blocker.threadId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          ).pipe(Effect.as(true)),
+        ),
+      );
+
     const isThreadQuarantined = Effect.fnUntraced(function* (threadId: string) {
-      if (quarantinedThreads.has(threadId)) return true;
-      const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
-        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-        threadId,
-      });
-      if (Option.isNone(blocker)) return false;
-      quarantinedThreads.add(threadId);
-      return true;
+      // No in-memory fast path: a quarantined thread must heal as soon as the
+      // runtime its failed command could still land on is gone, so every check
+      // re-reads the durable blocker and re-tests its ambiguity.
+      while (true) {
+        const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId,
+        });
+        if (Option.isNone(blocker)) {
+          quarantinedThreads.delete(threadId);
+          return false;
+        }
+        if (yield* isBlockingDeliveryAmbiguityLive(blocker.value)) {
+          quarantinedThreads.add(threadId);
+          return true;
+        }
+        // The blocking query only selects dead/uncertain rows; anything else
+        // cannot be settled through reconciliation, so keep the fence.
+        if (blocker.value.state !== "dead" && blocker.value.state !== "uncertain") {
+          quarantinedThreads.add(threadId);
+          return true;
+        }
+        // The command's outcome stays ambiguous, so it is abandoned — never
+        // re-driven into a replacement session — while letting later commands
+        // through. Reconciliation is the same durable path an operator uses.
+        const reconciled = yield* deliveryRepository
+          .reconcile({
+            reconciliationId: crypto.randomUUID(),
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: blocker.value.eventSequence,
+            threadId: blocker.value.threadId,
+            expectedState: blocker.value.state,
+            outcome: "abandon",
+            reconciledBy: "system:provider-command-reactor",
+            note: "The provider session that could still receive this command is gone; the delivery can no longer be in-flight.",
+            reconciledAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.map((delivery) => ({ failed: false as const, delivery })),
+            Effect.catch((error) =>
+              Effect.logWarning("provider delivery blocker auto-resolve failed", {
+                eventSequence: blocker.value.eventSequence,
+                threadId,
+                error: error instanceof Error ? error.message : String(error),
+              }).pipe(Effect.as({ failed: true as const })),
+            ),
+          );
+        if (reconciled.failed) {
+          // The blocker could not be cleared durably; keep the fence rather
+          // than spin on a write that may never apply.
+          quarantinedThreads.add(threadId);
+          return true;
+        }
+        if (Option.isSome(reconciled.delivery)) {
+          quarantinedThreads.delete(threadId);
+          yield* Effect.logInfo(
+            "provider delivery blocker resolved after its target session ended",
+            {
+              eventSequence: blocker.value.eventSequence,
+              threadId,
+              state: blocker.value.state,
+            },
+          );
+        }
+        // Option.none means the row settled under a concurrent reconciler —
+        // either way it no longer blocks, so loop and re-read what is first.
+      }
     });
 
     const settleTerminalFailure = Effect.fnUntraced(function* (input: {
