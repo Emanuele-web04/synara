@@ -3047,6 +3047,21 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
         hasLiveTurn;
+      if (event.payload.dispatchMode === "steer") {
+        // The decider records its projected decision on the message immediately,
+        // then this runtime check corrects either race direction before delivery:
+        // only a genuinely live native steer continues the current turn.
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.set-turn-boundary",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-boundary:${event.eventId}:${isNativeSteer ? "continuation" : "new-turn"}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          startsNewTurn: !isNativeSteer,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (!isNativeSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event);
         // The promotion raced another live turn and was re-queued. Release
@@ -3188,6 +3203,22 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      // A requested steer can still become a separate queued turn (for
+      // providers without native steering, or if the live turn already
+      // settled). Persist that effective boundary while leaving native steer
+      // continuations unbound to a new turn.
+      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.bind-turn",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-bind:${event.eventId}:${startedTurn.turnId}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          turnId: startedTurn.turnId,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (startedTurn && isPendingQueuedDispatch) {
         yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
       }
