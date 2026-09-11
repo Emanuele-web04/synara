@@ -3,7 +3,7 @@ import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@pierre/diffs", () => ({
   getFiletypeFromFileName: (fileName: string) => (fileName.endsWith(".ts") ? "ts" : "text"),
@@ -18,6 +18,12 @@ vi.mock("@pierre/diffs", () => ({
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
+
+// The full workspace pays a cold transform of the renderer's dependency graph.
+// Keep that setup outside individual behavior tests' five-second timeout.
+beforeAll(async () => {
+  await import("./ChatMarkdown");
+}, 120_000);
 
 function renderWithQueryClient(ui: ReactElement) {
   const client = new QueryClient({
@@ -58,6 +64,162 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
+  it.each(["off", "auto-blocks"] as const)(
+    "preserves wiki alias offsets, encoded targets and upstream math in %s",
+    async (directionMode) => {
+      const { default: ChatMarkdown } = await import("./ChatMarkdown");
+      const text = "راجع [[My %20 note|مرجع &amp; عربي]] ثم $2x[0]$ و $5 ثم $10";
+      const startOffset = text.indexOf("عربي");
+      const marker: ThreadMarker = {
+        id: ThreadMarkerId.makeUnsafe("rtl-wiki"),
+        messageId: MessageId.makeUnsafe("assistant-1"),
+        startOffset,
+        endOffset: startOffset + 4,
+        selectedText: "عربي",
+        style: "highlight",
+        color: "yellow",
+        label: null,
+        done: false,
+        createdAt: "2026-06-06T00:00:00.000Z",
+        updatedAt: "2026-06-06T00:00:00.000Z",
+      };
+      const markup = renderWithQueryClient(
+        <ChatMarkdown
+          text={text}
+          cwd="/vault/nested"
+          wikiLinkRoot="/vault"
+          directionMode={directionMode}
+          markers={[marker]}
+          findQuery="عربي"
+          findActiveRange={{ startOffset, endOffset: startOffset + 4 }}
+        />,
+      );
+      expect(markup).toContain('href="/vault/My%20%2520%20note.md"');
+      expect(markup).toContain('data-thread-marker-id="rtl-wiki"');
+      expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
+      expect(markup).toContain('data-chat-find-match="active"');
+      expect(markup.match(/class="katex"/g)).toHaveLength(1);
+      expect(markup).toContain("$5 ثم $10");
+      expect(markup).toContain("مرجع &amp;");
+    },
+  );
+
+  it.each(["off", "auto-blocks"] as const)(
+    "preserves user hard breaks and literal math in %s",
+    async (directionMode) => {
+      const { default: ChatMarkdown } = await import("./ChatMarkdown");
+      const markup = renderWithQueryClient(
+        <ChatMarkdown
+          text={"مرحبا\nEnglish $x^2$"}
+          cwd={undefined}
+          variant="user"
+          directionMode={directionMode}
+        />,
+      );
+      expect(markup).toContain("<br/>");
+      expect(markup).toContain("English $x^2$");
+      expect(markup).not.toContain('class="katex"');
+    },
+  );
+
+  it("preserves bilingual payload text through the markdown renderer", async () => {
+    const text = "مرحبا بالعالم\n\nAPI status: ready";
+    const markup = await renderMarkdown(text);
+
+    expect(markup).toContain("مرحبا بالعالم");
+    expect(markup).toContain("API status: ready");
+    expect(markup).not.toContain("�");
+  });
+
+  it("opts transcript blocks into native automatic direction", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={"مرحبا بالعالم\n\nEnglish paragraph"}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<p dir="auto">مرحبا بالعالم</p>');
+    expect(markup).toContain('<p dir="auto">English paragraph</p>');
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+  });
+
+  it("keeps automatic direction off for other ChatMarkdown consumers", async () => {
+    const markup = await renderMarkdown("مرحبا بالعالم");
+
+    expect(markup).not.toContain('data-direction-mode="auto-blocks"');
+    expect(markup).not.toContain('dir="auto"');
+  });
+
+  it("assigns direction to structural owners without changing table order", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={[
+          "# عنوان",
+          "",
+          "> اقتباس عربي",
+          "",
+          "- عنصر عربي",
+          "- English item",
+          "",
+          "| العربية | English |",
+          "| --- | --- |",
+          "| قيمة | value |",
+        ].join("\n")}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<h1 dir="auto">عنوان</h1>');
+    expect(markup).toContain('<blockquote dir="auto">');
+    expect(markup.match(/<li dir="auto">/g) ?? []).toHaveLength(2);
+    expect(markup).toContain('<table dir="ltr">');
+    expect(markup).not.toContain("<tr dir=");
+    expect(markup.match(/<th dir="auto">/g) ?? []).toHaveLength(2);
+    expect(markup.match(/<td dir="auto">/g) ?? []).toHaveLength(2);
+  });
+
+  it("isolates code and link labels inside automatic-direction blocks", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={[
+          "راجع [API docs](https://example.com) واستخدم `npm run test`.",
+          "",
+          "```sh",
+          "npm run test",
+          "```",
+        ].join("\n")}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('dir="auto" href="https://example.com"');
+    expect(markup).toContain('<code dir="ltr">npm run test</code>');
+    expect(markup).toContain('class="chat-markdown-codeblock" data-wrap="false" dir="ltr"');
+  });
+
+  it("isolates transcript file chips without changing their target", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={"راجع `/tmp/example.ts`"}
+        cwd={undefined}
+        knownAbsoluteFilePaths={["/tmp/example.ts"]}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<bdi class="chat-markdown-technical-isolate" dir="ltr">');
+    expect(markup).toContain('href="/tmp/example.ts"');
+    expect(markup).toContain("/tmp/example.ts");
+  });
+
   it("uses the theme foreground token for markdown text", async () => {
     const markup = await renderMarkdown("Theme-aware text");
 

@@ -706,6 +706,12 @@ label:has(> select#reasoning-effort) select {
   list-style-type: decimal;
 }
 
+.chat-markdown[data-direction-mode="auto-blocks"] ul,
+.chat-markdown[data-direction-mode="auto-blocks"] ol {
+  /* Sibling items can resolve in opposite directions; each side needs a gutter. */
+  padding-inline: 1.25rem;
+}
+
 .chat-markdown ul ul {
   list-style-type: circle;
 }
@@ -738,6 +744,11 @@ label:has(> select#reasoning-effort) select {
   margin: 0 0.4em 0.1em -1.4em;
   vertical-align: middle;
   accent-color: var(--primary);
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-markdown-task-checkbox {
+  margin-inline-start: -1.4em;
+  margin-inline-end: 0.4em;
 }
 
 .chat-markdown .chat-markdown-task-checkbox:not(:disabled) {
@@ -865,6 +876,34 @@ label:has(> select#reasoning-effort) select {
   border-bottom-right-radius: 0;
 }
 
+/* Reset physical continuation edges before applying source-order logical edges.
+   Keep the shared/default rendering unchanged outside transcript opt-in. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match {
+  padding-inline: 0.2em;
+  border-radius: 0.45em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .thread-marker-highlight {
+  padding-inline: 0.12em;
+  border-radius: 0.22em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-before,
+.chat-markdown[data-direction-mode="auto-blocks"]
+  .thread-marker-highlight.thread-marker-continues-before {
+  padding-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-after,
+.chat-markdown[data-direction-mode="auto-blocks"]
+  .thread-marker-highlight.thread-marker-continues-after {
+  padding-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
 .chat-markdown .thread-marker-underline {
   text-decoration-line: underline;
   text-decoration-thickness: 0.14em;
@@ -910,6 +949,24 @@ label:has(> select#reasoning-effort) select {
   border-left: 2px solid var(--border);
   padding-left: 0.8rem;
   color: var(--muted-foreground);
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] blockquote {
+  border-left: 0;
+  border-inline-start: 2px solid var(--border);
+  padding-left: 0;
+  padding-inline-start: 0.8rem;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] a[dir="auto"],
+.chat-markdown[data-direction-mode="auto-blocks"] :not(pre) > code,
+.chat-markdown[data-direction-mode="auto-blocks"] .katex {
+  unicode-bidi: isolate;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] :not(pre) > code,
+.chat-markdown[data-direction-mode="auto-blocks"] .katex {
+  direction: ltr;
 }
 
 .chat-markdown :not(pre) > code {
