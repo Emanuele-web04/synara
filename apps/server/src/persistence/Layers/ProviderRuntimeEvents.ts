@@ -38,6 +38,14 @@ const PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL = PROVIDER_RUNTIME_EVENT_RE
 const ProviderRuntimeEventJson = Schema.fromJsonString(ProviderRuntimeEvent);
 const encodeEvent = Schema.encodeEffect(ProviderRuntimeEventJson);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEventJson);
+// Adapters hand the journal provider-raw strings. `Trim` fields canonicalize
+// only on decode, so a title like "cd foo && bar " arrives valid in Type-space
+// but fails the strict encode and quarantines the whole event — dropping the
+// session.exited / turn.completed that settles projections. Decoding the event
+// first applies the transforms (trims boundary whitespace, fills constructor
+// defaults) so ordinary provider data survives; anything still invalid after
+// canonicalization is a real contract violation and quarantines as before.
+const normalizeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);
 
 const StoredRowSchema = Schema.Struct({
   sequence: NonNegativeInt,
@@ -92,12 +100,15 @@ export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
 
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
-    const eventJson = yield* encodeEvent(event).pipe(
+    const normalized = yield* normalizeEvent(event).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalize")),
+    );
+    const eventJson = yield* encodeEvent(normalized).pipe(
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
     );
     const originalBytes = Buffer.byteLength(eventJson, "utf8");
     if (originalBytes <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-      return { event, eventJson };
+      return { event: normalized, eventJson };
     }
 
     // Shrink oversized string leaves so one huge tool output no longer strands
@@ -105,15 +116,17 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
     // marker (its own copy of the tool output would otherwise re-blow the
     // budget), while source/method/messageType survive for diagnostics.
     const compactedEvent = {
-      ...event,
-      payload: shrinkRuntimeEventStrings(event.payload),
-      ...(event.raw !== undefined
+      ...normalized,
+      payload: shrinkRuntimeEventStrings(normalized.payload),
+      ...(normalized.raw !== undefined
         ? {
             raw: {
-              source: event.raw.source,
-              ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
-              ...(event.raw.messageType !== undefined
-                ? { messageType: event.raw.messageType }
+              source: normalized.raw.source,
+              ...(normalized.raw.method !== undefined
+                ? { method: normalized.raw.method }
+                : {}),
+              ...(normalized.raw.messageType !== undefined
+                ? { messageType: normalized.raw.messageType }
                 : {}),
               payload: {
                 synaraTruncated: true,
