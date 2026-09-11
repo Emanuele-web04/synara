@@ -20,6 +20,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   EventId,
+  type PiModelSelection,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
@@ -1834,6 +1835,129 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
     };
 
+    const buildProviderText = (context: PiSessionContext, text: string) =>
+      [
+        takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        }),
+        text,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    const sendTurnBusyError = () =>
+      new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "sendTurn",
+        issue: "A Pi turn is already active for this thread.",
+      });
+
+    const applyPiModelSelection = (context: PiSessionContext, selection: PiModelSelection) =>
+      Effect.gen(function* () {
+        const model = findModelInRegistry(context.modelRegistry, selection.model);
+        if (!model) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "model/set",
+            issue: `Pi model '${selection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
+          });
+        }
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.setModel(model),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/set",
+              detail: toMessage(cause, "Failed to set Pi model."),
+              cause,
+            }),
+        });
+        const thinkingLevel = normalizePiThinkingLevel(selection.options?.thinkingLevel);
+        if (thinkingLevel) {
+          context.runtime.session.setThinkingLevel(thinkingLevel);
+        }
+      });
+
+    // /reload only exists as a bare text command — attachments make it a prompt.
+    const isPiReloadPayload = (payload: { text: string; images: ImageContent[] }) =>
+      payload.images.length === 0 && isPiReloadCommand(payload.text);
+
+    const steerPiTurn = (context: PiSessionContext, text: string, images: ImageContent[]) =>
+      Effect.tryPromise({
+        try: () => context.runtime.session.steer(text, images),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/steer",
+            detail: toMessage(cause, "Failed to steer Pi turn."),
+            cause,
+          }),
+      });
+
+    const runPiReload = (context: PiSessionContext, command: string) =>
+      Effect.gen(function* () {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.started",
+          payload: {
+            ...(context.runtime.session.model
+              ? {
+                  model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
+                }
+              : {}),
+            effort: context.runtime.session.thinkingLevel,
+          },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.reload(),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/reload",
+              detail: toMessage(cause, "Failed to reload Pi resources."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              const message = error.message;
+              offerRuntimeEvent({
+                ...makeEventBase(context),
+                type: "turn.completed",
+                payload: { state: "failed", stopReason: "error", errorMessage: message },
+                raw: { source: "pi.sdk.event", method: "reload", payload: error },
+              } satisfies ProviderRuntimeEvent);
+              offerRuntimeError(context, {
+                message,
+                method: "session/reload",
+                cause: error,
+              });
+              yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+              context.activeTurnId = undefined;
+              context.session = makeSessionSnapshot(context);
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.completed",
+          payload: { state: "completed", stopReason: "reload" },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+        context.activeTurnId = undefined;
+        context.session = makeSessionSnapshot(context);
+      });
+
+    const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
+      threadId: context.session.threadId,
+      turnId,
+      resumeCursor: getSessionFile(context.runtime.session),
+    });
+
     const recordItem = (context: PiSessionContext, item: unknown, toolCallId?: string) => {
       const turn = context.activeTurnId
         ? context.turns.find((candidate) => candidate.id === context.activeTurnId)
@@ -2553,149 +2677,40 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         if (context.activeTurnId) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "A Pi turn is already active for this thread.",
-          });
+          return yield* sendTurnBusyError();
         }
         if (input.modelSelection?.provider === "pi") {
-          const model = findModelInRegistry(context.modelRegistry, input.modelSelection.model);
-          if (!model) {
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "model/set",
-              issue: `Pi model '${input.modelSelection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
-            });
-          }
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.setModel(model),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "model/set",
-                detail: toMessage(cause, "Failed to set Pi model."),
-                cause,
-              }),
-          });
-          const thinkingLevel = normalizePiThinkingLevel(
-            input.modelSelection.options?.thinkingLevel,
-          );
-          if (thinkingLevel) {
-            context.runtime.session.setThinkingLevel(thinkingLevel);
-          }
+          yield* applyPiModelSelection(context, input.modelSelection);
         }
         const payload = yield* buildPromptPayload(input);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         context.activeTurnId = turnId;
         context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
         context.session = makeSessionSnapshot(context);
-        if (payload.images.length === 0 && isPiReloadCommand(payload.text)) {
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.started",
-            payload: {
-              ...(context.runtime.session.model
-                ? {
-                    model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
-                  }
-                : {}),
-              effort: context.runtime.session.thinkingLevel,
-            },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.reload(),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/reload",
-                detail: toMessage(cause, "Failed to reload Pi resources."),
-                cause,
-              }),
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const message = error.message;
-                offerRuntimeEvent({
-                  ...makeEventBase(context),
-                  type: "turn.completed",
-                  payload: { state: "failed", stopReason: "error", errorMessage: message },
-                  raw: { source: "pi.sdk.event", method: "reload", payload: error },
-                } satisfies ProviderRuntimeEvent);
-                offerRuntimeError(context, {
-                  message,
-                  method: "session/reload",
-                  cause: error,
-                });
-                yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-                context.activeTurnId = undefined;
-                context.session = makeSessionSnapshot(context);
-                return yield* Effect.fail(error);
-              }),
-            ),
-          );
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.completed",
-            payload: { state: "completed", stopReason: "reload" },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-          context.activeTurnId = undefined;
-          context.session = makeSessionSnapshot(context);
-          return {
-            threadId: input.threadId,
-            turnId,
-            resumeCursor: getSessionFile(context.runtime.session),
-          };
+        if (isPiReloadPayload(payload)) {
+          yield* runPiReload(context, payload.text);
+          return dispatchResult(context, turnId);
         }
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        startPrompt(context, turnId, providerText, payload.images);
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
+        startPrompt(context, turnId, buildProviderText(context, payload.text), payload.images);
+        return dispatchResult(context, turnId);
       });
 
     const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         const payload = yield* buildPromptPayload(input);
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
+        const providerText = buildProviderText(context, payload.text);
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
         }
         if (context.runtime.session.isStreaming) {
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.steer(providerText, payload.images),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "turn/steer",
-                detail: toMessage(cause, "Failed to steer Pi turn."),
-                cause,
-              }),
-          });
+          yield* steerPiTurn(context, providerText, payload.images);
         } else {
           startPrompt(context, turnId, providerText, payload.images);
         }
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
+        return dispatchResult(context, turnId);
       });
 
     const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
