@@ -369,6 +369,7 @@ interface PiSessionContext {
   // preflight, so a concurrent send must treat this as still-live rather than
   // settled.
   promptCommitting: TurnId | undefined;
+  promptCommit: Promise<void> | undefined;
   // Set when an interrupt lands while the turn's prompt() is still in async
   // preflight — nothing exists for abort() to reach yet. Fired on the next
   // agent_start once the run commits; cleared when the turn completes.
@@ -1399,9 +1400,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
-    // Serializes turn dispatch per thread: the activeTurnId/isStreaming check
-    // and the resulting prompt()/steer()/followUp() call stay atomic, so two
-    // overlapping sends cannot both read "idle" and race prompt()'s preflight.
+    // Serializes session lifecycle and turn dispatch per thread. Dispatch also
+    // waits for a prior prompt's preflight decision before choosing prompt(),
+    // steer(), or followUp().
     const dispatchLock = makeKeyedLock<ThreadId>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
@@ -1846,18 +1847,30 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       // isStreaming flag only flips deep inside prompt()'s async preflight, so
       // a concurrent sendTurn/steerTurn must not read the gap as "settled".
       context.promptCommitting = turnId;
+      let resolveCommit!: () => void;
+      const committed = new Promise<void>((resolve) => {
+        resolveCommit = resolve;
+      });
+      context.promptCommit = committed;
+      let commitSettled = false;
       const settled = () => {
+        if (commitSettled) return;
+        commitSettled = true;
         if (context.promptCommitting === turnId) context.promptCommitting = undefined;
+        if (context.promptCommit === committed) context.promptCommit = undefined;
+        resolveCommit();
       };
       // A prompt owns all SDK retries, compaction and queued continuations.
       // agent_end is per attempt; agent_settled also fires before a rejection.
-      // streamingBehavior is the last-resort fallback: if the session started
-      // streaming between the dispatch check and prompt()'s own check, the
-      // message queues instead of throwing the raw SDK busy error.
       void context.runtime.session
         .prompt(text, {
-          streamingBehavior: "followUp",
           ...(images.length > 0 ? { images } : {}),
+          // Release a waiting dispatch once prompt() either commits its own
+          // run or handles the input without a run. A rejected preflight is
+          // released by the promise rejection path below.
+          preflightResult: (success) => {
+            if (success) settled();
+          },
         })
         .then(
           () => {
@@ -1869,6 +1882,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
           },
         );
+    };
+
+    const awaitPromptCommit = (context: PiSessionContext) => {
+      const pending = context.promptCommit;
+      return pending === undefined
+        ? Effect.void
+        : Effect.promise(() => pending).pipe(Effect.uninterruptible);
     };
 
     // A turn whose run fully settled but whose completion is still queued on
@@ -2075,8 +2095,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         !context.runtime.session.isStreaming
       ) {
         context.pendingAbortTurnId = turnId;
-        context.runtime.session.clearQueue();
-        return Promise.resolve();
+        // There is no agent run to abort yet, but prompt preflight may be
+        // compacting. Abort that work now and keep the deferred run abort.
+        return abortSessionTurn(context);
       }
       return abortSessionTurn(context);
     };
@@ -2192,7 +2213,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ) {
             // The committing prompt just started its run — land the interrupt
             // that was deferred because abort() had nothing to reach yet.
-            context.pendingAbortTurnId = undefined;
             void abortSessionTurn(context).catch((cause) => {
               offerRuntimeError(context, {
                 message: toMessage(cause, "Failed to interrupt Pi turn."),
@@ -2485,7 +2505,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       };
     };
 
-    const startSession: PiAdapterShape["startSession"] = (input) =>
+    const startSessionUnlocked = (input: Parameters<PiAdapterShape["startSession"]>[0]) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
         const piSdk = yield* loadPiSdk("session/start");
@@ -2625,6 +2645,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           turns: [],
           activeTurnId: undefined,
           promptCommitting: undefined,
+          promptCommit: undefined,
           pendingAbortTurnId: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
@@ -2725,6 +2746,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         return session;
       });
 
+    const startSession: PiAdapterShape["startSession"] = (input) =>
+      dispatchLock.withLock(input.threadId, startSessionUnlocked(input));
+
     const buildPromptPayload = (input: {
       readonly input?: string | undefined;
       readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
@@ -2783,6 +2807,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.threadId,
         Effect.gen(function* () {
           const context = yield* requireSession(input.threadId);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* sendTurnBusyError();
+          }
+          yield* awaitPromptCommit(context);
           if (input.modelSelection?.provider === "pi") {
             yield* applyPiModelSelection(context, input.modelSelection);
           }
@@ -2827,6 +2858,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.threadId,
         Effect.gen(function* () {
           const context = yield* requireSession(input.threadId);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          yield* awaitPromptCommit(context);
           const payload = yield* buildPromptPayload(input);
           if (context.stopped) {
             return yield* new ProviderAdapterSessionClosedError({
@@ -2845,8 +2887,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               issue: "A Pi turn is already active for this thread.",
             });
           }
-          const providerText = buildProviderText(context, payload.text);
           const joinedTurnId = context.activeTurnId;
+          if (joinedTurnId === undefined && context.runtime.session.isStreaming) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          const providerText = buildProviderText(context, payload.text);
           const turnId = joinedTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
           if (joinedTurnId === undefined) {
             context.activeTurnId = turnId;
@@ -2858,9 +2907,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ) {
             yield* steerPiTurn(context, providerText, payload.images);
           } else {
-            // Fresh turn while an untracked run drains: startPrompt's
-            // streamingBehavior:"followUp" queues it behind the run and its own
-            // prompt() promise completes this turn — steer() would orphan it.
             startPrompt(context, turnId, providerText, payload.images);
           }
           return dispatchResult(context, turnId);
@@ -2921,33 +2967,36 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
-      Effect.gen(function* () {
-        const context = sessions.get(threadId);
-        if (!context) return;
-        yield* Effect.tryPromise({
-          try: () => disposeSessionContext(context),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/stop",
-              detail: toMessage(cause, "Failed to stop Pi session."),
-              cause,
-            }),
-        });
-        if (sessions.get(threadId) === context) {
-          sessions.delete(threadId);
-        }
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "thread.state.changed",
-          payload: { state: "closed", detail: { reason: "stopped" } },
-        } satisfies ProviderRuntimeEvent);
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "session.exited",
-          payload: { reason: "stopped", exitKind: "graceful" },
-        } satisfies ProviderRuntimeEvent);
-      });
+      dispatchLock.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const context = sessions.get(threadId);
+          if (!context) return;
+          yield* Effect.tryPromise({
+            try: () => disposeSessionContext(context),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/stop",
+                detail: toMessage(cause, "Failed to stop Pi session."),
+                cause,
+              }),
+          });
+          if (sessions.get(threadId) === context) {
+            sessions.delete(threadId);
+          }
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "thread.state.changed",
+            payload: { state: "closed", detail: { reason: "stopped" } },
+          } satisfies ProviderRuntimeEvent);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "session.exited",
+            payload: { reason: "stopped", exitKind: "graceful" },
+          } satisfies ProviderRuntimeEvent);
+        }),
+      );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));

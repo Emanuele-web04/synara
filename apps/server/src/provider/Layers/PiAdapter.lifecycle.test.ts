@@ -605,6 +605,85 @@ it("serializes a concurrent send dispatching behind a committing prompt", async 
   });
 });
 
+it("does not strand a concurrent send when the committing prompt is an extension command", async () => {
+  let markCommandStarted!: () => void;
+  const commandStarted = new Promise<void>((resolve) => {
+    markCommandStarted = resolve;
+  });
+  let releaseCommand!: () => void;
+  const commandGate = new Promise<void>((resolve) => {
+    releaseCommand = resolve;
+  });
+  captured.extensions.push((pi) => {
+    pi.registerCommand("pause", {
+      description: "Pause without inference",
+      handler: async () => {
+        markCommandStarted();
+        await commandGate;
+      },
+    });
+  });
+  const calls = responses("success", "success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const command = Effect.runPromise(adapter.sendTurn({ threadId, input: "/pause" }));
+    await commandStarted;
+    const prompt = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after the command" }),
+    );
+    releaseCommand();
+    const [commandTurn, promptTurn] = await Promise.all([command, prompt]);
+    expect(promptTurn.turnId).not.toBe(commandTurn.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(3));
+    expect(calls()).toBe(2);
+    expect(captured.sessions[0]!.pendingMessageCount).toBe(0);
+    expect(
+      captured.sessions[0]!.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Run after the command"),
+      ),
+    ).toBe(true);
+  });
+});
+
+it("starts a concurrent send cleanly after the committing prompt rejects preflight", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let rejectPrompt!: (cause: Error) => void;
+    vi.spyOn(session, "prompt")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectPrompt = reject;
+          }),
+      )
+      .mockImplementation(realPrompt);
+    const first = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Rejected in preflight" }),
+    );
+    const secondPromise = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after rejection" }),
+    );
+    rejectPrompt(new Error("preflight rejected"));
+    const second = await secondPromise;
+    expect(second.turnId).not.toBe(first.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: first.turnId,
+      payload: { state: "failed", errorMessage: "preflight rejected" },
+    });
+    expect(completions(events)[1]).toMatchObject({
+      turnId: second.turnId,
+      payload: { state: "completed" },
+    });
+    expect(session.pendingMessageCount).toBe(0);
+  });
+});
+
 it("aborts a turn interrupted while its prompt is still committing", async () => {
   responses("until-abort");
   await withAdapter(async (adapter, events) => {
@@ -667,33 +746,28 @@ it("rejects a send to a turn whose interrupt is pending while still committing",
   });
 });
 
-it("starts a new turn instead of steering into an untracked draining run", async () => {
-  responses("success", "success");
+it("rejects steering into an untracked SDK run instead of orphaning a queued turn", async () => {
+  responses("success");
   await withAdapter(async (adapter, events) => {
-    const turn = await send(adapter);
-    await waitFor(() => expect(completions(events)).toHaveLength(1));
     const session = captured.sessions[0]!;
-    // Simulate the drain tail: the turn is complete but the SDK still reports
-    // streaming (queued continuations draining after prompt() resolved).
     const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
     const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
-    const realPrompt = session.prompt.bind(session);
-    const promptSpy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
-      // prompt() must see the real flag — only the adapter's check is mocked.
-      streamingSpy.mockRestore();
-      return realPrompt(text, options);
-    });
-    const second = await Effect.runPromise(
-      adapter.steerTurn!({ threadId, input: "Fresh turn during drain tail" }),
+    const promptSpy = vi.spyOn(session, "prompt");
+    const outcome = await Effect.runPromise(
+      adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => null }),
+      ),
     );
-    expect(second.turnId).not.toBe(turn.turnId);
-    expect(steerSpy).not.toHaveBeenCalled();
-    expect(promptSpy).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(completions(events)).toHaveLength(2));
-    expect(completions(events)[1]).toMatchObject({
-      turnId: second.turnId,
-      payload: { state: "completed" },
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "steerTurn",
     });
+    expect(steerSpy).not.toHaveBeenCalled();
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(session.pendingMessageCount).toBe(0);
+    expect(completions(events)).toHaveLength(0);
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.activeTurnId).toBeUndefined();
+    streamingSpy.mockRestore();
   });
 });
 
@@ -954,6 +1028,17 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
       const stopped = Effect.runPromise(adapter.stopSession(threadId));
       try {
         await waitFor(() => expect(credentials.cancelSessionTurnRequests).toHaveBeenCalled());
+        const sendDuringStop = Effect.runPromise(
+          adapter
+            .sendTurn({ threadId, input: "Must not restart during teardown" })
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        drain();
+        await stopped;
+        expect(await sendDuringStop).toMatchObject({
+          _tag: "ProviderAdapterSessionNotFoundError",
+        });
         await waitFor(() => expect(session.isIdle).toBe(true));
         expect(calls()).toBe(1);
         expect(session.pendingMessageCount).toBe(0);
