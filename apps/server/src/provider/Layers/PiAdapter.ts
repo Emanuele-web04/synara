@@ -2787,13 +2787,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             yield* applyPiModelSelection(context, input.modelSelection);
           }
           const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
           closeSettledActiveTurn(context);
           const liveTurnId = context.activeTurnId;
           if (liveTurnId !== undefined) {
             // A turn is active: route the send through the SDK's follow-up
             // queue instead of prompt(), which would throw the raw "Agent is
             // already processing" error mid-run.
-            if (isPiReloadPayload(payload)) {
+            if (context.pendingAbortTurnId === liveTurnId || isPiReloadPayload(payload)) {
               return yield* sendTurnBusyError();
             }
             yield* queuePiFollowUp(context, payload);
@@ -2822,7 +2828,23 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         Effect.gen(function* () {
           const context = yield* requireSession(input.threadId);
           const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
           closeSettledActiveTurn(context);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
           const providerText = buildProviderText(context, payload.text);
           const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
           if (!context.activeTurnId) {

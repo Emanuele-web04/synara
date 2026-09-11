@@ -634,6 +634,39 @@ it("aborts a turn interrupted while its prompt is still committing", async () =>
   });
 });
 
+it("rejects a send to a turn whose interrupt is pending while still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    const outcome = await Effect.runPromise(
+      adapter
+        .sendTurn({ threadId, input: "Would be dropped" })
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "sendTurn",
+    });
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({ payload: { state: "interrupted" } });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
   const calls = responses("success", "overflow", "success", "success");
   await withAdapter(async (adapter, events) => {
