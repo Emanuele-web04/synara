@@ -35,6 +35,7 @@ import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
+import { DiffTruncationWarning } from "../DiffTruncationWarning";
 import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chatHeaderControls";
 import { DiffStat } from "./DiffStatLabel";
 import { DockPaneHeader } from "./DockPaneHeader";
@@ -270,6 +271,7 @@ export function GitPanel(props: {
   const selectedPath = selected?.path ?? null;
 
   const isLoading = stagedQuery.isLoading || unstagedQuery.isLoading;
+  const truncated = stagedQuery.data?.truncated === true || unstagedQuery.data?.truncated === true;
   const error =
     stagedQuery.error instanceof Error
       ? stagedQuery.error.message
@@ -303,6 +305,12 @@ export function GitPanel(props: {
       />
 
       <div className="flex max-h-[48%] min-h-0 shrink-0 flex-col gap-2 overflow-auto px-1.5 py-2">
+        {truncated ? (
+          <DiffTruncationWarning>
+            Synara stopped reading source-control changes at the diff size limit. Some files or
+            changes may be missing; bulk actions only affect the files shown.
+          </DiffTruncationWarning>
+        ) : null}
         {error ? (
           <Alert variant="error" size="sm" className="text-destructive">
             {error}
