@@ -605,6 +605,35 @@ it("serializes a concurrent send dispatching behind a committing prompt", async 
   });
 });
 
+it("aborts a turn interrupted while its prompt is still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // prompt() is gated in preflight — nothing exists for abort() to reach.
+    expect(session.isStreaming).toBe(false);
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "interrupted" },
+    });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
   const calls = responses("success", "overflow", "success", "success");
   await withAdapter(async (adapter, events) => {

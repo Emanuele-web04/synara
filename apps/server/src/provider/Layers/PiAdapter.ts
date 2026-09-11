@@ -369,6 +369,10 @@ interface PiSessionContext {
   // preflight, so a concurrent send must treat this as still-live rather than
   // settled.
   promptCommitting: TurnId | undefined;
+  // Set when an interrupt lands while the turn's prompt() is still in async
+  // preflight — nothing exists for abort() to reach yet. Fired on the next
+  // agent_start once the run commits; cleared when the turn completes.
+  pendingAbortTurnId: TurnId | undefined;
   activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
@@ -1731,6 +1735,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       cause?: unknown,
     ) => {
       if (context.stopped || context.activeTurnId !== turnId) return;
+      if (context.pendingAbortTurnId === turnId) context.pendingAbortTurnId = undefined;
       const raw = {
         source: "pi.sdk.event" as const,
         method: "prompt",
@@ -2059,6 +2064,23 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return context.runtime.session.abort();
     };
 
+    // prompt()'s async preflight leaves no run for abort() to reach — an
+    // interrupt in that window would no-op and the turn would start anyway.
+    // Defer it: agent_start fires the abort once the run actually commits.
+    const interruptActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId !== undefined &&
+        context.promptCommitting === turnId &&
+        !context.runtime.session.isStreaming
+      ) {
+        context.pendingAbortTurnId = turnId;
+        context.runtime.session.clearQueue();
+        return Promise.resolve();
+      }
+      return abortSessionTurn(context);
+    };
+
     const disposeSessionContext = async (context: PiSessionContext) => {
       try {
         // Stop retry and queued continuation before waiting for gateway drainage.
@@ -2164,6 +2186,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const handleSessionEvent = (context: PiSessionContext, event: AgentSessionEvent) => {
       switch (event.type) {
         case "agent_start":
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            // The committing prompt just started its run — land the interrupt
+            // that was deferred because abort() had nothing to reach yet.
+            context.pendingAbortTurnId = undefined;
+            void abortSessionTurn(context).catch((cause) => {
+              offerRuntimeError(context, {
+                message: toMessage(cause, "Failed to interrupt Pi turn."),
+                method: "turn/interrupt",
+                cause,
+              });
+            });
+          }
           offerRuntimeEvent({
             ...makeEventBase(context),
             type: "thread.state.changed",
@@ -2588,6 +2625,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           turns: [],
           activeTurnId: undefined,
           promptCommitting: undefined,
+          pendingAbortTurnId: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
@@ -2605,7 +2643,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             runtime.session.bindExtensions({
               uiContext: makePiExtensionUIContext(context),
               abortHandler: () => {
-                void abortSessionTurn(context).catch((cause) => {
+                void interruptActiveTurn(context).catch((cause) => {
                   offerRuntimeError(context, {
                     message: toMessage(cause, "Failed to interrupt Pi turn."),
                     method: "turn/interrupt",
@@ -2819,7 +2857,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.gatewaySessionLease,
           activeTurnId,
           Effect.tryPromise({
-            try: () => abortSessionTurn(context),
+            try: () => interruptActiveTurn(context),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
