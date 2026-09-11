@@ -459,7 +459,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           _tag: "GitManagerError",
           operation: "summarizeDiff",
         });
-        expect(result.failure.detail).toContain("truncated diff");
+        expect(result.failure.message).toContain("truncated diff");
       }
     }),
   );
