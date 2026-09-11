@@ -11,6 +11,7 @@ import {
   MessageId,
   type OrchestrationEvent,
   type OrchestrationRegenerateThreadTitleResult,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -61,6 +62,10 @@ import {
   formatProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
+import {
+  PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+  toProviderHandoffActivityModelSelection,
+} from "@synara/shared/providerHandoff";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 
@@ -148,6 +153,11 @@ import { deriveTurnStartSession } from "../turnStartSession.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
+import {
+  checkpointRevertInProgressDetail,
+  threadHasCheckpointRevertInProgress,
+  threadHasInFlightTurn,
+} from "../commandInvariants.ts";
 
 type ProviderQueueDrainEvent = Extract<
   ProviderRuntimeEvent,
@@ -174,7 +184,7 @@ type ProviderAttemptOutcome =
   | { readonly _tag: "uncertain"; readonly detail: string };
 
 export function classifyProviderAttemptOutcome(
-  exit: Exit.Exit<void, unknown>,
+  exit: Exit.Exit<unknown, unknown>,
 ): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
@@ -1255,6 +1265,43 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  const appendProviderHandoffFailureActivity = (
+    event: Extract<ProviderIntentEvent, { type: "thread.provider-handoff-requested" }>,
+    input: {
+      readonly summary: string;
+      readonly detail: string;
+      readonly settlementStatus?: "retryable" | "uncertain";
+    },
+  ) => {
+    const handoffCommandId = event.commandId ?? event.eventId;
+    return orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-failure:${event.eventId}`),
+      threadId: event.payload.threadId,
+      activity: {
+        id: EventId.makeUnsafe(`provider-handoff-failed:${event.eventId}`),
+        tone: "error",
+        kind: PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+        summary: input.summary,
+        payload: {
+          handoffCommandId,
+          sourceModelSelection: toProviderHandoffActivityModelSelection(
+            event.payload.sourceModelSelection,
+          ),
+          targetModelSelection: toProviderHandoffActivityModelSelection(
+            event.payload.targetModelSelection,
+          ),
+          handoffEventId: event.eventId,
+          detail: input.detail,
+          ...(input.settlementStatus ? { settlementStatus: input.settlementStatus } : {}),
+        },
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
+  };
+
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
@@ -1614,6 +1661,7 @@ const make = Effect.gen(function* () {
       readonly providerOptions?: ProviderStartOptions;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
+      readonly providerHandoffSource?: ProviderKind;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -1654,10 +1702,16 @@ const make = Effect.gen(function* () {
       currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
         ? currentProvider
         : undefined;
+    const providerHandoffAuthorized =
+      establishedProvider !== undefined &&
+      requestedModelSelection !== undefined &&
+      requestedModelSelection.provider !== establishedProvider &&
+      options?.providerHandoffSource === establishedProvider;
     if (
       establishedProvider !== undefined &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== establishedProvider
+      requestedModelSelection.provider !== establishedProvider &&
+      !providerHandoffAuthorized
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: establishedProvider,
@@ -1666,7 +1720,7 @@ const make = Effect.gen(function* () {
       });
     }
     const preferredProvider: ProviderKind =
-      establishedProvider ??
+      (providerHandoffAuthorized ? requestedModelSelection?.provider : establishedProvider) ??
       requestedModelSelection?.provider ??
       currentProvider ??
       thread.modelSelection.provider;
@@ -1817,8 +1871,14 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedOutcome = yield* startProviderSessionWithOutcome(resumeCursor);
+      const restartedOutcome = yield* startProviderSessionWithOutcome(
+        resumeCursor,
+        options?.registerPriorTranscriptBootstrapOnFreshStart === true,
+      );
       const restartedSession = restartedOutcome.session;
+      if (shouldRegisterContextBootstrap && restartedOutcome.priorTranscriptBootstrapPending) {
+        freshSessionContextBootstrapThreadIds.add(threadId);
+      }
       if (
         shouldRegisterContextBootstrap &&
         currentProvider === "droid" &&
@@ -4798,6 +4858,130 @@ const make = Effect.gen(function* () {
             ),
           );
           return;
+        case "thread.provider-handoff-requested": {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (!thread) {
+            return;
+          }
+
+          const handoffCommandId = event.commandId ?? event.eventId;
+          const completionActivityId = EventId.makeUnsafe(`provider-handoff:${event.eventId}`);
+          const failureActivityId = EventId.makeUnsafe(`provider-handoff-failed:${event.eventId}`);
+          const existingFailureActivity = thread.activities.find(
+            (activity) => activity.id === failureActivityId,
+          );
+          if (existingFailureActivity) {
+            const failurePayload =
+              typeof existingFailureActivity.payload === "object" &&
+              existingFailureActivity.payload !== null
+                ? (existingFailureActivity.payload as Record<string, unknown>)
+                : null;
+            if (failurePayload?.settlementStatus === "uncertain") {
+              return yield* Effect.die(
+                new Error(
+                  typeof failurePayload.detail === "string"
+                    ? failurePayload.detail
+                    : "Provider handoff previously reached an uncertain terminal state.",
+                ),
+              );
+            }
+            return;
+          }
+
+          const settings = yield* serverSettings.getSettings;
+          if (!settings.enableContinuousProviderHandoff) {
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff is turned off",
+              detail:
+                "Enable 'Continue handoffs in this chat' in Settings before switching providers.",
+            });
+            return;
+          }
+
+          const sourceProvider = event.payload.sourceModelSelection.provider;
+          const targetProvider = event.payload.targetModelSelection.provider;
+          if (
+            thread.modelSelection.provider !== sourceProvider &&
+            thread.modelSelection.provider !== targetProvider
+          ) {
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff is stale",
+              detail: `This handoff expected '${sourceProvider}', but the thread now uses '${thread.modelSelection.provider}'.`,
+            });
+            return;
+          }
+          if (thread.modelSelection.provider === targetProvider) {
+            if (thread.activities.some((activity) => activity.id === completionActivityId)) {
+              return;
+            }
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff was superseded",
+              detail: `The thread already switched to '${targetProvider}' through another handoff request.`,
+            });
+            return;
+          }
+          if (
+            thread.modelSelection.provider === sourceProvider &&
+            (threadHasInFlightTurn(thread) ||
+              thread.hasPendingApprovals === true ||
+              thread.hasPendingUserInput === true)
+          ) {
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff was blocked",
+              detail:
+                "The thread became active or received a pending provider interaction before the handoff started. Retry after it settles.",
+            });
+            return;
+          }
+          if (threadHasCheckpointRevertInProgress(thread)) {
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff was blocked",
+              detail: checkpointRevertInProgressDetail(event.payload.threadId),
+            });
+            return;
+          }
+          if (yield* hasPendingQueuedTurnForSession(event.payload.threadId)) {
+            yield* appendProviderHandoffFailureActivity(event, {
+              summary: "Provider handoff was blocked",
+              detail:
+                "The thread has a queued message that must run before switching providers. Retry the handoff after the queue settles.",
+            });
+            yield* drainQueuedTurnsForSession(event.payload.threadId);
+            return;
+          }
+
+          const handoffExit = yield* Effect.exit(
+            ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+              modelSelection: event.payload.targetModelSelection,
+              runtimeMode: thread.runtimeMode,
+              registerPriorTranscriptBootstrapOnFreshStart: true,
+              providerHandoffSource: sourceProvider,
+            }),
+          );
+          if (Exit.isFailure(handoffExit)) {
+            const outcome = classifyProviderAttemptOutcome(handoffExit);
+            if (outcome._tag === "rejected") {
+              yield* appendProviderHandoffFailureActivity(event, {
+                summary: `Could not continue with ${PROVIDER_DISPLAY_NAMES[targetProvider]}`,
+                detail: outcome.detail,
+              });
+              return;
+            }
+            return yield* Effect.failCause(handoffExit.cause);
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.provider.handoff.complete",
+            commandId: CommandId.makeUnsafe(`server:provider-handoff-complete:${event.eventId}`),
+            threadId: event.payload.threadId,
+            handoffCommandId: CommandId.makeUnsafe(handoffCommandId),
+            handoffEventId: event.eventId,
+            sourceModelSelection: event.payload.sourceModelSelection,
+            targetModelSelection: event.payload.targetModelSelection,
+            createdAt: event.payload.createdAt,
+          });
+          return;
+        }
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
@@ -4944,6 +5128,22 @@ const make = Effect.gen(function* () {
         state: input.state,
         detail: input.detail,
       });
+      if (input.event.type === "thread.provider-handoff-requested") {
+        const targetProvider = input.event.payload.targetModelSelection.provider;
+        yield* appendProviderHandoffFailureActivity(input.event, {
+          summary: `Could not continue with ${PROVIDER_DISPLAY_NAMES[targetProvider]}`,
+          detail: input.detail,
+          // If the process dies between this activity and delivery settlement,
+          // replay must re-enter quarantine instead of treating the recorded
+          // failure as a successful provider switch.
+          settlementStatus: "uncertain",
+        });
+        yield* setThreadSessionError({
+          threadId: input.event.payload.threadId,
+          detail: `Provider handoff could not be settled safely. ${input.detail}`,
+          createdAt: new Date().toISOString(),
+        });
+      }
       const settled = yield* deliveryRepository.markTerminalFailure({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: input.event.sequence,
@@ -5014,6 +5214,28 @@ const make = Effect.gen(function* () {
               threadId: event.payload.threadId,
               cause: Cause.pretty(cause),
             }),
+          ),
+        );
+      } else if (event.type === "thread.provider-handoff-requested") {
+        yield* Effect.gen(function* () {
+          const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: event.payload.threadId,
+          });
+          const blockerDetail =
+            Option.isSome(blocker) && blocker.value.lastError !== null
+              ? blocker.value.lastError
+              : "an earlier provider command failed";
+          yield* appendProviderHandoffFailureActivity(event, {
+            summary: PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            detail: `The provider handoff was not started. Blocking failure: ${blockerDetail}`,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to close a quarantined provider handoff", {
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.andThen(Effect.failCause(cause))),
           ),
         );
       }

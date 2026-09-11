@@ -144,6 +144,8 @@ import {
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
+  resolvePendingProviderHandoff,
+  resolveProviderHandoffTrail,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
@@ -231,7 +233,7 @@ import { SynaraLogo } from "./SynaraLogo";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
-import { ChatHeader } from "./chat/ChatHeader";
+import { ChatHeader, type ProviderHandoffMode } from "./chat/ChatHeader";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
@@ -517,7 +519,7 @@ export default function ChatView({
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
-  const { createThreadHandoff } = useThreadHandoff();
+  const { createThreadHandoff, continueThreadWithProvider } = useThreadHandoff();
   const rawSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(rawSearch.splitViewId ?? null), [rawSearch.splitViewId]),
@@ -861,6 +863,10 @@ export default function ChatView({
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const pendingProviderHandoff = useMemo(
+    () => resolvePendingProviderHandoff(threadActivities),
+    [threadActivities],
+  );
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
     messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -1518,7 +1524,8 @@ export default function ChatView({
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting || isComposerApprovalState || isSidechatExpired || pendingProviderHandoff !== null;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -2054,6 +2061,10 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
+  const providerHandoffTrail = useMemo(
+    () => resolveProviderHandoffTrail(threadActivities),
+    [threadActivities],
+  );
   const handoffTargetProviders = useMemo(
     () =>
       activeThread
@@ -2065,7 +2076,13 @@ export default function ChatView({
         : [],
     [activeThread, providerStatuses, serverSettingsQuery.data?.providers],
   );
-  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
+  const handoffActionLabel = pendingProviderHandoff
+    ? `Switching to ${PROVIDER_DISPLAY_NAMES[pendingProviderHandoff.targetModelSelection.provider]}`
+    : settings.enableContinuousProviderHandoff
+      ? "Hand off to another provider"
+      : activeThread
+        ? "Hand off thread"
+        : "Create handoff thread";
   const activeProviderStatus = useMemo(
     () => findProviderStatus(providerStatuses, selectedProvider),
     [selectedProvider, providerStatuses],
@@ -3609,25 +3626,40 @@ export default function ChatView({
   );
 
   const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
+    async (targetProvider: ProviderKind, mode: ProviderHandoffMode) => {
       if (!activeThread || handoffDisabled) {
         return;
       }
 
+      const shouldContinueInThread =
+        mode === "continue" && settings.enableContinuousProviderHandoff;
+      const handoffPromise = shouldContinueInThread
+        ? continueThreadWithProvider(activeThread, targetProvider)
+        : createThreadHandoff(activeThread, targetProvider);
+      const errorTitle = shouldContinueInThread
+        ? "Could not switch providers"
+        : "Could not create handoff thread";
+      const fallbackErrorDescription = shouldContinueInThread
+        ? "An error occurred while switching providers."
+        : "An error occurred while creating the handoff thread.";
+
       try {
-        await createThreadHandoff(activeThread, targetProvider);
+        await handoffPromise;
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
+          title: errorTitle,
+          description: error instanceof Error ? error.message : fallbackErrorDescription,
         });
       }
     },
-    [activeThread, createThreadHandoff, handoffDisabled],
+    [
+      activeThread,
+      continueThreadWithProvider,
+      createThreadHandoff,
+      handoffDisabled,
+      settings.enableContinuousProviderHandoff,
+    ],
   );
 
   const clearComposerInput = useCallback(
@@ -5049,9 +5081,10 @@ export default function ChatView({
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
                 composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
-                isSidechatExpired && "pointer-events-none opacity-60",
+                (isSidechatExpired || pendingProviderHandoff !== null) &&
+                  "pointer-events-none opacity-60",
               )}
-              aria-disabled={isSidechatExpired}
+              aria-disabled={isComposerEditorDisabled}
             >
               <div
                 className={cn(
@@ -5270,7 +5303,7 @@ export default function ChatView({
                     submission={{
                       phase,
                       busy: isSendBusy,
-                      connecting: isConnecting,
+                      connecting: isConnecting || pendingProviderHandoff !== null,
                       expired: isSidechatExpired,
                       preparingImages: isPreparingComposerImages,
                       preparingWorktree: isPreparingWorktree,
@@ -5363,10 +5396,13 @@ export default function ChatView({
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
+          handoffPending={pendingProviderHandoff !== null}
           handoffDisabled={handoffDisabled}
           handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
+          providerHandoffTrail={providerHandoffTrail}
+          continuousHandoffEnabled={settings.enableContinuousProviderHandoff}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}

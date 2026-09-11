@@ -43,6 +43,14 @@ import {
 } from "./appSettings";
 
 describe("server-backed provider enablement", () => {
+  it("keeps continuous provider handoff opt-in and persists explicit changes", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).enableContinuousProviderHandoff).toBe(false);
+    expect(DEFAULT_SERVER_SETTINGS_VIEW.enableContinuousProviderHandoff).toBe(false);
+    expect(
+      appSettingsPatchToServerSettingsPatch({ enableContinuousProviderHandoff: true }),
+    ).toEqual({ enableContinuousProviderHandoff: true });
+  });
+
   it("reads disabled providers from the server settings view", () => {
     expect(
       getServerDisabledProviders({

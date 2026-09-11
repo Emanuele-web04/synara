@@ -20,10 +20,10 @@ import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
-  ArrowRightIcon,
   CheckIcon,
   HandoffIcon,
   HistoryIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
@@ -41,8 +41,8 @@ import {
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
-import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
-import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
@@ -64,6 +64,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { ProviderHandoffTrail } from "./ProviderHandoffTrail";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -98,10 +99,16 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
+  handoffPending?: boolean;
   handoffDisabled: boolean;
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
+  providerHandoffTrail: ReadonlyArray<{
+    readonly provider: ProviderKind;
+    readonly isReturn: boolean;
+  }>;
+  continuousHandoffEnabled: boolean;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -145,11 +152,13 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
-  onCreateHandoff: (targetProvider: ProviderKind) => void;
+  onCreateHandoff: (targetProvider: ProviderKind, mode: ProviderHandoffMode) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
 }
+
+export type ProviderHandoffMode = "continue" | "new-thread";
 
 const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
@@ -521,10 +530,13 @@ export function ChatHeader({
   diffToggleShortcutLabel,
   handoffBadgeLabel,
   handoffActionLabel,
+  handoffPending = false,
   handoffDisabled,
   handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
+  providerHandoffTrail,
+  continuousHandoffEnabled,
   gitCwd,
   diffTotals,
   showGitActions: showGitActionsProp,
@@ -588,6 +600,7 @@ export function ChatHeader({
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
+  const showProviderHandoffTrail = providerHandoffTrail.length > 1 || handoffBadgeLabel !== null;
 
   useEffect(() => {
     const el = headerRef.current;
@@ -609,6 +622,14 @@ export function ChatHeader({
       />
     );
   };
+  const renderHandoffTargetItems = (mode: ProviderHandoffMode) =>
+    handoffActionTargetProviders.map((provider) => (
+      <MenuItem key={provider} onClick={() => onCreateHandoff(provider, mode)}>
+        {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
+        {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
+        <span>{PROVIDER_DISPLAY_NAMES[provider]}</span>
+      </MenuItem>
+    ));
 
   // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts
   // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
@@ -713,7 +734,10 @@ export function ChatHeader({
               >
                 {threadIconKind === "none" ? null : (
                   <span
-                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                    className={cn(
+                      "inline-flex size-3.5 shrink-0 items-center justify-center",
+                      showProviderHandoffTrail && "sm:hidden",
+                    )}
                     title={
                       threadIconKind === "terminal"
                         ? "Terminal"
@@ -768,26 +792,14 @@ export function ChatHeader({
                   onNavigateToThread={onNavigateToThread}
                 />
               ) : null}
-              {!hideHandoffControls && handoffBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Badge
-                        variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
-                      >
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-                        </span>
-                        <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-                        </span>
-                      </Badge>
-                    }
-                  />
-                  <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-                </Tooltip>
+              {!hideHandoffControls ? (
+                <ProviderHandoffTrail
+                  trail={providerHandoffTrail}
+                  compact={compact}
+                  fallbackLabel={handoffBadgeLabel}
+                  fallbackSourceProvider={handoffBadgeSourceProvider}
+                  fallbackTargetProvider={handoffBadgeTargetProvider}
+                />
               ) : null}
             </div>
           </div>
@@ -813,21 +825,46 @@ export function ChatHeader({
                       />
                     }
                   >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    {handoffPending ? (
+                      <LoaderCircleIcon className="size-[1em] shrink-0 animate-spin opacity-80" />
+                    ) : (
+                      <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
+                    )}
+                    {!compact ? (
+                      <span className="truncate font-normal">
+                        {handoffPending ? "Switching…" : "Hand off"}
+                      </span>
+                    ) : null}
                   </MenuTrigger>
                 }
               />
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
-                </MenuItem>
-              ))}
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
+              {continuousHandoffEnabled ? (
+                <>
+                  <MenuSub>
+                    <MenuSubTrigger>
+                      <MessageCircleIcon className="size-3.5 shrink-0" />
+                      <span>Continue here</span>
+                    </MenuSubTrigger>
+                    <ComposerPickerMenuSubPopup className="w-48 min-w-48">
+                      {renderHandoffTargetItems("continue")}
+                    </ComposerPickerMenuSubPopup>
+                  </MenuSub>
+                  <MenuSub>
+                    <MenuSubTrigger>
+                      <HandoffIcon className="size-3.5 shrink-0" />
+                      <span>New conversation</span>
+                    </MenuSubTrigger>
+                    <ComposerPickerMenuSubPopup className="w-48 min-w-48">
+                      {renderHandoffTargetItems("new-thread")}
+                    </ComposerPickerMenuSubPopup>
+                  </MenuSub>
+                </>
+              ) : (
+                renderHandoffTargetItems("new-thread")
+              )}
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}

@@ -8,10 +8,13 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
+  resolvePendingProviderHandoff,
+  resolveProviderHandoffTrail,
   resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
@@ -185,6 +188,29 @@ describe("threadHandoff", () => {
     ).toEqual([]);
   });
 
+  it("supports every configured Synara provider as a continuous handoff target", () => {
+    const providers = DEFAULT_PROVIDER_ORDER;
+    const providerStatuses = providers.map(
+      (provider): ServerProviderStatus => ({
+        provider,
+        status: "ready",
+        available: true,
+        authStatus: provider === "opencode" ? "unknown" : "authenticated",
+        checkedAt: "2026-09-10T10:00:00.000Z",
+      }),
+    );
+
+    for (const sourceProvider of providers) {
+      expect(
+        resolveAvailableHandoffTargetProviders({
+          sourceProvider,
+          providerSettings: DEFAULT_SERVER_SETTINGS_VIEW.providers,
+          providerStatuses,
+        }),
+      ).toEqual(providers.filter((provider) => provider !== sourceProvider));
+    }
+  });
+
   it("preserves the source thread title for the created handoff thread", () => {
     expect(resolveThreadHandoffTitle({ title: "General Greeting" })).toBe("General Greeting");
     expect(resolveThreadHandoffTitle({ title: "  Debug   Grok handoff  " })).toBe(
@@ -235,5 +261,90 @@ describe("threadHandoff", () => {
       provider: "codex",
       model: "gpt-5.5",
     });
+  });
+
+  it("uses the discovered Pi model when Pi has no static default", () => {
+    expect(
+      resolveThreadHandoffModelSelection({
+        sourceThread: {
+          modelSelection: { provider: "codex", model: "gpt-5.5" },
+        },
+        targetProvider: "pi",
+        projectDefaultModelSelection: null,
+        stickyModelSelectionByProvider: {},
+        discoveredFallbackModel: "openai/gpt-5.5",
+      }),
+    ).toEqual({ provider: "pi", model: "openai/gpt-5.5" });
+  });
+
+  it("keeps the handoff pending until a matching terminal activity arrives", () => {
+    const pending = {
+      kind: "provider.handoff.requested",
+      payload: {
+        handoffCommandId: "handoff-1",
+        sourceModelSelection: { provider: "claudeAgent", model: "claude-sonnet" },
+        targetModelSelection: { provider: "grok", model: "grok-code" },
+      },
+    };
+    expect(resolvePendingProviderHandoff([pending])).toMatchObject({
+      handoffCommandId: "handoff-1",
+      targetModelSelection: { provider: "grok" },
+    });
+    expect(
+      resolvePendingProviderHandoff([
+        pending,
+        {
+          kind: "provider.handoff.completed",
+          payload: {
+            handoffCommandId: "handoff-1",
+            sourceModelSelection: { provider: "claudeAgent", model: "claude-sonnet" },
+            targetModelSelection: { provider: "grok", model: "grok-code" },
+          },
+        },
+      ]),
+    ).toBeNull();
+    expect(
+      resolvePendingProviderHandoff([
+        pending,
+        {
+          kind: "provider.handoff.failed",
+          payload: {
+            handoffCommandId: "handoff-1",
+            sourceModelSelection: { provider: "claudeAgent", model: "claude-sonnet" },
+            targetModelSelection: { provider: "grok", model: "grok-code" },
+          },
+        },
+      ]),
+    ).toBeNull();
+  });
+
+  it("builds an ordered provider trail and marks returns", () => {
+    const activity = (
+      id: string,
+      sourceProvider: ProviderKind,
+      targetProvider: ProviderKind,
+    ): Pick<OrchestrationThreadActivity, "kind" | "payload"> => ({
+      kind: "provider.handoff.completed",
+      payload: {
+        sourceModelSelection: { provider: sourceProvider, model: `${sourceProvider}-model` },
+        targetModelSelection: { provider: targetProvider, model: `${targetProvider}-model` },
+        id,
+      },
+    });
+
+    expect(
+      resolveProviderHandoffTrail([
+        activity("one", "claudeAgent", "antigravity"),
+        activity("two", "antigravity", "codex"),
+        activity("three", "codex", "grok"),
+        activity("four", "grok", "claudeAgent"),
+      ]),
+    ).toEqual([
+      { provider: "claudeAgent", isReturn: false },
+      { provider: "antigravity", isReturn: false },
+      { provider: "codex", isReturn: false },
+      { provider: "grok", isReturn: false },
+      { provider: "claudeAgent", isReturn: true },
+    ]);
   });
 });

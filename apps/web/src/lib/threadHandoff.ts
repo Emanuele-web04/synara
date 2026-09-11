@@ -15,8 +15,10 @@ import {
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
+import { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
+export { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
 import { type Thread } from "../types";
-import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
+import { DEFAULT_PROVIDER_ORDER, isProviderKind } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
 import { isCompletedContextCompaction } from "./contextWindow";
@@ -29,6 +31,48 @@ const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "context-compaction",
   "context-window.updated",
 ]);
+
+export interface ProviderHandoffTrailEntry {
+  readonly provider: ProviderKind;
+  readonly isReturn: boolean;
+}
+
+function providerFromModelSelectionPayload(value: unknown): ProviderKind | null {
+  if (typeof value !== "object" || value === null || !("provider" in value)) {
+    return null;
+  }
+  const provider = (value as { readonly provider?: unknown }).provider;
+  return typeof provider === "string" && isProviderKind(provider) ? provider : null;
+}
+
+export function resolveProviderHandoffTrail(
+  activities: ReadonlyArray<Pick<OrchestrationThreadActivity, "kind" | "payload">>,
+): ReadonlyArray<ProviderHandoffTrailEntry> {
+  const trail: ProviderHandoffTrailEntry[] = [];
+  const seen = new Set<ProviderKind>();
+
+  for (const activity of activities) {
+    if (activity.kind !== "provider.handoff.completed") continue;
+    if (typeof activity.payload !== "object" || activity.payload === null) continue;
+
+    const payload = activity.payload as {
+      readonly sourceModelSelection?: unknown;
+      readonly targetModelSelection?: unknown;
+    };
+    const source = providerFromModelSelectionPayload(payload.sourceModelSelection);
+    const target = providerFromModelSelectionPayload(payload.targetModelSelection);
+    if (!source || !target || source === target) continue;
+
+    if (trail.length === 0 || trail.at(-1)?.provider !== source) {
+      trail.push({ provider: source, isReturn: seen.has(source) });
+      seen.add(source);
+    }
+    trail.push({ provider: target, isReturn: seen.has(target) });
+    seen.add(target);
+  }
+
+  return trail;
+}
 
 function isImportableThreadMessage(
   message: Thread["messages"][number],
@@ -181,12 +225,15 @@ export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">)
 }
 
 export function canCreateThreadHandoff(input: {
-  readonly thread: Pick<Thread, "handoff" | "messages" | "session">;
+  readonly thread: Pick<Thread, "activities" | "handoff" | "messages" | "session">;
   readonly isBusy?: boolean;
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
 }): boolean {
   if (input.isBusy || input.hasPendingApprovals || input.hasPendingUserInput) {
+    return false;
+  }
+  if (resolvePendingProviderHandoff(input.thread.activities) !== null) {
     return false;
   }
   const sessionStatus = input.thread.session?.orchestrationStatus;
@@ -208,6 +255,7 @@ export function resolveThreadHandoffModelSelection(input: {
   readonly targetProvider: ProviderKind;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
   readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+  readonly discoveredFallbackModel?: string | null;
 }): ModelSelection {
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
@@ -222,9 +270,9 @@ export function resolveThreadHandoffModelSelection(input: {
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return input.projectDefaultModelSelection;
   }
-  const defaultModel = getDefaultModel(input.targetProvider);
+  const defaultModel = getDefaultModel(input.targetProvider) ?? input.discoveredFallbackModel;
   if (!defaultModel) {
-    throw new Error("Select a Pi model before handing off to Pi.");
+    throw new Error("No Pi model is available. Configure Pi and retry the handoff.");
   }
   return {
     provider: input.targetProvider,
