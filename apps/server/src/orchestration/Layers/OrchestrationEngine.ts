@@ -82,14 +82,41 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 
+/**
+ * Bounds only the caller's wait on a dispatch result — never the command
+ * itself. A timed-out caller gets an OrchestrationCommandTimeoutError while
+ * the admitted command still executes whenever the worker reaches it; the
+ * durable command receipt keeps a retried same-id command exactly-once.
+ */
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
+/**
+ * Bounds a single command's execution AFTER the worker dequeues it. This is a
+ * last-resort hang guard so a wedged command cannot stall the lone worker (or
+ * a still-waiting in-flight caller) forever — it is not a queue-backlog
+ * control. Queue wait is deliberately unbounded: late execution of an admitted
+ * command is always better than dropping real work, because the decider
+ * revalidates every command against current state at run time and
+ * staleness-sensitive commands carry expected-state guards. Kept far above any
+ * legitimate execution time so it can never kill healthy work the way the old
+ * caller-budget race did.
+ */
+const ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS = 300_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
 /** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
 const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
-type CommandExecutionState = "queued" | "in-flight" | "abandoned";
-type DispatchTimeoutDecision = { kind: "abandon" } | { kind: "wait" };
+/**
+ * Dispatcher/worker handshake for the caller-side wait bound. The worker flips
+ * "queued" to "in-flight" when it starts a command, so a dispatch timeout can
+ * tell a still-queued command (caller fails fast; the command itself still
+ * runs once dequeued — caller impatience never cancels admitted work) from an
+ * already-executing one (caller keeps waiting for the real outcome).
+ * "caller-timed-out" is a logging marker left by a timed-out caller; the
+ * worker notes it and runs the command anyway.
+ */
+type CommandExecutionState = "queued" | "in-flight" | "caller-timed-out";
+type DispatchTimeoutDecision = { kind: "fail-caller" } | { kind: "wait" };
 type OrchestrationEnginePhase = "running" | "quiescing" | "draining" | "stopped";
 
 interface CommandEnvelope {
@@ -97,7 +124,6 @@ interface CommandEnvelope {
   attachmentPrincipal: ManagedAttachmentPrincipal;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   executionState: Ref.Ref<CommandExecutionState>;
-  deadlineAtMs: number;
 }
 
 interface EngineAdmissionState {
@@ -222,11 +248,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       )
       .pipe(Effect.uninterruptible);
 
-  const makeCommandTimeoutError = (command: OrchestrationCommand) =>
+  const makeCommandTimeoutError = (
+    command: OrchestrationCommand,
+    timeoutMs: number = ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+  ) =>
     new OrchestrationCommandTimeoutError({
       commandId: command.commandId,
       commandType: command.type,
-      timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+      timeoutMs,
     });
 
   const makeCommandInternalError = (
@@ -683,7 +712,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // while an effect is being evaluated.
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
-    const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
@@ -705,18 +733,25 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
     const runCommand = Effect.gen(function* () {
-      const shouldSkip = yield* Ref.modify(envelope.executionState, (state) => {
-        if (state === "abandoned") {
-          return [true, state] as const;
-        }
-        return [false, "in-flight"] as const;
-      });
-      if (shouldSkip) {
-        return;
-      }
-
-      if (remainingBudgetMs === 0) {
-        return yield* makeCommandTimeoutError(envelope.command);
+      // Admitted work always executes once dequeued. A dispatch timeout only
+      // ends the caller's wait — it must not cancel the command, because queued
+      // commands carry real intent (a sent turn, an activity record) that the
+      // caller can no longer observe but still expects to happen. The durable
+      // receipt check below keeps a retried same-id command exactly-once, so a
+      // late run cannot double-commit.
+      const callerTimedOut = yield* Ref.modify(
+        envelope.executionState,
+        (state) => [state === "caller-timed-out", "in-flight"] as const,
+      );
+      if (callerTimedOut) {
+        yield* Effect.log(
+          "executing queued orchestration command after its caller timed out",
+        ).pipe(
+          Effect.annotateLogs({
+            commandId: envelope.command.commandId,
+            commandType: envelope.command.type,
+          }),
+        );
       }
 
       const existingReceipt = yield* commandReceiptRepository.getByCommandId({
@@ -994,10 +1029,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
-      Effect.timeoutOption(remainingBudgetMs),
+      // Hang guard only (see ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS): never
+      // tied to the caller's wait, so a slow queue cannot abort real work.
+      Effect.timeoutOption(ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS),
       Effect.flatMap((outcome) =>
         Option.match(outcome, {
-          onNone: () => Effect.fail(makeCommandTimeoutError(envelope.command)),
+          onNone: () =>
+            Effect.fail(
+              makeCommandTimeoutError(
+                envelope.command,
+                ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS,
+              ),
+            ),
           onSome: Effect.succeed,
         }),
       ),
@@ -1321,7 +1364,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         attachmentPrincipal: context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
         result,
         executionState,
-        deadlineAtMs: Date.now() + ORCHESTRATION_DISPATCH_TIMEOUT_MS,
       };
       const nextIdle = yield* Deferred.make<void>();
       const admission = yield* Ref.modify(
@@ -1361,6 +1403,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           reason: admission.reason,
         });
       }
+      // The timeout below bounds only this caller's wait. It never cancels the
+      // admitted command: a still-queued envelope keeps its slot and runs when
+      // the worker reaches it, so a slow queue cannot discard real user intent.
       return yield* Deferred.await(result).pipe(
         Effect.timeoutOption(`${ORCHESTRATION_DISPATCH_TIMEOUT_MS} millis`),
         Effect.flatMap((outcome) =>
@@ -1370,7 +1415,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 executionState,
                 (state): readonly [DispatchTimeoutDecision, CommandExecutionState] =>
                   state === "queued"
-                    ? [{ kind: "abandon" }, "abandoned"]
+                    ? [{ kind: "fail-caller" }, "caller-timed-out"]
                     : [{ kind: "wait" }, state],
               ).pipe(
                 Effect.flatMap((decision) =>
@@ -1386,7 +1431,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                         Effect.flatMap(() => Deferred.await(result)),
                       )
                     : Effect.logWarning(
-                        "orchestration dispatch timed out before command started",
+                        "orchestration dispatch timed out before command started; the queued command will still run",
                       ).pipe(
                         Effect.annotateLogs({
                           commandId: command.commandId,
