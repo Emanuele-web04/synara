@@ -142,6 +142,21 @@ function windowIdDescription(byName: ToolsByName, tool: string): string {
 }
 
 describe("agent gateway computer tools", () => {
+  it("bounds active tool context and directs deferred discovery to the next small set", async () => {
+    const { tools, manager } = await setup(
+      Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
+    );
+    const definitions = tools.map((tool) => tool.definition);
+    expect(JSON.stringify(definitions).length).toBeLessThan(40_000);
+    const notes = computerToolInstructions();
+    expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
+    expect(notes).toContain("discover only the small set of tools needed next by exact names");
+    expect(notes).toContain("stop on any refusal");
+    expect(notes).toContain('computer_launch_app({app:"Calculator"})');
+    expect(notes).toContain("choose delivery_mode:foreground from the first mutation");
+    await manager.dispose();
+  });
+
   it("reserves model observation authority for explicit perception tools", async () => {
     const { backend, manager, call } = await setup();
     const observations: boolean[] = [];
@@ -190,11 +205,9 @@ describe("agent gateway computer tools", () => {
     const { byName } = await setup();
     const notes = computerToolInstructions();
     expect(notes).toContain("select an exact input target");
-    expect(windowIdDescription(byName, "computer_press_key")).toContain(
-      "without authorizing foreground promotion",
-    );
+    expect(windowIdDescription(byName, "computer_press_key")).toContain("does not activate it");
     expect(windowIdDescription(byName, "computer_click")).toContain(
-      "input is scoped to that exact window",
+      "Exact window for label or x/y targeting",
     );
   });
 
@@ -206,11 +219,9 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("covered by the active task's Computer consent");
     expect(notes).not.toContain("without bringing it to the front");
     expect(windowIdDescription(byName, "computer_click")).toContain(
-      "input is scoped to that exact window",
+      "Exact window for label or x/y targeting",
     );
-    expect(windowIdDescription(byName, "computer_type_text")).toContain(
-      "without authorizing foreground promotion",
-    );
+    expect(windowIdDescription(byName, "computer_type_text")).toContain("does not activate it");
     expect(byName.get("computer_activate_window")?.definition.description).toContain(
       "active Computer task's consent",
     );
@@ -348,6 +359,30 @@ describe("agent gateway computer tools", () => {
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
   });
 
+  it("filters discovery to the requested app without losing availability or choosing a window", async () => {
+    const backend = new FakeComputerBackend();
+    const windows = await backend.listWindows();
+    backend.emitWindowsChanged([...windows, { ...windows[0]!, id: "same-app-second-window" }]);
+    const { call, manager } = await setup(backend);
+    try {
+      const all = resultJson(await call("computer_list_windows", {})) as { windows: unknown[] };
+      expect(all.windows).toHaveLength(windows.length + 1);
+      const filtered = resultJson(
+        await call("computer_list_windows", { app: windows[0]!.appName!.toUpperCase() }),
+      ) as { windows: { id: string }[]; availability: unknown };
+      expect(filtered.windows.map((window) => window.id)).toEqual([
+        windows[0]!.id,
+        "same-app-second-window",
+      ]);
+      expect(filtered.availability).toBeDefined();
+      expect(resultJson(await call("computer_list_windows", { app: "missing-app" }))).toMatchObject(
+        { windows: [] },
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("returns perception payloads and preserves screenshot image content", async () => {
     const { call } = await setup();
     const list = await call("computer_list_windows", {});
@@ -467,7 +502,7 @@ describe("agent gateway computer tools", () => {
       "computer_scroll",
     ]) {
       const description = byName.get(name)?.definition.description ?? "";
-      expect(description).toContain("never desktop coordinates, and never converted by you");
+      expect(description).toContain("never desktop coordinates");
       expect(description).toContain("Pointing at the desktop");
       expect(description).not.toContain("global desktop coordinates");
       // The optional id lives beside x/y on every pointer tool.
@@ -489,7 +524,7 @@ describe("agent gateway computer tools", () => {
     // to be described on the shared property rather than in one tool.
     for (const name of ["computer_click", "computer_double_click", "computer_drag"]) {
       const schema = JSON.stringify(byName.get(name)?.definition.inputSchema ?? {});
-      expect(schema).toContain("input is scoped to that exact window");
+      expect(schema).toContain("Exact window for label or x/y targeting");
     }
   });
 
@@ -929,14 +964,13 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("Pass window_id");
     for (const name of ["computer_type_text", "computer_press_key", "computer_hotkey"]) {
       const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("Keys go where the agent seat is aimed");
+      expect(tool?.definition.description).toContain("Pass window_id or use the last aimed window");
       expect(tool?.definition.description).toContain("Aiming the keyboard");
       expect(JSON.stringify(tool?.definition.inputSchema)).toContain("window_id");
     }
-    // The opt-out has to fence itself off, or it reintroduces the separate
-    // perception call the attached screenshot exists to remove.
+    // A final text observation can replace an image when it verifies the result.
     const schema = JSON.stringify(byName.get("computer_click")?.definition.inputSchema);
-    expect(schema).toContain("Never pass false on the last action");
+    expect(schema).toContain("verify with fresh state or a final screenshot");
   });
 
   it("reports an unchanged screen instead of resending the identical image", async () => {
@@ -978,7 +1012,7 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("not that the action failed");
     // Each action still says a screenshot is attached, and points at the rest.
     const description = byName.get("computer_click")?.definition.description ?? "";
-    expect(description).toContain("screenshot taken shortly after the action");
+    expect(description).toContain("Returns a screenshot by default");
     expect(description).toContain("The screenshot on every action");
   });
 
@@ -1009,7 +1043,7 @@ describe("agent gateway computer tools", () => {
       "computer_perform_action",
     ]) {
       const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("screenshot taken shortly after the action");
+      expect(tool?.definition.description).toContain("Returns a screenshot by default");
       expect(JSON.stringify(tool?.definition.inputSchema)).toContain("include_screenshot");
     }
     // Launching resolves seconds later and clipboard writes change no pixels,

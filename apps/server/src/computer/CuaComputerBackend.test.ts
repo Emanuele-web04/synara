@@ -22,6 +22,7 @@ function fixture() {
   }> = [];
   let bounds = { x: -300, y: 20, width: 200, height: 100 };
   let live = true;
+  let elements: Record<string, unknown>[] = [];
   let failure: Error | undefined;
   let nativeRefusal = false;
   let desktopPaused = false;
@@ -122,7 +123,7 @@ function fixture() {
           window_id: captureWindowId,
           window_bounds: bounds,
           screenshot_frame_valid: true,
-          elements: [],
+          elements,
         },
         content: [{ type: "image", mimeType: "image/png", data: header.toString("base64") }],
       };
@@ -135,6 +136,9 @@ function fixture() {
   const backend = new CuaComputerBackend({ endpoint: "/fixture-only", request });
   return {
     backend,
+    setElements: (value: Record<string, unknown>[]) => {
+      elements = value;
+    },
     pauseDesktop: (paused: boolean) => {
       desktopPaused = paused;
     },
@@ -195,6 +199,49 @@ function fixture() {
 }
 
 describe("Cua native boundary", () => {
+  it("uses advertised AX actions and retains a fresh check at input dispatch", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Equals",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+        actions: ["AXPress"],
+      },
+      {
+        role: "AXButton",
+        label: "Canvas",
+        frame: { x: -270, y: 30, width: 20, height: 20 },
+        element_token: "canvas-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = { target: { label: "Equals" }, node, point: node.activationPoint! };
+    expect(f.calls.filter((c) => c.name === "list_windows")).toHaveLength(1);
+    expect(state.windows).toHaveLength(1);
+    expect(f.backend.supportsAction(target, "AXPress")).toBe(true);
+    expect(f.backend.supportsAction({ ...target, node: state.root!.children[1]! }, "AXPress")).toBe(
+      false,
+    );
+    await f.backend.focusWindow("cua:10:20");
+    expect(f.calls.filter((c) => c.name === "list_windows")).toHaveLength(1);
+    await f.backend.performAction(target, "AXPress");
+    expect(f.calls.filter((c) => c.name === "list_windows")).toHaveLength(2);
+    expect(f.calls.find((c) => c.name === "click")?.args).toMatchObject({
+      element_token: "fresh-token",
+      pid: 10,
+      window_id: 20,
+    });
+    expect(f.calls.find((c) => c.name === "click")?.args).not.toHaveProperty("force_synthetic");
+    f.close();
+    await expect(f.backend.performAction(target, "AXPress")).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    expect(f.calls.filter((c) => c.name === "click")).toHaveLength(1);
+  });
+
   it("allows the bounded native permission request to finish without extending action deadlines", async () => {
     const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
     const request: typeof cuaRequest = async (_endpoint, request, options) => {

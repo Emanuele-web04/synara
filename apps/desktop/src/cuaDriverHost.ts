@@ -359,19 +359,26 @@ export class CuaDriverHost {
       if (this.generation) await this.retire(this.generation);
       await access(this.options.binaryPath);
       const endpoint = join(this.directory, `driver-${randomUUID().slice(0, 8)}.sock`);
-      const child = spawn(this.options.binaryPath, ["serve", "--embedded", "--socket", endpoint], {
-        stdio: ["pipe", "ignore", "pipe"],
-        env: {
-          ...process.env,
-          CUA_DRIVER_EMBEDDED: "1",
-          CUA_DRIVER_HOST_BUNDLE_ID: this.options.bundleId,
-          CUA_DRIVER_PERMISSION_MODE: "standard",
-          CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
-          CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
-          CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
-          CUA_DRIVER_RS_HOME: join(this.directory, "state"),
+      const child = spawn(
+        this.options.binaryPath,
+        ["serve", "--embedded", "--socket", endpoint, "--compact-cursor", "--idle-hide-ms", "900"],
+        {
+          stdio: ["pipe", "ignore", "pipe"],
+          env: {
+            ...process.env,
+            CUA_DRIVER_EMBEDDED: "1",
+            CUA_DRIVER_HOST_BUNDLE_ID: this.options.bundleId,
+            CUA_DRIVER_PERMISSION_MODE: "standard",
+            CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+            // Owned by the GUI host, not supplied through public tool arguments.
+            // The native driver applies this only after foreground input cleanup.
+            SYNARA_CUA_FOREGROUND_OBSERVATION_MS: "100",
+            CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
+            CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
+            CUA_DRIVER_RS_HOME: join(this.directory, "state"),
+          },
         },
-      });
+      );
       // Consume diagnostics without retaining potentially private tool payloads.
       child.stderr?.on("data", () => undefined);
       const exited = new Promise<void>((resolve) => {
@@ -429,6 +436,15 @@ export class CuaDriverHost {
         });
         if (!session.ok || session.result?.isError)
           throw new Error("Cua session initialization failed.");
+        // Configure once per native generation, not before each input. The
+        // cursor remains visible without making travel distance delay the action.
+        const motion = await cuaRequest<CuaReply>(endpoint, {
+          method: "call",
+          name: "set_agent_cursor_motion",
+          args: { session: generation.session, glide_duration_ms: 100, dwell_after_click_ms: 0 },
+        });
+        if (!motion.ok || motion.result?.isError)
+          throw new Error("Cua cursor initialization failed.");
         return generation;
       } catch (error) {
         await this.retire(generation);

@@ -46,6 +46,8 @@ const net=require('node:net'),fs=require('node:fs');
 const log=${JSON.stringify(log)}, options=${JSON.stringify(options)};
 const write=event=>fs.appendFileSync(log,JSON.stringify({event,pid:process.pid,time:Date.now()})+'\\n');
 write('start');
+if(!process.argv.includes('--compact-cursor')) throw new Error('Missing compact cursor profile');
+if(process.argv[process.argv.indexOf('--idle-hide-ms')+1]!=='900') throw new Error('Missing cursor idle deadline');
 const socket=process.argv[process.argv.indexOf('--socket')+1];
 let action, timer;
 net.createServer(s=>{
@@ -69,7 +71,8 @@ net.createServer(s=>{
       else if(options.failAction) s.destroy();
       else timer=setTimeout(()=>{write('effect');reply({});action=undefined},10000);
     }
-    else if(r.name==='press_key') { write('key'); reply({}); }
+    else if(r.name==='set_agent_cursor_motion') { write('motion-'+r.args.glide_duration_ms+'-'+r.args.dwell_after_click_ms); reply({}); }
+    else if(r.name==='press_key') { write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply({}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else reply({});
@@ -117,6 +120,21 @@ process.stdin.resume(); process.stdin.on('end',retire);
   return { host, endpoint, events };
 }
 describe("Cua GUI host retirement", () => {
+  it("starts the compact cursor once per generation and owns the observation budget", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 2; i++) {
+      const reply = await cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter", _synara_foreground_observation_ms: 0 },
+      });
+      expect(reply.ok).toBe(true);
+    }
+    const events = (await f.events()).map((row) => row.event);
+    expect(events.filter((event) => event === "motion-100-0")).toHaveLength(1);
+    expect(events.filter((event) => event === "observation-budget-100")).toHaveLength(2);
+  });
+
   it.each(["stop", "suspend", "pauseDesktop"] as const)(
     "%s does not wait for another feature's permission dialog",
     async (method) => {
@@ -414,6 +432,7 @@ describe("Cua GUI host retirement", () => {
     const first = events.filter((e) => e.pid === starts[0].pid).map((e) => e.event);
     expect(first).toEqual([
       "start",
+      "motion-100-0",
       "dispatch",
       "cancel",
       "release",
@@ -479,7 +498,12 @@ describe("Cua GUI host retirement", () => {
         cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
       ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
       const events = await f.events();
-      expect(events.map((e) => e.event)).toEqual(["start", "cancel", "cleanup-ack"]);
+      expect(events.map((e) => e.event)).toEqual([
+        "start",
+        "motion-100-0",
+        "cancel",
+        "cleanup-ack",
+      ]);
       expect(() => process.kill(events[0].pid, 0)).not.toThrow();
     },
   );
