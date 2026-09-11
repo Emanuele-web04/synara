@@ -301,9 +301,79 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "generated.ts"), updated);
 
         const result = yield* core.readUnstagedPatch(tmp);
-        expect(result.patch.length).toBeLessThanOrEqual(1_000_000 * 2);
+        expect(Buffer.byteLength(result.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
         expect(result.truncated).toBe(true);
         expect(result.patch).toContain("diff --git a/generated.ts b/generated.ts");
+      }),
+    );
+
+    it.effect("shares one byte budget across tracked and untracked patch segments", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "tracked.txt"), "x\n".repeat(150_000));
+        yield* git(tmp, ["add", "tracked.txt"]);
+        yield* git(tmp, ["commit", "-m", "add tracked fixture"]);
+        yield* writeTextFile(path.join(tmp, "tracked.txt"), "y\n".repeat(150_000));
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "z\n".repeat(300_000));
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(Buffer.byteLength(result.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
+        expect(result.truncated).toBe(true);
+        expect(result.patch).toContain("diff --git a/tracked.txt b/tracked.txt");
+        expect(result.patch).toContain("diff --git a/untracked.txt b/untracked.txt");
+      }),
+    );
+
+    it.effect("stops deterministically after the first untracked patch exhausts the budget", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a-first.txt"), "a\n".repeat(200));
+        yield* writeTextFile(path.join(tmp, "b-second.txt"), "b\n".repeat(200));
+        const diffedFiles: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readUnstagedPatch.untrackedPatch") {
+            diffedFiles.push(input.args.at(-1) ?? "");
+            return realCore.execute({ ...input, maxOutputBytes: 64 });
+          }
+          return realCore.execute(input);
+        });
+
+        const result = yield* core.readUnstagedPatch(tmp);
+        expect(result.truncated).toBe(true);
+        expect(diffedFiles).toEqual(["a-first.txt"]);
+      }),
+    );
+
+    it.effect("surfaces an untracked patch read failure", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "vanished.txt"), "content\n");
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readUnstagedPatch.untrackedPatch") {
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access 'vanished.txt'",
+            });
+          }
+          return realCore.execute(input);
+        });
+
+        const result = yield* Effect.result(core.readUnstagedPatch(tmp));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            operation: "GitCore.readUnstagedPatch.untrackedPatch",
+            detail: "error: Could not access 'vanished.txt'",
+          });
+        }
       }),
     );
 
@@ -372,6 +442,24 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(text).toBe(new TextDecoder().decode(bytes).slice(0, 16));
         expect(truncated).toBe(true);
         expect(received).toEqual(records);
+      }),
+    );
+
+    it.effect("retains a byte-safe UTF-8 prefix without splitting multibyte text", () =>
+      Effect.gen(function* () {
+        const bytes = new TextEncoder().encode("🙂éx");
+        const { text, truncated } = yield* collectGitOutput(
+          { operation: "test utf8 output", cwd: process.cwd(), args: ["diff"] },
+          Stream.fromIterable(Array.from(bytes, (byte) => Uint8Array.of(byte))),
+          5,
+          undefined,
+          "truncate",
+        );
+
+        expect(text).toBe("🙂");
+        expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(5);
+        expect(text).not.toContain("�");
+        expect(truncated).toBe(true);
       }),
     );
 
@@ -2830,7 +2918,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
         const unstaged = yield* core.readUnstagedPatch(tmp);
         expect(unstaged.truncated).toBe(true);
-        expect(unstaged.patch.length).toBeLessThan(1_000_000 * 2);
+        expect(Buffer.byteLength(unstaged.patch, "utf8")).toBeLessThanOrEqual(1_000_000);
 
         yield* git(tmp, ["add", "large.txt"]);
         yield* git(tmp, ["commit", "-m", "add large tracked text"]);
