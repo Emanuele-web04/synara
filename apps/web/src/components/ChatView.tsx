@@ -209,6 +209,7 @@ import {
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
   hasFileUndoSettled,
+  isFirstSessionConnect,
   persistModelSelectionBeforeRuntimeMode,
   promptStillMatchesActiveHistoryBrowse,
   type PendingFileUndo,
@@ -1094,6 +1095,10 @@ function formatPastedTextTitleSeed(pastedTexts: ReadonlyArray<PastedTextDraft>):
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
+// A "connecting" phase must hold this long before it reaches the working
+// indicator, so ready → starting → running bursts during a restart cannot
+// thrash the label (or mount/unmount the working row).
+const SESSION_CONNECT_STABILITY_MS = 400;
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) {
@@ -2585,6 +2590,21 @@ export default function ChatView({
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = phase === "connecting";
+  // A connecting session on a thread that already produced output is a
+  // mid-conversation restart/resume, not a first spawn — the label and the
+  // composer both treat the two cases differently.
+  const isFirstConnect = isFirstSessionConnect({
+    messages: activeThread?.messages ?? EMPTY_MESSAGES,
+    latestTurn: activeLatestTurn,
+  });
+  // The connect phase can flap (ready → starting → running) inside a restart
+  // burst; only a phase that holds for a beat is surfaced as connecting UI.
+  // The `isConnecting &&` half drops the flag the instant the phase exits, so
+  // only the enter edge is debounced.
+  const [settledIsConnecting] = useDebouncedValue(isConnecting, {
+    wait: SESSION_CONNECT_STABILITY_MS,
+  });
+  const isConnectingForUi = isConnecting && settledIsConnecting;
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   // User messages intentionally have no turn id; assistant messages are the stable
@@ -3239,7 +3259,11 @@ export default function ChatView({
   // Keep Thinking through the post-ack gap where the server has the message /
   // turn request but the provider session is not live yet (common on first send).
   const isWorking =
-    hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
+    hasLiveTurn ||
+    isSendBusy ||
+    isConnectingForUi ||
+    isRevertingCheckpoint ||
+    isAwaitingTurnStart;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
@@ -3257,7 +3281,11 @@ export default function ChatView({
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  // Only a first spawn locks the editor — there is nothing to steer yet. During
+  // a mid-conversation reconnect the user can keep typing a follow-up; send
+  // stays gated on the live session and fires once the provider is back.
+  const isComposerEditorDisabled =
+    (isConnecting && isFirstConnect) || isComposerApprovalState || isSidechatExpired;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -12792,7 +12820,8 @@ export default function ChatView({
                     workingLabel={resolveWorkingLabel({
                       isSendBusy,
                       turnTakenOver,
-                      isConnecting,
+                      isConnecting: isConnectingForUi,
+                      isFirstConnect,
                       providerName: providerDisplayName,
                     })}
                     worktreeSetup={activeWorktreeSetup}
