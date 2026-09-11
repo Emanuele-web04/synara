@@ -239,6 +239,110 @@ describe("pullRequestActionMutationOptions", () => {
     },
   );
 
+  it("cancels an uncached first-open snapshot by PR identity before a late stale response", async () => {
+    const queryClient = new QueryClient();
+    const input = {
+      projectId: "project-a" as ProjectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "ready",
+    } as const;
+    const matchingPullRequest = {
+      number: 42,
+      title: "First-open snapshot",
+      url: "https://github.com/acme/widgets/pull/42",
+      baseBranch: "main",
+      headBranch: "fix/status",
+      state: "open",
+      isDraft: true,
+      mergeability: "unknown",
+      additions: null,
+      deletions: null,
+      changedFiles: null,
+    } satisfies GitResolvedPullRequest;
+    const otherNumberPullRequest = {
+      ...matchingPullRequest,
+      number: 43,
+      url: "https://github.com/acme/widgets/pull/43",
+    };
+    const otherRepositoryPullRequest = {
+      ...matchingPullRequest,
+      url: "https://github.com/other/repository/pull/42",
+    };
+    const snapshot = (pullRequest: GitResolvedPullRequest) =>
+      ({
+        pullRequest,
+        checks: [],
+        comments: [],
+        commentsTruncated: false,
+        commentsError: null,
+      }) satisfies GitPullRequestSnapshotResult;
+    const matchingRequest = deferred<GitPullRequestSnapshotResult>();
+    const otherNumberRequest = deferred<GitPullRequestSnapshotResult>();
+    const otherRepositoryRequest = deferred<GitPullRequestSnapshotResult>();
+    const requestsByReference = new Map([
+      [matchingPullRequest.url, matchingRequest],
+      [otherNumberPullRequest.url, otherNumberRequest],
+      [otherRepositoryPullRequest.url, otherRepositoryRequest],
+    ]);
+    getPullRequestSnapshot.mockImplementation(({ reference }) => {
+      const request = requestsByReference.get(reference);
+      if (!request) throw new Error(`Unexpected snapshot reference: ${reference}`);
+      return request.promise;
+    });
+
+    const matchingQuery = gitPullRequestSnapshotQueryOptions({
+      cwd: "/matching-worktree",
+      reference: matchingPullRequest.url,
+    });
+    const otherNumberQuery = gitPullRequestSnapshotQueryOptions({
+      cwd: "/other-pr-worktree",
+      reference: otherNumberPullRequest.url,
+    });
+    const otherRepositoryQuery = gitPullRequestSnapshotQueryOptions({
+      cwd: "/other-repository-worktree",
+      reference: otherRepositoryPullRequest.url,
+    });
+    const fetches = [matchingQuery, otherNumberQuery, otherRepositoryQuery].map((query) =>
+      queryClient.fetchQuery(query).catch(() => undefined),
+    );
+    await vi.waitFor(() => expect(getPullRequestSnapshot).toHaveBeenCalledTimes(3));
+
+    const action = pullRequestActionMutationOptions(queryClient);
+    const context = await Reflect.apply(action.onMutate!, undefined, [input, undefined]);
+    const fetchStatusesAfterMutation = [matchingQuery, otherNumberQuery, otherRepositoryQuery].map(
+      (query) => queryClient.getQueryState(query.queryKey)?.fetchStatus,
+    );
+    await Reflect.apply(action.onSuccess!, undefined, [
+      { workspaceRoot: "/project-root" },
+      input,
+      context,
+      undefined,
+    ]);
+    Reflect.apply(action.onSettled!, undefined, [
+      { workspaceRoot: "/project-root" },
+      null,
+      input,
+      context,
+      undefined,
+    ]);
+
+    matchingRequest.resolve(snapshot(matchingPullRequest));
+    otherNumberRequest.resolve(snapshot(otherNumberPullRequest));
+    otherRepositoryRequest.resolve(snapshot(otherRepositoryPullRequest));
+    await Promise.all(fetches);
+
+    const matchingData = queryClient.getQueryData(matchingQuery.queryKey);
+    const otherNumberData = queryClient.getQueryData(otherNumberQuery.queryKey);
+    const otherRepositoryData = queryClient.getQueryData(otherRepositoryQuery.queryKey);
+    queryClient.clear();
+
+    expect(fetchStatusesAfterMutation).toEqual(["idle", "fetching", "fetching"]);
+    expect(matchingData).toBeUndefined();
+    expect(otherNumberData).toEqual(snapshot(otherNumberPullRequest));
+    expect(otherRepositoryData).toEqual(snapshot(otherRepositoryPullRequest));
+  });
+
   it("refreshes the affected worktree caches after success even when the action returns the project root", async () => {
     const queryClient = new QueryClient();
     const input = {

@@ -38,6 +38,16 @@ function matchesPullRequest(pr: GitPullRequest | null, input: PullRequestIdentit
   );
 }
 
+function matchesPullRequestReference(reference: unknown, input: PullRequestIdentity): boolean {
+  if (typeof reference !== "string") return false;
+  const numberMatch = /\/pull\/(\d+)(?:[/?#]|$)/i.exec(reference.trim());
+  return (
+    Number(numberMatch?.[1]) === input.number &&
+    parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(reference)?.toLowerCase() ===
+      input.repository.toLowerCase()
+  );
+}
+
 export function pullRequestGitQueryFilters(
   input: PullRequestIdentity,
   workspaceRoot?: string,
@@ -51,12 +61,16 @@ export function pullRequestGitQueryFilters(
       if (workspaceRoot !== undefined && key[1] === "pull-request" && key[2] === workspaceRoot) {
         return true;
       }
+      const isStatus = key[1] === "status";
+      const isSnapshot = key[1] === "pull-request" && key[3] === "snapshot";
+      if (!isStatus && !isSnapshot) return false;
+
       return (
-        (key[1] === "status" || (key[1] === "pull-request" && key[3] === "snapshot")) &&
         matchesPullRequest(
           cachedPullRequest(query.state.data as GitPullRequestCache | undefined),
           input,
-        )
+        ) ||
+        (isSnapshot && matchesPullRequestReference(key[4], input))
       );
     },
   };
