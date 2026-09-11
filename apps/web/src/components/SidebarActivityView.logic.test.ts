@@ -14,6 +14,7 @@ import {
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
+  resolveActivityOrderingStatusGroup,
   resolveActivityStatusGroup,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
@@ -154,7 +155,88 @@ describe("resolveActivityStatusGroup", () => {
   });
 });
 
+describe("resolveActivityOrderingStatusGroup", () => {
+  it("holds only the exact visited completion while preserving real status semantics", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+    const hold = { threadId: visited.id, completedAt };
+
+    expect(resolveActivityStatusGroup(visited)).toBe("seen");
+    expect(resolveActivityOrderingStatusGroup(visited, hold)).toBe("unseenCompleted");
+    expect(
+      resolveActivityOrderingStatusGroup(
+        {
+          ...visited,
+          latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+          lastVisitedAt: "2026-08-01T10:15:00.000Z",
+        },
+        hold,
+      ),
+    ).toBe("seen");
+    expect(resolveActivityOrderingStatusGroup({ ...visited, hasLiveTailWork: true }, hold)).toBe(
+      "running",
+    );
+  });
+});
+
 describe("buildActivityViewModel", () => {
+  it("keeps a just-read completion ahead of running work until its hold is released", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+    const running = makeThread({ id: "running", hasLiveTailWork: true });
+    const hold = { threadId: visited.id, completedAt };
+
+    const released = buildActivityViewModel({
+      threads: [visited, running],
+      pinnedThreadIdSet: new Set(),
+    });
+    const held = buildActivityViewModel({
+      threads: [visited, running],
+      pinnedThreadIdSet: new Set(),
+      readOrderHold: hold,
+    });
+
+    expect(released.active.map((thread) => thread.id)).toEqual([running.id, visited.id]);
+    expect(held.active.map((thread) => thread.id)).toEqual([visited.id, running.id]);
+    expect(splitPriorityActivityThreads(held.active, hold)).toEqual({
+      priority: [visited, running],
+      seen: [],
+    });
+  });
+
+  it("keeps a held settled completion active until the hold is released", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held-settled",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      settledAt: "2026-08-01T08:00:00.000Z",
+    });
+    const hold = { threadId: visited.id, completedAt };
+
+    expect(
+      buildActivityViewModel({
+        threads: [visited],
+        pinnedThreadIdSet: new Set(),
+      }).settled.map((thread) => thread.id),
+    ).toEqual([visited.id]);
+    expect(
+      buildActivityViewModel({
+        threads: [visited],
+        pinnedThreadIdSet: new Set(),
+        readOrderHold: hold,
+      }).active.map((thread) => thread.id),
+    ).toEqual([visited.id]);
+  });
+
   it("orders active threads attention → unseen → running → seen, newest first per group", () => {
     const createdAt = "2026-08-01T04:00:00.000Z";
     const seenOld = makeThread({

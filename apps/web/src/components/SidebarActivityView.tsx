@@ -43,6 +43,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
+  hasUnseenCompletion,
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
@@ -62,6 +63,7 @@ import {
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
+  type ActivityReadOrderHold,
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
@@ -92,6 +94,11 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
+
+type ActivityReadOrderHoldState = ActivityReadOrderHold & {
+  pinnedAtOpen: boolean;
+  settledAtOpen: boolean;
+} & ({ phase: "pending"; previousActiveThreadId: ThreadId | null } | { phase: "active" });
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -594,6 +601,45 @@ export function SidebarActivityView({
   const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   );
+  const [readOrderHoldState, setReadOrderHoldState] = useState<ActivityReadOrderHoldState | null>(
+    null,
+  );
+
+  const readOrderHeldThread = readOrderHoldState
+    ? threads.find((thread) => thread.id === readOrderHoldState.threadId)
+    : undefined;
+  const readOrderHoldStructureIsCurrent =
+    readOrderHoldState !== null &&
+    readOrderHeldThread !== undefined &&
+    readOrderHeldThread.latestTurn?.completedAt === readOrderHoldState.completedAt &&
+    pinnedThreadIdSet.has(readOrderHeldThread.id) === readOrderHoldState.pinnedAtOpen &&
+    isThreadSettledForActivity(readOrderHeldThread, settledOverrideByThreadId) ===
+      readOrderHoldState.settledAtOpen;
+  const readOrderHoldIsCurrent =
+    readOrderHoldState !== null &&
+    readOrderHoldStructureIsCurrent &&
+    (readOrderHoldState.phase === "active"
+      ? activeThreadId === readOrderHoldState.threadId
+      : activeThreadId === readOrderHoldState.previousActiveThreadId ||
+        activeThreadId === readOrderHoldState.threadId);
+  const readOrderHold = readOrderHoldIsCurrent ? readOrderHoldState : null;
+
+  useEffect(() => {
+    setReadOrderHoldState((current) => {
+      if (current === null) return current;
+      if (current.phase === "pending") {
+        if (activeThreadId === current.threadId) {
+          return { ...current, phase: "active" };
+        }
+        return activeThreadId === current.previousActiveThreadId ? current : null;
+      }
+      return activeThreadId === current.threadId ? current : null;
+    });
+  }, [activeThreadId]);
+
+  const clearReadOrderHoldForThread = (threadId: ThreadId) => {
+    setReadOrderHoldState((current) => (current?.threadId === threadId ? null : current));
+  };
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
   // Scope options and the unread sweep intentionally ignore the active scope:
@@ -614,11 +660,13 @@ export function SidebarActivityView({
     pinnedThreadIdSet,
     settledOverrideByThreadId,
     projectFilterIds,
+    readOrderHold,
   });
   const scopedPinnedThreads = model.pinned;
   const nowMs = Date.now();
   const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
     model.active,
+    readOrderHold,
   );
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
     seenThreads,
@@ -703,9 +751,34 @@ export function SidebarActivityView({
   );
 
   const markAllRead = () => {
+    setReadOrderHoldState(null);
     for (const thread of unreadThreads) {
       onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
     }
+  };
+
+  const openThread = (thread: SidebarThreadSummary) => {
+    const completedAt = thread.latestTurn?.completedAt;
+    setReadOrderHoldState((current) => {
+      if (completedAt && current?.threadId === thread.id && current.completedAt === completedAt) {
+        return current;
+      }
+      if (!completedAt || !hasUnseenCompletion(thread)) return null;
+      const base = {
+        threadId: thread.id,
+        completedAt,
+        pinnedAtOpen: pinnedThreadIdSet.has(thread.id),
+        settledAtOpen: isThreadSettledForActivity(thread, settledOverrideByThreadId),
+      };
+      return activeThreadId === thread.id
+        ? { ...base, phase: "active" }
+        : {
+            ...base,
+            phase: "pending",
+            previousActiveThreadId: activeThreadId,
+          };
+    });
+    onOpenThread(thread.id);
   };
 
   const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
@@ -730,14 +803,21 @@ export function SidebarActivityView({
             })
       }
       status={resolveThreadStatus(thread)}
-      onOpen={() => onOpenThread(thread.id)}
+      onOpen={() => openThread(thread)}
       onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
+        clearReadOrderHoldForThread(thread.id);
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
         onSetThreadSettled(thread.id, settled);
       }}
-      onTogglePinned={() => onToggleThreadPinned(thread.id)}
-      onArchive={() => onArchiveThread(thread.id)}
+      onTogglePinned={() => {
+        clearReadOrderHoldForThread(thread.id);
+        onToggleThreadPinned(thread.id);
+      }}
+      onArchive={() => {
+        clearReadOrderHoldForThread(thread.id);
+        onArchiveThread(thread.id);
+      }}
       onRename={onRenameThread}
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
@@ -780,7 +860,10 @@ export function SidebarActivityView({
           options={scopeOptions}
           projectById={projectById}
           scopeSelection={activeScope}
-          onChangeScopeSelection={setScopeSelection}
+          onChangeScopeSelection={(selection) => {
+            setReadOrderHoldState(null);
+            setScopeSelection(selection);
+          }}
         />
         <SidebarSectionToolbar revealOnHover className="mr-0">
           <SidebarIconButton
