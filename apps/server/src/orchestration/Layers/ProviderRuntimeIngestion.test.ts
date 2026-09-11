@@ -6660,15 +6660,13 @@ describe("ProviderRuntimeIngestion", () => {
       const thread = await waitForThread(harness.engine, (entry) =>
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) =>
-            activity.kind === "context-compaction" &&
-            activity.summary === "Compacting context",
+            activity.kind === "context-compaction" && activity.summary === "Compacting context",
         ),
       );
 
       const activity = thread.activities.find(
         (candidate: ProviderRuntimeTestActivity) =>
-          candidate.kind === "context-compaction" &&
-          candidate.summary === "Compacting context",
+          candidate.kind === "context-compaction" && candidate.summary === "Compacting context",
       );
       expect(activity?.tone).toBe("info");
     },
