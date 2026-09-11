@@ -20,6 +20,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   EventId,
+  type PiModelSelection,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
@@ -76,6 +77,7 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
@@ -362,6 +364,16 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  // The turn whose prompt() has been dispatched but has not committed a run
+  // yet — the SDK's isStreaming flag only flips deep inside prompt()'s async
+  // preflight, so a concurrent send must treat this as still-live rather than
+  // settled.
+  promptCommitting: TurnId | undefined;
+  promptCommit: Promise<void> | undefined;
+  // Set when an interrupt lands while the turn's prompt() is still in async
+  // preflight — nothing exists for abort() to reach yet. Fired on the next
+  // agent_start once the run commits; cleared when the turn completes.
+  pendingAbortTurnId: TurnId | undefined;
   activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
@@ -1388,6 +1400,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
+    // Serializes session lifecycle and turn dispatch per thread. Dispatch also
+    // waits for a prior prompt's preflight decision before choosing prompt(),
+    // steer(), or followUp().
+    const dispatchLock = makeKeyedLock<ThreadId>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1720,6 +1736,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       cause?: unknown,
     ) => {
       if (context.stopped || context.activeTurnId !== turnId) return;
+      if (context.pendingAbortTurnId === turnId) context.pendingAbortTurnId = undefined;
       const raw = {
         source: "pi.sdk.event" as const,
         method: "prompt",
@@ -1826,13 +1843,211 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       images: ImageContent[],
     ) => {
       delete context.activeTurnErrorMessage;
+      // Marks the prompt as dispatched-but-not-yet-streaming: the SDK's
+      // isStreaming flag only flips deep inside prompt()'s async preflight, so
+      // a concurrent sendTurn/steerTurn must not read the gap as "settled".
+      context.promptCommitting = turnId;
+      let resolveCommit!: () => void;
+      const committed = new Promise<void>((resolve) => {
+        resolveCommit = resolve;
+      });
+      context.promptCommit = committed;
+      let commitSettled = false;
+      const settled = () => {
+        if (commitSettled) return;
+        commitSettled = true;
+        if (context.promptCommitting === turnId) context.promptCommitting = undefined;
+        if (context.promptCommit === committed) context.promptCommit = undefined;
+        resolveCommit();
+      };
       // A prompt owns all SDK retries, compaction and queued continuations.
       // agent_end is per attempt; agent_settled also fires before a rejection.
-      void context.runtime.session.prompt(text, images.length > 0 ? { images } : undefined).then(
-        () => completePrompt(context, turnId, context.activeTurnErrorMessage),
-        (cause) => completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause),
-      );
+      void context.runtime.session
+        .prompt(text, {
+          ...(images.length > 0 ? { images } : {}),
+          // Release a waiting dispatch once prompt() either commits its own
+          // run or handles the input without a run. A rejected preflight is
+          // released by the promise rejection path below.
+          preflightResult: (success) => {
+            if (success) settled();
+          },
+        })
+        .then(
+          () => {
+            settled();
+            completePrompt(context, turnId, context.activeTurnErrorMessage);
+          },
+          (cause) => {
+            settled();
+            completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
+          },
+        );
     };
+
+    const awaitPromptCommit = (context: PiSessionContext) => {
+      const pending = context.promptCommit;
+      return pending === undefined
+        ? Effect.void
+        : Effect.promise(() => pending).pipe(Effect.uninterruptible);
+    };
+
+    // A turn whose run fully settled but whose completion is still queued on
+    // the prompt() promise is stale — close it out so the next dispatch starts
+    // clean instead of joining a dead turn. A still-committing prompt
+    // (isStreaming has not flipped yet) is live, not stale.
+    const closeSettledActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId === undefined ||
+        context.runtime.session.isStreaming ||
+        context.promptCommitting === turnId
+      ) {
+        return;
+      }
+      completePrompt(context, turnId, context.activeTurnErrorMessage);
+    };
+
+    const buildProviderText = (context: PiSessionContext, text: string) =>
+      [
+        takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        }),
+        text,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    const sendTurnBusyError = () =>
+      new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "sendTurn",
+        issue: "A Pi turn is already active for this thread.",
+      });
+
+    const applyPiModelSelection = (context: PiSessionContext, selection: PiModelSelection) =>
+      Effect.gen(function* () {
+        const model = findModelInRegistry(context.modelRegistry, selection.model);
+        if (!model) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "model/set",
+            issue: `Pi model '${selection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
+          });
+        }
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.setModel(model),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/set",
+              detail: toMessage(cause, "Failed to set Pi model."),
+              cause,
+            }),
+        });
+        const thinkingLevel = normalizePiThinkingLevel(selection.options?.thinkingLevel);
+        if (thinkingLevel) {
+          context.runtime.session.setThinkingLevel(thinkingLevel);
+        }
+      });
+
+    // /reload only exists as a bare text command — attachments make it a prompt.
+    const isPiReloadPayload = (payload: { text: string; images: ImageContent[] }) =>
+      payload.images.length === 0 && isPiReloadCommand(payload.text);
+
+    const queuePiFollowUp = (
+      context: PiSessionContext,
+      payload: { text: string; images: ImageContent[] },
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          context.runtime.session.followUp(
+            buildProviderText(context, payload.text),
+            payload.images,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/followUp",
+            detail: toMessage(cause, "Failed to queue Pi follow-up."),
+            cause,
+          }),
+      });
+
+    const steerPiTurn = (context: PiSessionContext, text: string, images: ImageContent[]) =>
+      Effect.tryPromise({
+        try: () => context.runtime.session.steer(text, images),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/steer",
+            detail: toMessage(cause, "Failed to steer Pi turn."),
+            cause,
+          }),
+      });
+
+    const runPiReload = (context: PiSessionContext, command: string) =>
+      Effect.gen(function* () {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.started",
+          payload: {
+            ...(context.runtime.session.model
+              ? {
+                  model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
+                }
+              : {}),
+            effort: context.runtime.session.thinkingLevel,
+          },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.reload(),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/reload",
+              detail: toMessage(cause, "Failed to reload Pi resources."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              const message = error.message;
+              offerRuntimeEvent({
+                ...makeEventBase(context),
+                type: "turn.completed",
+                payload: { state: "failed", stopReason: "error", errorMessage: message },
+                raw: { source: "pi.sdk.event", method: "reload", payload: error },
+              } satisfies ProviderRuntimeEvent);
+              offerRuntimeError(context, {
+                message,
+                method: "session/reload",
+                cause: error,
+              });
+              yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+              context.activeTurnId = undefined;
+              context.session = makeSessionSnapshot(context);
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.completed",
+          payload: { state: "completed", stopReason: "reload" },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+        context.activeTurnId = undefined;
+        context.session = makeSessionSnapshot(context);
+      });
+
+    const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
+      threadId: context.session.threadId,
+      turnId,
+      resumeCursor: getSessionFile(context.runtime.session),
+    });
 
     const recordItem = (context: PiSessionContext, item: unknown, toolCallId?: string) => {
       const turn = context.activeTurnId
@@ -1867,6 +2082,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       // Otherwise the SDK can start a queued continuation after aborting backoff.
       context.runtime.session.clearQueue();
       return context.runtime.session.abort();
+    };
+
+    // prompt()'s async preflight leaves no run for abort() to reach — an
+    // interrupt in that window would no-op and the turn would start anyway.
+    // Defer it: agent_start fires the abort once the run actually commits.
+    const interruptActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId !== undefined &&
+        context.promptCommitting === turnId &&
+        !context.runtime.session.isStreaming
+      ) {
+        context.pendingAbortTurnId = turnId;
+        // There is no agent run to abort yet, but prompt preflight may be
+        // compacting. Abort that work now and keep the deferred run abort.
+        return abortSessionTurn(context);
+      }
+      return abortSessionTurn(context);
     };
 
     const disposeSessionContext = async (context: PiSessionContext) => {
@@ -1974,6 +2207,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const handleSessionEvent = (context: PiSessionContext, event: AgentSessionEvent) => {
       switch (event.type) {
         case "agent_start":
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            // The committing prompt just started its run — land the interrupt
+            // that was deferred because abort() had nothing to reach yet.
+            void abortSessionTurn(context).catch((cause) => {
+              offerRuntimeError(context, {
+                message: toMessage(cause, "Failed to interrupt Pi turn."),
+                method: "turn/interrupt",
+                cause,
+              });
+            });
+          }
           offerRuntimeEvent({
             ...makeEventBase(context),
             type: "thread.state.changed",
@@ -2258,7 +2505,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       };
     };
 
-    const startSession: PiAdapterShape["startSession"] = (input) =>
+    const startSessionUnlocked = (input: Parameters<PiAdapterShape["startSession"]>[0]) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
         const piSdk = yield* loadPiSdk("session/start");
@@ -2397,6 +2644,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           session,
           turns: [],
           activeTurnId: undefined,
+          promptCommitting: undefined,
+          promptCommit: undefined,
+          pendingAbortTurnId: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
@@ -2414,7 +2664,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             runtime.session.bindExtensions({
               uiContext: makePiExtensionUIContext(context),
               abortHandler: () => {
-                void abortSessionTurn(context).catch((cause) => {
+                void interruptActiveTurn(context).catch((cause) => {
                   offerRuntimeError(context, {
                     message: toMessage(cause, "Failed to interrupt Pi turn."),
                     method: "turn/interrupt",
@@ -2496,6 +2746,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         return session;
       });
 
+    const startSession: PiAdapterShape["startSession"] = (input) =>
+      dispatchLock.withLock(input.threadId, startSessionUnlocked(input));
+
     const buildPromptPayload = (input: {
       readonly input?: string | undefined;
       readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
@@ -2550,153 +2803,115 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        if (context.activeTurnId) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "A Pi turn is already active for this thread.",
-          });
-        }
-        if (input.modelSelection?.provider === "pi") {
-          const model = findModelInRegistry(context.modelRegistry, input.modelSelection.model);
-          if (!model) {
-            return yield* new ProviderAdapterValidationError({
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* sendTurnBusyError();
+          }
+          yield* awaitPromptCommit(context);
+          if (input.modelSelection?.provider === "pi") {
+            yield* applyPiModelSelection(context, input.modelSelection);
+          }
+          const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
               provider: PROVIDER,
-              operation: "model/set",
-              issue: `Pi model '${input.modelSelection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
+              threadId: input.threadId,
             });
           }
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.setModel(model),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "model/set",
-                detail: toMessage(cause, "Failed to set Pi model."),
-                cause,
-              }),
-          });
-          const thinkingLevel = normalizePiThinkingLevel(
-            input.modelSelection.options?.thinkingLevel,
-          );
-          if (thinkingLevel) {
-            context.runtime.session.setThinkingLevel(thinkingLevel);
+          closeSettledActiveTurn(context);
+          const liveTurnId = context.activeTurnId;
+          if (liveTurnId !== undefined) {
+            // A turn is active: route the send through the SDK's follow-up
+            // queue instead of prompt(), which would throw the raw "Agent is
+            // already processing" error mid-run.
+            if (context.pendingAbortTurnId === liveTurnId || isPiReloadPayload(payload)) {
+              return yield* sendTurnBusyError();
+            }
+            yield* queuePiFollowUp(context, payload);
+            return dispatchResult(context, liveTurnId);
           }
-        }
-        const payload = yield* buildPromptPayload(input);
-        const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        context.activeTurnId = turnId;
-        context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-        context.session = makeSessionSnapshot(context);
-        if (payload.images.length === 0 && isPiReloadCommand(payload.text)) {
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.started",
-            payload: {
-              ...(context.runtime.session.model
-                ? {
-                    model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
-                  }
-                : {}),
-              effort: context.runtime.session.thinkingLevel,
-            },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.reload(),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/reload",
-                detail: toMessage(cause, "Failed to reload Pi resources."),
-                cause,
-              }),
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const message = error.message;
-                offerRuntimeEvent({
-                  ...makeEventBase(context),
-                  type: "turn.completed",
-                  payload: { state: "failed", stopReason: "error", errorMessage: message },
-                  raw: { source: "pi.sdk.event", method: "reload", payload: error },
-                } satisfies ProviderRuntimeEvent);
-                offerRuntimeError(context, {
-                  message,
-                  method: "session/reload",
-                  cause: error,
-                });
-                yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-                context.activeTurnId = undefined;
-                context.session = makeSessionSnapshot(context);
-                return yield* Effect.fail(error);
-              }),
-            ),
-          );
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.completed",
-            payload: { state: "completed", stopReason: "reload" },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-          context.activeTurnId = undefined;
-          context.session = makeSessionSnapshot(context);
-          return {
-            threadId: input.threadId,
-            turnId,
-            resumeCursor: getSessionFile(context.runtime.session),
-          };
-        }
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        startPrompt(context, turnId, providerText, payload.images);
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
-      });
-
-    const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        const payload = yield* buildPromptPayload(input);
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
-        if (!context.activeTurnId) {
+          if (context.runtime.session.isStreaming) {
+            // A run Synara did not dispatch is active (e.g. extension-triggered).
+            return yield* sendTurnBusyError();
+          }
+          const turnId = TurnId.makeUnsafe(crypto.randomUUID());
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-        }
-        if (context.runtime.session.isStreaming) {
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.steer(providerText, payload.images),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "turn/steer",
-                detail: toMessage(cause, "Failed to steer Pi turn."),
-                cause,
-              }),
-          });
-        } else {
-          startPrompt(context, turnId, providerText, payload.images);
-        }
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
-      });
+          context.session = makeSessionSnapshot(context);
+          if (isPiReloadPayload(payload)) {
+            yield* runPiReload(context, payload.text);
+            return dispatchResult(context, turnId);
+          }
+          startPrompt(context, turnId, buildProviderText(context, payload.text), payload.images);
+          return dispatchResult(context, turnId);
+        }),
+      );
+
+    const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          yield* awaitPromptCommit(context);
+          const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
+          closeSettledActiveTurn(context);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          const joinedTurnId = context.activeTurnId;
+          if (joinedTurnId === undefined && context.runtime.session.isStreaming) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          const providerText = buildProviderText(context, payload.text);
+          const turnId = joinedTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+          if (joinedTurnId === undefined) {
+            context.activeTurnId = turnId;
+            context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
+          }
+          if (
+            joinedTurnId !== undefined &&
+            (context.runtime.session.isStreaming || context.promptCommitting === joinedTurnId)
+          ) {
+            yield* steerPiTurn(context, providerText, payload.images);
+          } else {
+            startPrompt(context, turnId, providerText, payload.images);
+          }
+          return dispatchResult(context, turnId);
+        }),
+      );
 
     const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
@@ -2714,7 +2929,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.gatewaySessionLease,
           activeTurnId,
           Effect.tryPromise({
-            try: () => abortSessionTurn(context),
+            try: () => interruptActiveTurn(context),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -2752,33 +2967,36 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
-      Effect.gen(function* () {
-        const context = sessions.get(threadId);
-        if (!context) return;
-        yield* Effect.tryPromise({
-          try: () => disposeSessionContext(context),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/stop",
-              detail: toMessage(cause, "Failed to stop Pi session."),
-              cause,
-            }),
-        });
-        if (sessions.get(threadId) === context) {
-          sessions.delete(threadId);
-        }
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "thread.state.changed",
-          payload: { state: "closed", detail: { reason: "stopped" } },
-        } satisfies ProviderRuntimeEvent);
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "session.exited",
-          payload: { reason: "stopped", exitKind: "graceful" },
-        } satisfies ProviderRuntimeEvent);
-      });
+      dispatchLock.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const context = sessions.get(threadId);
+          if (!context) return;
+          yield* Effect.tryPromise({
+            try: () => disposeSessionContext(context),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/stop",
+                detail: toMessage(cause, "Failed to stop Pi session."),
+                cause,
+              }),
+          });
+          if (sessions.get(threadId) === context) {
+            sessions.delete(threadId);
+          }
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "thread.state.changed",
+            payload: { state: "closed", detail: { reason: "stopped" } },
+          } satisfies ProviderRuntimeEvent);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "session.exited",
+            payload: { reason: "stopped", exitKind: "graceful" },
+          } satisfies ProviderRuntimeEvent);
+        }),
+      );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));
