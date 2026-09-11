@@ -174,9 +174,12 @@ import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReco
 import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
+  clearQueuedComposerAutoDispatchRetry,
   clearQueuedComposerSteerGate,
+  getQueuedComposerAutoDispatchRetryDelay,
   getQueuedComposerSteerGate,
   isQueuedComposerAwaitingTurnStart,
+  recordQueuedComposerAutoDispatchFailure,
   releaseQueuedComposerAutoDispatch,
   runLockedQueuedComposerAutoDispatch,
   tryBeginQueuedComposerAutoDispatch,
@@ -9724,9 +9727,12 @@ export default function ChatView({
       removeQueuedComposerTurnFromDraft(threadId, queuedTurn.id);
       const succeeded = await dispatchQueuedComposerTurn(queuedTurn, "steer");
       if (succeeded) {
+        clearQueuedComposerAutoDispatchRetry(threadId);
         return;
       }
       insertQueuedComposerTurn(threadId, queuedTurn, queuedIndex);
+      recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
+      setQueuedAutoDispatchTick((tick) => tick + 1);
     },
     [
       dispatchQueuedComposerTurn,
@@ -9820,6 +9826,17 @@ export default function ChatView({
     if (!nextQueuedTurn) {
       return;
     }
+    const retryDelay = getQueuedComposerAutoDispatchRetryDelay(threadId, nextQueuedTurn.id);
+    if (retryDelay === null) {
+      return;
+    }
+    if (retryDelay !== undefined && retryDelay > 0) {
+      const timer = window.setTimeout(
+        () => setQueuedAutoDispatchTick((tick) => tick + 1),
+        retryDelay,
+      );
+      return () => window.clearTimeout(timer);
+    }
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
       // The watcher already owns this thread's queue head (background drain
       // started before this ChatView claimed). Poll until that send settles.
@@ -9832,8 +9849,12 @@ export default function ChatView({
       run: async () => {
         const succeeded = await dispatchQueuedComposerTurn(nextQueuedTurn, "queue");
         if (succeeded) {
+          clearQueuedComposerAutoDispatchRetry(threadId);
           removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
+          return;
         }
+        recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        setQueuedAutoDispatchTick((tick) => tick + 1);
       },
       onSettled: () => {
         autoDispatchingQueuedTurnRef.current = false;
