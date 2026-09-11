@@ -1846,16 +1846,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       };
       // A prompt owns all SDK retries, compaction and queued continuations.
       // agent_end is per attempt; agent_settled also fires before a rejection.
-      void context.runtime.session.prompt(text, images.length > 0 ? { images } : undefined).then(
-        () => {
-          settled();
-          completePrompt(context, turnId, context.activeTurnErrorMessage);
-        },
-        (cause) => {
-          settled();
-          completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
-        },
-      );
+      // streamingBehavior is the last-resort fallback: if the session started
+      // streaming between the dispatch check and prompt()'s own check, the
+      // message queues instead of throwing the raw SDK busy error.
+      void context.runtime.session
+        .prompt(text, {
+          streamingBehavior: "followUp",
+          ...(images.length > 0 ? { images } : {}),
+        })
+        .then(
+          () => {
+            settled();
+            completePrompt(context, turnId, context.activeTurnErrorMessage);
+          },
+          (cause) => {
+            settled();
+            completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
+          },
+        );
     };
 
     // A turn whose run fully settled but whose completion is still queued on
@@ -1921,6 +1929,25 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     // /reload only exists as a bare text command — attachments make it a prompt.
     const isPiReloadPayload = (payload: { text: string; images: ImageContent[] }) =>
       payload.images.length === 0 && isPiReloadCommand(payload.text);
+
+    const queuePiFollowUp = (
+      context: PiSessionContext,
+      payload: { text: string; images: ImageContent[] },
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          context.runtime.session.followUp(
+            buildProviderText(context, payload.text),
+            payload.images,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/followUp",
+            detail: toMessage(cause, "Failed to queue Pi follow-up."),
+            cause,
+          }),
+      });
 
     const steerPiTurn = (context: PiSessionContext, text: string, images: ImageContent[]) =>
       Effect.tryPromise({
@@ -2723,7 +2750,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }
           const payload = yield* buildPromptPayload(input);
           closeSettledActiveTurn(context);
-          if (context.activeTurnId !== undefined) {
+          const liveTurnId = context.activeTurnId;
+          if (liveTurnId !== undefined) {
+            // A turn is active: route the send through the SDK's follow-up
+            // queue instead of prompt(), which would throw the raw "Agent is
+            // already processing" error mid-run.
+            if (isPiReloadPayload(payload)) {
+              return yield* sendTurnBusyError();
+            }
+            yield* queuePiFollowUp(context, payload);
+            return dispatchResult(context, liveTurnId);
+          }
+          if (context.runtime.session.isStreaming) {
+            // A run Synara did not dispatch is active (e.g. extension-triggered).
             return yield* sendTurnBusyError();
           }
           const turnId = TurnId.makeUnsafe(crypto.randomUUID());

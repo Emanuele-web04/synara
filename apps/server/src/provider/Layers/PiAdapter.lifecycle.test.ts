@@ -554,6 +554,57 @@ it("keeps steering during backoff inside the same logical turn", async () => {
   });
 });
 
+it("queues a send during an active turn as an SDK follow-up instead of erroring", async () => {
+  const calls = responses("error", "success", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isRetrying).toBe(true));
+    const queued = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Queued while running" }),
+    );
+    expect(queued.turnId).toBe(turn.turnId);
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Queued while running")),
+    ).toBe(true);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "completed" },
+    });
+    expect(calls()).toBe(3);
+    expect(
+      session.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Queued while running"),
+      ),
+    ).toBe(true);
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("serializes a concurrent send dispatching behind a committing prompt", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const first = Effect.runPromise(adapter.sendTurn({ threadId, input: "First prompt" }));
+    const second = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Second while first commits" }),
+    );
+    const session = captured.sessions[0]!;
+    const [firstTurn, secondTurn] = await Promise.all([first, second]);
+    expect(secondTurn.turnId).toBe(firstTurn.turnId);
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Second while first commits")),
+    ).toBe(true);
+    await Effect.runPromise(adapter.interruptTurn(threadId, firstTurn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
   const calls = responses("success", "overflow", "success", "success");
   await withAdapter(async (adapter, events) => {
