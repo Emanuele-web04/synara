@@ -297,35 +297,38 @@ describe("PullRequestProjectFilterPopover", () => {
 
   it("announces the selected project on both the trigger and options", async () => {
     const projectId = "project-1" as PullRequestListEntry["projectId"];
-    await render(
+    const mounted = await render(
       <PullRequestProjectFilterPopover
         projects={[[projectId, "Project One"]]}
         value={projectId}
         onChange={vi.fn()}
       />,
     );
-
-    const trigger = page.getByRole("button", {
-      name: "Filter pull requests by project: Project One",
-    });
-    expect(trigger).toBeVisible();
-    expect(
-      document
-        .querySelector('button[aria-label="Filter pull requests by project: Project One"]')
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-    await trigger.click();
-    const optionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
-    const selectedOption = optionButtons.find(
-      (button) => button.textContent?.trim() === "Project One",
-    );
-    const allProjectsOption = optionButtons.find(
-      (button) => button.textContent?.trim() === "All projects",
-    );
-    expect(selectedOption?.getAttribute("aria-pressed")).toBe("true");
-    expect(allProjectsOption?.getAttribute("aria-pressed")).toBe("false");
-    // Close the portalled popover before the browser renderer unmounts this test root.
-    await page.getByRole("button", { name: "All projects" }).click();
+    try {
+      const trigger = page.getByRole("button", {
+        name: "Filter pull requests by project: Project One",
+      });
+      expect(trigger).toBeVisible();
+      expect(
+        document
+          .querySelector('button[aria-label="Filter pull requests by project: Project One"]')
+          ?.getAttribute("aria-pressed"),
+      ).toBe("true");
+      await trigger.click();
+      const optionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
+      const selectedOption = optionButtons.find(
+        (button) => button.textContent?.trim() === "Project One",
+      );
+      const allProjectsOption = optionButtons.find(
+        (button) => button.textContent?.trim() === "All projects",
+      );
+      expect(selectedOption?.getAttribute("aria-pressed")).toBe("true");
+      expect(allProjectsOption?.getAttribute("aria-pressed")).toBe("false");
+      // Close the portalled popover before unmounting this test root.
+      await page.getByRole("button", { name: "All projects" }).click();
+    } finally {
+      await mounted.unmount();
+    }
   });
 });
 
