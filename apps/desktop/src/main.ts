@@ -155,6 +155,7 @@ import {
 } from "./resumableUpdateDownload";
 import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
+import { showPathInFileManager } from "./showInFileManager";
 import { BackendStartupBlockDetector, type BackendStartupBlock } from "./backendStartupBlock";
 import {
   BACKEND_MAX_CONSECUTIVE_START_FAILURES,
@@ -4547,27 +4548,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(IPC.showInFolder);
   ipcMain.handle(IPC.showInFolder, async (_event, rawPath: unknown) => {
-    if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
-      throw new Error("Missing folder path.");
-    }
-    const resolvedPath = Path.resolve(rawPath);
-
-    let stats: FS.Stats;
-    try {
-      stats = await FS.promises.stat(resolvedPath);
-    } catch {
-      throw new Error(`Folder not found: ${resolvedPath}`);
-    }
-
-    if (stats.isDirectory()) {
-      const errorMessage = await shell.openPath(resolvedPath);
-      if (errorMessage.trim().length > 0) {
-        throw new Error(errorMessage);
-      }
-      return;
-    }
-
-    shell.showItemInFolder(resolvedPath);
+    // Folders open in the file manager, files are revealed inside it; the
+    // renderer picks the matching label/error copy per platform.
+    await showPathInFileManager(rawPath, shell);
   });
 
   ipcMain.removeHandler(IPC.windowMinimize);
