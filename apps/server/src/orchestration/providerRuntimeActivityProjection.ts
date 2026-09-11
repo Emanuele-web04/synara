@@ -1094,6 +1094,10 @@ export function projectProviderRuntimeActivities(
           summary,
           payload: toActivityPayload({
             state,
+            ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
+            ...(event.payload.tokenAccountingVersion === 1
+              ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
+              : {}),
             ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
