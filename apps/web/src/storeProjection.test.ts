@@ -7,11 +7,9 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
   type OrchestrationReadModel,
   type OrchestrationShellStreamEvent,
-  type ThreadMarker,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -455,32 +453,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("remember to rerun typecheck");
     expect(threadsOf(next)[0]?.goal).toBe("Finish the release safely");
-  });
-
-  it("preserves threadMarkers through the normalized read-model projection", () => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-1"),
-      messageId: MessageId.makeUnsafe("assistant-marker-1"),
-      startOffset: 6,
-      endOffset: 20,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-02-27T00:01:00.000Z",
-      updatedAt: "2026-02-27T00:01:00.000Z",
-    };
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          threadMarkers: [marker],
-        }),
-      ),
-    );
-
-    expect(threadsOf(next)[0]?.threadMarkers).toEqual([marker]);
   });
 
   it("applies shell goals without clobbering detail annotations", () => {

@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,16 +25,10 @@ function renderWithQueryClient(ui: ReactElement) {
   return renderToStaticMarkup(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
-async function renderMarkdown(
-  text: string,
-  cwd = "C:\\Users\\LENOVO\\synara",
-  markers?: readonly ThreadMarker[],
-) {
+async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\synara") {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-  return renderWithQueryClient(
-    <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
-  );
+  return renderWithQueryClient(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
 async function renderUserMarkdown(text: string) {
@@ -357,106 +350,6 @@ $$
     expect(markup).toContain(">error</span>");
   });
 
-  it("renders exact thread marker ranges without changing markdown structure", async () => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-1"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset: 7,
-      endOffset: 21,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown("Read **important text** today.", undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-1"');
-    expect(markup).toContain("thread-marker-highlight");
-    expect(markup).toContain("<strong>");
-    expect(markup).toContain("important text");
-  });
-
-  it("renders marker ranges resolved from visual text across markdown delimiters", async () => {
-    const text = "**Ho letto tutto il progetto.**\n\n**L'app è bella e curata:** UI dark coerente.";
-    const startOffset = text.indexOf("Ho letto");
-    const endOffset = text.indexOf(":** UI") + 1;
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-markdown-range"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset,
-      selectedText: text.slice(startOffset, endOffset),
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup.match(/data-thread-marker-id="marker-markdown-range"/g) ?? []).toHaveLength(2);
-    expect(markup).toContain("thread-marker-continues-after");
-    expect(markup).toContain("thread-marker-continues-before");
-    expect(markup).toContain("Ho letto tutto il progetto.");
-    expect(markup).toContain("L&#x27;app è bella e curata:");
-  });
-
-  it("keeps marker offsets stable after literal dollar protection", async () => {
-    const text = "Price $5. Highlight this phrase.";
-    const startOffset = text.indexOf("Highlight");
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-dollar"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset: startOffset + "Highlight this phrase".length,
-      selectedText: "Highlight this phrase",
-      style: "underline",
-      color: "blue",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-dollar"');
-    expect(markup).toContain("thread-marker-underline");
-    expect(markup).toContain("Price $5.");
-  });
-
-  it("keeps marker offsets aligned when an escaped dollar precedes the marker", async () => {
-    // `\$` is two raw characters that render as one `$`; the dollar-protection transform must stay
-    // length-preserving or every offset after it shifts and the marker wraps the wrong substring.
-    const text = "Cost is \\$5 here. Use $PATH and [route](/src/$id.tsx). Highlight this phrase.";
-    const startOffset = text.indexOf("Highlight");
-    const selectedText = "Highlight this phrase";
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-escaped-dollar"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset: startOffset + selectedText.length,
-      selectedText,
-      style: "underline",
-      color: "blue",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-escaped-dollar"');
-    expect(markup).toContain(">Highlight this phrase</span>");
-    expect(markup).toContain("Cost is $5 here.");
-    expect(markup).toContain("Use $PATH and");
-    expect(markup).toContain('href="/src/$id.tsx"');
-    expect(markup).not.toContain('class="katex"');
-  });
-
   it("keeps relative inline-code as code until a real file is known", async () => {
     const markup = await renderMarkdown("See `src/index.ts`.", "/Users/tester/project");
 
@@ -673,32 +566,17 @@ describe("workspace Wiki links", () => {
     "[[note|after]]",
     "[[note|Label &amp; after]]",
     "Cost \\$5 [[note]] after",
-  ])("keeps find and marker source offsets in %s", async (text) => {
+  ])("keeps find source offsets in %s", async (text) => {
     const { default: ChatMarkdown } = await import("./ChatMarkdown");
     const startOffset = text.indexOf("after");
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("wiki-marker"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset: startOffset + 5,
-      selectedText: "after",
-      style: "underline",
-      color: "blue",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
     const markup = renderWithQueryClient(
       <ChatMarkdown
         text={text}
         cwd="/vault"
         findQuery="after"
         findActiveRange={{ startOffset, endOffset: startOffset + 5 }}
-        markers={[marker]}
       />,
     );
-    expect(markup).toContain('data-thread-marker-id="wiki-marker"');
     expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
     expect(markup).toContain('data-chat-find-match="active"');
   });

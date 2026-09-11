@@ -302,6 +302,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -354,6 +355,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 98, name: "MigrateKiloToOpenCode" },
           { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
           { migration_id: 100, name: "MessageTextChunks" },
+          { migration_id: 101, name: "RemoveTranscriptMarkers" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -447,6 +449,7 @@ agentGatewayRetentionLegacyLayer(
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -542,6 +545,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -578,6 +582,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
         ],
       );
 
@@ -668,6 +673,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -700,6 +706,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

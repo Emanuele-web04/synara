@@ -17,8 +17,6 @@ import type {
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
-  ThreadMarker,
-  ThreadMarkerId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -52,7 +50,6 @@ import {
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
-import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentStudioOutputsSection } from "./EnvironmentStudioOutputsSection";
 import {
   EnvironmentSidechatsSection,
@@ -133,12 +130,8 @@ export interface EnvironmentPanelProps {
   } | null;
   /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
-  /** Per-thread text markers (server-synced). */
-  threadMarkers: readonly ThreadMarker[];
   /** Live text of pinned messages still present in the transcript (for labels/availability). */
   pinnedMessageTextById: ReadonlyMap<MessageId, string>;
-  /** Live text of marked messages still present in the transcript (for labels/availability). */
-  markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
   /** Active project whose local instructions should be edited. */
@@ -165,14 +158,6 @@ export interface EnvironmentPanelProps {
   onUnpinMessage: (messageId: MessageId) => void;
   /** Set (`null` clears to auto) a pinned message's label. */
   onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
-  /** Scroll the transcript to a text marker. */
-  onJumpToThreadMarker: (marker: ThreadMarker) => void;
-  /** Toggle a marker's done state. */
-  onToggleThreadMarkerDone: (markerId: ThreadMarkerId) => void;
-  /** Remove a text marker. */
-  onRemoveThreadMarker: (markerId: ThreadMarkerId) => void;
-  /** Set (`null` clears to auto) a marker label. */
-  onRenameThreadMarker: (markerId: ThreadMarkerId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
   /** Open the in-app editor workspace view (the Editor section's default first row). */
@@ -236,9 +221,7 @@ export function EnvironmentPanel({
   branchToolbar,
   recap: recapProp,
   pinnedMessages,
-  threadMarkers,
   pinnedMessageTextById,
-  markerMessageTextById,
   notes,
   activeProjectId,
   projectInstructions,
@@ -252,10 +235,6 @@ export function EnvironmentPanel({
   onTogglePinnedMessageDone,
   onUnpinMessage,
   onRenamePinnedMessage,
-  onJumpToThreadMarker,
-  onToggleThreadMarkerDone,
-  onRemoveThreadMarker,
-  onRenameThreadMarker,
   onNotesChange,
   onOpenEditorView: onOpenEditorViewProp,
   onClose,
@@ -488,20 +467,6 @@ export function EnvironmentPanel({
             onToggleDone={onTogglePinnedMessageDone}
             onUnpin={onUnpinMessage}
             onRename={onRenamePinnedMessage}
-          />
-        </>
-      ) : null}
-
-      {settings.showEnvironmentMarkers && threadMarkers.length > 0 ? (
-        <>
-          <EnvironmentSectionDivider />
-          <EnvironmentMarkersSection
-            markers={threadMarkers}
-            messageTextById={markerMessageTextById}
-            onJump={onJumpToThreadMarker}
-            onToggleDone={onToggleThreadMarkerDone}
-            onRemove={onRemoveThreadMarker}
-            onRename={onRenameThreadMarker}
           />
         </>
       ) : null}
