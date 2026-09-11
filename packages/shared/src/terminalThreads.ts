@@ -14,14 +14,14 @@ export function terminalScopeIdsForThread(hostThreadId: string): readonly string
   return [hostThreadId, dockTerminalScopeId(hostThreadId)];
 }
 
-export type TerminalCliKind = "codex" | "claude" | "antigravity";
-export type TerminalIconKey = "terminal" | "openai" | "claude" | "antigravity";
+export type TerminalCliKind = "codex" | "claude" | "antigravity" | "commandcode";
+export type TerminalIconKey = "terminal" | "openai" | "claude" | "antigravity" | "commandcode";
 export type TerminalActivityState = "running" | "attention" | "review";
 export type TerminalVisualState = "idle" | TerminalActivityState;
 export type TerminalAgentHookEventType = "Start" | "Stop" | "PermissionRequest";
 export const SYNARA_TERMINAL_CLI_KIND_ENV_KEY = "SYNARA_TERMINAL_CLI_KIND";
 export const SYNARA_TERMINAL_HOOK_OSC_PREFIX = "633;SYNARA_AGENT_EVENT=";
-export type ManagedTerminalCliKind = Exclude<TerminalCliKind, "antigravity">;
+export type ManagedTerminalCliKind = Exclude<TerminalCliKind, "antigravity" | "commandcode">;
 export const MANAGED_TERMINAL_COMMAND_NAME_BY_CLI_KIND: Record<ManagedTerminalCliKind, string> = {
   codex: "codex",
   claude: "claude",
@@ -48,12 +48,18 @@ const WRAPPER_COMMANDS = new Set(["builtin", "command", "env", "noglob", "nocorr
 const CODEX_COMMAND_NAMES = new Set(["codex", "codex-cli"]);
 const CLAUDE_COMMAND_NAMES = new Set(["claude", "claude-code", "claude_code"]);
 const ANTIGRAVITY_COMMAND_NAMES = new Set(["agy", "antigravity", "antigravity-cli"]);
+// Command Code ships as the `cmd` binary. Bare `cmd` is also the Windows shell,
+// so identity detection only trusts explicit command-code command names and the
+// "Command Code" product title, never a bare `cmd` token.
+const COMMANDCODE_COMMAND_NAMES = new Set(["cmd", "command-code", "command_code", "commandcode"]);
 const TITLE_CODEX_TEXT_PATTERNS = [/\bopenai codex\b/i, /\bcodex cli\b/i];
 const TITLE_CLAUDE_TEXT_PATTERNS = [/\bclaude code\b/i];
 const TITLE_ANTIGRAVITY_TEXT_PATTERNS = [/\bantigravity(?: cli)?\b/i, /^agy(?: cli)?$/i];
+const TITLE_COMMANDCODE_TEXT_PATTERNS = [/\bcommand code(?: cli)?\b/i, /^cmd cli$/i];
 const PROCESS_CODEX_TEXT_PATTERNS = [/@openai\/codex/i];
 const PROCESS_CLAUDE_TEXT_PATTERNS = [/@anthropic-ai\/claude-code/i, /anthropic\/claude-code/i];
 const PROCESS_ANTIGRAVITY_TEXT_PATTERNS = [/google-antigravity\/antigravity-cli/i];
+const PROCESS_COMMANDCODE_TEXT_PATTERNS = [/(?:@command[-_]?code\/cli|command[-_]?code-cli)/i];
 const IGNORED_TERMINAL_TITLE_COMMANDS = new Set([
   ".",
   "alias",
@@ -112,6 +118,9 @@ function deriveCliKindFromNormalizedToken(token: string): TerminalCliKind | null
   if (ANTIGRAVITY_COMMAND_NAMES.has(normalizedToken)) {
     return "antigravity";
   }
+  if (COMMANDCODE_COMMAND_NAMES.has(normalizedToken)) {
+    return "commandcode";
+  }
   return null;
 }
 
@@ -146,7 +155,8 @@ function deriveCliKindFromProcessText(text: string | null | undefined): Terminal
   return (
     textMatchesCliPatterns(normalizedText, PROCESS_CODEX_TEXT_PATTERNS, "codex") ??
     textMatchesCliPatterns(normalizedText, PROCESS_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(normalizedText, PROCESS_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
+    textMatchesCliPatterns(normalizedText, PROCESS_ANTIGRAVITY_TEXT_PATTERNS, "antigravity") ??
+    textMatchesCliPatterns(normalizedText, PROCESS_COMMANDCODE_TEXT_PATTERNS, "commandcode")
   );
 }
 
@@ -262,7 +272,9 @@ function createTerminalCommandIdentity(
           ? "claude"
           : cliKind === "antigravity"
             ? "antigravity"
-            : "terminal",
+            : cliKind === "commandcode"
+              ? "commandcode"
+              : "terminal",
     title,
   };
 }
@@ -272,7 +284,9 @@ export function defaultTerminalTitleForCliKind(cliKind: TerminalCliKind): string
     ? "Codex CLI"
     : cliKind === "claude"
       ? "Claude Code"
-      : "Antigravity CLI";
+      : cliKind === "antigravity"
+        ? "Antigravity CLI"
+        : "Command Code CLI";
 }
 
 export function managedTerminalCommandNameForCliKind(cliKind: ManagedTerminalCliKind): string {
@@ -283,7 +297,8 @@ export function terminalCliKindFromValue(value: string | null | undefined): Term
   const normalizedValue = value?.trim().toLowerCase();
   return normalizedValue === "codex" ||
     normalizedValue === "claude" ||
-    normalizedValue === "antigravity"
+    normalizedValue === "antigravity" ||
+    normalizedValue === "commandcode"
     ? normalizedValue
     : null;
 }
@@ -311,6 +326,12 @@ export function deriveTerminalProcessIdentity(
       "antigravity",
     );
   }
+  if (tokenCliKind === "commandcode") {
+    return createTerminalCommandIdentity(
+      defaultTerminalTitleForCliKind("commandcode"),
+      "commandcode",
+    );
+  }
   return null;
 }
 
@@ -328,10 +349,14 @@ function inferCliKindFromTitle(title: string | null | undefined): TerminalCliKin
   if (/^(?:antigravity(?: cli)?|agy(?: cli)?)(?: \d+)?$/.test(normalizedTitle)) {
     return "antigravity";
   }
+  if (/^(?:command code|cmd cli)(?: \d+)?$/.test(normalizedTitle)) {
+    return "commandcode";
+  }
   return (
     textMatchesCliPatterns(normalizedTitle, TITLE_CODEX_TEXT_PATTERNS, "codex") ??
     textMatchesCliPatterns(normalizedTitle, TITLE_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(normalizedTitle, TITLE_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
+    textMatchesCliPatterns(normalizedTitle, TITLE_ANTIGRAVITY_TEXT_PATTERNS, "antigravity") ??
+    textMatchesCliPatterns(normalizedTitle, TITLE_COMMANDCODE_TEXT_PATTERNS, "commandcode")
   );
 }
 
@@ -364,6 +389,9 @@ export function deriveTerminalCommandIdentity(command: string): TerminalCommandI
   }
   if (detectedCliKind === "antigravity") {
     return createTerminalCommandIdentity("Antigravity CLI", "antigravity");
+  }
+  if (detectedCliKind === "commandcode") {
+    return createTerminalCommandIdentity("Command Code CLI", "commandcode");
   }
   if (first === "git") {
     return createTerminalCommandIdentity(
@@ -464,7 +492,9 @@ export function resolveTerminalVisualIdentity(input: {
           ? "claude"
           : cliKind === "antigravity"
             ? "antigravity"
-            : "terminal",
+            : cliKind === "commandcode"
+              ? "commandcode"
+              : "terminal",
     state,
     title,
   };

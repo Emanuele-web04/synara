@@ -7,6 +7,7 @@ import { Effect, Layer, Stream } from "effect";
 
 import { AntigravityAdapter, AntigravityAdapterShape } from "../Services/AntigravityAdapter.ts";
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { CommandCodeAdapter, CommandCodeAdapterShape } from "../Services/CommandCodeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
@@ -46,6 +47,23 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   stopTask: vi.fn(),
   backgroundTask: vi.fn(),
   steerSubagent: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
+const fakeCommandCodeAdapter: CommandCodeAdapterShape = {
+  provider: "commandcode",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
   respondToRequest: vi.fn(),
   respondToUserInput: vi.fn(),
   stopSession: vi.fn(),
@@ -189,6 +207,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
+        Layer.succeed(CommandCodeAdapter, fakeCommandCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
       ),
     ),
@@ -230,6 +249,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "grok",
         "droid",
         "opencode",
+        "commandcode",
         "pi",
       ]);
     }),

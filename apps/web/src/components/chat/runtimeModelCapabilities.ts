@@ -105,6 +105,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "grok" &&
       input.provider !== "droid" &&
       input.provider !== "opencode" &&
+      input.provider !== "commandcode" &&
       input.provider !== "pi" &&
       input.provider !== "devin") ||
     !runtimeEfforts ||

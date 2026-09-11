@@ -357,6 +357,7 @@ const HOME_ORIGIN_ORDER = [
   "grok",
   "factory",
   "opencode",
+  "commandcode",
   "pi",
   "devin",
   "agents",
@@ -443,6 +444,10 @@ const SKILL_ORIGIN_ROOTS = {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".config", "opencode", "skills")],
     projectRootNames: [".opencode"],
   },
+  commandcode: {
+    homeRoots: (input) => [nodePath.join(input.homeDir, ".cmd", "skills")],
+    projectRootNames: [".cmd"],
+  },
   pi: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".pi", "agent", "skills")],
     projectRootNames: [".pi"],
@@ -479,6 +484,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   grok: ["grok", "claude", "agents"],
   droid: ["factory", "agents", "claude", "codex"],
   opencode: ["opencode", "claude", "agents"],
+  commandcode: ["commandcode", "agents"],
   pi: ["pi", "agents"],
   devin: ["devin", "claude", "agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;

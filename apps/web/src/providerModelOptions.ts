@@ -13,6 +13,8 @@ import {
   type ClaudeModelSelection,
   type CodexModelOptions,
   type CodexModelSelection,
+  type CommandCodeModelOptions,
+  type CommandCodeModelSelection,
   type CursorModelOptions,
   type CursorModelSelection,
   type DroidModelOptions,
@@ -89,7 +91,11 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "opencode" || input.provider === "pi") {
+  if (
+    input.provider === "opencode" ||
+    input.provider === "commandcode" ||
+    input.provider === "pi"
+  ) {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -369,6 +375,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as OpenCodeModelOptions;
   }
+  if (provider === "commandcode") {
+    return {
+      ...(modelOptions as CommandCodeModelOptions | undefined),
+      ...patch,
+    } as CommandCodeModelOptions;
+  }
   return {
     ...(modelOptions as PiModelOptions | undefined),
     ...patch,
@@ -419,6 +431,11 @@ export function buildModelSelection(
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
 ): OpenCodeModelSelection;
+export function buildModelSelection(
+  provider: "commandcode",
+  model: string,
+  options?: CommandCodeModelOptions | null | undefined,
+): CommandCodeModelSelection;
 export function buildModelSelection(
   provider: "pi",
   model: string,
@@ -503,6 +520,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as OpenCodeModelOptions,
+          }
+        : { provider, model };
+    case "commandcode":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as CommandCodeModelOptions,
           }
         : { provider, model };
     case "pi":

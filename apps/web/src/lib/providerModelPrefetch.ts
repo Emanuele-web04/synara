@@ -33,6 +33,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "grokBinaryPath"
   | "droidBinaryPath"
   | "openCodeBinaryPath"
+  | "commandCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
 >;
@@ -171,6 +172,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.openCodeBinaryPath || null,
         cwd,
         priority,
+      });
+    case "commandcode":
+      return providerModelsQueryOptions({
+        provider: "commandcode",
+        binaryPath: settings.commandCodeBinaryPath || null,
+        cwd,
       });
     case "pi":
       return providerModelsQueryOptions({

@@ -24,6 +24,7 @@ describe("isProviderInstallSettingsDirty", () => {
       { openCodeBinaryPath: "/opt/opencode" },
       { openCodeServerUrl: "http://127.0.0.1:5001" },
       { openCodeExperimentalWebSockets: true },
+      { commandCodeBinaryPath: "/opt/cmd" },
       { piBinaryPath: "/opt/pi" },
       { piAgentDir: "/tmp/pi-agent" },
     ] satisfies ReadonlyArray<Partial<AppSettings>>;
@@ -69,6 +70,7 @@ describe("createProviderInstallResetPatch", () => {
         "openCodeExperimentalWebSockets",
         "openCodeServerPassword",
         "openCodeServerUrl",
+        "commandCodeBinaryPath",
         "piAgentDir",
         "piBinaryPath",
       ].sort(),

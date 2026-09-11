@@ -984,6 +984,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
+    case "commandcode":
+      return normalizeCustomBinaryPath(providerOptions?.commandcode?.binaryPath);
     case "devin":
       return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":
@@ -2423,6 +2425,7 @@ export default function ChatView({
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
       opencode: resolveHint("opencode"),
+      commandcode: resolveHint("commandcode"),
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
     };
@@ -4690,7 +4693,7 @@ export default function ChatView({
       onTerminalMetadataChange: (
         terminalId: string,
         metadata: {
-          cliKind: "codex" | "claude" | "antigravity" | null;
+          cliKind: "codex" | "claude" | "antigravity" | "commandcode" | null;
           label: string;
         },
       ) => {

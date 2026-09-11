@@ -48,6 +48,7 @@ function ClaudeTraitsPickerHarness(props: {
       grok: [],
       droid: [],
       opencode: [],
+      commandcode: [],
       pi: [],
     },
   });
@@ -678,6 +679,7 @@ function OpenCodeTraitsPickerHarness(props: {
       grok: [],
       droid: [],
       opencode: [],
+      commandcode: [],
       pi: [],
     },
   });

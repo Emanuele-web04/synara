@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import {
   AntigravityIcon,
   ClaudeAI,
+  CommandCodeIcon,
   CursorIcon,
   DevinIcon,
   DroidIcon,
@@ -72,6 +73,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   grok: GrokIcon,
   droid: DroidIcon,
   opencode: OpenCodeProviderIcon,
+  commandcode: CommandCodeIcon,
   pi: PiIcon,
 };
 

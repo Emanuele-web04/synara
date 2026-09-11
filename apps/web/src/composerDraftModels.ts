@@ -38,6 +38,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "grok",
   "droid",
   "opencode",
+  "commandcode",
   "pi",
 ] as const satisfies readonly ProviderKind[];
 
@@ -210,6 +211,16 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "commandcode":
+      return {
+        provider,
+        model,
+        ...(options
+          ? {
+              options: options as Extract<ModelSelection, { provider: "commandcode" }>["options"],
+            }
+          : {}),
+      };
     case "pi":
       return {
         provider,
@@ -258,6 +269,10 @@ export function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const commandCodeCandidate =
+    candidate?.commandcode && typeof candidate.commandcode === "object"
+      ? (candidate.commandcode as Record<string, unknown>)
       : null;
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
@@ -370,6 +385,11 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const commandCodeReasoningEffort = trimStringOrUndefined(commandCodeCandidate?.reasoningEffort);
+  const commandcode =
+    commandCodeReasoningEffort !== undefined
+      ? { reasoningEffort: commandCodeReasoningEffort }
+      : undefined;
   const devinFastMode = booleanOrUndefined(devinCandidate?.fastMode);
   const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
   const devinThinking = booleanOrUndefined(devinCandidate?.thinking);
@@ -398,6 +418,7 @@ export function normalizeProviderModelOptions(
     !grok &&
     !droid &&
     !opencode &&
+    !commandcode &&
     !pi
   ) {
     return null;
@@ -411,6 +432,7 @@ export function normalizeProviderModelOptions(
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
     ...(opencode ? { opencode } : {}),
+    ...(commandcode ? { commandcode } : {}),
     ...(pi ? { pi } : {}),
   };
 }
@@ -473,11 +495,13 @@ export function normalizeModelSelection(
                 ? modelOptions?.cursor
                 : provider === "opencode"
                   ? modelOptions?.opencode
-                  : provider === "pi"
-                    ? modelOptions?.pi
-                    : provider === "devin"
-                      ? modelOptions?.devin
-                      : undefined;
+                  : provider === "commandcode"
+                    ? modelOptions?.commandcode
+                    : provider === "pi"
+                      ? modelOptions?.pi
+                      : provider === "devin"
+                        ? modelOptions?.devin
+                        : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

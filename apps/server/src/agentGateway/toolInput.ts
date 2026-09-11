@@ -17,6 +17,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "grok",
   "droid",
   "opencode",
+  "commandcode",
   "pi",
   "devin",
 ];

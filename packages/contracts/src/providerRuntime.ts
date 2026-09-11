@@ -29,6 +29,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "acp.jsonrpc",
   "acp.cursor.extension",
   "opencode.sdk.event",
+  "commandcode.cli.event",
   "pi.sdk.event",
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;

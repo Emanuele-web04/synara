@@ -393,6 +393,9 @@ export function PluginLibrary() {
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
+  const commandCodeCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("commandcode"),
+  );
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
 
@@ -428,6 +431,10 @@ export function PluginLibrary() {
     opencode: {
       plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
+    },
+    commandcode: {
+      plugins: supportsPluginDiscovery(commandCodeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(commandCodeCapabilitiesQuery.data),
     },
     pi: {
       plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
