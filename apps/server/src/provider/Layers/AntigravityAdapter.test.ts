@@ -530,10 +530,10 @@ describe("Antigravity CLI integration helpers", () => {
     expect(postToolResult.status).toBe(0);
     expect(postToolResult.stdout.trim()).toBe("{}");
 
-    // PreInvocation gates the upcoming LLM invocation (the subagent's first
-    // model call when the agent spawns one): an empty object is treated as a
-    // denial that aborts the launch and makes the parent CLI exit with
-    // code 1, so the inactive hook must answer allow.
+    // PreInvocation output is decoded with protojson into a message that has
+    // no decision field: a decision fails to unmarshal, aborts the invocation
+    // it gates and makes the parent CLI exit with code 1. The neutral empty
+    // object is the only answer that lets the invocation proceed.
     const preInvocationResult = runCaptureCommand(
       buildAntigravityCaptureCommand(
         "__synara_gui_must_not_launch__",
@@ -545,7 +545,7 @@ describe("Antigravity CLI integration helpers", () => {
     );
     expect(preInvocationResult.error).toBeUndefined();
     expect(preInvocationResult.status).toBe(0);
-    expect(preInvocationResult.stdout.trim()).toBe('{"decision":"allow"}');
+    expect(preInvocationResult.stdout.trim()).toBe("{}");
   });
 
   it("answers pre-tool with a decision from the capture script when capture is inactive", async () => {
@@ -605,6 +605,42 @@ describe("Antigravity CLI integration helpers", () => {
     }
   });
 
+  it("answers pre-invocation without a decision while still capturing the event", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-hook-test-"));
+    const scriptPath = path.join(directory, "capture.cjs");
+    const eventPath = path.join(directory, "events.ndjson");
+    try {
+      await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
+      // Invoke the script directly rather than through the shell wrapper: the
+      // win32 wrapper is deliberately quote-free, so it cannot launch a helper
+      // whose path contains a space (this runner's process.execPath often
+      // does), and the behaviour under test belongs to the script itself.
+      const result = spawnSync(process.execPath, [scriptPath, "pre-invocation"], {
+        env: {
+          ...process.env,
+          SYNARA_ANTIGRAVITY_EVENTS: eventPath,
+          SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+        },
+        input: JSON.stringify({ stepIdx: 3, conversationId: "conversation-1" }),
+        encoding: "utf8",
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      // The CLI decodes PreInvocation output with protojson into a message
+      // that has no decision field. Any decision -- including one forced by
+      // SYNARA_ANTIGRAVITY_HOOK_DECISION -- fails to unmarshal, aborts the
+      // invocation and exits the parent CLI with code 1.
+      expect(result.stdout.trim()).toBe("{}");
+      expect(Object.keys(JSON.parse(result.stdout.trim()))).toEqual([]);
+      // Staying neutral must not cost the event capture the turn depends on.
+      const captured = await fs.readFile(eventPath, "utf8");
+      expect(captured).toBe('pre-invocation\t{"conversationId":"conversation-1","stepIdx":3}\n');
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("runs packaged Electron as Node only for Synara-managed sessions", () => {
     expect(
       buildAntigravityCaptureCommand(
@@ -630,8 +666,9 @@ describe("Antigravity CLI integration helpers", () => {
       // win32 command must stay free of double quotes.
       String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
-    // PreInvocation gates the LLM invocation: answer allow so subagent
-    // launches are not denied (which would make the parent CLI exit 1).
+    // PreInvocation carries no decision: the CLI decodes its output with
+    // protojson into a message without that field, so a decision fails to
+    // unmarshal, aborts the invocation and exits the parent CLI with code 1.
     expect(
       buildAntigravityCaptureCommand(
         String.raw`C:\Users\test\AppData\Local\Programs\Synara\Synara.exe`,
@@ -640,7 +677,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -650,7 +687,7 @@ describe("Antigravity CLI integration helpers", () => {
         "darwin",
       ),
     ).toBe(
-      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
     );
   });
 
