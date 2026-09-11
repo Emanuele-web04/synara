@@ -45,6 +45,7 @@ export const ProjectionThreadMessage = Schema.Struct({
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
+  startsNewTurn: Schema.optional(Schema.Boolean),
   isStreaming: Schema.Boolean,
   source: OrchestrationMessageSource,
   /** Server-owned orchestration event sequence for causal ordering. */

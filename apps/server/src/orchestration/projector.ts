@@ -948,6 +948,13 @@ export function projectEvent(
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
+            ...(payload.dispatchOrigin !== undefined
+              ? { dispatchOrigin: payload.dispatchOrigin }
+              : {}),
+            ...(payload.startsNewTurn !== undefined
+              ? { startsNewTurn: payload.startsNewTurn }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             source: payload.source,
@@ -1000,6 +1007,21 @@ export function projectEvent(
             ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
             ...(message.skills !== undefined ? { skills: message.skills } : {}),
             ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+            ...(message.dispatchMode !== undefined
+              ? { dispatchMode: message.dispatchMode }
+              : entry.dispatchMode !== undefined
+                ? { dispatchMode: entry.dispatchMode }
+                : {}),
+            ...(message.dispatchOrigin !== undefined
+              ? { dispatchOrigin: message.dispatchOrigin }
+              : entry.dispatchOrigin !== undefined
+                ? { dispatchOrigin: entry.dispatchOrigin }
+                : {}),
+            ...(message.startsNewTurn !== undefined
+              ? { startsNewTurn: message.startsNewTurn }
+              : entry.startsNewTurn !== undefined
+                ? { startsNewTurn: entry.startsNewTurn }
+                : {}),
           };
           cappedMessages = nextMessages;
         } else {

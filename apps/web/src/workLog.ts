@@ -2433,15 +2433,14 @@ export function deriveTimelineEntries(
     ? messages
     : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const message of orderedMessages) {
-    // A steer is a boundary only when provider dispatch bound it to a new
-    // effective turn. Native steers remain unbound continuations; emulated
-    // steers retain their user-facing mode but receive the id of the queued
-    // turn they eventually start.
-    if (
-      message.role === "user" &&
+    // Effective dispatch semantics are recorded before an emulated steer waits
+    // for interruption/promotion. Fall back to turn binding for events written
+    // before startsNewTurn existed; native steers remain continuations.
+    const startsNewTurn =
+      message.startsNewTurn ??
       (message.dispatchMode !== "steer" ||
-        (message.turnId !== null && message.turnId !== undefined))
-    ) {
+        (message.turnId !== null && message.turnId !== undefined));
+    if (message.role === "user" && startsNewTurn) {
       userStarts.push(message.createdAt);
     }
     const order = userStarts.length;

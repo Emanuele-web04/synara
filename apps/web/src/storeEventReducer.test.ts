@@ -79,6 +79,7 @@ describe("store event reducer", () => {
         text: "Use @linear",
         attachments: [],
         mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        startsNewTurn: true,
         turnId: null,
         streaming: false,
         source: "native",
@@ -90,6 +91,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
+    expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
   });
 
   it("updates thread error and marks the running latest turn failed from session-set events", () => {
