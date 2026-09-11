@@ -893,11 +893,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.isFalse(persisted.some((entry) => entry.command === "terminal.toggle"));
       assert.isTrue(persisted.some((entry) => entry.command === "script.custom-action.run"));
 
-      assert.isTrue(
-        messages.some((message) =>
-          message.includes("skipping default keybinding due to shortcut conflict"),
-        ),
+      const conflictWarnings = messages.filter((message) =>
+        message.includes("skipping default keybindings due to shortcut conflicts"),
       );
+      assert.lengthOf(conflictWarnings, 1);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

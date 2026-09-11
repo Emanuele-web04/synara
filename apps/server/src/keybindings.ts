@@ -932,6 +932,26 @@ const makeKeybindings = Effect.gen(function* () {
   const emitChange = (configState: KeybindingsConfigState) =>
     PubSub.publish(changesPubSub, configState).pipe(Effect.asVoid);
 
+  // User configs legitimately accumulate entries this server cannot decode
+  // (newer fields, removed commands). Each distinct entry warns once per
+  // process — watcher-driven reloads would otherwise re-warn for entries the
+  // user has not touched since the last load. Entries surface as config issues
+  // too, so the log is diagnostics only.
+  const warnedInvalidKeybindingEntries = new Set<string>();
+  const logInvalidKeybindingEntryOnce = (index: number, entry: unknown, detail: string) => {
+    const key = JSON.stringify(entry) ?? "";
+    if (warnedInvalidKeybindingEntries.has(key)) {
+      return Effect.void;
+    }
+    warnedInvalidKeybindingEntries.add(key);
+    return Effect.logWarning("ignoring invalid keybinding entry", {
+      path: keybindingsConfigPath,
+      index,
+      entry,
+      error: detail,
+    });
+  };
+
   const readConfigExists = fs.exists(keybindingsConfigPath).pipe(
     Effect.mapError(
       (cause) =>
@@ -971,7 +991,7 @@ const makeKeybindings = Effect.gen(function* () {
       });
     }
 
-    return yield* Effect.forEach(decodedEntries.entries, (entry) =>
+    return yield* Effect.forEach(decodedEntries.entries, (entry, index) =>
       Effect.gen(function* () {
         const command = readKeybindingEntryCommand(entry);
         if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
@@ -981,20 +1001,12 @@ const makeKeybindings = Effect.gen(function* () {
         const normalized = normalizeLegacyKeybindingEntry(entry);
         const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
-          yield* Effect.logWarning("ignoring invalid keybinding entry", {
-            path: keybindingsConfigPath,
-            entry,
-            error: Cause.pretty(decodedRule.cause),
-          });
+          yield* logInvalidKeybindingEntryOnce(index, entry, Cause.pretty(decodedRule.cause));
           return null;
         }
         const resolved = Schema.decodeExit(ResolvedKeybindingFromConfig)(decodedRule.value);
         if (resolved._tag === "Failure") {
-          yield* Effect.logWarning("ignoring invalid keybinding entry", {
-            path: keybindingsConfigPath,
-            entry,
-            error: Cause.pretty(resolved.cause),
-          });
+          yield* logInvalidKeybindingEntryOnce(index, entry, Cause.pretty(resolved.cause));
           return null;
         }
         return decodedRule.value;
@@ -1058,12 +1070,7 @@ const makeKeybindings = Effect.gen(function* () {
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
-        yield* Effect.logWarning("ignoring invalid keybinding entry", {
-          path: keybindingsConfigPath,
-          index,
-          entry,
-          error: detail,
-        });
+        yield* logInvalidKeybindingEntryOnce(index, entry, detail);
         continue;
       }
 
@@ -1071,12 +1078,7 @@ const makeKeybindings = Effect.gen(function* () {
       if (resolvedRule._tag === "Failure") {
         const detail = Cause.pretty(resolvedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
-        yield* Effect.logWarning("ignoring invalid keybinding entry", {
-          path: keybindingsConfigPath,
-          index,
-          entry,
-          error: detail,
-        });
+        yield* logInvalidKeybindingEntryOnce(index, entry, detail);
         continue;
       }
       const migratedDefaultRule = migrateOutdatedDefaultKeybindingRule(decodedRule.value);
@@ -1195,13 +1197,13 @@ const makeKeybindings = Effect.gen(function* () {
         }
         missingDefaults.push(defaultRule);
       }
-      for (const conflict of shortcutConflictWarnings) {
-        yield* Effect.logWarning("skipping default keybinding due to shortcut conflict", {
+      // Conflicting user shortcuts are a legitimate configuration state — a
+      // custom rule may deliberately shadow a default. One aggregated warning
+      // keeps the list auditable without a log line per conflict.
+      if (shortcutConflictWarnings.length > 0) {
+        yield* Effect.logWarning("skipping default keybindings due to shortcut conflicts", {
           path: keybindingsConfigPath,
-          defaultCommand: conflict.defaultCommand,
-          conflictingCommand: conflict.conflictingCommand,
-          key: conflict.key,
-          when: conflict.when,
+          conflicts: shortcutConflictWarnings,
           reason: "shortcut context already used by existing rule",
         });
       }
