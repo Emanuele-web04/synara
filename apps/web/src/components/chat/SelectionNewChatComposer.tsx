@@ -129,13 +129,10 @@ export function SelectionNewChatComposer({
       data-transcript-selection-action="true"
       role="dialog"
       aria-label="New chat from selection"
-      className="fixed z-50 w-[360px] max-w-[calc(100vw-16px)] text-foreground"
-      style={{
-        left: action.left,
-        top: action.top,
-        maxHeight: "calc(100dvh - 16px)",
-        overflowY: "auto",
-      }}
+      className="fixed z-50 w-[320px] max-w-[calc(100vw-16px)] text-foreground"
+      // No overflow on this wrapper: a scroll box is square and would clip the rounded
+      // surface's shadow into hard corners. The editor caps and scrolls its own height.
+      style={{ left: action.left, top: action.top }}
     >
       <div className={COMPOSER_INPUT_SHELL_CLASS_NAME}>
         <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME}>
@@ -147,8 +144,8 @@ export function SelectionNewChatComposer({
                 void submit("send");
               }}
             >
-              <div className={COMPOSER_EDITOR_PADDING_CLASS_NAME}>
-                <div className="mb-2 flex items-center justify-between gap-2">
+              <div className={cn(COMPOSER_EDITOR_PADDING_CLASS_NAME, "px-2.5 pt-2 pb-1")}>
+                <div className="mb-1 flex items-center justify-between gap-2">
                   <AssistantSelectionsSummaryChip selections={selections} />
                   <div className="flex items-center gap-1">
                     <Button
@@ -182,6 +179,7 @@ export function SelectionNewChatComposer({
                   terminalContexts={[]}
                   disabled={busy}
                   ariaLabel="Message for new chat"
+                  className="min-h-[1lh]"
                   placeholder="Ask about this selection…"
                   onRemoveTerminalContext={() => {}}
                   onPaste={() => {}}

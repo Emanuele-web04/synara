@@ -13,8 +13,9 @@ export interface TranscriptSelectionActionLayout {
   placement: "top" | "bottom";
 }
 
-const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 336;
-export const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 38;
+// Keep in sync with the toolbar in TranscriptSelectionAction.tsx (w-[272px], h-7 + border).
+const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 272;
+export const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 30;
 const TRANSCRIPT_SELECTION_ACTION_GAP_PX = 8;
 function getSelectionRect(selection: Selection): DOMRect | null {
   if (selection.rangeCount === 0 || selection.isCollapsed) {
