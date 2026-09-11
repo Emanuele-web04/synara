@@ -2105,10 +2105,10 @@ describe("ProviderCommandReactor", () => {
     // quarantine holds, and must be replayed once the thread resumes.
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("cmd-durable-blocked-task-stop"),
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe("cmd-durable-blocked-task-background"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        taskId: "task-durable-blocked",
+        toolUseId: "tool-durable-blocked",
         createdAt: now,
       }),
     );
@@ -2119,7 +2119,7 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= highWater;
     });
-    expect(harness.stopTask.mock.calls.length).toBe(0);
+    expect(harness.backgroundTask.mock.calls.length).toBe(0);
 
     const reconciliation = await Effect.runPromise(
       harness.reactor.reconcileDelivery({
@@ -2145,10 +2145,10 @@ describe("ProviderCommandReactor", () => {
     // The authorized retry completed the previously blocked rollback and
     // replayed the side effect the quarantine had skipped.
     expect(harness.rollbackConversation.mock.calls.length).toBe(1);
-    await waitFor(() => harness.stopTask.mock.calls.length === 1);
-    expect(harness.stopTask.mock.calls[0]?.[0]).toEqual({
+    await waitFor(() => harness.backgroundTask.mock.calls.length === 1);
+    expect(harness.backgroundTask.mock.calls[0]?.[0]).toEqual({
       threadId: ThreadId.makeUnsafe("thread-1"),
-      taskId: "task-durable-blocked",
+      toolUseId: "tool-durable-blocked",
     });
     expect(
       Option.isNone(
