@@ -133,10 +133,15 @@ function Slider({
           className="relative h-[var(--slider-track-size)] w-full overflow-visible rounded-full bg-[color-mix(in_srgb,var(--color-text-foreground)_14%,transparent)]"
           data-slot="slider-track"
         >
+          {/* At the minimum the fill sits entirely under the thumb, but the thumb and
+              the track share the same left edge, so anti-aliasing leaves a sliver of
+              accent peeking out. Hide the fill there instead of relying on overlap. */}
           <SliderPrimitive.Indicator
             className={cn(
               "rounded-full bg-[var(--color-text-accent)]",
               magnetic && MAGNETIC_MOTION_CLASS,
+              magnetic && "transition-[inset-inline-start,width,opacity]",
+              valuePercent <= 0 && "opacity-0",
             )}
             data-slot="slider-indicator"
           />

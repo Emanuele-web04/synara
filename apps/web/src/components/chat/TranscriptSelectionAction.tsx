@@ -32,7 +32,7 @@ function TranscriptSelectionToolbarButton({
       title={label}
       disabled={disabled}
       className={cn(
-        "pointer-events-auto inline-flex h-9 flex-1 items-center justify-center whitespace-nowrap px-3 text-xs text-[var(--color-text-foreground)] outline-none focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40",
+        "pointer-events-auto inline-flex h-7 flex-auto items-center justify-center whitespace-nowrap px-2.5 text-xs text-[var(--color-text-foreground)] outline-none focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40",
         ELEVATED_HOVER_SURFACE_CLASS_NAME,
       )}
       onMouseDown={(event) => {
@@ -61,8 +61,8 @@ export function TranscriptSelectionAction(props: TranscriptSelectionActionProps)
     >
       <div
         className={cn(
-          "pointer-events-auto inline-flex max-w-[calc(100vw-16px)] items-center divide-x divide-[var(--color-border)] overflow-hidden rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg",
-          props.onAddToNewChat && "w-[336px]",
+          "pointer-events-auto inline-flex max-w-[calc(100vw-16px)] items-center divide-x divide-[var(--color-border)] overflow-hidden rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-md",
+          props.onAddToNewChat && "w-[272px]",
         )}
       >
         <TranscriptSelectionToolbarButton
