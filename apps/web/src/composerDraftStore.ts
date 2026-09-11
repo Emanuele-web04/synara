@@ -2,7 +2,12 @@
 // Purpose: Public Zustand facade for composer drafts, model choices, attachments, and persistence.
 // Exports: Stable composer draft API, hooks, and promotion helpers.
 
-import { type ModelSelection, type ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  type ModelSelection,
+  type ProjectId,
+  type ProviderKind,
+  type ThreadId,
+} from "@synara/contracts";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -13,6 +18,7 @@ import {
   selectComposerThreadDraft,
   type ComposerDraftStoreState,
   type ComposerThreadDraftState,
+  type DraftThreadState,
 } from "./composerDraftDomain";
 import {
   deriveEffectiveComposerModelState,
@@ -140,13 +146,77 @@ export function useEffectiveComposerModelState(input: {
   });
 }
 
+// How long a just-promoted thread stays route-protected after its draft record
+// drops. The first started detail clears the draft and can land before the
+// shell row — or a lagging shell snapshot can briefly rebuild `threadShellById`
+// without the thread — leaving one render where neither slice knows it. The
+// thread route guard reads these markers to hold its missing-thread fallback
+// instead of bouncing home; the bound keeps a genuinely missing thread on a
+// real (few-second) timeout.
+export const PROMOTED_THREAD_ROUTE_GRACE_MS = 5_000;
+
+export interface PromotedThreadRouteMarker {
+  readonly projectId: ProjectId;
+  readonly entryPoint: DraftThreadState["entryPoint"];
+  readonly promotedAt: number;
+}
+
+const promotedThreadRouteMarkers = new Map<ThreadId, PromotedThreadRouteMarker>();
+
+function prunePromotedThreadRouteMarkers(now: number): void {
+  for (const [threadId, marker] of promotedThreadRouteMarkers) {
+    if (now - marker.promotedAt > PROMOTED_THREAD_ROUTE_GRACE_MS) {
+      promotedThreadRouteMarkers.delete(threadId);
+    }
+  }
+}
+
+function notePromotedThreadRouteMarker(threadId: ThreadId, draftThread: DraftThreadState): void {
+  const promotedAt = Date.now();
+  const marker: PromotedThreadRouteMarker = {
+    projectId: draftThread.projectId,
+    entryPoint: draftThread.entryPoint,
+    promotedAt,
+  };
+  promotedThreadRouteMarkers.set(threadId, marker);
+  // `promotedTo` defaults to the draft id but can carry a distinct server id —
+  // protect whichever id a route could be holding.
+  if (draftThread.promotedTo !== undefined && draftThread.promotedTo !== threadId) {
+    promotedThreadRouteMarkers.set(draftThread.promotedTo, marker);
+  }
+  prunePromotedThreadRouteMarkers(promotedAt);
+}
+
+/** True while `threadId`'s promotion is fresh enough that its route must hold. */
+export function isPromotedThreadRoutePending(threadId: ThreadId): boolean {
+  const marker = promotedThreadRouteMarkers.get(threadId);
+  if (marker === undefined) {
+    return false;
+  }
+  if (Date.now() - marker.promotedAt > PROMOTED_THREAD_ROUTE_GRACE_MS) {
+    promotedThreadRouteMarkers.delete(threadId);
+    return false;
+  }
+  return true;
+}
+
+/** Fresh markers only — expired entries are swept before the map is handed out. */
+export function readPromotedThreadRouteMarkers(): ReadonlyMap<ThreadId, PromotedThreadRouteMarker> {
+  prunePromotedThreadRouteMarkers(Date.now());
+  return promotedThreadRouteMarkers;
+}
+
 // Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.
 export function markPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
   const store = useComposerDraftStore.getState();
   const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];
   for (const draftId of draftThreadIds) {
     if (serverThreadIds.has(draftId)) {
+      const draftThread = store.draftThreadsByThreadId[draftId];
       store.markDraftThreadPromoting(draftId);
+      if (draftThread !== undefined) {
+        notePromotedThreadRouteMarker(draftId, draftThread);
+      }
     }
   }
 }
@@ -154,6 +224,13 @@ export function markPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>)
 export function finalizePromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
   const store = useComposerDraftStore.getState();
   for (const threadId of serverThreadIds) {
+    // Re-stamp at the exact moment the draft record drops — that is the render
+    // window the route guard protects, and it can open long after the promote
+    // call that set the first marker.
+    const draftThread = useComposerDraftStore.getState().draftThreadsByThreadId[threadId];
+    if (draftThread?.promotedTo !== undefined) {
+      notePromotedThreadRouteMarker(threadId, draftThread);
+    }
     store.finalizePromotedDraftThread(threadId);
   }
 }

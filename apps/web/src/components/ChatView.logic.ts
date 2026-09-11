@@ -1349,19 +1349,44 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
 /** The exact label set the transcript's working indicator can render. */
-export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+export type WorkingLabel =
+  | "Loading"
+  | "Thinking"
+  | `Starting ${string}…`
+  | `Reconnecting to ${string}…`;
+
+/**
+ * A connecting session is a true first spawn only while the thread has never
+ * produced anything: no assistant reply and no settled turn. Keyed on produced
+ * output rather than raw message count so the first send's own user echo —
+ * which can land while the session is still connecting — cannot flip a
+ * brand-new thread's spawn into a "reconnect".
+ */
+export function isFirstSessionConnect(input: {
+  messages: readonly Pick<ChatMessage, "role">[];
+  latestTurn: Thread["latestTurn"];
+}): boolean {
+  return (
+    !input.messages.some((message) => message.role === "assistant") &&
+    input.latestTurn?.completedAt == null
+  );
+}
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
+  isFirstConnect?: boolean;
   providerName?: string;
 }): WorkingLabel {
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
   if (input.isConnecting && input.providerName) {
-    return `Starting ${input.providerName}…`;
+    // Mid-conversation the same phase is a restart/resume, not a first spawn.
+    return (input.isFirstConnect ?? true)
+      ? `Starting ${input.providerName}…`
+      : `Reconnecting to ${input.providerName}…`;
   }
   return "Thinking";
 }

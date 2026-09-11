@@ -38,7 +38,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     expect(steps).toEqual(["attached", "snapshot"]);
     expect(Array.from(items)).toEqual([
       { kind: "snapshot", snapshot: { snapshotSequence: 1 } },
-      { kind: "event", event: event(2) },
+      { kind: "replay", events: [event(2)] },
     ]);
   });
 
@@ -68,7 +68,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
 
     expect(Array.from(items)).toEqual([
       { kind: "snapshot", snapshot: { snapshotSequence: 1 } },
-      { kind: "event", event: event(2) },
+      { kind: "replay", events: [event(2)] },
       { kind: "event", event: event(3) },
     ]);
   });
@@ -133,7 +133,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
                 Stream.make(event(4), event(5)),
               );
             },
-          }).pipe(Stream.take(3), Stream.runCollect);
+          }).pipe(Stream.take(2), Stream.runCollect);
         }),
       ),
     );
@@ -141,8 +141,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     expect(snapshotLoaded).toBe(false);
     expect(replayRange).toEqual([3, 5]);
     expect(Array.from(items)).toEqual([
-      { kind: "event", event: event(4) },
-      { kind: "event", event: event(5) },
+      { kind: "replay", events: [event(4), event(5)] },
       { kind: "event", event: event(6) },
     ]);
   });
@@ -171,14 +170,13 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
             ),
             resumeFromSequence: 3,
             replay: () => Stream.make(event(4), event(5)),
-          }).pipe(Stream.take(3), Stream.runCollect);
+          }).pipe(Stream.take(2), Stream.runCollect);
         }),
       ),
     );
 
     expect(Array.from(items)).toEqual([
-      { kind: "event", event: event(4) },
-      { kind: "event", event: event(5) },
+      { kind: "replay", events: [event(4), event(5)] },
       { kind: "event", event: event(6) },
     ]);
   }, 15_000);

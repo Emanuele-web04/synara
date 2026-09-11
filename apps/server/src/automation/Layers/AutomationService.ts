@@ -8,6 +8,7 @@ import {
   DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS,
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
+  EventId,
   MessageId,
   ThreadId,
   type AutomationAllowedCapability,
@@ -682,6 +683,65 @@ export const AutomationServiceLive = Layer.effect(
           Effect.asVoid,
         );
     };
+
+    // Auto-disable stops future runs until the user re-enables the automation —
+    // a lifecycle change, not just another failed run — so it lands in the
+    // transcript like the proposal lifecycle does rather than only in the runs
+    // list and attention badge.
+    const publishAutoDisableActivity = (
+      run: AutomationRun,
+      consecutiveFailureCount: number,
+      now: string,
+    ) =>
+      automationRepository.getDefinitionById({ id: run.automationId }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation.")),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (definition) => {
+              const threadId = run.threadId ?? definition.sourceThreadId;
+              if (!threadId) {
+                return Effect.void;
+              }
+              return orchestrationEngine
+                .dispatch({
+                  type: "thread.activity.append",
+                  // Stable per run id: a retried dispatch is idempotent instead
+                  // of appending a duplicate disable notice.
+                  commandId: CommandId.makeUnsafe(`automation:${definition.id}:disabled:${run.id}`),
+                  threadId,
+                  activity: {
+                    id: EventId.makeUnsafe(randomUUID()),
+                    tone: "error" as const,
+                    kind: "automation.disabled",
+                    summary: `Automation stopped after ${consecutiveFailureCount} consecutive failed runs: ${definition.name}`,
+                    payload: {
+                      automationId: definition.id,
+                      automationName: definition.name,
+                      runId: run.id,
+                      consecutiveFailureCount,
+                    },
+                    turnId: null,
+                    createdAt: now,
+                  },
+                  createdAt: now,
+                })
+                .pipe(Effect.asVoid);
+            },
+          }),
+        ),
+        // Best-effort like the proposal activity path: the run result and
+        // definition streams already carry the disable state, so a failed
+        // transcript append must not break failure accounting.
+        Effect.catch((error) =>
+          Effect.logWarning("automation disable activity could not be appended", {
+            automationId: run.automationId,
+            runId: run.id,
+            error: errorMessage(error),
+          }),
+        ),
+        Effect.asVoid,
+      );
 
     const cleanupUnattachedWorktree = (input: {
       readonly definition: AutomationDefinition;
@@ -1985,6 +2045,9 @@ export const AutomationServiceLive = Layer.effect(
             ? publishDefinition(result.run.automationId).pipe(
                 Effect.andThen(
                   appendFailureAutoDisableResult(result.run, consecutiveFailureCount, now),
+                ),
+                Effect.andThen(
+                  publishAutoDisableActivity(result.run, consecutiveFailureCount, now),
                 ),
               )
             : stopFailedRunAtMaxIterations(result.run, now),

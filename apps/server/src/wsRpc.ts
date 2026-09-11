@@ -156,6 +156,7 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import {
   makeCursorSafeSnapshotLiveStream,
   makeResnapshotEscalationTracker,
+  ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
@@ -749,6 +750,11 @@ const makeWsRpcHandlersLayer = () =>
           toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
         ),
       );
+      const getOrchestrationLowWaterSequence = orchestrationEngine.getEventLowWaterSequence.pipe(
+        Effect.mapError((cause) =>
+          toWsRpcError(cause, "Failed to capture orchestration low-water sequence"),
+        ),
+      );
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
@@ -937,7 +943,37 @@ const makeWsRpcHandlersLayer = () =>
                   THREAD_DETAIL_EVENT_TYPES,
                 );
           return rpcEffect(
-            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
+            Effect.gen(function* () {
+              // Same bound as the cursor-resume stream: a stale cursor can
+              // otherwise pull a thread's entire history in one request. The
+              // caller treats this failure as transient and falls back to the
+              // full snapshot reconcile.
+              const lowWaterSequence = yield* getOrchestrationLowWaterSequence;
+              if (fromSequenceExclusive + 1 < lowWaterSequence) {
+                return yield* new WsRpcError({
+                  message:
+                    `Replay cursor ${fromSequenceExclusive} is below the journal floor ` +
+                    `${lowWaterSequence}; pruned events cannot be replayed — ` +
+                    "refresh the detail snapshot instead.",
+                  code: "ORCHESTRATION_REPLAY_OVERFLOW",
+                  retryable: true,
+                });
+              }
+              const collected = yield* Stream.runCollect(
+                replay.pipe(Stream.take(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 1)),
+              );
+              const events = Array.from(collected);
+              if (events.length > ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+                return yield* new WsRpcError({
+                  message:
+                    `Replay gap exceeds ${ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT} events; ` +
+                    "refresh the detail snapshot instead.",
+                  code: "ORCHESTRATION_REPLAY_OVERFLOW",
+                  retryable: true,
+                });
+              }
+              return events;
+            }),
             "Failed to replay orchestration events",
           );
         },
@@ -1013,6 +1049,7 @@ const makeWsRpcHandlersLayer = () =>
                 ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
+              getLowWaterSequence: getOrchestrationLowWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
                   .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
@@ -1023,22 +1060,36 @@ const makeWsRpcHandlersLayer = () =>
                     ),
                   ),
             }).pipe(
-              Stream.mapEffect((item) =>
-                item.kind === "snapshot"
-                  ? Effect.succeed(
-                      Option.some<OrchestrationShellStreamItem>({
-                        kind: "snapshot",
-                        snapshot: item.snapshot,
-                      }),
-                    )
-                  : toShellStreamEvent(item.event),
-              ),
+              Stream.mapEffect((item) => {
+                if (item.kind === "snapshot") {
+                  return Effect.succeed(
+                    Option.some<OrchestrationShellStreamItem>({
+                      kind: "snapshot",
+                      snapshot: item.snapshot,
+                    }),
+                  );
+                }
+                if (item.kind === "replay") {
+                  return Effect.forEach(item.events, toShellStreamEvent).pipe(
+                    Effect.map((mapped) => mapped.filter(Option.isSome).map((some) => some.value)),
+                    Effect.map((events) =>
+                      events.length > 0
+                        ? Option.some<OrchestrationShellStreamItem>({ kind: "replay", events })
+                        : Option.none(),
+                    ),
+                  );
+                }
+                return toShellStreamEvent(item.event);
+              }),
               Stream.flatMap((item) =>
                 Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
               ),
             ),
           ),
-        [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.unsubscribeShell]: (_, { clientId }) =>
+          // Releasing promptly ends every stream attached to the lease instead
+          // of leaving teardown to the next resubscribe's eviction.
+          streamAdmission.releaseKey(clientId, "orchestration.shell"),
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -1106,6 +1157,7 @@ const makeWsRpcHandlersLayer = () =>
               ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
+              getLowWaterSequence: getOrchestrationLowWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
                   .readThreadEventsThrough(
@@ -1128,6 +1180,12 @@ const makeWsRpcHandlersLayer = () =>
                     event: item.event,
                   });
                 }
+                if (item.kind === "replay") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "replay",
+                    events: item.events,
+                  });
+                }
                 // A silently empty snapshot would leave the client waiting forever
                 // for thread history; fail identifiably so it can surface the state.
                 return Option.isSome(item.snapshot.detail)
@@ -1146,7 +1204,8 @@ const makeWsRpcHandlersLayer = () =>
               trackSidechatVisibility(input.threadId),
             ),
           ),
-        [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.unsubscribeThread]: (input, { clientId }) =>
+          streamAdmission.releaseKey(clientId, `orchestration.thread:${input.threadId}`),
         [WS_METHODS.subscribeOrchestrationDomainEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

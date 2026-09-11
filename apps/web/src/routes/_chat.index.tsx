@@ -12,7 +12,7 @@ import {
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { readPromotedThreadRouteMarkers, useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
 import { collectStudioProjectIds } from "../lib/studioProjects";
@@ -59,6 +59,15 @@ function ChatIndexRouteView() {
   for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
     if (draft.entryPoint === "chat" && draft.promotedTo === undefined) {
       draftProjectIdByThreadId.set(threadId, draft.projectId);
+    }
+  }
+  // A promoted draft's record can be cleared before the new thread's shell row
+  // lands. Keep those ids restorable for the marker's short grace so landing on
+  // "/" mid-promotion navigates back to the thread — whose route guard then
+  // waits out the same window — instead of minting a fresh chat that strands it.
+  for (const [threadId, marker] of readPromotedThreadRouteMarkers()) {
+    if (marker.entryPoint === "chat") {
+      draftProjectIdByThreadId.set(threadId, marker.projectId);
     }
   }
 

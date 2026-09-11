@@ -91,17 +91,11 @@ describe("deriveTurnStartSession", () => {
     });
   });
 
-  it("preserves established provider settings when restarting an idle session", () => {
-    expect(derive(makeSession("ready"))).toMatchObject({
-      status: "starting",
-      providerName: "codex",
-      runtimeMode: "approval-required",
-      activeTurnId: null,
-      lastError: null,
-    });
+  it("does not regress a ready session to starting", () => {
+    expect(derive(makeSession("ready"))).toBeNull();
   });
 
-  it.each(["starting", "running"] as const)("does not replace a %s session", (status) => {
+  it.each(["starting", "running", "ready"] as const)("does not replace a %s session", (status) => {
     expect(derive(makeSession(status))).toBeNull();
   });
 

@@ -688,7 +688,26 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
       removeRegularFiles(backupDirectory, isMigrationBackupPartial(basename)),
     );
     const requiredBytes = yield* estimateMigrationBackupRequiredBytes(dbPath);
-    yield* attemptPromise(() => assertBackupSpaceAvailable(requiredBytes, backupDirectory));
+    yield* attemptPromise(() => assertBackupSpaceAvailable(requiredBytes, backupDirectory)).pipe(
+      Effect.catch((error) =>
+        error instanceof InsufficientMigrationBackupSpaceError
+          ? Effect.gen(function* () {
+              // Reclaimable space can already be sitting in retained backups:
+              // an install whose disk is nearly full would otherwise crash-loop
+              // on the guard while gigabytes of older snapshots stay untouched.
+              // Keep the newest one as the forensic floor and check again. A
+              // prune failure must not mask the space verdict — re-checking
+              // still produces the honest error.
+              yield* attemptPromise(() =>
+                pruneMigrationArtifactFamily(preMigrationBackupFamily(dbPath, 1)),
+              ).pipe(Effect.ignore);
+              yield* attemptPromise(() =>
+                assertBackupSpaceAvailable(requiredBytes, backupDirectory),
+              );
+            })
+          : Effect.fail(error),
+      ),
+    );
     const createdAt = new Date().toISOString();
     const uniqueSuffix = `${compactTimestamp(new Date(createdAt))}-${randomUUID()}`;
     const finalName = `${basename}.pre-migration-${safeVersionLabel(plan.sourceVersion)}-to-v${plan.targetVersion}-${uniqueSuffix}.sqlite`;

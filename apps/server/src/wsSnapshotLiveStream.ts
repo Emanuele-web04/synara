@@ -5,6 +5,7 @@ export const ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT = 4_096;
 
 export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
+  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> }
   | { readonly kind: "event"; readonly event: OrchestrationEvent };
 
 export interface ResnapshotReport {
@@ -92,6 +93,13 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
    * and stream an empty replay forever instead of surfacing the deletion.
    */
   readonly resumeSubjectExists?: Effect.Effect<boolean, E>;
+  /**
+   * Oldest surviving journal sequence. Journal retention prunes the prefix
+   * below the projection watermarks, so a cursor whose next needed event is
+   * below the floor can never be satisfied by a gap replay — it must take the
+   * snapshot path instead of silently missing pruned events.
+   */
+  readonly getLowWaterSequence?: Effect.Effect<number, E>;
   readonly onResnapshotRequired?: (report: ResnapshotReport) => Effect.Effect<void, never>;
   /**
    * Loop guard: pairs a stable stream key with a process-wide tracker so a
@@ -129,16 +137,41 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         // gap cannot silently alias deleted history onto new events.
         const subjectExists =
           input.resumeSubjectExists === undefined ? true : yield* input.resumeSubjectExists;
-        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+        // A cursor below the journal floor points into pruned history: the gap
+        // replay would return only surviving rows and the client would silently
+        // miss the deleted events. Fall through to the authoritative snapshot.
+        const lowWaterSequence =
+          input.getLowWaterSequence === undefined ? 0 : yield* input.getLowWaterSequence;
+        const cursorBelowFloor = resumeFromSequence + 1 < lowWaterSequence;
+        if (
+          subjectExists &&
+          !cursorBelowFloor &&
+          resumeGap >= 0 &&
+          resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT
+        ) {
           input.resnapshotEscalation?.tracker.recordHealthyStart(
             input.resnapshotEscalation.streamKey,
           );
-          const replay = input.replay(resumeFromSequence, highWaterSequence).pipe(
-            Stream.filter(
-              (event) => event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+          // The gap ships as one batch, not one frame per event: the client
+          // applies it atomically so catching up on a busy thread lands as a
+          // single render instead of a visible progressive stream of history.
+          const replay = Stream.fromEffect(
+            Stream.runCollect(
+              input
+                .replay(resumeFromSequence, highWaterSequence)
+                .pipe(
+                  Stream.filter(
+                    (event) =>
+                      event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+                  ),
+                ),
+            ).pipe(
+              Effect.map((events) => ({
+                kind: "replay" as const,
+                events: Array.from(events) as ReadonlyArray<OrchestrationEvent>,
+              })),
             ),
-            Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-          );
+          ).pipe(Stream.filter((item) => item.events.length > 0));
           const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
             Stream.filter((event) => event.sequence > highWaterSequence),
             Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
@@ -183,12 +216,22 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
       }
       input.resnapshotEscalation?.tracker.recordHealthyStart(input.resnapshotEscalation.streamKey);
 
-      const replay = input.replay(snapshotSequence, highWaterSequence).pipe(
-        Stream.filter(
-          (event) => event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
+      const replay = Stream.fromEffect(
+        Stream.runCollect(
+          input
+            .replay(snapshotSequence, highWaterSequence)
+            .pipe(
+              Stream.filter(
+                (event) => event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
+              ),
+            ),
+        ).pipe(
+          Effect.map((events) => ({
+            kind: "replay" as const,
+            events: Array.from(events) as ReadonlyArray<OrchestrationEvent>,
+          })),
         ),
-        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-      );
+      ).pipe(Stream.filter((item) => item.events.length > 0));
       const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
         Stream.filter((event) => event.sequence > highWaterSequence),
         Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),

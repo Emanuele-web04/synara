@@ -17,6 +17,10 @@ import {
 } from "../chatRouteRecovery";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import {
+  isThreadPromotionPendingOrRecent,
+  waitForPromotedThreadRouteReady,
+} from "../lib/threadCreatePromotion";
 import { readNativeApi } from "../nativeApi";
 import { isSplitRoute } from "../splitViewRoute";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
@@ -42,6 +46,13 @@ function ChatThreadRouteView() {
   );
   const draftThreadExists = draftThreadState !== null;
   const routeThreadExists = threadExists || draftThreadExists;
+  // A promoted draft's record clears on its first started detail, which can land
+  // before the thread's shell row — one render then sees neither slice and the
+  // guard below would bounce home. While this route's promotion is in flight or
+  // just finished, give it the same bounded recovery grace the
+  // zero-known-threads case gets.
+  const promotionPending = isThreadPromotionPendingOrRecent(threadId);
+  const guardHasKnownServerThreads = hasKnownServerThreads && !promotionPending;
   const splitView = useSplitViewStore(
     useMemo(() => selectSplitView(search.splitViewId ?? null), [search.splitViewId]),
   );
@@ -95,7 +106,7 @@ function ChatThreadRouteView() {
     if (!routeThreadExists) {
       if (
         shouldStartMissingThreadRouteRecovery({
-          hasKnownServerThreads,
+          hasKnownServerThreads: guardHasKnownServerThreads,
           recoveryState: missingThreadRecoveryState,
           routeThreadExists,
         }) &&
@@ -114,6 +125,11 @@ function ChatThreadRouteView() {
         void Promise.all([
           refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
           waitForEmptyRouteRestoreFallbackDelay(),
+          // A promoted thread's shell row can land after the fixed fallback
+          // delay; waiting for it (bounded by the promotion grace) keeps the
+          // hold from releasing into a bounce one frame too early. No-op for
+          // threads that were never drafted locally.
+          waitForPromotedThreadRouteReady(threadId),
         ]).finally(() => {
           window.clearTimeout(pendingTimer);
           if (mountedRef.current && missingThreadRecoveryRunRef.current === recoveryRun) {
@@ -125,7 +141,7 @@ function ChatThreadRouteView() {
 
       if (
         shouldHoldMissingThreadRouteFallback({
-          hasKnownServerThreads,
+          hasKnownServerThreads: guardHasKnownServerThreads,
           recoveryState: missingThreadRecoveryState,
           routeThreadExists,
         })
@@ -153,7 +169,7 @@ function ChatThreadRouteView() {
       void navigate({ to: "/", replace: true });
     }
   }, [
-    hasKnownServerThreads,
+    guardHasKnownServerThreads,
     missingThreadRecoveryState,
     navigate,
     routeThreadExists,
@@ -168,7 +184,7 @@ function ChatThreadRouteView() {
     !threadsHydrated ||
     !splitViewsHydrated ||
     shouldHoldMissingThreadRouteFallback({
-      hasKnownServerThreads,
+      hasKnownServerThreads: guardHasKnownServerThreads,
       recoveryState: missingThreadRecoveryState,
       routeThreadExists,
     })

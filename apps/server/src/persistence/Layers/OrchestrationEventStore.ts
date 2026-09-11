@@ -18,6 +18,7 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   PersistenceDecodeError,
   toPersistenceDecodeError,
+  toPersistenceSqlError,
   toPersistenceSqlOrDecodeError,
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
@@ -721,6 +722,41 @@ const makeEventStore = Effect.gen(function* () {
       Effect.map((row) => row.highWaterSequence),
     );
 
+  const getLowWaterSequence: OrchestrationEventStoreShape["getLowWaterSequence"] = () =>
+    sql<{ readonly lowWaterSequence: number | null }>`
+      SELECT MIN(sequence) AS "lowWaterSequence" FROM orchestration_events
+    `.pipe(
+      Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.getLowWaterSequence:query")),
+      Effect.map((rows) => rows[0]?.lowWaterSequence ?? 0),
+    );
+
+  const JOURNAL_PRUNE_BATCH_SIZE = 8_192;
+  const pruneThroughSequence: OrchestrationEventStoreShape["pruneThroughSequence"] = (sequence) => {
+    const floor = Math.max(0, Math.floor(sequence));
+    if (floor <= 0) return Effect.succeed(0);
+    // One statement per batch: deleting a multi-hundred-MB prefix in a single
+    // transaction would build a comparable WAL before the checkpoint reclaims
+    // it. 8k-row commits keep the working set small.
+    const deleteBatch = sql`
+      DELETE FROM orchestration_events
+      WHERE sequence IN (
+        SELECT sequence FROM orchestration_events
+        WHERE sequence <= ${floor}
+        ORDER BY sequence
+        LIMIT ${JOURNAL_PRUNE_BATCH_SIZE}
+      )
+      RETURNING sequence
+    `.pipe(
+      Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.pruneThroughSequence:query")),
+      Effect.map((rows) => rows.length),
+    );
+    const loop = (deleted: number): Effect.Effect<number, OrchestrationEventStoreError> =>
+      deleteBatch.pipe(
+        Effect.flatMap((count) => (count === 0 ? Effect.succeed(deleted) : loop(deleted + count))),
+      );
+    return loop(0);
+  };
+
   const getThreadHighWaterSequence: OrchestrationEventStoreShape["getThreadHighWaterSequence"] = (
     threadId,
   ) =>
@@ -776,6 +812,8 @@ const makeEventStore = Effect.gen(function* () {
   return {
     append,
     getHighWaterSequence,
+    getLowWaterSequence,
+    pruneThroughSequence,
     getThreadHighWaterSequence,
     getThreadTitleHighWaterSequence,
     readThreadEvents,

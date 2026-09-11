@@ -10,6 +10,7 @@ import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contract
 import {
   Cause,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   Layer,
@@ -17,6 +18,7 @@ import {
   PubSub,
   Queue,
   Ref,
+  Schedule,
   Schema,
   Semaphore,
   Scope,
@@ -82,14 +84,56 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 
+/**
+ * Bounds only the caller's wait on a dispatch result — never the command
+ * itself. A timed-out caller gets an OrchestrationCommandTimeoutError while
+ * the admitted command still executes whenever the worker reaches it; the
+ * durable command receipt keeps a retried same-id command exactly-once.
+ */
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
+/**
+ * Bounds a single command's execution AFTER the worker dequeues it. This is a
+ * last-resort hang guard so a wedged command cannot stall the lone worker (or
+ * a still-waiting in-flight caller) forever — it is not a queue-backlog
+ * control. Queue wait is deliberately unbounded: late execution of an admitted
+ * command is always better than dropping real work, because the decider
+ * revalidates every command against current state at run time and
+ * staleness-sensitive commands carry expected-state guards. Kept far above any
+ * legitimate execution time so it can never kill healthy work the way the old
+ * caller-budget race did.
+ */
+const ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS = 300_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
 /** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
 const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
+/**
+ * Receipts answer same-commandId retries, which can only arrive while the
+ * original caller is still holding the command open. Thirty days exceeds any
+ * plausible retry window by orders of magnitude, and bounds a table that
+ * otherwise accrues one row per dispatched command forever.
+ */
+const COMMAND_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+/**
+ * Slack between the lowest projection watermark and the journal floor. Live
+ * subscribers and cursor resumes only ever reach back as far as the snapshot
+ * replay limit, so keeping that much journal under the watermark preserves
+ * every legitimate gap replay while bounding the table's growth.
+ */
+const JOURNAL_PRUNE_CURSOR_MARGIN = 4_096;
+const JOURNAL_PRUNE_INTERVAL = Duration.hours(24);
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
-type CommandExecutionState = "queued" | "in-flight" | "abandoned";
-type DispatchTimeoutDecision = { kind: "abandon" } | { kind: "wait" };
+/**
+ * Dispatcher/worker handshake for the caller-side wait bound. The worker flips
+ * "queued" to "in-flight" when it starts a command, so a dispatch timeout can
+ * tell a still-queued command (caller fails fast; the command itself still
+ * runs once dequeued — caller impatience never cancels admitted work) from an
+ * already-executing one (caller keeps waiting for the real outcome).
+ * "caller-timed-out" is a logging marker left by a timed-out caller; the
+ * worker notes it and runs the command anyway.
+ */
+type CommandExecutionState = "queued" | "in-flight" | "caller-timed-out";
+type DispatchTimeoutDecision = { kind: "fail-caller" } | { kind: "wait" };
 type OrchestrationEnginePhase = "running" | "quiescing" | "draining" | "stopped";
 
 interface CommandEnvelope {
@@ -97,7 +141,6 @@ interface CommandEnvelope {
   attachmentPrincipal: ManagedAttachmentPrincipal;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   executionState: Ref.Ref<CommandExecutionState>;
-  deadlineAtMs: number;
 }
 
 interface EngineAdmissionState {
@@ -222,11 +265,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       )
       .pipe(Effect.uninterruptible);
 
-  const makeCommandTimeoutError = (command: OrchestrationCommand) =>
+  const makeCommandTimeoutError = (
+    command: OrchestrationCommand,
+    timeoutMs: number = ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+  ) =>
     new OrchestrationCommandTimeoutError({
       commandId: command.commandId,
       commandType: command.type,
-      timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+      timeoutMs,
     });
 
   const makeCommandInternalError = (
@@ -683,7 +729,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // while an effect is being evaluated.
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
-    const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
@@ -705,18 +750,23 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
     const runCommand = Effect.gen(function* () {
-      const shouldSkip = yield* Ref.modify(envelope.executionState, (state) => {
-        if (state === "abandoned") {
-          return [true, state] as const;
-        }
-        return [false, "in-flight"] as const;
-      });
-      if (shouldSkip) {
-        return;
-      }
-
-      if (remainingBudgetMs === 0) {
-        return yield* makeCommandTimeoutError(envelope.command);
+      // Admitted work always executes once dequeued. A dispatch timeout only
+      // ends the caller's wait — it must not cancel the command, because queued
+      // commands carry real intent (a sent turn, an activity record) that the
+      // caller can no longer observe but still expects to happen. The durable
+      // receipt check below keeps a retried same-id command exactly-once, so a
+      // late run cannot double-commit.
+      const callerTimedOut = yield* Ref.modify(
+        envelope.executionState,
+        (state) => [state === "caller-timed-out", "in-flight"] as const,
+      );
+      if (callerTimedOut) {
+        yield* Effect.log("executing queued orchestration command after its caller timed out").pipe(
+          Effect.annotateLogs({
+            commandId: envelope.command.commandId,
+            commandType: envelope.command.type,
+          }),
+        );
       }
 
       const existingReceipt = yield* commandReceiptRepository.getByCommandId({
@@ -994,10 +1044,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
-      Effect.timeoutOption(remainingBudgetMs),
+      // Hang guard only (see ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS): never
+      // tied to the caller's wait, so a slow queue cannot abort real work.
+      Effect.timeoutOption(ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS),
       Effect.flatMap((outcome) =>
         Option.match(outcome, {
-          onNone: () => Effect.fail(makeCommandTimeoutError(envelope.command)),
+          onNone: () =>
+            Effect.fail(
+              makeCommandTimeoutError(envelope.command, ORCHESTRATION_COMMAND_EXECUTION_TIMEOUT_MS),
+            ),
           onSome: Effect.succeed,
         }),
       ),
@@ -1111,6 +1166,70 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
   lastPublishedSequence = yield* eventStore.getHighWaterSequence();
+
+  // Receipts exist only to answer same-id retries; a row past every plausible
+  // retry window is dead weight that otherwise grows unbounded (one row per
+  // dispatched command, forever). One sweep per boot is enough — nothing can
+  // age in between.
+  yield* commandReceiptRepository
+    .deleteAcceptedBefore({
+      before: new Date(Date.now() - COMMAND_RECEIPT_RETENTION_MS).toISOString(),
+    })
+    .pipe(
+      Effect.tap((deleted) =>
+        deleted > 0
+          ? Effect.log("swept expired orchestration command receipts").pipe(
+              Effect.annotateLogs({ deleted }),
+            )
+          : Effect.void,
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("orchestration command receipt sweep failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.forkScoped,
+    );
+
+  // Journal retention. Events at or below every projector's watermark are
+  // already folded into the durable projections — bootstrap never reads them
+  // again — so the journal prefix below (min watermark - cursor margin) is
+  // dead weight that otherwise grows unbounded (this table was ~1.4GB after
+  // a few weeks). The floor stays contiguous: `getLowWaterSequence` is
+  // `MIN(sequence)`, and cursor resumes below it take the snapshot path
+  // instead of replaying a gap with holes. Delivery rows are pruned with
+  // their events so dead/uncertain evidence does not outlive its event.
+  const pruneJournalPrefix = Effect.gen(function* () {
+    const watermarkRows = yield* sql<{ readonly minApplied: number | null }>`
+      SELECT MIN(last_applied_sequence) AS "minApplied" FROM projection_state
+    `;
+    const minWatermark = watermarkRows[0]?.minApplied ?? null;
+    if (minWatermark === null) return;
+    const floor = minWatermark - JOURNAL_PRUNE_CURSOR_MARGIN;
+    if (floor <= 0) return;
+    const eventsDeleted = yield* eventStore.pruneThroughSequence(floor);
+    const deliveriesDeleted = yield* sql<{ readonly eventSequence: number }>`
+      DELETE FROM orchestration_event_deliveries
+      WHERE event_sequence <= ${floor}
+      RETURNING event_sequence
+    `.pipe(Effect.map((rows) => rows.length));
+    if (eventsDeleted > 0 || deliveriesDeleted > 0) {
+      yield* Effect.log("pruned orchestration journal prefix").pipe(
+        Effect.annotateLogs({ floor, eventsDeleted, deliveriesDeleted }),
+      );
+    }
+  });
+
+  yield* Effect.forkScoped(
+    pruneJournalPrefix.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("orchestration journal prune failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.repeat(Schedule.spaced(JOURNAL_PRUNE_INTERVAL)),
+    ),
+  );
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
@@ -1275,6 +1394,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       eventTypes,
     );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
+  const getEventLowWaterSequence = eventStore.getLowWaterSequence();
   const getThreadTitleHighWaterSequence = (threadId: string) =>
     eventStore.getThreadTitleHighWaterSequence(threadId);
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
@@ -1321,7 +1441,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         attachmentPrincipal: context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
         result,
         executionState,
-        deadlineAtMs: Date.now() + ORCHESTRATION_DISPATCH_TIMEOUT_MS,
       };
       const nextIdle = yield* Deferred.make<void>();
       const admission = yield* Ref.modify(
@@ -1361,6 +1480,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           reason: admission.reason,
         });
       }
+      // The timeout below bounds only this caller's wait. It never cancels the
+      // admitted command: a still-queued envelope keeps its slot and runs when
+      // the worker reaches it, so a slow queue cannot discard real user intent.
       return yield* Deferred.await(result).pipe(
         Effect.timeoutOption(`${ORCHESTRATION_DISPATCH_TIMEOUT_MS} millis`),
         Effect.flatMap((outcome) =>
@@ -1370,7 +1492,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 executionState,
                 (state): readonly [DispatchTimeoutDecision, CommandExecutionState] =>
                   state === "queued"
-                    ? [{ kind: "abandon" }, "abandoned"]
+                    ? [{ kind: "fail-caller" }, "caller-timed-out"]
                     : [{ kind: "wait" }, state],
               ).pipe(
                 Effect.flatMap((decision) =>
@@ -1386,7 +1508,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                         Effect.flatMap(() => Deferred.await(result)),
                       )
                     : Effect.logWarning(
-                        "orchestration dispatch timed out before command started",
+                        "orchestration dispatch timed out before command started; the queued command will still run",
                       ).pipe(
                         Effect.annotateLogs({
                           commandId: command.commandId,
@@ -1597,6 +1719,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readThreadEvents,
     readThreadEventsThrough,
     getEventHighWaterSequence,
+    getEventLowWaterSequence,
     getThreadTitleHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

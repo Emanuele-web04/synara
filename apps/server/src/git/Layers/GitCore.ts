@@ -1221,6 +1221,21 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const upstream = yield* resolveCurrentUpstream(cwd);
         if (!upstream) return;
+        // `@{upstream}` resolves from `branch.<name>.remote` config even after
+        // the remote itself was removed, and a fetch against a remote that is
+        // not configured can never succeed. Skip those before they enter the
+        // failure cache's retry/backoff loop.
+        if (!(yield* remoteExists(cwd, upstream.remoteName))) {
+          yield* Effect.logDebug(
+            "Git status upstream refresh skipped: upstream remote is not configured",
+            {
+              cwd,
+              upstreamRef: upstream.upstreamRef,
+              remoteName: upstream.remoteName,
+            },
+          );
+          return;
+        }
         yield* Cache.get(
           statusUpstreamRefreshCache,
           new StatusUpstreamRefreshCacheKey({
@@ -1236,6 +1251,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const upstream = yield* resolveCurrentUpstream(cwd);
         if (!upstream) return;
+        if (!(yield* remoteExists(cwd, upstream.remoteName))) {
+          return;
+        }
         yield* fetchUpstreamRef(cwd, upstream);
       });
 
@@ -1271,10 +1289,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         },
       ).pipe(Effect.map((result) => result.code === 0));
 
-    const originRemoteExists = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
-      executeGit("GitCore.originRemoteExists", cwd, ["remote", "get-url", "origin"], {
+    const remoteExists = (
+      cwd: string,
+      remoteName: string,
+    ): Effect.Effect<boolean, GitCommandError> =>
+      executeGit("GitCore.remoteExists", cwd, ["remote", "get-url", remoteName], {
         allowNonZeroExit: true,
       }).pipe(Effect.map((result) => result.code === 0));
+
+    const originRemoteExists = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
+      remoteExists(cwd, "origin");
 
     const listRemoteNames = (cwd: string): Effect.Effect<ReadonlyArray<string>, GitCommandError> =>
       runGitStdout("GitCore.listRemoteNames", cwd, ["remote"]).pipe(

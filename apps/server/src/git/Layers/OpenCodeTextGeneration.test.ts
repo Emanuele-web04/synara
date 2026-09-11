@@ -290,9 +290,12 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("does not reuse an active managed server for a different request cwd", () =>
+  it.effect("serves a concurrent different-cwd request from its own pooled server", () =>
     Effect.gen(function* () {
       const textGeneration = yield* OpenCodeTextGeneration;
+      // The layer is shared across tests, so earlier tests may already hold
+      // pooled servers for their cwds — use fresh cwds and a call baseline.
+      const baselineStarts = runtimeMock.state.startCalls.length;
       let releaseFirstPrompt!: () => void;
       const firstPromptStarted = new Promise<void>((resolve) => {
         runtimeMock.state.promptStartedResolvers.push(resolve);
@@ -305,8 +308,8 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
 
       const firstFiber = yield* textGeneration
         .generateCommitMessage({
-          cwd: "/repo/alpha",
-          branch: "feature/opencode-alpha",
+          cwd: "/repo/gamma",
+          branch: "feature/opencode-gamma",
           stagedSummary: "M README.md",
           stagedPatch: "diff --git a/README.md b/README.md",
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
@@ -316,8 +319,8 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
       yield* Effect.promise(() => firstPromptStarted);
 
       yield* textGeneration.generateCommitMessage({
-        cwd: "/repo/beta",
-        branch: "feature/opencode-beta",
+        cwd: "/repo/delta",
+        branch: "feature/opencode-delta",
         stagedSummary: "M README.md",
         stagedPatch: "diff --git a/README.md b/README.md",
         modelSelection: DEFAULT_TEST_MODEL_SELECTION,
@@ -326,13 +329,22 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
       releaseFirstPrompt();
       yield* Fiber.join(firstFiber);
 
-      expect(runtimeMock.state.startCalls).toEqual(["opencode", "opencode"]);
-      expect(runtimeMock.state.startCwds).toEqual(["/repo/alpha", "/repo/beta"]);
-      expect(runtimeMock.state.promptUrls).toEqual([
-        "http://127.0.0.1:4301",
-        "http://127.0.0.1:4302",
+      // Each config scope gets its own pooled server: no request is folded
+      // into another cwd's in-flight server, and no throwaway process spawns.
+      expect(runtimeMock.state.startCalls.slice(baselineStarts)).toEqual(["opencode", "opencode"]);
+      expect(runtimeMock.state.startCwds.slice(baselineStarts)).toEqual([
+        "/repo/gamma",
+        "/repo/delta",
       ]);
-      expect(runtimeMock.state.closeCalls).toContain("http://127.0.0.1:4302");
+      const [gammaUrl, deltaUrl] = runtimeMock.state.promptUrls.slice(-2);
+      expect(gammaUrl).not.toBe(deltaUrl);
+      // Both pooled servers close once their idle TTL elapses (urls can
+      // collide with evicted stale entries, so assert on the tail).
+      const baselineCloses = runtimeMock.state.closeCalls.length;
+      yield* advanceIdleClock;
+      expect(runtimeMock.state.closeCalls.length).toBe(baselineCloses + 2);
+      expect(runtimeMock.state.closeCalls.slice(-2)).toContain(gammaUrl);
+      expect(runtimeMock.state.closeCalls.slice(-2)).toContain(deltaUrl);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

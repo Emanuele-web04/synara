@@ -40,6 +40,26 @@ export interface OrchestrationEventStoreShape {
   /** Capture the latest durable sequence for a finite replay fence. */
   readonly getHighWaterSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
 
+  /**
+   * Oldest surviving journal sequence (0 when the journal is empty).
+   *
+   * Journal retention deletes the contiguous prefix below the projection
+   * watermarks, so this is also the resume floor: a cursor whose next needed
+   * event is below it can never be satisfied by a gap replay and must take the
+   * snapshot path instead.
+   */
+  readonly getLowWaterSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /**
+   * Delete the journal prefix through `sequence` (inclusive), in bounded
+   * batches. Retention only ever prunes below every projector's watermark, so
+   * the floor stays contiguous and `getLowWaterSequence` remains an exact
+   * resume boundary. Returns the number of deleted rows.
+   */
+  readonly pruneThroughSequence: (
+    sequence: number,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
   /** Capture the latest durable sequence for one thread stream. */
   readonly getThreadHighWaterSequence: (
     threadId: string,

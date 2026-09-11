@@ -76,6 +76,18 @@ export interface OrchestrationCommandReceiptRepositoryShape {
     Option.Option<OrchestrationCommandReceipt>,
     OrchestrationCommandReceiptRepositoryError
   >;
+
+  /**
+   * Delete receipts accepted before `before`.
+   *
+   * A receipt only exists so a retried dispatch of the same `commandId` resolves
+   * to its first result. Command ids are minted per dispatch call, so a retry
+   * can only arrive while the original caller is still alive to resend — a row
+   * older than any plausible retry window can never be consulted again.
+   */
+  readonly deleteAcceptedBefore: (input: {
+    readonly before: IsoDateTime;
+  }) => Effect.Effect<number, OrchestrationCommandReceiptRepositoryError>;
 }
 
 /**

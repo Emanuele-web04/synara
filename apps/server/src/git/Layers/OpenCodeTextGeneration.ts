@@ -53,6 +53,11 @@ import {
 } from "../textGenerationShared.ts";
 
 const OPENCODE_TEXT_GENERATION_IDLE_TTL = "30 seconds";
+// One pooled server per (binaryPath, cwd) config scope, bounded so distinct
+// worktrees cannot each pin a process forever; past the cap the
+// least-recently idle entry is evicted, or the request falls back to a
+// dedicated process when every pooled server is busy.
+const OPENCODE_TEXT_GENERATION_POOL_MAX_ENTRIES = 4;
 
 function getOpenCodePromptErrorMessage(error: unknown): string | null {
   if (!error || typeof error !== "object") {
@@ -97,19 +102,19 @@ function getOpenCodeTextResponse(parts: ReadonlyArray<unknown> | undefined): str
     .trim();
 }
 
-interface SharedOpenCodeTextGenerationServerState {
-  server: OpenCodeServerProcess | null;
-  serverScope: Scope.Closeable | null;
-  binaryPath: string | null;
-  cwd: string | null;
+interface SharedServerPoolEntry {
+  server: OpenCodeServerProcess;
+  serverScope: Scope.Closeable;
   activeRequests: number;
   idleCloseFiber: Fiber.Fiber<void, never> | null;
+  lastReleasedAt: number;
 }
 
 interface AcquiredOpenCodeTextGenerationServer {
   server: OpenCodeServerProcess;
   shared: boolean;
   serverScope: Scope.Closeable | null;
+  poolKey: string | null;
 }
 
 type OpenCodeCompatibleTextGenerationProvider = "opencode";
@@ -155,53 +160,52 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       Scope.close(scope, Exit.void),
     );
     const sharedServerMutex = yield* Semaphore.make(1);
-    const sharedServerState: SharedOpenCodeTextGenerationServerState = {
-      server: null,
-      serverScope: null,
-      binaryPath: null,
-      cwd: null,
-      activeRequests: 0,
-      idleCloseFiber: null,
-    };
+    // Servers are pooled per config scope (binaryPath + cwd): worktree-scoped
+    // requests previously forced a dedicated process whenever the single shared
+    // slot held a server for a different scope, spawning one process per
+    // concurrent request. The pool reuses each scope's server and evicts the
+    // least-recently idle entry past the cap.
+    const serverPool = new Map<string, SharedServerPoolEntry>();
+    const poolKeyFor = (binaryPath: string, cwd: string) => JSON.stringify([binaryPath, cwd]);
 
-    const closeSharedServer = Effect.fn("closeSharedServer")(function* () {
-      const scope = sharedServerState.serverScope;
-      sharedServerState.server = null;
-      sharedServerState.serverScope = null;
-      sharedServerState.binaryPath = null;
-      sharedServerState.cwd = null;
-      if (scope !== null) {
-        yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
+    const closePoolEntry = Effect.fnUntraced(function* (key: string, entry: SharedServerPoolEntry) {
+      serverPool.delete(key);
+      const idleCloseFiber = entry.idleCloseFiber;
+      entry.idleCloseFiber = null;
+      if (idleCloseFiber !== null) {
+        yield* Fiber.interrupt(idleCloseFiber).pipe(Effect.ignore);
       }
+      yield* Scope.close(entry.serverScope, Exit.void).pipe(Effect.ignore);
     });
 
-    const cancelIdleCloseFiber = Effect.fn("cancelIdleCloseFiber")(function* () {
-      const idleCloseFiber = sharedServerState.idleCloseFiber;
-      sharedServerState.idleCloseFiber = null;
+    const cancelEntryIdleClose = Effect.fnUntraced(function* (entry: SharedServerPoolEntry) {
+      const idleCloseFiber = entry.idleCloseFiber;
+      entry.idleCloseFiber = null;
       if (idleCloseFiber !== null) {
         yield* Fiber.interrupt(idleCloseFiber).pipe(Effect.ignore);
       }
     });
 
-    const scheduleIdleClose = Effect.fn("scheduleIdleClose")(function* (
-      server: OpenCodeServerProcess,
+    const scheduleIdleClose = Effect.fnUntraced(function* (
+      key: string,
+      entry: SharedServerPoolEntry,
     ) {
-      yield* cancelIdleCloseFiber();
+      yield* cancelEntryIdleClose(entry);
       const fiber = yield* Effect.sleep(OPENCODE_TEXT_GENERATION_IDLE_TTL).pipe(
         Effect.andThen(
           sharedServerMutex.withPermit(
             Effect.gen(function* () {
-              if (sharedServerState.server !== server || sharedServerState.activeRequests > 0) {
+              if (serverPool.get(key) !== entry || entry.activeRequests > 0) {
                 return;
               }
-              sharedServerState.idleCloseFiber = null;
-              yield* closeSharedServer();
+              entry.idleCloseFiber = null;
+              yield* closePoolEntry(key, entry);
             }),
           ),
         ),
         Effect.forkIn(idleFiberScope),
       );
-      sharedServerState.idleCloseFiber = fiber;
+      entry.idleCloseFiber = fiber;
     });
 
     const acquireSharedServer = (input: {
@@ -211,8 +215,6 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     }) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
-          yield* cancelIdleCloseFiber();
-
           const startServer = Effect.fn("startOpenCodeTextGenerationServer")(function* () {
             const serverScope = yield* Scope.make();
             const startedExit = yield* Effect.exit(
@@ -246,38 +248,40 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
             };
           });
 
-          const existingServer = sharedServerState.server;
-          if (existingServer !== null) {
-            const sameConfigScope =
-              sharedServerState.binaryPath === input.binaryPath &&
-              sharedServerState.cwd === input.cwd;
-            if (!sameConfigScope && sharedServerState.activeRequests === 0) {
-              yield* closeSharedServer();
+          const poolKey = poolKeyFor(input.binaryPath, input.cwd);
+          const existing = serverPool.get(poolKey);
+          if (existing !== undefined) {
+            yield* cancelEntryIdleClose(existing);
+            existing.activeRequests += 1;
+            return {
+              server: existing.server,
+              shared: true,
+              serverScope: null,
+              poolKey,
+            } satisfies AcquiredOpenCodeTextGenerationServer;
+          }
+
+          if (serverPool.size >= OPENCODE_TEXT_GENERATION_POOL_MAX_ENTRIES) {
+            // Evict the least-recently idle entry; when every pooled server is
+            // busy this request falls back to a dedicated process — a bounded
+            // capacity outcome, not a mismatch worth warning about.
+            const idleEntries = Array.from(serverPool.entries())
+              .filter(([, entry]) => entry.activeRequests === 0)
+              .sort(([, a], [, b]) => a.lastReleasedAt - b.lastReleasedAt);
+            const evictable = idleEntries[0];
+            if (evictable !== undefined) {
+              yield* closePoolEntry(evictable[0], evictable[1]);
             } else {
-              if (!sameConfigScope) {
-                yield* Effect.logWarning(
-                  `${config.displayName} shared server config scope mismatch: requested ` +
-                    input.binaryPath +
-                    " at " +
-                    input.cwd +
-                    " but active server uses " +
-                    sharedServerState.binaryPath +
-                    " at " +
-                    sharedServerState.cwd +
-                    "; starting a dedicated server for this request",
-                );
-                const dedicated = yield* startServer();
-                return {
-                  server: dedicated.server,
-                  shared: false,
-                  serverScope: dedicated.serverScope,
-                } satisfies AcquiredOpenCodeTextGenerationServer;
-              }
-              sharedServerState.activeRequests += 1;
+              yield* Effect.logDebug(
+                `${config.displayName} text-generation server pool is fully busy; starting a dedicated server for this request`,
+                { binaryPath: input.binaryPath, cwd: input.cwd },
+              );
+              const dedicated = yield* startServer();
               return {
-                server: existingServer,
-                shared: true,
-                serverScope: null,
+                server: dedicated.server,
+                shared: false,
+                serverScope: dedicated.serverScope,
+                poolKey: null,
               } satisfies AcquiredOpenCodeTextGenerationServer;
             }
           }
@@ -285,15 +289,19 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const { server, serverScope } = yield* restore(startServer());
-              sharedServerState.server = server;
-              sharedServerState.serverScope = serverScope;
-              sharedServerState.binaryPath = input.binaryPath;
-              sharedServerState.cwd = input.cwd;
-              sharedServerState.activeRequests = 1;
+              const entry: SharedServerPoolEntry = {
+                server,
+                serverScope,
+                activeRequests: 1,
+                idleCloseFiber: null,
+                lastReleasedAt: Date.now(),
+              };
+              serverPool.set(poolKey, entry);
               return {
                 server,
                 shared: true,
                 serverScope: null,
+                poolKey,
               } satisfies AcquiredOpenCodeTextGenerationServer;
             }),
           );
@@ -303,18 +311,20 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     const releaseSharedServer = (acquired: AcquiredOpenCodeTextGenerationServer) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
-          if (!acquired.shared) {
+          if (!acquired.shared || acquired.poolKey === null) {
             if (acquired.serverScope !== null) {
               yield* Scope.close(acquired.serverScope, Exit.void).pipe(Effect.ignore);
             }
             return;
           }
-          if (sharedServerState.server !== acquired.server) {
+          const entry = serverPool.get(acquired.poolKey);
+          if (entry === undefined || entry.server !== acquired.server) {
             return;
           }
-          sharedServerState.activeRequests = Math.max(0, sharedServerState.activeRequests - 1);
-          if (sharedServerState.activeRequests === 0) {
-            yield* scheduleIdleClose(acquired.server);
+          entry.activeRequests = Math.max(0, entry.activeRequests - 1);
+          if (entry.activeRequests === 0) {
+            entry.lastReleasedAt = Date.now();
+            yield* scheduleIdleClose(acquired.poolKey, entry);
           }
         }),
       );
@@ -322,9 +332,9 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     yield* Effect.addFinalizer(() =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
-          yield* cancelIdleCloseFiber();
-          sharedServerState.activeRequests = 0;
-          yield* closeSharedServer();
+          for (const [key, entry] of serverPool) {
+            yield* closePoolEntry(key, entry);
+          }
         }),
       ),
     );

@@ -343,7 +343,11 @@ export function resolveDevinAdapterTimeouts(
     }),
     toolIdleMs: resolveAcpTurnIdleTimeoutMs({
       envVar: "SYNARA_DEVIN_TOOL_IDLE_TIMEOUT_MS",
-      defaultMs: 60 * 60 * 1000,
+      // An active tool call is itself turn progress: sleep, watch, and
+      // wait-for-thread calls are supposed to stay silent. Six hours bounds a
+      // truly deadlocked call without murdering deliberate waits — the known
+      // devin deadlock shapes have their own stall-watch detector.
+      defaultMs: 6 * 60 * 60 * 1000,
       env,
     }),
   };

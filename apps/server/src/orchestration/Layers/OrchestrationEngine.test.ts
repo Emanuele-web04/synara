@@ -975,6 +975,12 @@ describe("OrchestrationEngine", () => {
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
+      getLowWaterSequence() {
+        return Effect.succeed(events.at(0)?.sequence ?? 0);
+      },
+      pruneThroughSequence() {
+        return Effect.succeed(0);
+      },
       ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
@@ -1202,6 +1208,12 @@ describe("OrchestrationEngine", () => {
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
+      getLowWaterSequence() {
+        return Effect.succeed(events.at(0)?.sequence ?? 0);
+      },
+      pruneThroughSequence() {
+        return Effect.succeed(0);
+      },
       ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
@@ -1315,6 +1327,12 @@ describe("OrchestrationEngine", () => {
       },
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
+      },
+      getLowWaterSequence() {
+        return Effect.succeed(events.at(0)?.sequence ?? 0);
+      },
+      pruneThroughSequence() {
+        return Effect.succeed(0);
       },
       ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {

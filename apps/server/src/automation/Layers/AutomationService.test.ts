@@ -384,6 +384,7 @@ const orchestrationEngine = {
   readThreadEvents: () => Stream.empty,
   readThreadEventsThrough: () => Stream.empty,
   getEventHighWaterSequence: Effect.succeed(0),
+  getEventLowWaterSequence: Effect.succeed(0),
   getThreadTitleHighWaterSequence: () => Effect.succeed(0),
   subscribeDomainEvents: Effect.succeed(Stream.empty),
   getReadModel: () =>
@@ -4506,7 +4507,17 @@ layer("AutomationService", (it) => {
       const rerunError = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
 
       assert.match(rerunError.message, /re-enable/i);
-      assert.strictEqual(dispatchedCommands.length, 2);
+      assert.strictEqual(dispatchedCommands.length, 3);
+      const disableActivity = dispatchedCommands.find(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "automation.disabled",
+      );
+      assert.isDefined(disableActivity);
+      if (disableActivity?.type === "thread.activity.append") {
+        assert.strictEqual(disableActivity.activity.tone, "error");
+        assert.match(disableActivity.activity.summary, /stopped after 1 consecutive failed run/i);
+      }
     }),
   );
 

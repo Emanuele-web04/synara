@@ -96,13 +96,18 @@ import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
 } from "../../agentGateway/sessionLease.ts";
 
-const isStaleDevinSessionLoadError = (
-  provider: ProviderKind,
+/**
+ * True when the provider reports its persisted resume state as unloadable —
+ * `resume-state-unavailable` is the typed signal adapters emit for "the stored
+ * session data could not be loaded". That is a data problem, not a provider
+ * outage, so it is the one start failure eligible for a fresh-session retry.
+ * Any adapter may raise it; matching on the typed reason (not the provider or
+ * the message text) keeps genuinely-failing providers on the error path.
+ */
+const isResumeStateUnavailableError = (
   error: ProviderAdapterError,
 ): error is ProviderAdapterProcessError =>
-  provider === "devin" &&
-  error instanceof ProviderAdapterProcessError &&
-  error.reason === "resume-state-unavailable";
+  error instanceof ProviderAdapterProcessError && error.reason === "resume-state-unavailable";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -335,6 +340,53 @@ function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   );
 }
 
+/**
+ * True for non-terminal events that describe work inside a specific turn —
+ * streamed content, item lifecycle, and turn-scoped progress — rather than
+ * session or thread lifecycle. During a respawn handoff the superseded
+ * generation keeps emitting the in-flight turn's real output; when such an
+ * event still names the binding's active turn it is journaled and projected
+ * instead of silently truncating the turn's tail.
+ *
+ * Deliberately absent:
+ * - terminal events, which the stale gate settles through its own path;
+ * - session/thread lifecycle claims (`session.*`, `thread.*`,
+ *   `model.rerouted`, `turn.started`), which a dead generation must never
+ *   use to resurrect or reconfigure the session, and whose replayed
+ *   ingestion side-effects would duplicate work the bound turn already ran;
+ * - `task.*`, which feed runtime idle-stop liveness — a dead runtime's tasks
+ *   can never settle and would pin the replacement session open;
+ * - global/session-scoped advisories (`account.*`, `auth.status`, `mcp.*`,
+ *   `runtime.warning`, `event.unmapped`, telemetry), which carry no
+ *   turn-local work worth preserving.
+ */
+function isTurnProgressRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "content.delta":
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+    case "turn.tasks.updated":
+    case "turn.proposed.delta":
+    case "turn.proposed.completed":
+    case "turn.diff.updated":
+    case "turn.steered":
+    case "tool.progress":
+    case "tool.summary":
+    case "hook.started":
+    case "hook.progress":
+    case "hook.completed":
+    case "request.opened":
+    case "request.resolved":
+    case "user-input.requested":
+    case "user-input.resolved":
+    case "files.persisted":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
   activeTurnId?: unknown,
@@ -412,16 +464,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     type ResolvedProviderSessionStartInput = ProviderSessionStartInput & {
       readonly provider: ProviderKind;
     };
-    const startAdapterWithStaleDevinFallback = (
+    // Exactly one fresh retry is allowed, and only when the adapter reports
+    // its stored resume state as unloadable/corrupt: starting with a dropped
+    // cursor loses native history, so a live leftover session or a genuine
+    // provider failure must keep failing instead of silently replacing it.
+    const startAdapterWithStaleResumeFallback = (
       adapter: ProviderAdapterShape<ProviderAdapterError>,
       startInput: ResolvedProviderSessionStartInput,
     ) =>
       adapter.startSession(startInput).pipe(
-        Effect.map((session) => ({ session, staleDevinFallbackOccurred: false })),
+        Effect.map((session) => ({ session, staleResumeFallbackOccurred: false })),
         Effect.catchIf(
           (error) =>
-            hasResumeCursor(startInput.resumeCursor) &&
-            isStaleDevinSessionLoadError(startInput.provider, error),
+            hasResumeCursor(startInput.resumeCursor) && isResumeStateUnavailableError(error),
           (error) =>
             adapter.hasSession(startInput.threadId).pipe(
               Effect.flatMap((hasLiveSession) => {
@@ -429,9 +484,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   return Effect.fail(error);
                 }
                 const { resumeCursor: _staleResumeCursor, ...freshStartInput } = startInput;
-                return adapter
-                  .startSession(freshStartInput)
-                  .pipe(Effect.map((session) => ({ session, staleDevinFallbackOccurred: true })));
+                return Effect.logWarning("provider.session.stale_resume_state_fresh_start", {
+                  threadId: startInput.threadId,
+                  provider: startInput.provider,
+                  cause: error instanceof Error ? error.message : String(error),
+                }).pipe(
+                  Effect.andThen(
+                    adapter.startSession(freshStartInput).pipe(
+                      Effect.map((session) => ({
+                        session,
+                        staleResumeFallbackOccurred: true,
+                      })),
+                    ),
+                  ),
+                );
               }),
             ),
         ),
@@ -1349,7 +1415,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const staleTerminalIsSettling =
               isTerminalRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
-            if (!staleTerminalIsSettling) {
+            // Turn-scoped progress events carry no lifecycle claims, so a
+            // superseded generation may still deliver the in-flight turn's
+            // real work (streamed content, items, in-turn requests) — but only
+            // when the event still names the turn the binding considers
+            // active. The same bound-turn check the terminal path uses applies
+            // here too: the turn id is the only trustworthy authority once the
+            // generation is gone.
+            const staleTurnProgressForBoundTurn =
+              !isTerminalRuntimeEvent(event) &&
+              event.turnId !== undefined &&
+              isTurnProgressRuntimeEvent(event);
+            if (!staleTerminalIsSettling && !staleTurnProgressForBoundTurn) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
               // nothing, and the runtime reconciler later settles the turn as
@@ -1362,10 +1439,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 currentLifecycleGeneration: currentGeneration,
               });
             }
-            if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale terminal event
-              // when it still names the turn the binding has active. If the
-              // binding already moved on (or is gone), keep dropping it.
+            if (currentGeneration !== undefined || staleTurnProgressForBoundTurn) {
+              // Only accept a stale event when it still names the turn the
+              // binding has active. If the binding already moved on (or is
+              // gone), keep dropping it.
               return directory.getBinding(event.threadId).pipe(
                 Effect.flatMap((maybeBinding) => {
                   const binding = Option.getOrUndefined(maybeBinding);
@@ -1381,15 +1458,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       currentLifecycleGeneration: currentGeneration,
                     });
                   }
-                  return Effect.logInfo(
-                    "provider.session.stale_generation_terminal_event_accepted",
-                    {
-                      threadId: event.threadId,
-                      provider: event.provider,
-                      eventType: event.type,
-                      eventLifecycleGeneration: event.lifecycleGeneration,
-                      currentLifecycleGeneration: currentGeneration,
-                    },
+                  const staleEventLogAnnotations = {
+                    threadId: event.threadId,
+                    provider: event.provider,
+                    eventType: event.type,
+                    eventLifecycleGeneration: event.lifecycleGeneration,
+                    currentLifecycleGeneration: currentGeneration,
+                  };
+                  // Stale turn progress is routine during a respawn handoff,
+                  // so it logs at debug; terminal settles stay visible at info.
+                  return (
+                    isTerminalRuntimeEvent(event)
+                      ? Effect.logInfo(
+                          "provider.session.stale_generation_terminal_event_accepted",
+                          staleEventLogAnnotations,
+                        )
+                      : Effect.logDebug(
+                          "provider.session.stale_generation_turn_event_accepted",
+                          staleEventLogAnnotations,
+                        )
                   ).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
                 }),
               );
@@ -1400,6 +1487,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return journalAndPublish(canonicalEvent);
         }),
       );
+
+    // A failed provider start leaves no live runtime to emit its own terminal
+    // event, and the lifecycle rewind makes anything the half-started adapter
+    // did emit look stale. Synthesizing a `runtime.error` while this run's
+    // generation is still current gives the journal and the session
+    // projection the same settle signal a real runtime failure would — the
+    // orchestration session goes to `error` instead of showing "starting"
+    // until the reconciler's abandoned-turn sweep. The event flows through
+    // the normal pipeline, so a newer generation's ownership still wins if
+    // this run was superseded before the settle ran.
+    const recordFailedSessionStart = (input: {
+      readonly threadId: ThreadId;
+      readonly provider: ProviderKind;
+      readonly lifecycleGeneration: string;
+      readonly cause: Cause.Cause<unknown>;
+    }): Effect.Effect<void> => {
+      const detail = Cause.findErrorOption(input.cause).pipe(
+        Option.map((error) => (error instanceof Error ? error.message : String(error))),
+        Option.getOrElse(() => Cause.pretty(input.cause)),
+      );
+      return processRuntimeEvent({
+        type: "runtime.error",
+        eventId: EventId.makeUnsafe(randomUUID()),
+        provider: input.provider,
+        threadId: input.threadId,
+        createdAt: new Date().toISOString(),
+        lifecycleGeneration: input.lifecycleGeneration,
+        payload: {
+          message: `Provider '${input.provider}' session start failed: ${detail}`,
+          class: "provider_error",
+          detail: Cause.pretty(input.cause),
+        },
+      }).pipe(
+        Effect.catchCause((settleCause) =>
+          Effect.logWarning("provider.session.start_failure_event_failed", {
+            threadId: input.threadId,
+            provider: input.provider,
+            cause: Cause.pretty(settleCause),
+          }),
+        ),
+      );
+    };
 
     const recoverSessionForThread = (input: {
       readonly binding: ProviderRuntimeBinding;
@@ -1536,7 +1665,54 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             };
             // Prompt construction has already happened here. Only explicit startup
             // may replace lost native history and request a transcript recap.
-            const resumed = yield* adapter.startSession(resumeStartInput);
+            // The resume handshake still gets the start deadline: a wedged
+            // resume holds this thread's lifecycle lock and every queued
+            // dispatch forever.
+            const recoveryStartupLifecycle = new ProviderStartupLifecycle();
+            recoveryStartupLifecycle.transition("starting");
+            recoveryStartupLifecycle.transition("handshaking");
+            const recoveryStarted = yield* observeProviderStartup(
+              adapter.startSession(resumeStartInput),
+              {
+                lifecycle: recoveryStartupLifecycle,
+                timeout: PROVIDER_START_SESSION_TIMEOUT,
+              },
+            ).pipe(
+              Effect.tapError((cause) =>
+                Effect.logError("provider.session.recover_failed", {
+                  threadId,
+                  provider: adapter.provider,
+                  operation: input.operation,
+                  startup: recoveryStartupLifecycle.snapshot(),
+                  cause: cause instanceof Error ? cause.message : String(cause),
+                }),
+              ),
+            );
+            if (Option.isNone(recoveryStarted)) {
+              yield* Effect.logError("provider session recovery exceeded its deadline", {
+                threadId,
+                provider: adapter.provider,
+                timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                startup: recoveryStartupLifecycle.snapshot(),
+              });
+              yield* adapter.stopSession(threadId).pipe(
+                Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to retire a timed-out provider session recovery", {
+                    threadId,
+                    provider: adapter.provider,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+              return yield* toValidationError(
+                input.operation,
+                `Provider '${adapter.provider}' did not finish resuming within ${Duration.toMillis(
+                  PROVIDER_START_SESSION_TIMEOUT,
+                )}ms for thread '${threadId}'.`,
+              );
+            }
+            const resumed = recoveryStarted.value;
             if (resumed.provider !== adapter.provider) {
               return yield* toValidationError(
                 input.operation,
@@ -1564,7 +1740,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             );
             lease.commit();
             return adapter;
-          }),
+          }).pipe(
+            Effect.onError((cause) =>
+              // The rewind that follows un-publishes this run's generation, so
+              // the settle must run here — inside the lease — for the
+              // synthesized error event to pass the stale-generation gate.
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : recordFailedSessionStart({
+                    threadId,
+                    provider: input.binding.provider,
+                    lifecycleGeneration: lease.generation,
+                    cause,
+                  }),
+            ),
+          ),
         );
       });
 
@@ -1811,7 +2001,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // The lifecycle is updated inside observeProviderStartup; these taps
               // only log the already-recorded outcome.
               const started = yield* observeProviderStartup(
-                startAdapterWithStaleDevinFallback(adapter, resolvedAdapterStartInput),
+                startAdapterWithStaleResumeFallback(adapter, resolvedAdapterStartInput),
                 { lifecycle: startupLifecycle, timeout: PROVIDER_START_SESSION_TIMEOUT },
               ).pipe(
                 Effect.tapError((cause) =>
@@ -1854,17 +2044,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   )}ms for thread '${threadId}'.`,
                 );
               }
-              const { session, staleDevinFallbackOccurred } = started.value;
+              const { session, staleResumeFallbackOccurred } = started.value;
               startupLifecycle.transition("ready");
               replacementStarted = true;
               const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
               const nativeResumeSucceeded =
-                nativeResumeAttempted && !staleDevinFallbackOccurred
+                nativeResumeAttempted && !staleResumeFallbackOccurred
                   ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
                   : false;
               const priorTranscriptBootstrapPending =
                 persistedPriorTranscriptBootstrapPending ||
-                staleDevinFallbackOccurred ||
+                staleResumeFallbackOccurred ||
                 (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
                   !nativeResumeSucceeded);
 
@@ -1909,7 +2099,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 nativeResumeSucceeded,
                 priorTranscriptBootstrapPending,
               };
-            });
+            }).pipe(
+              Effect.onError((cause) =>
+                // The rewind that follows un-publishes this run's generation,
+                // so the settle must run here — inside the lease — for the
+                // synthesized error event to pass the stale-generation gate.
+                // It also lands before the provider-switch restore below: the
+                // restored session's own events can still re-project the
+                // thread afterwards, and a failed restore keeps the failed
+                // start on record.
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : recordFailedSessionStart({
+                      threadId,
+                      provider: input.provider,
+                      lifecycleGeneration: lease.generation,
+                      cause,
+                    }),
+              ),
+            );
 
             if (!persistedBinding || persistedBinding.provider === input.provider) {
               return yield* startAndPersistReplacement;
@@ -1941,22 +2149,62 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       if (replacementStarted) {
                         yield* adapter.stopSession(threadId);
                       }
-                      const restored = yield* previousAdapter.startSession({
-                        threadId,
-                        provider: persistedBinding.provider,
-                        lifecycleGeneration: previousGeneration,
-                        runtimeMode: persistedBinding.runtimeMode ?? "full-access",
-                        ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
-                        ...(previousModelSelection !== undefined
-                          ? { modelSelection: previousModelSelection }
-                          : {}),
-                        ...(previousProviderOptions !== undefined
-                          ? { providerOptions: previousProviderOptions }
-                          : {}),
-                        ...(persistedBinding.resumeCursor !== undefined
-                          ? { resumeCursor: persistedBinding.resumeCursor }
-                          : {}),
-                      });
+                      // The restore is still a provider start: it must observe
+                      // the same deadline so a wedged previous runtime cannot
+                      // hold the lifecycle lease past the caller's bound.
+                      const restoreStartupLifecycle = new ProviderStartupLifecycle();
+                      restoreStartupLifecycle.transition("starting");
+                      restoreStartupLifecycle.transition("handshaking");
+                      const restoreStarted = yield* observeProviderStartup(
+                        previousAdapter.startSession({
+                          threadId,
+                          provider: persistedBinding.provider,
+                          lifecycleGeneration: previousGeneration,
+                          runtimeMode: persistedBinding.runtimeMode ?? "full-access",
+                          ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
+                          ...(previousModelSelection !== undefined
+                            ? { modelSelection: previousModelSelection }
+                            : {}),
+                          ...(previousProviderOptions !== undefined
+                            ? { providerOptions: previousProviderOptions }
+                            : {}),
+                          ...(persistedBinding.resumeCursor !== undefined
+                            ? { resumeCursor: persistedBinding.resumeCursor }
+                            : {}),
+                        }),
+                        {
+                          lifecycle: restoreStartupLifecycle,
+                          timeout: PROVIDER_START_SESSION_TIMEOUT,
+                        },
+                      );
+                      if (Option.isNone(restoreStarted)) {
+                        yield* Effect.logError("provider session restore exceeded its deadline", {
+                          threadId,
+                          provider: previousAdapter.provider,
+                          timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                          startup: restoreStartupLifecycle.snapshot(),
+                        });
+                        yield* previousAdapter.stopSession(threadId).pipe(
+                          Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                          Effect.catchCause((cause) =>
+                            Effect.logWarning(
+                              "failed to retire a timed-out provider session restore",
+                              {
+                                threadId,
+                                provider: previousAdapter.provider,
+                                cause: Cause.pretty(cause),
+                              },
+                            ),
+                          ),
+                        );
+                        return yield* toValidationError(
+                          "ProviderService.startSession",
+                          `Provider '${previousAdapter.provider}' did not finish restoring its session within ${Duration.toMillis(
+                            PROVIDER_START_SESSION_TIMEOUT,
+                          )}ms for thread '${threadId}'.`,
+                        );
+                      }
+                      const restored = restoreStarted.value;
                       if (restored.provider !== previousAdapter.provider) {
                         return yield* toValidationError(
                           "ProviderService.startSession",

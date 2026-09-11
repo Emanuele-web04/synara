@@ -56,8 +56,32 @@ export function deriveTurnStartSession(input: {
    */
   readonly sessionProviderEstablished?: boolean;
 }): OrchestrationSession | null {
-  if (input.currentSession?.status === "starting" || input.currentSession?.status === "running") {
+  // "starting" is only an optimistic pre-bind placeholder: a session that is
+  // already bound (`ready`) or already transitioning (`starting`/`running`)
+  // must never be regressed to it — e.g. a queued steer promoted after an
+  // interrupt that left the provider session alive would otherwise flap
+  // ready → starting → running. The real bind writes the authoritative status.
+  if (
+    input.currentSession?.status === "starting" ||
+    input.currentSession?.status === "running" ||
+    input.currentSession?.status === "ready"
+  ) {
     return null;
+  }
+
+  // The request predates the session's last write: the intent was replayed or
+  // sat in a queue while a newer session state landed, so this placeholder
+  // would overwrite fresher state with an older updatedAt.
+  if (input.currentSession !== null) {
+    const sessionUpdatedAt = Date.parse(input.currentSession.updatedAt);
+    const requestedAt = Date.parse(input.requestedAt);
+    if (
+      Number.isFinite(sessionUpdatedAt) &&
+      Number.isFinite(requestedAt) &&
+      sessionUpdatedAt > requestedAt
+    ) {
+      return null;
+    }
   }
 
   const sessionProviderName =

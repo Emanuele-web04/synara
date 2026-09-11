@@ -185,10 +185,11 @@ export function makeAgentGatewayMcpTransport(input: {
             return yield* Effect.fail(
               new GatewayToolError(
                 "caller_turn_inactive",
-                "This Synara write was rejected because this credential had no write authority for the exact active turn when the MCP request arrived.",
+                "This Synara write was rejected because this thread has no running turn — the turn was interrupted, settled, or superseded. Only the currently running turn holds write authority; retrying for a settled turn will keep failing.",
                 {
                   callerThreadId,
                   latestTurnId: callerThread.value.latestTurn?.turnId ?? null,
+                  latestTurnState: callerThread.value.latestTurn?.state ?? null,
                 },
               ),
             );
@@ -221,7 +222,7 @@ export function makeAgentGatewayMcpTransport(input: {
             return yield* Effect.fail(
               new GatewayToolError(
                 "caller_turn_inactive",
-                "This Synara write was rejected because the turn that received this MCP request is no longer active. In-flight requests cannot inherit authority from a later turn.",
+                "This Synara write was rejected because the turn that issued this MCP request is no longer running — it was interrupted or settled while the call was in flight. In-flight requests cannot inherit authority from a later turn; do not retry from the settled turn.",
                 {
                   callerThreadId,
                   authorizedTurnId: callerWriteAuthority.turnId,

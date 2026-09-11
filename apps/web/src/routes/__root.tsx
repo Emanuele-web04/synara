@@ -1829,7 +1829,25 @@ function EventRouter() {
       // rejection propagate to callers exactly as the try/finally did.
       return await api.orchestration
         .replayEvents(fromSequence, threadId)
+        .catch((error) => {
+          // A gap past the server replay limit can never satisfy this poll;
+          // repair through the authoritative snapshot instead of retrying a
+          // replay that fails the same way forever.
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ORCHESTRATION_REPLAY_OVERFLOW"
+          ) {
+            void reconcileThreadProjection(threadId).catch(() => undefined);
+            return null;
+          }
+          throw error;
+        })
         .then((replayedEvents) => {
+          if (replayedEvents === null) {
+            return null;
+          }
           let appliedEventCount = 0;
           for (const event of replayedEvents
             .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
@@ -2008,19 +2026,7 @@ function EventRouter() {
     reconcileThreadSubscriptionsRef.current = (threadIds) =>
       enqueueThreadSubscriptionReconcile(threadIds);
 
-    const unsubShellEvent = api.orchestration.onShellEvent((item) => {
-      if (item.kind === "snapshot") {
-        shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
-        const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
-        shellSnapshotSequence = item.snapshot.snapshotSequence;
-        syncServerShellSnapshot(item.snapshot);
-        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        flushShellBuffer(item.snapshot.snapshotSequence);
-        removeOrphanedTerminalsForCurrentState();
-        reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
-        return;
-      }
-
+    const handleShellEventItem = (item: OrchestrationShellStreamEvent) => {
       if (shellSnapshotSequence < 0) {
         appendBounded(pendingShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
         return;
@@ -2084,6 +2090,26 @@ function EventRouter() {
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
+    };
+    const unsubShellEvent = api.orchestration.onShellEvent((item) => {
+      if (item.kind === "snapshot") {
+        shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
+        const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
+        shellSnapshotSequence = item.snapshot.snapshotSequence;
+        syncServerShellSnapshot(item.snapshot);
+        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
+        flushShellBuffer(item.snapshot.snapshotSequence);
+        removeOrphanedTerminalsForCurrentState();
+        reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
+        return;
+      }
+      // A replay batch is the server's whole gap in one frame — apply each
+      // event through the same path rather than one store update per event.
+      if (item.kind === "replay") {
+        for (const event of item.events) handleShellEventItem(event);
+        return;
+      }
+      handleShellEventItem(item);
     });
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
@@ -2124,49 +2150,58 @@ function EventRouter() {
         return;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
-      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
-      if (latestThreadSequence === undefined) {
-        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
-        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+      const handleThreadDetailEvent = (event: OrchestrationEvent) => {
+        const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
+        const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+        if (latestThreadSequence === undefined) {
+          const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
+          appendBounded(pendingThreadEvents, event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
+          pendingThreadEventsById.set(threadId, pendingThreadEvents);
+          if (
+            event.type === "thread.session-set" &&
+            isTerminalThreadSessionStatus(event.payload.session.status)
+          ) {
+            // Arm even while buffered: the immediate reconcile below may return a
+            // premature session-set snapshot, and the fence must outlive it (#548).
+            armThreadProjectionTerminalFence(threadId, event.sequence);
+          } else if (event.type === "thread.session-set") {
+            clearThreadProjectionTerminalFence(threadId);
+          }
+          if (subscribedThreadIds.has(threadId)) {
+            void reconcileThreadProjection(threadId).catch(() => undefined);
+          }
+          return;
+        }
+        if (event.sequence <= latestThreadSequence) {
+          return;
+        }
+        if (!applyFencedThreadEvent(threadId, event)) {
+          return;
+        }
         if (
-          item.event.type === "thread.session-set" &&
-          isTerminalThreadSessionStatus(item.event.payload.session.status)
+          event.type === "thread.session-set" &&
+          isTerminalThreadSessionStatus(event.payload.session.status)
         ) {
-          // Arm even while buffered: the immediate reconcile below may return a
-          // premature session-set snapshot, and the fence must outlive it (#548).
-          armThreadProjectionTerminalFence(threadId, item.event.sequence);
-        } else if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
+          // Arm after the generic post-event schedule so the fast first-reconcile
+          // delay is not overwritten back to the slower cadence.
+          armThreadProjectionTerminalFence(threadId, event.sequence);
+        } else {
+          if (event.type === "thread.session-set") {
+            clearThreadProjectionTerminalFence(threadId);
+          }
+          nextThreadProjectionReconcileAtById.set(
+            threadId,
+            Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+          );
         }
-        if (subscribedThreadIds.has(threadId)) {
-          void reconcileThreadProjection(threadId).catch(() => undefined);
-        }
+      };
+      if (item.kind === "replay") {
+        // The whole gap arrives in one frame; applying it through one pass keeps
+        // the transcript update atomic instead of a visible per-event stream.
+        for (const event of item.events) handleThreadDetailEvent(event);
         return;
       }
-      if (item.event.sequence <= latestThreadSequence) {
-        return;
-      }
-      if (!applyFencedThreadEvent(threadId, item.event)) {
-        return;
-      }
-      if (
-        item.event.type === "thread.session-set" &&
-        isTerminalThreadSessionStatus(item.event.payload.session.status)
-      ) {
-        // Arm after the generic post-event schedule so the fast first-reconcile
-        // delay is not overwritten back to the slower cadence.
-        armThreadProjectionTerminalFence(threadId, item.event.sequence);
-      } else {
-        if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
-        }
-        nextThreadProjectionReconcileAtById.set(
-          threadId,
-          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-        );
-      }
+      handleThreadDetailEvent(item.event);
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);

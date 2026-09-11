@@ -1001,6 +1001,10 @@ export const OrchestrationShellStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshot: OrchestrationShellSnapshot,
   }),
+  Schema.Struct({
+    kind: Schema.Literal("replay"),
+    events: Schema.Array(OrchestrationShellStreamEvent),
+  }),
   OrchestrationShellStreamEvent,
 ]);
 export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
@@ -2359,6 +2363,10 @@ export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
     snapshot: OrchestrationThreadDetailSnapshot,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("replay"),
+    events: Schema.Array(OrchestrationEvent),
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),
