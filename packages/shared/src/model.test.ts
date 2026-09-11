@@ -173,7 +173,7 @@ describe("normalizeModelSlug", () => {
   it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
     expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
     expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1.6-fast");
     expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
   });
 

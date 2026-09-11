@@ -85,32 +85,30 @@ const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   gpt: "GPT",
   minimax: "MiniMax",
   openai: "OpenAI",
+  opencode: "OpenCode",
   swe: "SWE",
+  xai: "xAI",
   xhigh: "XHigh",
 };
 
 // First tokens that mark a provider-supplied label as a model-family name
-// worth normalizing. Anything else (custom names like "MyModel", "K2P6")
-// keeps its original casing untouched.
+// worth normalizing: the brand tokens plus families whose casing is already
+// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
+// original casing untouched.
 const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
+  ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
   "adaptive",
   "auto",
   "claude",
   "codex",
   "composer",
   "cursor",
-  "deepseek",
   "devin",
   "gemini",
-  "glm",
-  "gpt",
   "grok",
   "inkling",
   "kimi",
-  "minimax",
   "nemotron",
-  "openai",
-  "swe",
 ]);
 
 function humanizeModelToken(token: string): string {
@@ -175,7 +173,8 @@ export function normalizeModelDisplayName(name: string): string {
   const head = parenIndex >= 0 ? trimmed.slice(0, parenIndex).trimEnd() : trimmed;
   const tail = parenIndex >= 0 ? trimmed.slice(parenIndex) : "";
   const tokens = head.split(/[-_\s]+/u).filter(Boolean);
-  if (tokens.length === 0 || !MODEL_FAMILY_TOKENS.has(tokens[0]!.toLowerCase())) {
+  const [firstToken] = tokens;
+  if (firstToken === undefined || !MODEL_FAMILY_TOKENS.has(firstToken.toLowerCase())) {
     return trimmed;
   }
   const normalized = joinModelVersionTokens(tokens)
