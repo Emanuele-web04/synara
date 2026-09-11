@@ -290,9 +290,15 @@ export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
   fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
 ): ThreadTokenSnapshotRow[] {
+  // Claude's verified turn results are snapshotted separately. Remove its old
+  // context rows before maintaining any delta state, otherwise a large Claude
+  // counter can reset or inflate the next provider's archived delta.
+  const nonClaudeRows = rows.filter(
+    (row) => resolveTokenProviderModel(row, fallbackSelection).provider !== "claudeAgent",
+  );
   const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
   const cumulativeProviderModels = new Set<string>();
-  for (const row of rows) {
+  for (const row of nonClaudeRows) {
     if (tokenCounterValue(row.totalProcessedTokens) === null) {
       continue;
     }
@@ -301,7 +307,7 @@ export function aggregateThreadTokenRows(
   }
 
   let previousCumulativeTotal: number | null = null;
-  for (const row of rows) {
+  for (const row of nonClaudeRows) {
     const total = tokenCounterValue(row.totalProcessedTokens);
     if (total === null) {
       continue;
@@ -319,7 +325,6 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
-    if (provider === "claudeAgent") continue;
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
@@ -330,7 +335,7 @@ export function aggregateThreadTokenRows(
 
   let previousUsedTotal: number | null = null;
   let previousUsedProviderModelKey: string | null = null;
-  for (const row of rows) {
+  for (const row of nonClaudeRows) {
     const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
     const providerModelKey = tokenProviderModelKey(provider, model);
     if (cumulativeProviderModels.has(providerModelKey)) {
@@ -347,7 +352,6 @@ export function aggregateThreadTokenRows(
         : Math.max(0, total - previousUsedTotal);
     previousUsedTotal = total;
     previousUsedProviderModelKey = providerModelKey;
-    if (provider === "claudeAgent") continue;
     if (
       delta <= 0 ||
       row.createdAt === null ||

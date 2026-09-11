@@ -9303,6 +9303,104 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("preserves resultless synthetic-turn usage across the next result and resume", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: ProviderRuntimeEvent[] = [];
+      const firstCompleted = yield* Deferred.make<void>();
+      const syntheticStarted = yield* Deferred.make<void>();
+      const allCompleted = yield* Deferred.make<void>();
+      let completedCount = 0;
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => {
+          events.push(event);
+          if (event.type === "turn.completed") {
+            completedCount += 1;
+            if (completedCount === 1) return Deferred.succeed(firstCompleted, undefined);
+            if (completedCount === 3) return Deferred.succeed(allCompleted, undefined);
+          }
+          if (event.type === "turn.started" && completedCount === 1) {
+            return Deferred.succeed(syntheticStarted, undefined);
+          }
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "first", attachments: [] });
+      emitAssistantUsage(
+        harness.query,
+        "sdk-resultless-accounting",
+        "first-block",
+        "first",
+        { input_tokens: 100 },
+        "first-call",
+      );
+      emitSuccessResult(harness.query, "sdk-resultless-accounting", "first-result", {
+        input_tokens: 100,
+      });
+      yield* Deferred.await(firstCompleted);
+
+      // Background output opens a synthetic UI turn. The next user prompt closes
+      // that turn before Claude emits an SDK result for it.
+      emitAssistantUsage(
+        harness.query,
+        "sdk-resultless-accounting",
+        "background-block",
+        "background",
+        { input_tokens: 10 },
+        "background-call",
+      );
+      yield* Deferred.await(syntheticStarted);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "next", attachments: [] });
+
+      // A larger late snapshot from the closed request must stay quarantined.
+      emitAssistantUsage(
+        harness.query,
+        "sdk-resultless-accounting",
+        "background-tail",
+        "late",
+        { input_tokens: 15 },
+        "background-call",
+      );
+      emitAssistantUsage(
+        harness.query,
+        "sdk-resultless-accounting",
+        "next-block",
+        "next",
+        { input_tokens: 20 },
+        "next-call",
+      );
+      emitSuccessResult(harness.query, "sdk-resultless-accounting", "next-result", {
+        input_tokens: 20,
+      });
+      yield* Deferred.await(allCompleted);
+      assert.equal(
+        events.filter((event) => event.type === "turn.completed")[1]?.payload.mainLoopTokens,
+        10,
+      );
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "thread.token-usage.updated")
+          .map((event) => event.payload.usage.totalProcessedTokens),
+        [100, 100, 110, 110, 110, 130, 130],
+      );
+      const resumeCursor = (yield* adapter.listSessions())[0]!.resumeCursor as
+        | { processedTokenTotal?: number }
+        | undefined;
+      assert.equal(resumeCursor?.processedTokenTotal, 130);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect(
     "keeps request accounting across interruption, late delivery, clear, and resume",
     () => {

@@ -37,7 +37,9 @@ export function claudeTokenActivityCtes(
       LEFT JOIN projection_turns pt ON pt.thread_id = a.thread_id AND pt.turn_id = a.turn_id
       LEFT JOIN projection_thread_messages pm
         ON pm.thread_id = pt.thread_id AND pm.message_id = pt.pending_message_id
-      WHERE th.parent_thread_id IS NULL
+      -- Provider-native children mirror usage that the parent result already
+      -- includes. Other child threads are independent work and must count.
+      WHERE COALESCE(th.creation_source, '') != 'provider_native'
         AND COALESCE(
           json_extract(a.payload_json, '$.provider'), tm.provider,
           CASE WHEN json_valid(th.model_selection_json)

@@ -375,7 +375,8 @@ interface ClaudeSessionContext {
   // the meter without resetting the cumulative processed estimate.
   processedTokenTotal: number;
   processedTokenTurnBaseline: number;
-  // Native results delimit SDK turns, even when a UI turn closes early.
+  // Native results normally delimit SDK turns. A synthetic UI turn can close
+  // before its result, so every logical completion must advance this baseline.
   processedTokenResultBaseline: number;
   processedTokenBaselineKnown: boolean;
   readonly requestUsage: ClaudeRequestUsage;
@@ -2890,10 +2891,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.processedTokenTotal -
             (result ? context.processedTokenResultBaseline : context.processedTokenTurnBaseline),
         );
-        if (result) {
-          context.processedTokenResultBaseline = context.processedTokenTotal;
-          context.requestUsage.settleTurn();
-        }
+        // A synthetic/background UI turn may be auto-closed before the SDK emits
+        // a result. Its per-request usage is still final for this logical turn;
+        // carry it into the next result baseline and quarantine late snapshots so
+        // a later result cannot replace the cumulative total below these tokens.
+        context.processedTokenResultBaseline = context.processedTokenTotal;
+        context.requestUsage.settleTurn();
 
         // A safeguard reroute only applies to the turn that just finished.
         // Restore the user-selected model so subsequent turns do not silently

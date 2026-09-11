@@ -371,6 +371,62 @@ describe("ProfileStatsArchive", () => {
     ]);
   });
 
+  it("removes legacy Claude rows before computing other providers' archive deltas", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 1_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 99_000,
+        usedTokens: null,
+        provider: "claudeAgent",
+        model: "claude-fable-5",
+        createdAt: "2026-06-13T12:01:00.000Z",
+      },
+      {
+        totalProcessedTokens: 1_500,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        createdAt: "2026-06-13T12:02:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 100,
+        provider: "pi",
+        model: "pi",
+        createdAt: "2026-06-13T12:03:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 9_000,
+        provider: "claudeAgent",
+        model: "claude-opus-4-8",
+        createdAt: "2026-06-13T12:04:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 150,
+        provider: "pi",
+        model: "pi",
+        createdAt: "2026-06-13T12:05:00.000Z",
+      },
+    ]);
+
+    expect(
+      rows.map(({ provider, createdAt, tokens }) => ({ provider, createdAt, tokens })),
+    ).toEqual([
+      { provider: "codex", createdAt: "2026-06-13T12:00:00.000Z", tokens: 1_000 },
+      { provider: "codex", createdAt: "2026-06-13T12:02:00.000Z", tokens: 500 },
+      { provider: "pi", createdAt: "2026-06-13T12:03:00.000Z", tokens: 100 },
+      { provider: "pi", createdAt: "2026-06-13T12:05:00.000Z", tokens: 50 },
+    ]);
+  });
+
   it("keeps a stamped activity provider instead of a mismatched thread fallback", () => {
     const rows = aggregateThreadTokenRows(
       [
@@ -403,6 +459,13 @@ describe("ProfileStatsArchive", () => {
         const archive = yield* ProfileStatsArchive;
         yield* seedTwoThreadsWithActivity;
         yield* acknowledgeProviderCommandJournal(sql);
+        // Independent child threads are real work. Only provider-native mirrors
+        // are excluded from Claude result accounting.
+        yield* sql`
+          UPDATE projection_threads
+          SET parent_thread_id = 'thread-keep', creation_source = 'synara_mcp'
+          WHERE thread_id = 'thread-purge'
+        `;
         yield* sql`
         UPDATE projection_thread_activities SET payload_json = '{"provider":"claudeAgent","totalProcessedTokens":999999}'
         WHERE thread_id = 'thread-purge'

@@ -718,7 +718,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           ${turnModelSelectionCte(sql)}
         ),
         ${claudeTokenActivityCtes(sql)},
-        ev AS (
+        token_activity AS (
           SELECT
             a.thread_id AS thread_id,
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
@@ -767,6 +767,12 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               json_extract(a.payload_json, '$.totalProcessedTokens'),
               json_extract(a.payload_json, '$.usedTokens')
             ) IS NOT NULL
+        ),
+        -- Claude's verified per-turn results are counted separately below. Drop
+        -- provisional/legacy Claude context rows before windowing so they cannot
+        -- change a neighboring provider's cumulative or used-only delta.
+        ev AS (
+          SELECT * FROM token_activity WHERE provider != 'claudeAgent'
         ),
         provider_model_scale AS (
           SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
@@ -884,12 +890,10 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         ),
         all_tokens AS (
           SELECT day, provider, model, d FROM cumulative_delta
-          WHERE provider != 'claudeAgent'
-            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
           UNION ALL
           SELECT day, provider, model, d FROM used_only_delta
-          WHERE provider != 'claudeAgent'
-            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
           UNION ALL
           SELECT STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})),
             'claudeAgent', model, tokens

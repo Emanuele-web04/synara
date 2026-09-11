@@ -75,13 +75,18 @@ describe("ProfileStatsQuery", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const stats = yield* ProfileStatsQuery;
-        for (const threadId of ["root", "child"]) {
+        for (const [threadId, parentThreadId, creationSource] of [
+          ["root", null, null],
+          ["mirrored-child", "root", "provider_native"],
+          ["independent-child", "root", "synara_mcp"],
+        ] as const) {
           yield* sql`
           INSERT INTO projection_threads
             (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-             env_mode, created_at, updated_at, parent_thread_id)
+             env_mode, created_at, updated_at, parent_thread_id, creation_source)
           VALUES (${threadId}, 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
-            'full-access', 'default', 'local', '2026-09-10', '2026-09-10', ${threadId === "child" ? "root" : null})
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            ${parentThreadId}, ${creationSource})
         `;
         }
         const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
@@ -117,7 +122,7 @@ describe("ProfileStatsQuery", () => {
         };
         yield* addActivity("1", "root", "first", versioned);
         yield* addActivity("2", "root", "first", versioned);
-        yield* addActivity("3", "child", "mirrored", versioned);
+        yield* addActivity("3", "mirrored-child", "mirrored", versioned);
         yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
         yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
         // An earlier private build emitted a compact shape whose input already
@@ -142,6 +147,7 @@ describe("ProfileStatsQuery", () => {
           mainLoopTokens: 250,
           modelUsage: { "claude-fable-5": "unusable" },
         });
+        yield* addActivity("8", "independent-child", "independent", versioned);
         // Successful main-loop usage survives even though old compact model totals
         // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
@@ -177,10 +183,10 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(56_902);
+        expect(result.lifetimeTotalTokens).toBe(85_228);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 55_902 },
-          { model: "claude-opus-4-8", tokens: 1_000 },
+          { model: "claude-fable-5", tokens: 83_228 },
+          { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
     );
@@ -925,6 +931,17 @@ describe("ProfileStatsQuery", () => {
               'client',
               '{"threadId":"thread-hybrid","messageId":"message-hybrid-claude","modelSelection":{"provider":"claudeAgent","model":"claude-haiku-4-5"}}',
               '{}'
+            ),
+            (
+              'event-hybrid-codex-after',
+              'thread',
+              'thread-hybrid',
+              3,
+              'thread.turn-start-requested',
+              '2026-06-13T12:20:00.000Z',
+              'client',
+              '{"threadId":"thread-hybrid","messageId":"message-hybrid-codex-after","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+              '{}'
             )
         `;
 
@@ -953,11 +970,20 @@ describe("ProfileStatsQuery", () => {
               'completed',
               '2026-06-13T12:10:00.000Z',
               '[]'
+            ),
+            (
+              'thread-hybrid',
+              'turn-hybrid-codex-after',
+              'message-hybrid-codex-after',
+              'completed',
+              '2026-06-13T12:20:00.000Z',
+              '[]'
             )
         `;
 
         // Codex has cumulative totals, so its usedTokens-only dip is ignored.
-        // Claude final usage is counted independently of the Codex counter series.
+        // A large legacy Claude counter sits between the two Codex turns, but
+        // Claude final usage is counted independently and cannot reset that delta.
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -994,15 +1020,15 @@ describe("ProfileStatsQuery", () => {
               '2026-06-13T12:03:00.000Z'
             ),
             (
-              'activity-hybrid-codex-2',
+              'activity-hybrid-claude-legacy',
               'thread-hybrid',
-              'turn-hybrid-codex',
+              'turn-hybrid-claude',
               'info',
               'context-window.updated',
               'tokens updated',
-              '{"usedTokens":1500,"totalProcessedTokens":2500}',
+              '{"usedTokens":700,"totalProcessedTokens":999999}',
               3,
-              '2026-06-13T12:04:00.000Z'
+              '2026-06-13T12:11:00.000Z'
             ),
             (
               'activity-hybrid-claude-1',
@@ -1013,7 +1039,7 @@ describe("ProfileStatsQuery", () => {
               'tokens updated',
               '{"usedTokens":700}',
               4,
-              '2026-06-13T12:11:00.000Z'
+              '2026-06-13T12:11:30.000Z'
             ),
             (
               'activity-hybrid-claude-2',
@@ -1025,6 +1051,17 @@ describe("ProfileStatsQuery", () => {
               '{"tokenAccountingVersion":1,"mainLoopTokens":1700}',
               5,
               '2026-06-13T12:12:00.000Z'
+            ),
+            (
+              'activity-hybrid-codex-2',
+              'thread-hybrid',
+              'turn-hybrid-codex-after',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1500,"totalProcessedTokens":2500}',
+              6,
+              '2026-06-13T12:21:00.000Z'
             )
         `;
 
