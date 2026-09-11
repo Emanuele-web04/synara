@@ -93,31 +93,61 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
     };
   }, []);
 
-  const loadAppSnapWindows = () => {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
+  useEffect(() => {
+    if (!appSnapSubmenuOpen || !appSnapBridge) return;
+
+    let disposed = false;
+    let listedForReadyState = false;
+
+    const applyState = (state: DesktopAppSnapState) => {
+      if (disposed) return;
+      setAppSnapState(state);
+      setAppSnapError(null);
+
+      if (state.status !== "ready") {
+        listedForReadyState = false;
+        appSnapRequestIdRef.current += 1;
+        setAppSnapWindows([]);
+        return;
+      }
+      if (listedForReadyState) return;
+      listedForReadyState = true;
+
+      const requestId = ++appSnapRequestIdRef.current;
+      setAppSnapWindows(null);
+      void appSnapBridge
+        .listWindows()
+        .then((windows) => {
+          if (!disposed && appSnapRequestIdRef.current === requestId) {
+            setAppSnapWindows(windows);
+          }
+        })
+        .catch((error) => {
+          if (!disposed && appSnapRequestIdRef.current === requestId) {
+            setAppSnapError(error instanceof Error ? error.message : "Could not list windows.");
+          }
+        });
+    };
+
+    const unsubscribe = appSnapBridge.onState(applyState);
     const requestId = ++appSnapRequestIdRef.current;
-    setAppSnapWindows(null);
-    setAppSnapError(null);
-    setAppSnapState(null);
-    void bridge
+    void appSnapBridge
       .getState()
-      .then(async (state) => {
-        if (appSnapRequestIdRef.current !== requestId) return;
-        setAppSnapState(state);
-        if (state.status !== "ready") {
-          setAppSnapWindows([]);
-          return;
-        }
-        const windows = await bridge.listWindows();
-        if (appSnapRequestIdRef.current !== requestId) return;
-        setAppSnapWindows(windows);
+      .then((state) => {
+        if (!disposed && appSnapRequestIdRef.current === requestId) applyState(state);
       })
       .catch((error) => {
-        if (appSnapRequestIdRef.current !== requestId) return;
-        setAppSnapError(error instanceof Error ? error.message : "Could not list windows.");
+        if (!disposed && appSnapRequestIdRef.current === requestId) {
+          setAppSnapError(error instanceof Error ? error.message : "Could not list windows.");
+        }
       });
-  };
+
+    return () => {
+      disposed = true;
+      appSnapRequestIdRef.current += 1;
+      unsubscribe();
+    };
+  }, [appSnapBridge, appSnapSubmenuOpen]);
 
   const captureAppSnapWindow = (windowId: number) => {
     const bridge = window.desktopBridge?.appSnap;
@@ -192,7 +222,9 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
               onOpenChange={(open) => {
                 setAppSnapSubmenuOpen(open);
                 if (open) {
-                  loadAppSnapWindows();
+                  setAppSnapWindows(null);
+                  setAppSnapError(null);
+                  setAppSnapState(null);
                 } else {
                   appSnapRequestIdRef.current += 1;
                 }

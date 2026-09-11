@@ -76,6 +76,7 @@ function appSnapBridge(overrides: {
   >;
   captureWindow?: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
   acknowledgeCapture?: (captureId: string) => Promise<void>;
+  onState?: (listener: (state: DesktopAppSnapState) => void) => () => void;
 }) {
   return {
     appSnap: {
@@ -101,6 +102,7 @@ function appSnapBridge(overrides: {
           ])),
       captureWindow: overrides.captureWindow ?? (() => Promise.resolve(CAPTURE)),
       acknowledgeCapture: overrides.acknowledgeCapture ?? (() => Promise.resolve()),
+      onState: overrides.onState ?? (() => () => undefined),
     },
   };
 }
@@ -289,5 +291,45 @@ describe("ComposerExtrasMenu", () => {
 
     await expect.element(page.getByText("Enable AppSnap in Settings")).toBeVisible();
     expect(listWindows).not.toHaveBeenCalled();
+  });
+
+  it("lists windows when AppSnap becomes ready while the picker is open", async () => {
+    let emitState: ((state: DesktopAppSnapState) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const listWindows = vi.fn(() =>
+      Promise.resolve([
+        {
+          windowId: 42,
+          appName: "Ghostty",
+          bundleIdentifier: "com.mitchellh.ghostty",
+          windowTitle: "dev",
+          appIconDataUrl: null,
+        },
+      ]),
+    );
+    setDesktopBridge(
+      appSnapBridge({
+        getState: () => Promise.resolve({ ...READY_STATE, status: "starting" }),
+        listWindows,
+        onState: (listener) => {
+          emitState = listener;
+          return unsubscribe;
+        },
+      }),
+    );
+    const menu = await mountMenu({ threadId });
+
+    await page.getByLabelText("Composer extras").click();
+    await page.getByText("Attach window").click();
+    await expect.element(page.getByText("AppSnap is starting…")).toBeVisible();
+    expect(listWindows).not.toHaveBeenCalled();
+
+    emitState?.(READY_STATE);
+
+    await expect.element(page.getByText("Ghostty")).toBeVisible();
+    expect(listWindows).toHaveBeenCalledOnce();
+
+    await menu.cleanup();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });
