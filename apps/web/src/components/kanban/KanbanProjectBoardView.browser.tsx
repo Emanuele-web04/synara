@@ -14,13 +14,13 @@ vi.mock("~/appSettings", () => ({
   resolveAssistantDeliveryMode: () => "default",
 }));
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
-  useProviderStatusesForLocalConfig: () => [],
+  useProviderStatusesForLocalConfig: () => [READY_CODEX_STATUS],
 }));
 vi.mock("~/hooks/useProviderStatusRefresh", () => ({
   useRefreshProviderStatusesNow: () => () => undefined,
 }));
 vi.mock("../../lib/kanbanDispatch", () => ({
-  dispatchKanbanDraftCard: vi.fn().mockResolvedValue({ ok: true }),
+  dispatchKanbanDraftCardAsGoal: vi.fn().mockResolvedValue({ kind: "dispatched" }),
   kanbanDispatchFailureToast: vi.fn().mockReturnValue({
     type: "error",
     title: "Mock toast",
@@ -28,8 +28,9 @@ vi.mock("../../lib/kanbanDispatch", () => ({
   }),
 }));
 
-import type { ThreadId } from "@synara/contracts";
+import type { ServerProviderStatus, ThreadId } from "@synara/contracts";
 import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
+import { dispatchKanbanDraftCardAsGoal } from "../../lib/kanbanDispatch";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import type { KanbanCard, KanbanProjectBoard } from "./kanban.logic";
 
@@ -86,6 +87,74 @@ describe("KanbanProjectBoardView v2 (browser)", () => {
     );
 
     for (const label of Object.values(KANBAN_COLUMN_V2_LABELS)) {
+/**
+ * The inner card `<button>` for a draft title. (A plain role query is ambiguous:
+ * the sortable wrapper `li` also carries `role="button"`.)
+ */
+function findCardButton(titleSnippet: string): HTMLButtonElement | null {
+  const match = [...document.querySelectorAll("li button")].find((candidate) =>
+    candidate.textContent?.includes(titleSnippet),
+  );
+  return (match ?? null) as HTMLButtonElement | null;
+}
+
+/**
+ * Drives a dnd-kit PointerSensor drag with synthetic pointer events: pointerdown
+ * on the card (the sortable `li` picks it up through bubbling), then moves and
+ * pointerup which bubble up to the owner document where the sensor listens.
+ * Moves walk past the 6px activation constraint and land over the target
+ * column's droppable list; collision is coordinate-based.
+ */
+async function dragCardOntoColumn(titleSnippet: string, columnHeading: string) {
+  const source = findCardButton(titleSnippet);
+  if (!source) {
+    throw new Error(`missing card button containing "${titleSnippet}"`);
+  }
+  const columnSection = [...document.querySelectorAll("section")].find((candidate) =>
+    [...candidate.querySelectorAll("h3")].some((heading) => heading.textContent === columnHeading),
+  );
+  const target = columnSection?.querySelector("ul");
+  if (!target) {
+    throw new Error(`missing droppable list for column "${columnHeading}"`);
+  }
+  const from = source.getBoundingClientRect();
+  const to = target.getBoundingClientRect();
+  const fromX = from.x + from.width / 2;
+  const fromY = from.y + from.height / 2;
+  const toX = to.x + to.width / 2;
+  const toY = to.y + to.height / 2;
+  const pointerEvent = (type: "pointerdown" | "pointermove" | "pointerup", x: number, y: number) =>
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      pointerId: 1,
+      isPrimary: true,
+      pointerType: "mouse",
+    });
+  // Real drags space input across frames, letting React flush the measure /
+  // collision effects between events. A synchronous burst would deliver every
+  // event before any effect runs, so collisions (and `over`) never compute.
+  const frame = () => new Promise((resolve) => window.setTimeout(resolve, 16));
+  source.dispatchEvent(pointerEvent("pointerdown", fromX, fromY));
+  await frame();
+  const steps = 8;
+  for (let step = 1; step <= steps; step++) {
+    source.dispatchEvent(
+      pointerEvent(
+        "pointermove",
+        fromX + ((toX - fromX) * step) / steps,
+        fromY + ((toY - fromY) * step) / steps,
+      ),
+    );
+    await frame();
+  }
+  source.dispatchEvent(pointerEvent("pointerup", toX, toY));
+}
+
       await expect.element(page.getByRole("heading", { name: label })).toBeVisible();
     }
     for (const cardTitle of ["Card draft-1", "Card live-1", "Card awaiting-1", "Card done-1"]) {

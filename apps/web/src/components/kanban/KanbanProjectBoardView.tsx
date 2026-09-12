@@ -1,5 +1,5 @@
 // FILE: KanbanProjectBoardView.tsx
-// Purpose: Full 3-column board for one project — drag a Draft card onto In Progress to
+// Purpose: Full 4-column board for one project — drag a Draft card onto In Progress to
 //          dispatch its prompt, or reorder drafts; other moves are derived-only.
 // Layer: UI component (owns the board DndContext)
 // Exports: KanbanProjectBoardView
@@ -28,7 +28,10 @@ import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
-import { dispatchKanbanDraftCard, kanbanDispatchFailureToast } from "../../lib/kanbanDispatch";
+import {
+  dispatchKanbanDraftCardAsGoal,
+  kanbanDispatchFailureToast,
+} from "../../lib/kanbanDispatch";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import { NeedsReviewFilter } from "./NeedsReviewFilter";
@@ -122,8 +125,11 @@ export function KanbanProjectBoardView({
       return;
     }
     // The dispatch marks the optimistic overlay synchronously, so the card jumps
-    // to In Progress before any round-trip; failure results revert it.
-    const result = await dispatchKanbanDraftCard({
+    // to In Progress before any round-trip; failure results revert it. Drops
+    // dispatch WITH the drafted prompt saved as the thread goal (the AsGoal
+    // variant runs the same open-thread guards as plain dispatch, so
+    // non-dispatchable drops still fall back to opening the chat).
+    const result = await dispatchKanbanDraftCardAsGoal({
       card,
       defaultProvider: settings.defaultProvider,
       assistantDeliveryMode,
