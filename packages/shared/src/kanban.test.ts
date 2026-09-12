@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  KANBAN_ATTENTION_LABELS,
-  KANBAN_COLUMN_V2_LABELS,
   KANBAN_STUCK_HARD_MS,
   KANBAN_STUCK_WARN_MS,
   deriveKanbanAttention,
