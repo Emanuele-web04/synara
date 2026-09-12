@@ -7,6 +7,8 @@ function result(
   reads: number,
   writes: number,
   cost: number,
+  webSearchRequests = 0,
+  thinkingTokens = 0,
 ): ClaudeResultUsageBaseline {
   return {
     total_cost_usd: cost,
@@ -14,10 +16,11 @@ function result(
       sonnet: {
         inputTokens: input,
         outputTokens: output,
+        thinkingTokens,
         cacheReadInputTokens: reads,
         cacheCreationInputTokens: writes,
         costUSD: cost,
-        webSearchRequests: 0,
+        webSearchRequests,
         contextWindow: 200000,
         maxOutputTokens: 64000,
       },
@@ -27,14 +30,16 @@ function result(
 
 describe("Claude cumulative result accounting", () => {
   it("subtracts the preceding SDK result instead of charging prior turns again", () => {
-    const first = result(6, 211, 86202, 43334, 0.1926984);
-    const next = result(8, 239, 129623, 43334, 0.2018);
+    const first = result(6, 211, 86202, 43334, 0.1926984, 2, 100);
+    const next = result(8, 239, 129623, 43334, 0.2018, 5, 120);
     const usage = claudeTurnResultUsage(next, first);
     expect(usage.modelUsage.sonnet).toMatchObject({
       inputTokens: 2,
       outputTokens: 28,
+      thinkingTokens: 20,
       cacheReadInputTokens: 43421,
       cacheCreationInputTokens: 0,
+      webSearchRequests: 3,
       contextWindow: 200000,
     });
     expect(usage.totalCostUsd).toBeCloseTo(0.0091016);

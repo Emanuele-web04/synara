@@ -11,6 +11,12 @@ import type {
   ProjectFileLineEnding,
   ProjectReadFileResult,
 } from "@synara/contracts";
+import type { FileContents as PierreFileContents } from "@pierre/diffs";
+import {
+  Editor as PierreEditor,
+  type EditorOptions as PierreEditorOptions,
+} from "@pierre/diffs/edit";
+import { EditProvider, File as PierreFile } from "@pierre/diffs/react";
 import {
   isSupportedLocalImagePath,
   isSupportedLocalPdfPath,
@@ -31,6 +37,8 @@ import {
   use,
   useCallback,
   useEffect,
+  useInsertionEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -44,7 +52,11 @@ import {
   getSelectionWithin,
   type ChatFileReference,
 } from "~/lib/chatReferences";
-import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
+import {
+  buildDiffPanelUnsafeCSS,
+  resolveDiffThemeName,
+  type DiffThemeName,
+} from "~/lib/diffRendering";
 import { extractEditorGutterChanges, type EditorGutterChangeRange } from "~/lib/editorGutterDiff";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
@@ -74,6 +86,7 @@ import { cn } from "~/lib/utils";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import ChatMarkdown from "./ChatMarkdown";
+import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { useFileLineCommenting } from "./chat/useFileLineCommenting";
@@ -261,6 +274,184 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   );
 }
 
+function createPierreEditor(options: PierreEditorOptions<undefined>) {
+  return new PierreEditor(options);
+}
+
+type EditableFileContentsProps = {
+  path: string;
+  contents: string;
+  cacheKey: string;
+  hidden: boolean;
+  themeName: DiffThemeName;
+  theme: "light" | "dark";
+  saving: boolean;
+  invalid: boolean;
+  onContentsChange: (contents: string) => void;
+  onSave: () => void;
+};
+
+function PierreEditableFileContents(props: EditableFileContentsProps) {
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const editorId = useId();
+  const labelEditor = useCallback(() => {
+    editorContainerRef.current
+      ?.querySelector("diffs-container")
+      ?.shadowRoot?.querySelector<HTMLElement>('[contenteditable="true"]')
+      ?.setAttribute("aria-label", `Edit ${props.path}`);
+  }, [props.path]);
+  const editorObserverRef = useRef<MutationObserver | null>(null);
+  const attachEditor = useCallback(() => {
+    const shadowRoot = editorContainerRef.current?.querySelector("diffs-container")?.shadowRoot;
+    if (!shadowRoot) return;
+    labelEditor();
+    if (editorObserverRef.current === null) {
+      editorObserverRef.current = new MutationObserver(labelEditor);
+    }
+    editorObserverRef.current.observe(shadowRoot, { childList: true, subtree: true });
+  }, [labelEditor]);
+  useEffect(() => {
+    attachEditor();
+    return () => {
+      editorObserverRef.current?.disconnect();
+      editorObserverRef.current = null;
+    };
+  }, [attachEditor]);
+  // Local typing updates this snapshot in the same batch as the parent draft.
+  // Only a different incoming document (reload/watcher) resets Pierre's history.
+  const [document, setDocument] = useState({
+    contents: props.contents,
+    seedContents: props.contents,
+    revision: 0,
+  });
+  if (document.contents !== props.contents) {
+    setDocument({
+      contents: props.contents,
+      seedContents: props.contents,
+      revision: document.revision + 1,
+    });
+  }
+  const onContentsChangeRef = useRef(props.onContentsChange);
+  useInsertionEffect(() => {
+    onContentsChangeRef.current = props.onContentsChange;
+  });
+  const file = useMemo<PierreFileContents>(
+    () => ({
+      name: props.path,
+      contents: document.seedContents,
+      lang: getSyntaxLanguageForPath(props.path),
+      cacheKey: `${props.cacheKey}:${editorId}:${document.revision}`,
+    }),
+    [document.seedContents, document.revision, editorId, props.cacheKey, props.path],
+  );
+  const editorOptions = useMemo<PierreEditorOptions<undefined>>(
+    () => ({
+      onAttach: attachEditor,
+      onChange: (nextFile) => {
+        const contents = nextFile.contents;
+        setDocument((current) => ({ ...current, contents }));
+        onContentsChangeRef.current(contents);
+      },
+    }),
+    [attachEditor],
+  );
+
+  return (
+    <div
+      ref={editorContainerRef}
+      className="editor-file-editor__pierre"
+      hidden={props.hidden}
+      aria-busy={props.saving}
+      aria-invalid={props.invalid ? "true" : undefined}
+      onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          props.onSave();
+        }
+      }}
+    >
+      <EditProvider createEditor={createPierreEditor}>
+        <PierreFile
+          file={file}
+          edit
+          editorOptions={editorOptions}
+          options={{
+            disableFileHeader: true,
+            overflow: "scroll",
+            preferredHighlighter: "shiki-js",
+            theme: props.themeName,
+            unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
+          }}
+        />
+      </EditProvider>
+    </div>
+  );
+}
+
+// Keep the editing engine stable for the open document: changing it while
+// typing would discard focus, selection and native undo history.
+function EditableFileContents(props: EditableFileContentsProps) {
+  const [plainText] = useState(
+    () =>
+      props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ||
+      props.contents.split("\n").length > 1_000,
+  );
+  return plainText ? (
+    <NumberedPlainEditableFileContents {...props} />
+  ) : (
+    <PierreEditableFileContents {...props} />
+  );
+}
+
+function NumberedPlainEditableFileContents(props: EditableFileContentsProps) {
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const lineCount = props.contents.split("\n").length;
+  const numbers = useMemo(
+    () =>
+      lineCount <= MAX_PLAIN_NUMBERED_LINES
+        ? Array.from({ length: lineCount }, (_, index) => (
+            <span key={index} className="editor-file-editor__gutter-line">
+              {index + 1}
+            </span>
+          ))
+        : null,
+    [lineCount],
+  );
+  const syncGutter = useCallback(() => {
+    if (editorRef.current && gutterRef.current)
+      gutterRef.current.style.transform = `translateY(${-editorRef.current.scrollTop}px)`;
+  }, []);
+  useEffect(syncGutter, [props.contents, props.hidden, syncGutter]);
+  return (
+    <div className="editor-file-editor-wrap" hidden={props.hidden}>
+      {numbers ? (
+        <div className="editor-file-editor__gutter" aria-hidden="true">
+          <div ref={gutterRef}>{numbers}</div>
+        </div>
+      ) : null}
+      <textarea
+        ref={editorRef}
+        className="editor-file-editor"
+        aria-label={`Edit ${props.path}`}
+        aria-busy={props.saving}
+        aria-invalid={props.invalid ? "true" : undefined}
+        value={props.contents}
+        spellCheck={false}
+        wrap="off"
+        onScroll={syncGutter}
+        onChange={(event) => props.onContentsChange(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            props.onSave();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 function filePreviewRowOffset(rows: number): string {
   return `calc(var(--editor-file-padding, 1rem) + ${rows} * var(--editor-file-line-height, 1.65) * 1em)`;
 }
@@ -417,8 +608,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const contentsRef = useRef<HTMLDivElement>(null);
-  const editAreaRef = useRef<HTMLTextAreaElement>(null);
-  const editGutterRef = useRef<HTMLDivElement>(null);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
@@ -666,20 +855,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       error: null,
     }));
   };
-
-  // The inline editor is a plain textarea, so its line-number gutter is a
-  // separate column that mirrors the textarea's vertical scroll position.
-  const syncEditGutterScroll = useCallback(() => {
-    const area = editAreaRef.current;
-    const gutter = editGutterRef.current;
-    if (area && gutter) {
-      gutter.style.transform = `translateY(${-area.scrollTop}px)`;
-    }
-  }, []);
-
-  useEffect(() => {
-    syncEditGutterScroll();
-  }, [syncEditGutterScroll, displayedFileContents, filePath]);
 
   const handleEditBufferSave = async () => {
     if (
@@ -1096,6 +1271,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
               : "Could not refresh file."}
         </div>
       ) : null}
+      {changeGutterEnabled && workingTreeDiffQuery.data?.truncated === true ? (
+        <DiffTruncationWarning className="rounded-none border-x-0 border-t-0">
+          Only part of this file&apos;s working-tree diff is available. Change markers may be
+          incomplete.
+        </DiffTruncationWarning>
+      ) : null}
       {locatingOutOfRootFile ? (
         <FilePreviewLoadingState />
       ) : fileIsImage ? (
@@ -1126,133 +1307,125 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </PanelStateMessage>
       ) : !hasFileContents ? (
         <FilePreviewLoadingState />
-      ) : activeEditBuffer && editableDocument && !showMarkdownPreview ? (
-        <div className="editor-file-editor-wrap">
-          {lineCount <= MAX_PLAIN_NUMBERED_LINES ? (
-            <div className="editor-file-editor__gutter" aria-hidden="true">
-              <div ref={editGutterRef}>
-                {Array.from({ length: Math.max(1, lineCount) }, (_, index) => (
-                  <span key={index + 1} className="editor-file-editor__gutter-line">
-                    {index + 1}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <textarea
-            ref={editAreaRef}
-            className="editor-file-editor"
-            aria-label={`Edit ${filePath}`}
-            aria-busy={activeEditBuffer.saving}
-            aria-invalid={activeEditBuffer.error ? "true" : undefined}
-            value={activeEditBuffer.contents}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(event) => handleEditBufferChange(event.currentTarget.value)}
-            onScroll={syncEditGutterScroll}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-                event.preventDefault();
-                void handleEditBufferSave();
-              }
-            }}
-          />
-        </div>
       ) : (
-        <div
-          ref={contentsRef}
-          className={cn(
-            "editor-file-viewer min-h-0 flex-1 overflow-auto",
-            showMarkdownPreview && "editor-file-viewer--markdown-preview",
-          )}
-          onContextMenu={handleContentsContextMenu}
-          onMouseUp={previewSelectionAction.onContainerMouseUp}
-          onMouseMove={lineCommenting.onContainerMouseMove}
-          onMouseLeave={lineCommenting.onContainerMouseLeave}
-        >
-          {showMarkdownPreview ? (
-            <div className="editor-markdown-preview">
-              <ChatMarkdown
-                text={displayedFileContents}
-                cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
-                wikiLinkRoot={props.workspaceRoot ?? undefined}
-                isStreaming={false}
-                className="editor-markdown-preview__body text-sm leading-relaxed"
-                {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
-              />
-            </div>
-          ) : (
-            <FileContentsView path={filePath} contents={fileContents} themeName={diffThemeName} />
-          )}
-          {!showMarkdownPreview && changeRanges.length > 0 ? (
-            <FilePreviewChangeGutter ranges={changeRanges} subtle={changeGutterSubtle} />
-          ) : null}
-          {!showMarkdownPreview && lineCount > 0 ? (
-            <span className="sr-only">{lineCount} lines</span>
-          ) : null}
-          {previewSelectionAction.pendingAction ? (
-            <TranscriptSelectionAction
-              left={previewSelectionAction.pendingAction.left}
-              top={previewSelectionAction.pendingAction.top}
-              placement={previewSelectionAction.pendingAction.placement}
-              onAddToChat={previewSelectionAction.commit}
+        <>
+          {activeEditBuffer && editableDocument ? (
+            <EditableFileContents
+              key={activeEditBuffer.key}
+              path={filePath}
+              contents={activeEditBuffer.contents}
+              cacheKey={activeEditBuffer.key}
+              hidden={showMarkdownPreview}
+              themeName={diffThemeName}
+              theme={resolvedTheme}
+              saving={activeEditBuffer.saving}
+              invalid={activeEditBuffer.error !== null}
+              onContentsChange={handleEditBufferChange}
+              onSave={() => {
+                void handleEditBufferSave();
+              }}
             />
           ) : null}
-          {lineCommentingEnabled && hoveredCommentLine && !activeCommentLine ? (
-            <button
-              type="button"
-              className="editor-file-viewer__comment-add"
-              style={{
-                top: hoveredCommentLine.top,
-                left: hoveredCommentLine.left,
-                height: hoveredCommentLine.height,
-              }}
-              aria-label={`Comment on line ${hoveredCommentLine.lineNumber}`}
-              title="Comment"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                lineCommenting.openComment(hoveredCommentLine);
-              }}
+          {!activeEditBuffer || !editableDocument || showMarkdownPreview ? (
+            <div
+              ref={contentsRef}
+              className={cn(
+                "editor-file-viewer min-h-0 flex-1 overflow-auto",
+                showMarkdownPreview && "editor-file-viewer--markdown-preview",
+              )}
+              onContextMenu={handleContentsContextMenu}
+              onMouseUp={previewSelectionAction.onContainerMouseUp}
+              onMouseMove={lineCommenting.onContainerMouseMove}
+              onMouseLeave={lineCommenting.onContainerMouseLeave}
             >
-              <span className="editor-file-viewer__comment-add-glyph">
-                <PlusIcon className="size-3.5" />
-              </span>
-            </button>
+              {showMarkdownPreview ? (
+                <div className="editor-markdown-preview">
+                  <ChatMarkdown
+                    text={displayedFileContents}
+                    cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
+                    wikiLinkRoot={props.workspaceRoot ?? undefined}
+                    isStreaming={false}
+                    className="editor-markdown-preview__body text-sm leading-relaxed"
+                    {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
+                  />
+                </div>
+              ) : (
+                <FileContentsView
+                  path={filePath}
+                  contents={fileContents}
+                  themeName={diffThemeName}
+                />
+              )}
+              {!showMarkdownPreview && changeRanges.length > 0 ? (
+                <FilePreviewChangeGutter ranges={changeRanges} subtle={changeGutterSubtle} />
+              ) : null}
+              {!showMarkdownPreview && lineCount > 0 ? (
+                <span className="sr-only">{lineCount} lines</span>
+              ) : null}
+              {previewSelectionAction.pendingAction ? (
+                <TranscriptSelectionAction
+                  left={previewSelectionAction.pendingAction.left}
+                  top={previewSelectionAction.pendingAction.top}
+                  placement={previewSelectionAction.pendingAction.placement}
+                  onAddToChat={previewSelectionAction.commit}
+                />
+              ) : null}
+              {lineCommentingEnabled && hoveredCommentLine && !activeCommentLine ? (
+                <button
+                  type="button"
+                  className="editor-file-viewer__comment-add"
+                  style={{
+                    top: hoveredCommentLine.top,
+                    left: hoveredCommentLine.left,
+                    height: hoveredCommentLine.height,
+                  }}
+                  aria-label={`Comment on line ${hoveredCommentLine.lineNumber}`}
+                  title="Comment"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    lineCommenting.openComment(hoveredCommentLine);
+                  }}
+                >
+                  <span className="editor-file-viewer__comment-add-glyph">
+                    <PlusIcon className="size-3.5" />
+                  </span>
+                </button>
+              ) : null}
+              {lineCommentingEnabled && activeCommentLine ? (
+                <>
+                  <div
+                    className="editor-file-viewer__comment-line-highlight"
+                    style={{ top: activeCommentLine.top, height: activeCommentLine.height }}
+                    aria-hidden="true"
+                  />
+                  <FileLineCommentBox
+                    lineLabel={formatFileCommentRange({
+                      startLine: activeCommentLine.lineNumber,
+                      endLine: activeCommentLine.lineNumber,
+                    })}
+                    top={activeCommentLine.top + activeCommentLine.height}
+                    left={activeCommentLine.left}
+                    width={Math.max(
+                      240,
+                      Math.min(440, activeCommentLine.containerWidth - activeCommentLine.left - 16),
+                    )}
+                    onCancel={lineCommenting.closeComment}
+                    onSubmit={(text) => {
+                      commitLineComment({
+                        startLine: activeCommentLine.lineNumber,
+                        endLine: activeCommentLine.lineNumber,
+                        text,
+                      });
+                      lineCommenting.closeComment();
+                    }}
+                  />
+                </>
+              ) : null}
+            </div>
           ) : null}
-          {lineCommentingEnabled && activeCommentLine ? (
-            <>
-              <div
-                className="editor-file-viewer__comment-line-highlight"
-                style={{ top: activeCommentLine.top, height: activeCommentLine.height }}
-                aria-hidden="true"
-              />
-              <FileLineCommentBox
-                lineLabel={formatFileCommentRange({
-                  startLine: activeCommentLine.lineNumber,
-                  endLine: activeCommentLine.lineNumber,
-                })}
-                top={activeCommentLine.top + activeCommentLine.height}
-                left={activeCommentLine.left}
-                width={Math.max(
-                  240,
-                  Math.min(440, activeCommentLine.containerWidth - activeCommentLine.left - 16),
-                )}
-                onCancel={lineCommenting.closeComment}
-                onSubmit={(text) => {
-                  commitLineComment({
-                    startLine: activeCommentLine.lineNumber,
-                    endLine: activeCommentLine.lineNumber,
-                    text,
-                  });
-                  lineCommenting.closeComment();
-                }}
-              />
-            </>
-          ) : null}
-        </div>
+        </>
       )}
     </div>
   );

@@ -554,6 +554,223 @@ it("keeps steering during backoff inside the same logical turn", async () => {
   });
 });
 
+it("queues a send during an active turn as an SDK follow-up instead of erroring", async () => {
+  const calls = responses("error", "success", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isRetrying).toBe(true));
+    const queued = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Queued while running" }),
+    );
+    expect(queued.turnId).toBe(turn.turnId);
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Queued while running")),
+    ).toBe(true);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "completed" },
+    });
+    expect(calls()).toBe(3);
+    expect(
+      session.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Queued while running"),
+      ),
+    ).toBe(true);
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("serializes a concurrent send dispatching behind a committing prompt", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const first = Effect.runPromise(adapter.sendTurn({ threadId, input: "First prompt" }));
+    const second = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Second while first commits" }),
+    );
+    const session = captured.sessions[0]!;
+    const [firstTurn, secondTurn] = await Promise.all([first, second]);
+    expect(secondTurn.turnId).toBe(firstTurn.turnId);
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Second while first commits")),
+    ).toBe(true);
+    await Effect.runPromise(adapter.interruptTurn(threadId, firstTurn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+  });
+});
+
+it("does not strand a concurrent send when the committing prompt is an extension command", async () => {
+  let markCommandStarted!: () => void;
+  const commandStarted = new Promise<void>((resolve) => {
+    markCommandStarted = resolve;
+  });
+  let releaseCommand!: () => void;
+  const commandGate = new Promise<void>((resolve) => {
+    releaseCommand = resolve;
+  });
+  captured.extensions.push((pi) => {
+    pi.registerCommand("pause", {
+      description: "Pause without inference",
+      handler: async () => {
+        markCommandStarted();
+        await commandGate;
+      },
+    });
+  });
+  const calls = responses("success", "success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const command = Effect.runPromise(adapter.sendTurn({ threadId, input: "/pause" }));
+    await commandStarted;
+    const prompt = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after the command" }),
+    );
+    releaseCommand();
+    const [commandTurn, promptTurn] = await Promise.all([command, prompt]);
+    expect(promptTurn.turnId).not.toBe(commandTurn.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(3));
+    expect(calls()).toBe(2);
+    expect(captured.sessions[0]!.pendingMessageCount).toBe(0);
+    expect(
+      captured.sessions[0]!.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Run after the command"),
+      ),
+    ).toBe(true);
+  });
+});
+
+it("starts a concurrent send cleanly after the committing prompt rejects preflight", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let rejectPrompt!: (cause: Error) => void;
+    vi.spyOn(session, "prompt")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectPrompt = reject;
+          }),
+      )
+      .mockImplementation(realPrompt);
+    const first = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Rejected in preflight" }),
+    );
+    const secondPromise = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after rejection" }),
+    );
+    rejectPrompt(new Error("preflight rejected"));
+    const second = await secondPromise;
+    expect(second.turnId).not.toBe(first.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: first.turnId,
+      payload: { state: "failed", errorMessage: "preflight rejected" },
+    });
+    expect(completions(events)[1]).toMatchObject({
+      turnId: second.turnId,
+      payload: { state: "completed" },
+    });
+    expect(session.pendingMessageCount).toBe(0);
+  });
+});
+
+it("aborts a turn interrupted while its prompt is still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // prompt() is gated in preflight — nothing exists for abort() to reach.
+    expect(session.isStreaming).toBe(false);
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "interrupted" },
+    });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects a send to a turn whose interrupt is pending while still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    const outcome = await Effect.runPromise(
+      adapter
+        .sendTurn({ threadId, input: "Would be dropped" })
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "sendTurn",
+    });
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({ payload: { state: "interrupted" } });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects steering into an untracked SDK run instead of orphaning a queued turn", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const promptSpy = vi.spyOn(session, "prompt");
+    const outcome = await Effect.runPromise(
+      adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => null }),
+      ),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "steerTurn",
+    });
+    expect(steerSpy).not.toHaveBeenCalled();
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(session.pendingMessageCount).toBe(0);
+    expect(completions(events)).toHaveLength(0);
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.activeTurnId).toBeUndefined();
+    streamingSpy.mockRestore();
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
   const calls = responses("success", "overflow", "success", "success");
   await withAdapter(async (adapter, events) => {
@@ -811,6 +1028,17 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
       const stopped = Effect.runPromise(adapter.stopSession(threadId));
       try {
         await waitFor(() => expect(credentials.cancelSessionTurnRequests).toHaveBeenCalled());
+        const sendDuringStop = Effect.runPromise(
+          adapter
+            .sendTurn({ threadId, input: "Must not restart during teardown" })
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        drain();
+        await stopped;
+        expect(await sendDuringStop).toMatchObject({
+          _tag: "ProviderAdapterSessionNotFoundError",
+        });
         await waitFor(() => expect(session.isIdle).toBe(true));
         expect(calls()).toBe(1);
         expect(session.pendingMessageCount).toBe(0);

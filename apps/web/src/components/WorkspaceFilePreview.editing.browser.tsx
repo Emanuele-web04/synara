@@ -10,10 +10,11 @@ import type {
   ProjectReadFileResult,
   ProjectWatchFileInput,
 } from "@synara/contracts";
+import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { page } from "vitest/browser";
+import { page, userEvent, type Locator } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
-import { render } from "vitest-browser-react";
+import { render, cleanup } from "vitest-browser-react";
 
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
@@ -53,25 +54,41 @@ function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectRead
   };
 }
 
+const primaryModifier = /Mac/.test(navigator.platform) ? "Meta" : "Control";
+
+function shortcut(key: string): string {
+  return `{${primaryModifier}>}${key}{/${primaryModifier}}`;
+}
+
+async function replaceEditorContents(editor: Locator, contents: string): Promise<void> {
+  await editor.click();
+  await userEvent.keyboard(shortcut("a"));
+  // Fill replaces DOM text without updating Pierre's document; use native input.
+  await userEvent.keyboard(
+    contents ? contents.replace(/[{[]/g, "$&$&").replace(/\n/g, "{Enter}") : "{Backspace}",
+  );
+}
+
 function pressKeyboardSave(element: Element): void {
   element.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "s",
       ctrlKey: true,
       bubbles: true,
+      composed: true,
       cancelable: true,
     }),
   );
 }
 
-afterEach(() => {
-  document.body.innerHTML = "";
+afterEach(async () => {
+  await cleanup();
 });
 
 it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {
   const resolvedPath = "packages/app/src/app.ts";
   const readFile = vi.fn().mockResolvedValue(loadedFile({ relativePath: resolvedPath }));
-  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "" });
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "", truncated: false });
   const subscription: { listener?: (event: ProjectFileChangeEvent) => void } = {};
   const onFileChange = vi.fn(
     (_input: ProjectWatchFileInput, listener: (event: ProjectFileChangeEvent) => void) => {
@@ -109,6 +126,31 @@ it("requests only the resolved preview file for gutters and refreshes it on file
   }
 });
 
+it("warns when a file's working-tree change markers come from a partial diff", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({
+    patch: "diff --git a/src/app.ts b/src/app.ts\n+partial\n",
+    truncated: true,
+  });
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange: () => () => undefined },
+    git: { readWorkingTreeDiff },
+  } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} />
+      </QueryClientProvider>,
+    );
+
+    await expect.element(page.getByText("Partial diff", { exact: true })).toBeVisible();
+    await expect.element(page.getByText(/change markers may be incomplete/i)).toBeVisible();
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedFile());
   const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
@@ -124,8 +166,8 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
-    await editor.fill("export const value = 2;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "export const value = 2;\n");
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
 
     pressKeyboardSave(editor.element());
@@ -148,105 +190,6 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
   }
 });
 
-it("renders a line-number gutter next to the inline editor", async () => {
-  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "one\ntwo\nthree\n" }));
-  const restoreNativeApi = installNativeApi({
-    projects: { readFile },
-  } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
-      </QueryClientProvider>,
-    );
-
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-
-    await vi.waitFor(() => {
-      const gutter = document.querySelector(".editor-file-editor__gutter");
-      if (!gutter) {
-        throw new Error("editor line-number gutter not found");
-      }
-      expect(gutter.getAttribute("aria-hidden")).toBe("true");
-      // "one\ntwo\nthree\n" splits into four rows (the trailing newline leaves
-      // the caret on an empty fourth line), matching the editor's line count.
-      expect(gutter.textContent).toBe("1234");
-    });
-  } finally {
-    restoreNativeApi();
-  }
-});
-
-it("keeps gutter rows aligned at the bottom of horizontally overflowing files", async () => {
-  const lines = Array.from({ length: 100 }, (_, index) => `${index + 1} ${"x".repeat(300)}`);
-  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: lines.join("\n") }));
-  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <div style={{ width: 400, height: 320 }}>
-          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
-        </div>
-      </QueryClientProvider>,
-    );
-
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-    const area = editor.element() as HTMLTextAreaElement;
-    expect(area.scrollWidth).toBeGreaterThan(area.clientWidth);
-    // Headless Chromium hides scrollbars. Extra bottom padding exercises the
-    // same unequal scroll ranges there; visible scrollbars need no emulation.
-    if (area.offsetHeight === area.clientHeight) {
-      area.style.paddingBottom = `${Number.parseFloat(getComputedStyle(area).paddingBottom) + 10}px`;
-    }
-    area.scrollTop = area.scrollHeight;
-    area.dispatchEvent(new Event("scroll"));
-
-    await vi.waitFor(() => {
-      const lastNumber = document.querySelector(".editor-file-editor__gutter-line:last-child");
-      if (!lastNumber) throw new Error("editor line-number gutter not found");
-      const metrics = getComputedStyle(area);
-      const lastTextLineTop =
-        area.getBoundingClientRect().top +
-        Number.parseFloat(metrics.paddingTop) +
-        (lines.length - 1) * Number.parseFloat(metrics.lineHeight) -
-        area.scrollTop;
-      expect(Math.abs(lastNumber.getBoundingClientRect().top - lastTextLineTop)).toBeLessThan(1);
-    });
-  } finally {
-    restoreNativeApi();
-  }
-});
-
-it("keeps line one and the editor position stable when an empty buffer is edited", async () => {
-  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "" }));
-  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
-
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
-      </QueryClientProvider>,
-    );
-
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-    const originalLeft = editor.element().getBoundingClientRect().left;
-    for (const contents of ["", "first character", ""]) {
-      await editor.fill(contents);
-      await vi.waitFor(() => {
-        expect(document.querySelector(".editor-file-editor__gutter")?.textContent).toBe("1");
-        expect(editor.element().getBoundingClientRect().left).toBe(originalLeft);
-      });
-    }
-  } finally {
-    restoreNativeApi();
-  }
-});
-
 it("keeps the buffer dirty and shows guarded write failures", async () => {
   const conflictMessage =
     "This file changed on disk after it was opened. Reload it before saving to avoid overwriting those changes.";
@@ -264,12 +207,12 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await editor.fill("manual edit\n");
+    await replaceEditorContents(editor, "manual edit\n");
     pressKeyboardSave(editor.element());
 
     await expect.element(page.getByRole("alert")).toHaveTextContent(conflictMessage);
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     expect(writeFile).toHaveBeenCalledTimes(1);
   } finally {
     restoreNativeApi();
@@ -293,8 +236,9 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
       return unsubscribe;
     },
   );
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
   const restoreNativeApi = installNativeApi({
-    projects: { readFile, onFileChange },
+    projects: { readFile, onFileChange, writeFile },
   } as unknown as NativeApi);
 
   try {
@@ -305,8 +249,8 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
-    await editor.fill("manual edit\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     fileChangeSubscription.listener?.({
@@ -316,7 +260,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     });
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     await expect
       .element(page.getByText("This file changed on disk. Your unsaved edits are preserved."))
       .toBeVisible();
@@ -324,7 +268,19 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     const reloadButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(reloadButton).not.toBeNull();
     reloadButton?.click();
-    await expect.element(editor).toHaveValue("external edit\n");
+    await expect.element(editor).toHaveTextContent("external edit");
+    await replaceEditorContents(editor, "after reload\n");
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenCalledWith({
+        cwd: WORKSPACE_ROOT,
+        relativePath: FILE_PATH,
+        contents: "after reload\n",
+        expectedVersion: externalVersion,
+        encoding: "utf8",
+        lineEnding: "lf",
+      }),
+    );
   } finally {
     restoreNativeApi();
   }
@@ -347,7 +303,7 @@ it("stops revalidation when a kept-mounted preview becomes hidden", async () => 
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveValue("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     await screen.rerender(
@@ -384,7 +340,7 @@ it("switches the watcher to a workspace path resolved by the file read", async (
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveValue("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;");
     await vi.waitFor(() =>
       expect(onFileChange).toHaveBeenLastCalledWith(
         { cwd: WORKSPACE_ROOT, relativePath: resolvedPath },
@@ -427,8 +383,8 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
-    await editor.fill("manual edit\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     fileChangeSubscription.listener?.({
       type: "changed",
@@ -441,7 +397,7 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     await reloadButton.click();
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
-    await expect.element(editor).toHaveValue("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     await expect.element(page.getByText("Transient read failure")).toBeVisible();
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
   } finally {
@@ -478,7 +434,7 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${markdownPath}` });
-    await editor.fill("- [ ] updated task\n");
+    await replaceEditorContents(editor, "- [ ] updated task\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await page.getByRole("radio", { name: "Preview" }).click();
@@ -561,11 +517,11 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
       </QueryClientProvider>,
     );
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveValue("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: 1 });
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await editor.fill("saved contents\n");
+    await replaceEditorContents(editor, "saved contents\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
@@ -574,8 +530,8 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
     completeRead(loadedFile());
     await pendingRead;
     await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    await expect.element(editor).toHaveValue("saved contents\n");
-    await editor.fill("next saved contents\n");
+    await expect.element(editor).toHaveTextContent("saved contents");
+    await replaceEditorContents(editor, "next saved contents\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() =>
       expect(writeFile).toHaveBeenNthCalledWith(2, {
@@ -590,6 +546,322 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
   } finally {
     completeRead(loadedFile());
     queryClient.clear();
+    restoreNativeApi();
+  }
+});
+
+it("preserves unsaved Markdown edits across Preview and Source", async () => {
+  const readFile = vi
+    .fn()
+    .mockResolvedValue(loadedFile({ relativePath: "README.md", contents: "original\n" }));
+  const writeFile = vi
+    .fn()
+    .mockResolvedValue({ relativePath: "README.md", version: SAVED_VERSION });
+  const restore = installNativeApi({ projects: { readFile, writeFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <StrictMode>
+        <QueryClientProvider client={makeQueryClient()}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    const editor = page.getByRole("textbox", { name: "Edit README.md" });
+    await editor.click();
+    await userEvent.keyboard(shortcut("a") + "unsaved");
+    await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
+    await expect.element(editor).toHaveTextContent("unsaved");
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    const editorShell = document.querySelector<HTMLElement>(".editor-file-editor__pierre")!;
+    expect(getComputedStyle(editorShell).display).toBe("none");
+    expect(editorShell.getBoundingClientRect().height).toBe(0);
+    await page.getByRole("radio", { name: "Source", exact: true }).click();
+    await expect.element(editor).toHaveTextContent("unsaved");
+  } finally {
+    restore();
+  }
+});
+
+it("preserves edits and focus when a save completes while typing", async () => {
+  let complete!: (v: { relativePath: string; version: string }) => void;
+  const pending = new Promise<{ relativePath: string; version: string }>((r) => (complete = r));
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const writeFile = vi.fn().mockReturnValue(pending);
+  const restore = installNativeApi({ projects: { readFile, writeFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await editor.click();
+    await userEvent.keyboard(shortcut("a") + "first");
+    await userEvent.keyboard(shortcut("s"));
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await userEvent.keyboard("second");
+    await expect.element(editor).toHaveTextContent("firstsecond");
+    complete({ relativePath: FILE_PATH, version: SAVED_VERSION });
+    await vi.waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    await expect.element(editor).toHaveTextContent("firstsecond");
+    expect(editor.element().getRootNode()).toBeInstanceOf(ShadowRoot);
+    expect((editor.element().getRootNode() as ShadowRoot).activeElement).toBe(editor.element());
+    await userEvent.keyboard(shortcut("z"));
+    await expect.element(editor).not.toHaveTextContent("firstsecond");
+    await userEvent.keyboard(`{${primaryModifier}>}{Shift>}z{/Shift}{/${primaryModifier}}`);
+    await expect.element(editor).toHaveTextContent("firstsecond");
+  } finally {
+    restore();
+  }
+});
+
+it("renders numbered source lines without including the gutter in saved text", async () => {
+  const contents = "one\ntwo\nthree\n";
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents }));
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, writeFile },
+  } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const root = editor.element().getRootNode() as ShadowRoot;
+    await vi.waitFor(() =>
+      expect(
+        Array.from(
+          root.querySelectorAll("[data-line-number-content]"),
+          (number) => number.textContent,
+        ),
+      ).toEqual(["1", "2", "3", "4"]),
+    );
+    await replaceEditorContents(editor, `${contents}four`);
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenCalledWith(
+        expect.objectContaining({ contents: `${contents}four` }),
+      ),
+    );
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps Pierre line one and editor position stable when the buffer is emptied", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "" }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const root = editor.element().getRootNode() as ShadowRoot;
+    const originalLeft = editor.element().getBoundingClientRect().left;
+    for (const contents of ["first character", ""]) {
+      await replaceEditorContents(editor, contents);
+      await vi.waitFor(() => {
+        expect(
+          Array.from(
+            root.querySelectorAll("[data-line-number-content]"),
+            (number) => number.textContent,
+          ),
+        ).toEqual(["1"]);
+        expect(editor.element().getBoundingClientRect().left).toBe(originalLeft);
+      });
+    }
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps Pierre gutter aligned through horizontal and vertical scrolling", async () => {
+  const contents = Array.from({ length: 100 }, (_, i) => `line${i} ${"x".repeat(300)}`).join("\n");
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <div style={{ width: 400, height: 320 }}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+        </div>
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const root = editor.element().getRootNode() as ShadowRoot;
+    const candidates = [
+      ...Array.from(root.querySelectorAll<HTMLElement>("pre,code,[data-content]")),
+      document.querySelector<HTMLElement>(".editor-file-editor__pierre")!,
+    ];
+    const horizontal = candidates.find(
+      (el) =>
+        el.scrollWidth > el.clientWidth &&
+        ["auto", "scroll"].includes(getComputedStyle(el).overflowX),
+    )!;
+    const vertical = candidates.find(
+      (el) =>
+        el.scrollHeight > el.clientHeight &&
+        ["auto", "scroll"].includes(getComputedStyle(el).overflowY),
+    )!;
+    expect(horizontal).toBeDefined();
+    expect(vertical).toBeDefined();
+    horizontal.scrollLeft = horizontal.scrollWidth;
+    vertical.scrollTop = vertical.scrollHeight;
+    expect(horizontal.scrollLeft).toBeGreaterThan(0);
+    expect(vertical.scrollTop).toBeGreaterThan(0);
+    await vi.waitFor(() => {
+      const number = root.querySelector<HTMLElement>('[data-gutter] [data-line-index="99"]')!;
+      const line = root.querySelector<HTMLElement>('[data-content] [data-line-index="99"]')!;
+      expect(
+        Math.abs(number.getBoundingClientRect().top - line.getBoundingClientRect().top),
+      ).toBeLessThan(1);
+    });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps the large-file fallback gutter rows aligned at the bottom of horizontally overflowing files", async () => {
+  const lines = Array.from({ length: 1_001 }, (_, index) => `${index + 1} ${"x".repeat(300)}`);
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: lines.join("\n") }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <div style={{ width: 400, height: 320 }}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+        </div>
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const area = editor.element() as HTMLTextAreaElement;
+    expect(area.scrollWidth).toBeGreaterThan(area.clientWidth);
+    // Headless Chromium hides scrollbars. Extra bottom padding exercises the
+    // same unequal scroll ranges there; visible scrollbars need no emulation.
+    if (area.offsetHeight === area.clientHeight) {
+      area.style.paddingBottom = `${Number.parseFloat(getComputedStyle(area).paddingBottom) + 10}px`;
+    }
+    area.scrollTop = area.scrollHeight;
+    area.dispatchEvent(new Event("scroll"));
+
+    await vi.waitFor(() => {
+      const lastNumber = document.querySelector(".editor-file-editor__gutter-line:last-child");
+      if (!lastNumber) throw new Error("editor line-number gutter not found");
+      const metrics = getComputedStyle(area);
+      // CSS exposes unrounded line-height; measure native layout to avoid
+      // accumulating subpixel rounding across thousands of rows.
+      const measure = document.createElement("div");
+      Object.assign(measure.style, {
+        position: "absolute",
+        visibility: "hidden",
+        whiteSpace: "pre",
+        font: metrics.font,
+        lineHeight: metrics.lineHeight,
+        padding: "0",
+        border: "0",
+        margin: "0",
+      });
+      measure.textContent = "line\nline";
+      document.body.append(measure);
+      const renderedLineHeight = measure.getBoundingClientRect().height / 2;
+      measure.remove();
+      const lastTextLineTop =
+        area.getBoundingClientRect().top +
+        Number.parseFloat(metrics.paddingTop) +
+        (lines.length - 1) * renderedLineHeight -
+        area.scrollTop;
+      expect(Math.abs(lastNumber.getBoundingClientRect().top - lastTextLineTop)).toBeLessThan(1);
+    });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("preserves the large-file editing engine and line one after clearing and saving", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "line\n".repeat(1_000) }));
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, writeFile },
+  } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    const original = editor.element();
+    expect(original.tagName).toBe("TEXTAREA");
+    const left = original.getBoundingClientRect().left;
+    for (const contents of ["", "first character", ""]) {
+      await editor.fill(contents);
+      await vi.waitFor(() => {
+        expect(editor.element()).toBe(original);
+        expect(document.querySelector(".editor-file-editor__gutter")?.textContent).toBe("1");
+        expect(editor.element().getBoundingClientRect().left).toBe(left);
+      });
+    }
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenCalledWith(
+        expect.objectContaining({ contents: "", expectedVersion: LOADED_VERSION }),
+      ),
+    );
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("uses the lightweight editor for long single-line files", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "x".repeat(250_001) }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toBeVisible();
+    expect(editor.element().tagName).toBe("TEXTAREA");
+    expect(document.querySelector(".editor-file-editor__gutter")?.textContent).toBe("1");
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("preserves the lightweight Markdown editor while its preview is open", async () => {
+  const readFile = vi
+    .fn()
+    .mockResolvedValue(loadedFile({ relativePath: "README.md", contents: "line\n".repeat(1_000) }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: "Edit README.md" });
+    await expect.element(editor).toBeVisible();
+    const original = editor.element();
+    await editor.fill("# unsaved draft");
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    expect(original.getBoundingClientRect().height).toBe(0);
+    await page.getByRole("radio", { name: "Source", exact: true }).click();
+    await expect.element(editor).toHaveValue("# unsaved draft");
+    expect(editor.element()).toBe(original);
+  } finally {
     restoreNativeApi();
   }
 });

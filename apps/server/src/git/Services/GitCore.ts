@@ -55,6 +55,8 @@ export interface ExecuteGitResult {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
+  readonly stdoutTruncated?: boolean;
+  readonly stderrTruncated?: boolean;
 }
 
 export interface GitStatusDetails extends Omit<GitStatusResult, "pr"> {
@@ -123,6 +125,7 @@ export interface GitRangeContext {
 
 export interface GitWorkingTreePatch {
   patch: string;
+  truncated: boolean;
 }
 
 export interface GitRenameBranchInput {
