@@ -236,7 +236,9 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  * Antigravity requires PreToolUse output to carry a `decision`: an empty
  * object is treated as a denial with an empty reason, which blocks every tool
  * call because the hook is installed globally with `matcher: "*"` (#490).
- * "ask" preserves the permission flow the user would have without the hook.
+ * `"ask"` is not a valid Antigravity protojson decision; print-mode CLI
+ * sessions reject it and skip native tool steps. `"allow"` is the no-op that
+ * lets non-Synara Antigravity use, including MAGI CLI Google seats, proceed.
  *
  * PreInvocation fires immediately before an LLM invocation and is a veto
  * point with the same decision semantics: an empty object is treated as a
@@ -256,7 +258,7 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  * "Working" and Cancel has nothing left to kill (#465).
  */
 function inactiveHookOutput(event: string): string {
-  if (event === "pre-tool") return '{"decision":"ask"}';
+  if (event === "pre-tool") return '{"decision":"allow"}';
   if (event === "pre-invocation") return '{"decision":"allow"}';
   return "{}";
 }
@@ -292,13 +294,13 @@ process.stdin.on("data", (chunk) => { payload += chunk; });
 process.stdin.on("end", () => {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
   if (!target) {
-    // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry a
-    // decision or Antigravity denies the tool call with an empty reason, and
-    // PreInvocation must carry "allow" or the subagent launch it gates is
-    // denied and the parent CLI exits with code 1.
+    // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry
+    // "allow" ("ask" is not a valid protojson decision) or the CLI rejects
+    // the hook and skips tools, and PreInvocation must carry "allow" or the
+    // subagent launch it gates is denied and the parent CLI exits with code 1.
     process.stdout.write(
       (event === "pre-tool"
-        ? '{"decision":"ask"}'
+        ? '{"decision":"allow"}'
         : event === "pre-invocation"
           ? '{"decision":"allow"}'
           : "{}") + "\\n",

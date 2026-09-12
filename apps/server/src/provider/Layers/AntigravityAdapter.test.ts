@@ -512,10 +512,10 @@ describe("Antigravity CLI integration helpers", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    // Neutral for PreToolUse means preserving the permission flow: Antigravity
-    // requires a `decision`, and an empty object is treated as a denial with
-    // an empty reason that blocks every tool call (#490).
-    expect(result.stdout.trim()).toBe('{"decision":"ask"}');
+    // Neutral for PreToolUse means a valid no-op decision: Antigravity
+    // requires a `decision`, an empty object is treated as a denial (#490),
+    // and `"ask"` is rejected by protojson so print-mode tool calls fail.
+    expect(result.stdout.trim()).toBe('{"decision":"allow"}');
 
     const postToolResult = runCaptureCommand(
       buildAntigravityCaptureCommand(
@@ -565,7 +565,7 @@ describe("Antigravity CLI integration helpers", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe('{"decision":"ask"}');
+      expect(result.stdout.trim()).toBe('{"decision":"allow"}');
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -614,7 +614,7 @@ describe("Antigravity CLI integration helpers", () => {
         "darwin",
       ),
     ).toBe(
-      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"ask"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -628,7 +628,7 @@ describe("Antigravity CLI integration helpers", () => {
       // escapes intact, so `"` arrives as `\"` and quoted paths fail to
       // execute ("not recognized as an internal or external command"). The
       // win32 command must stay free of double quotes.
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
     // PreInvocation gates the LLM invocation: answer allow so subagent
     // launches are not denied (which would make the parent CLI exit 1).
