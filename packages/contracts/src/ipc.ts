@@ -42,6 +42,21 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  MindAffirmInput,
+  MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
+  MindListInput,
+  MindListResult,
+  MindMemory,
+  MindProfile,
+  MindProfileGetInput,
+  MindProfileGetResult,
+  MindProfileSetInput,
+  MindSetPinnedInput,
+  MindUpdateInput,
+} from "./mind";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -953,6 +968,16 @@ export interface NativeApi {
       input: AutomationResolveProposalInput,
     ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  mind: {
+    list: (input: MindListInput) => Promise<MindListResult>;
+    forget: (input: MindForgetInput) => Promise<void>;
+    setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
+    affirm: (input: MindAffirmInput) => Promise<MindMemory>;
+    update: (input: MindUpdateInput) => Promise<MindMemory>;
+    history: (input: MindHistoryInput) => Promise<MindHistoryResult>;
+    profileGet: (input: MindProfileGetInput) => Promise<MindProfileGetResult>;
+    profileSet: (input: MindProfileSetInput) => Promise<MindProfile>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

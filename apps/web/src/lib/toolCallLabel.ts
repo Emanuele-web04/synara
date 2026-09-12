@@ -275,6 +275,31 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara updated automation memory",
     failed: "Synara couldn't update automation memory",
   },
+  synara_remember: {
+    running: "Synara is saving to Mind",
+    completed: "Synara saved to Mind",
+    failed: "Synara couldn't save to Mind",
+  },
+  synara_recall_memories: {
+    running: "Synara is recalling from Mind",
+    completed: "Synara recalled from Mind",
+    failed: "Synara couldn't recall from Mind",
+  },
+  synara_confirm_memory: {
+    running: "Synara is confirming a memory",
+    completed: "Synara confirmed a memory",
+    failed: "Synara couldn't confirm a memory",
+  },
+  synara_forget_memory: {
+    running: "Synara is forgetting a memory",
+    completed: "Synara forgot a memory",
+    failed: "Synara couldn't forget a memory",
+  },
+  synara_memory_status: {
+    running: "Synara is checking Mind",
+    completed: "Synara checked Mind",
+    failed: "Synara couldn't check Mind",
+  },
   synara_report_automation_result: {
     running: "Synara is reporting an automation result",
     completed: "Synara reported an automation result",

@@ -158,6 +158,11 @@ describe("deriveSynaraMcpToolTitle", () => {
         "Synara finished waiting for a task",
       ],
       ["synara_read_task", "Synara is reading a task", "Synara read a task"],
+      ["synara_remember", "Synara is saving to Mind", "Synara saved to Mind"],
+      ["synara_recall_memories", "Synara is recalling from Mind", "Synara recalled from Mind"],
+      ["synara_confirm_memory", "Synara is confirming a memory", "Synara confirmed a memory"],
+      ["synara_forget_memory", "Synara is forgetting a memory", "Synara forgot a memory"],
+      ["synara_memory_status", "Synara is checking Mind", "Synara checked Mind"],
     ] as const;
 
     for (const [toolName, running, completed] of cases) {
