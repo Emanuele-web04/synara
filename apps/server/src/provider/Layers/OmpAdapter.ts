@@ -221,6 +221,17 @@ interface OmpSessionContext {
   // its originating turn instead of dropping it as an orphan. Cleared when the
   // next turn dispatches.
   readonly turnToolCallIds: Map<string, TurnId>;
+  // Most recently settled turn (prompt success or failure; never an interrupt
+  // cancel). A notification can still be in flight in the runtime dispatcher
+  // when the prompt response resolves and the settlement drain snapshots a
+  // stale enqueued count; the arriving ContentDelta/AssistantItemCompleted
+  // then finds activeTurnId cleared. Attributing it to the just-settled turn
+  // mirrors the turnToolCallIds backdating above. Cleared on next dispatch.
+  lastSettledTurnId: TurnId | undefined;
+  // Assistant items with renderable content for the just-settled turn, so a
+  // late AssistantItemCompleted keeps the normal with-content gate. Snapshotted
+  // at settlement; late deltas add to it. Cleared on next dispatch.
+  readonly lastSettledAssistantItemsWithContent: Set<string>;
   // Omp executes `Task` subagents outside the parent ACP event stream. Track
   // their parent tool rows so the watchdog can use a longer, still-finite cap.
   readonly activeNestedTaskToolCallIds: Set<string>;
@@ -712,17 +723,30 @@ export function makeOmpAdapter(
     // attribution (and recorded failed-tool detail) intact. Snapshotting the
     // runtime's enqueued count and waiting for the adapter's processed count
     // to catch up is immune to stream chunk buffering and in-flight handlers,
-    // unlike a queue-size probe. Returns immediately when the consumer kept
-    // up; bounded so a chatty stream cannot stall settlement past the cap.
+    // unlike a queue-size probe. The snapshot alone is not enough: a
+    // notification can still be in flight in the runtime dispatcher (parsed
+    // but not yet enqueued) when first sampled, so after reaching the target
+    // one more quiet poll re-snapshots; a grown count keeps draining. Bounded
+    // so a chatty stream cannot stall settlement past the cap. Costs one
+    // quiet poll (~25ms) even on the fast path, so a straggler notification
+    // in flight during the first snapshot is observed instead of orphaned.
     const waitForOmpQueuedTurnEventsDrained = (ctx: OmpSessionContext) =>
       Effect.gen(function* () {
-        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
         const startedAt = Date.now();
-        while (
-          ctx.sessionUpdatesProcessed < target &&
-          Date.now() - startedAt < OMP_TURN_SETTLE_DRAIN_MAX_WAIT_MS
-        ) {
+        let target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
+        while (Date.now() - startedAt < OMP_TURN_SETTLE_DRAIN_MAX_WAIT_MS) {
+          while (
+            ctx.sessionUpdatesProcessed < target &&
+            Date.now() - startedAt < OMP_TURN_SETTLE_DRAIN_MAX_WAIT_MS
+          ) {
+            yield* Effect.sleep(OMP_TURN_SETTLE_DRAIN_POLL_MS);
+          }
           yield* Effect.sleep(OMP_TURN_SETTLE_DRAIN_POLL_MS);
+          const resampled = yield* ctx.acp.sessionUpdatesEnqueuedCount;
+          if (resampled <= target && ctx.sessionUpdatesProcessed >= target) {
+            return;
+          }
+          target = Math.max(target, resampled);
         }
       });
 
@@ -1070,6 +1094,8 @@ export function makeOmpAdapter(
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
+            lastSettledTurnId: undefined,
+            lastSettledAssistantItemsWithContent: new Set(),
             activeNestedTaskToolCallIds: new Set(),
             nestedTaskLifecycleByToolCallId: new Map(),
             resumeReplayReady,
@@ -1103,6 +1129,43 @@ export function makeOmpAdapter(
                     return;
                   case "AssistantItemCompleted":
                     {
+                      // A completion queued behind the prompt response belongs to
+                      // the just-settled turn; emit it there so a late delta is
+                      // still closed instead of dropped as an orphan. Mirrors the
+                      // ToolCallUpdated backdating below.
+                      const lateTurnId =
+                        ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
+                          ? ctx.lastSettledTurnId
+                          : undefined;
+                      if (lateTurnId !== undefined) {
+                        const lateScopedItemId = scopeOmpRuntimeItemIdForTurn(
+                          lateTurnId,
+                          event.itemId,
+                        );
+                        if (!ctx.lastSettledAssistantItemsWithContent.has(lateScopedItemId)) {
+                          if (isOmpAcpDebugEnabled()) {
+                            yield* Effect.logInfo("omp.acp.empty_assistant_item_suppressed", {
+                              threadId: ctx.threadId,
+                              turnId: lateTurnId,
+                              itemId: lateScopedItemId,
+                            });
+                          }
+                          return;
+                        }
+                        ctx.lastSettledAssistantItemsWithContent.delete(lateScopedItemId);
+                        yield* offerRuntimeEvent(
+                          input.lifecycleGeneration,
+                          makeAcpAssistantItemEvent({
+                            stamp: yield* makeEventStamp(),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            turnId: lateTurnId,
+                            itemId: lateScopedItemId,
+                            lifecycle: "item.completed",
+                          }),
+                        );
+                        return;
+                      }
                       const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
@@ -1195,6 +1258,40 @@ export function makeOmpAdapter(
                     return;
                   case "ContentDelta":
                     {
+                      // The turn's sole chunk can still be in flight when the
+                      // prompt promise resolves and the settlement drain sampled
+                      // a stale count; attribute the straggler to the
+                      // just-settled turn so the assistant text is not lost.
+                      // Mirrors the ToolCallUpdated backdating above.
+                      const lateTurnId =
+                        ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
+                          ? ctx.lastSettledTurnId
+                          : undefined;
+                      if (lateTurnId !== undefined) {
+                        yield* logNative(ctx.threadId, "session/update", event.rawPayload);
+                        const lateScopedItemId = event.itemId
+                          ? scopeOmpRuntimeItemIdForTurn(lateTurnId, event.itemId)
+                          : undefined;
+                        if (isRenderableOmpAssistantDelta(event)) {
+                          if (lateScopedItemId !== undefined) {
+                            ctx.lastSettledAssistantItemsWithContent.add(lateScopedItemId);
+                          }
+                        }
+                        yield* offerRuntimeEvent(
+                          input.lifecycleGeneration,
+                          makeAcpContentDeltaEvent({
+                            stamp: yield* makeEventStamp(),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            turnId: lateTurnId,
+                            ...(lateScopedItemId ? { itemId: lateScopedItemId } : {}),
+                            text: event.text,
+                            ...(event.streamKind ? { streamKind: event.streamKind } : {}),
+                            rawPayload: event.rawPayload,
+                          }),
+                        );
+                        return;
+                      }
                       const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
@@ -1539,6 +1636,8 @@ export function makeOmpAdapter(
         // Late-event attribution only matters between turns; once a new turn
         // dispatches, stragglers from older turns are stale enough to drop.
         ctx.turnToolCallIds.clear();
+        ctx.lastSettledTurnId = undefined;
+        ctx.lastSettledAssistantItemsWithContent.clear();
         ctx.activeNestedTaskToolCallIds.clear();
         ctx.nestedTaskLifecycleByToolCallId.clear();
         ctx.activeInteractionMode = interactionMode;
@@ -1579,8 +1678,14 @@ export function makeOmpAdapter(
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForOmpQueuedTurnEventsDrained(ctx);
+                const settledAssistantItems = [...ctx.activeAssistantItemsWithContent];
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
+                }
+                ctx.lastSettledTurnId = turnId;
+                ctx.lastSettledAssistantItemsWithContent.clear();
+                for (const itemId of settledAssistantItems) {
+                  ctx.lastSettledAssistantItemsWithContent.add(itemId);
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
@@ -1621,8 +1726,14 @@ export function makeOmpAdapter(
                 yield* waitForOmpQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
+                const settledAssistantItems = [...ctx.activeAssistantItemsWithContent];
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
+                }
+                ctx.lastSettledTurnId = turnId;
+                ctx.lastSettledAssistantItemsWithContent.clear();
+                for (const itemId of settledAssistantItems) {
+                  ctx.lastSettledAssistantItemsWithContent.add(itemId);
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
