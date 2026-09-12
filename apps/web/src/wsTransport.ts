@@ -62,7 +62,11 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import {
+  RpcClient,
+  RpcClientError as RpcClientErrorModule,
+  RpcSerialization,
+} from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
@@ -71,6 +75,13 @@ import {
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
 } from "./lib/expensiveReadRetry";
+import {
+  classifyRpcTransportFailure,
+  describeTransportFailureForDiagnostics,
+  formatTransportFailureMessage,
+  markRequestNotSent,
+  type RpcTransportFailure,
+} from "./lib/rpcTransportFailure";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -88,6 +99,42 @@ type ProjectFileChangeSubscription = {
   readonly input: ProjectWatchFileInput;
   readonly listeners: Set<(event: ProjectFileChangeEvent) => void>;
 };
+
+/**
+ * One feature-socket session. The protocol wrapper reports failures with the
+ * session that owns the socket so stale signals from a torn-down runtime can be
+ * ignored instead of driving a second recovery episode.
+ */
+interface FeatureSession {
+  readonly id: number;
+  failed: boolean;
+}
+
+type RecoveryPhase = "ready" | "scheduled" | "recovering" | "tripped";
+
+interface RecoveryState {
+  phase: RecoveryPhase;
+  episodeRef: string | null;
+  suppressedSessionId: number | null;
+  candidateFailedSessionId: number | null;
+  firstFailureAt: number | null;
+  escalated: boolean;
+  countedDefectSessions: Set<number>;
+  consecutiveDefects: number;
+}
+
+function createInitialRecoveryState(): RecoveryState {
+  return {
+    phase: "ready",
+    episodeRef: null,
+    suppressedSessionId: null,
+    candidateFailedSessionId: null,
+    firstFailureAt: null,
+    escalated: false,
+    countedDefectSessions: new Set(),
+    consecutiveDefects: 0,
+  };
+}
 
 export function projectFileChangeStreamKey(input: ProjectWatchFileInput): string {
   return `projects.file-change:${input.cwd.length}:${input.cwd}${input.relativePath}`;
@@ -112,6 +159,13 @@ export class WsTransportRequestInterruptedError extends Data.TaggedError(
    * can safely re-issue it once the transport recovers.
    */
   readonly retryable?: boolean;
+  /**
+   * Whether the transport could prove the request never reached the wire.
+   * `not_sent` is only granted by the pre-flight `send` wrapper; every other
+   * transport failure (including a written request whose result was lost) is
+   * `unknown` and must not be replayed automatically.
+   */
+  readonly delivery?: "not_sent" | "unknown";
 }> {}
 
 /**
@@ -216,6 +270,16 @@ const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
 const INITIAL_RECONNECT_RETRY_MS = 500;
+/**
+ * A socket-level protocol failure must revive the session: the latched
+ * `currentError` fails every request locally until the runtime is replaced.
+ * Recovery is scheduled exactly once per failed session; library retry storms
+ * for the same session are suppressed.
+ */
+const DEFECT_CIRCUIT_BREAKER_THRESHOLD = 2;
+const RECOVERY_ESCALATION_LOG_MS = 20_000;
+const TRIPPED_RECOVERY_MESSAGE =
+  "Connection recovery stopped. Reload the app and check the operation's status.";
 const MAX_RECONNECT_RETRY_MS = 5_000;
 
 /** Keeps outages gentle on the backend while still recovering promptly. */
@@ -338,14 +402,51 @@ export async function negotiateOverHttp(
   return Option.isSome(result) ? result.value : null;
 }
 
-function makeProtocolLayer(url: string) {
-  const socketLayer = Socket.layerWebSocket(url).pipe(
-    Layer.provide(Socket.layerWebSocketConstructorGlobal),
-  );
+interface ProtocolLayerHooks {
+  readonly onProtocolFailure?: (error: unknown) => void;
+  readonly openTimeoutMs?: number;
+}
+
+function makeProtocolLayer(url: string, hooks?: ProtocolLayerHooks) {
+  const socketLayer = Socket.layerWebSocket(
+    url,
+    hooks?.openTimeoutMs !== undefined ? { openTimeout: hooks.openTimeoutMs } : undefined,
+  ).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal));
   // JSON keeps the wire format symmetric with any server build: a serialization
   // mismatch on this single multiplexed socket is a hard connect failure, and the
-  // desktop/dev setup routinely runs web and server on independently-built copies.
-  return RpcClient.layerProtocolSocket().pipe(
+  // desktop/dev server routinely runs web and server on independently-built copies.
+  //
+  // The protocol is rebuilt from the public `makeProtocolSocket` API so the
+  // transport can observe `ClientProtocolError` (the latched failure written to
+  // every registered entry) and tag the pre-flight `send` rejection, which is the
+  // only failure that proves the request never reached the wire.
+  const monitoredProtocol = Layer.effect(RpcClient.Protocol)(
+    Effect.map(RpcClient.makeProtocolSocket(), (base) => {
+      const run: typeof base.run = (onMessage) =>
+        base.run((data) => {
+          if (data._tag === "ClientProtocolError") {
+            hooks?.onProtocolFailure?.(data.error);
+          }
+          return onMessage(data);
+        });
+      const send: typeof base.send = (request, transferables) =>
+        Effect.catch(base.send(request, transferables), (error) => {
+          if (request._tag === "Request") {
+            return Effect.fail(
+              markRequestNotSent(new RpcClientErrorModule.RpcClientError({ reason: error.reason })),
+            );
+          }
+          return Effect.fail(error);
+        });
+      return {
+        run,
+        send,
+        supportsAck: base.supportsAck,
+        supportsTransferables: base.supportsTransferables,
+      };
+    }),
+  );
+  return monitoredProtocol.pipe(
     Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)),
   );
 }
@@ -792,9 +893,14 @@ export class WsTransport {
   // reconnects still reset replayed push state even after the negotiation
   // cache was cleared by an intervening failure.
   private lastServerInstanceId: string | null = null;
+  private featureSessionCounter = 0;
+  private currentFeatureSession: FeatureSession | null = null;
+  private readonly protocolOpenTimeoutMs: number | undefined;
+  private readonly recovery: RecoveryState = createInitialRecoveryState();
 
-  constructor(url?: string) {
+  constructor(url?: string, options?: { readonly protocolOpenTimeoutMs?: number }) {
     this.explicitUrl = url ?? null;
+    this.protocolOpenTimeoutMs = options?.protocolOpenTimeoutMs;
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
       if (this.disposed || isTerminalCompatibilityFailure(error)) return;
@@ -884,7 +990,12 @@ export class WsTransport {
       let capacityAttempts = 0;
       while (true) {
         try {
-          return (await clientRuntime.runPromise(call(normalizedRpcInput), runOptions)) as T;
+          const result = (await clientRuntime.runPromise(
+            call(normalizedRpcInput),
+            runOptions,
+          )) as T;
+          this.noteApplicationSuccess();
+          return result;
         } catch (error) {
           const retryDelayMs = getUnaryRpcCapacityRetryDelayMs(error, capacityAttempts);
           if (retryDelayMs === null) throw error;
@@ -918,7 +1029,19 @@ export class WsTransport {
           code: "WS_REQUEST_RECONNECTED",
           method,
           cause: error,
-          retryable: true,
+          retryable: false,
+          delivery: "unknown",
+        });
+      }
+      const failure = classifyRpcTransportFailure(error, this.recovery.episodeRef ?? undefined);
+      if (failure !== null) {
+        throw new WsTransportRequestInterruptedError({
+          message: formatTransportFailureMessage(failure.ref),
+          code: "WS_REQUEST_RECONNECTED",
+          method,
+          retryable: failure.delivery === "not_sent",
+          delivery: failure.delivery,
+          cause: error,
         });
       }
       throw error;
@@ -1069,6 +1192,7 @@ export class WsTransport {
     this.activeThreadStreamInputs.clear();
     this.projectFileSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
+    this.currentFeatureSession = null;
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
     void this.clientPromise.catch(() => undefined);
@@ -1174,6 +1298,7 @@ export class WsTransport {
     // Reconnects reuse the cached negotiation while the server generation is
     // unchanged, so a reconnect costs exactly one WebSocket handshake.
     const cachedCompatibility = this.compatibility;
+    const featureSession: FeatureSession = { id: ++this.featureSessionCounter, failed: false };
     const clientPromise = (async () => {
       const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
       if (this.disposed || this.sessionVersion !== sessionVersion) {
@@ -1181,18 +1306,30 @@ export class WsTransport {
       }
 
       const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility)),
+        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility), {
+          ...(this.protocolOpenTimeoutMs !== undefined
+            ? { openTimeoutMs: this.protocolOpenTimeoutMs }
+            : {}),
+          onProtocolFailure: (error) => this.noteProtocolFailure(featureSession, error),
+        }),
       );
       const featureScope = featureRuntime.runSync(Scope.make());
       this.runtime = featureRuntime;
       this.clientScope = featureScope;
+      this.currentFeatureSession = featureSession;
       const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
       this.runtimeByClient.set(client, featureRuntime);
       if (cachedCompatibility) {
         await this.probeFeatureConnection(client, featureRuntime);
       }
       if (!this.disposed && this.sessionVersion === sessionVersion) {
+        if (this.recovery.candidateFailedSessionId === featureSession.id) {
+          // A protocol failure landed after this candidate connected: it must
+          // not be adopted, even though the socket still looks open.
+          throw new Error("Recovery candidate failed before adoption.");
+        }
         this.adoptNegotiation(compatibility);
+        this.noteFeatureSessionAdopted();
         this.setState("open");
       }
       return client;
@@ -1209,10 +1346,11 @@ export class WsTransport {
       }
       throw error;
     });
-    return { clientPromise };
+    return { clientPromise, featureSession };
   }
 
   private async getClient(): Promise<RpcClientInstance> {
+    if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
     // Once recovery starts, the last fulfilled client belongs to a runtime
     // that reconnect() has detached. New work must join the shared recovery
     // promise instead of briefly reusing that stale socket.
@@ -1221,6 +1359,7 @@ export class WsTransport {
       return await this.clientPromise;
     } catch (error) {
       if (this.disposed) throw new Error("Transport disposed");
+      if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
       if (isTerminalCompatibilityFailure(error)) throw error;
       return this.reconnect();
     }
@@ -1260,6 +1399,127 @@ export class WsTransport {
     await resources.runtime.dispose().catch(() => undefined);
   }
 
+  private trippedRecoveryError(): WsTransportRpcError {
+    const ref = this.recovery.episodeRef;
+    return new WsTransportRpcError({
+      message:
+        ref === null ? TRIPPED_RECOVERY_MESSAGE : `${TRIPPED_RECOVERY_MESSAGE} (ref: ${ref})`,
+    });
+  }
+
+  private isRecoveryTripped(): boolean {
+    return this.recovery.phase === "tripped";
+  }
+
+  /**
+   * Runs on the protocol wrapper's thread. Everything that must be ordered
+   * against later failures (identity capture, storm suppression, defect
+   * counting) happens synchronously; recovery itself is scheduled out of the
+   * Effect fiber that is about to be disposed.
+   */
+  private noteProtocolFailure(session: FeatureSession, error: unknown): void {
+    if (this.disposed || this.recovery.phase === "tripped") return;
+    const failure = classifyRpcTransportFailure(error);
+    if (failure === null) return;
+    if (session.id === this.recovery.suppressedSessionId) return;
+
+    if (
+      failure.reason.tag === "RpcClientDefect" &&
+      !this.recovery.countedDefectSessions.has(session.id)
+    ) {
+      this.recovery.countedDefectSessions.add(session.id);
+      this.recovery.consecutiveDefects += 1;
+      if (this.recovery.consecutiveDefects >= DEFECT_CIRCUIT_BREAKER_THRESHOLD) {
+        this.tripRecovery(failure);
+        return;
+      }
+    }
+
+    if (this.recovery.phase === "recovering" && session.id === this.currentFeatureSession?.id) {
+      this.recovery.candidateFailedSessionId = session.id;
+      return;
+    }
+
+    session.failed = true;
+    this.recovery.phase = "scheduled";
+    this.recovery.suppressedSessionId = session.id;
+    this.recovery.episodeRef = failure.ref;
+    this.recovery.firstFailureAt = Date.now();
+    this.recovery.escalated = false;
+    console.warn(
+      "[ws-transport] protocol failure",
+      describeTransportFailureForDiagnostics(failure),
+    );
+    const episodeRef = failure.ref;
+    queueMicrotask(() => this.runScheduledRecovery(episodeRef));
+  }
+
+  private runScheduledRecovery(episodeRef: string): void {
+    if (this.disposed || this.recovery.phase === "tripped") return;
+    if (this.recovery.episodeRef !== episodeRef || this.recovery.phase !== "scheduled") return;
+    this.recovery.phase = "recovering";
+    this.recovery.candidateFailedSessionId = null;
+    void this.reconnect().catch((error) => {
+      if (
+        this.disposed ||
+        this.recovery.phase === "tripped" ||
+        isTerminalCompatibilityFailure(error)
+      ) {
+        return;
+      }
+      console.warn("[ws-transport] recovery attempt failed", {
+        ref: this.recovery.episodeRef,
+      });
+    });
+  }
+
+  private noteFeatureSessionAdopted(): void {
+    if (this.recovery.phase !== "ready") {
+      this.recovery.phase = "ready";
+      this.recovery.episodeRef = null;
+      this.recovery.suppressedSessionId = null;
+      this.recovery.candidateFailedSessionId = null;
+      this.recovery.firstFailureAt = null;
+      this.recovery.escalated = false;
+      this.recovery.countedDefectSessions.clear();
+    }
+  }
+
+  private noteApplicationSuccess(): void {
+    if (this.disposed || this.recovery.phase !== "ready") return;
+    if (this.recovery.consecutiveDefects === 0 && this.recovery.countedDefectSessions.size === 0) {
+      return;
+    }
+    this.recovery.consecutiveDefects = 0;
+    this.recovery.countedDefectSessions.clear();
+  }
+
+  private maybeLogRecoveryEscalation(): void {
+    if (this.recovery.phase !== "recovering" || this.recovery.escalated) return;
+    const firstFailureAt = this.recovery.firstFailureAt;
+    if (firstFailureAt === null || Date.now() - firstFailureAt < RECOVERY_ESCALATION_LOG_MS) return;
+    this.recovery.escalated = true;
+    console.warn("[ws-transport] connection recovery is still running", {
+      ref: this.recovery.episodeRef,
+      durationMs: Date.now() - firstFailureAt,
+    });
+  }
+
+  private tripRecovery(failure: RpcTransportFailure): void {
+    if (this.disposed || this.recovery.phase === "tripped") return;
+    this.recovery.phase = "tripped";
+    this.recovery.episodeRef = failure.ref;
+    console.warn(
+      "[ws-transport] protocol recovery stopped after repeated defects",
+      describeTransportFailureForDiagnostics(failure),
+    );
+    const resources = this.takeCurrentRuntime();
+    if (resources) {
+      void this.closeRuntime(resources).catch(() => undefined);
+    }
+    this.setState("closed");
+  }
+
   private reconnect(): Promise<RpcClientInstance> {
     if (this.reconnectPromise) return this.reconnectPromise;
 
@@ -1272,12 +1532,17 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    if (oldResources) void this.closeRuntime(oldResources);
-
-    this.reconnectPromise = this.openReconnectSession().finally(() => {
+    const reconnectPromise = (async () => {
+      // Wait for the old runtime to finish disposing before a candidate starts:
+      // an un-awaited teardown can leave the library's retry fibers running
+      // against a socket the new session has already replaced.
+      if (oldResources) await this.closeRuntime(oldResources);
+      return this.openReconnectSession();
+    })().finally(() => {
       this.reconnectPromise = null;
     });
-    return this.reconnectPromise;
+    this.reconnectPromise = reconnectPromise;
+    return reconnectPromise;
   }
 
   private setState(state: WsTransportState): void {
@@ -1414,9 +1679,12 @@ export class WsTransport {
   private async openReconnectSession(): Promise<RpcClientInstance> {
     for (;;) {
       if (this.disposed) throw new Error("Transport disposed");
+      if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
+      this.maybeLogRecoveryEscalation();
       this.setState("connecting");
       const delayMs = getReconnectRetryDelayMs(this.reconnectFailures);
       this.reconnectFailures += 1;
+      this.recovery.candidateFailedSessionId = null;
       await delayWithAbort(delayMs, this.lifetime.signal);
 
       const session = this.createSession();
@@ -1439,12 +1707,18 @@ export class WsTransport {
         for (const [key, subscription] of this.projectFileSubscriptions) {
           this.startProjectFileChangeStream(client, key, subscription);
         }
+        if (this.recovery.candidateFailedSessionId === session.featureSession.id) {
+          // The candidate died while its subscriptions were being restored:
+          // never adopt it, and let the loop select a fresh one.
+          throw new Error("Recovery candidate failed during stream restore.");
+        }
         this.reconnectFailures = 0;
         return client;
       } catch (error) {
         const failedResources = this.takeCurrentRuntime();
         if (failedResources) await this.closeRuntime(failedResources);
         if (this.disposed) throw new Error("Transport disposed");
+        if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
         if (isTerminalCompatibilityFailure(error)) throw error;
         // The backend may still be starting. Continue with bounded backoff;
         // the transport lifetime aborts this loop immediately on disposal.
@@ -1905,8 +2179,21 @@ export class WsTransport {
             return;
           }
           if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {
-            const error = causeToError(exit.cause);
-            console.warn("WebSocket RPC stream failed", error);
+            const rawError = causeToError(exit.cause);
+            const failure = classifyRpcTransportFailure(
+              rawError,
+              this.recovery.episodeRef ?? undefined,
+            );
+            const error =
+              failure === null ? rawError : new Error(formatTransportFailureMessage(failure.ref));
+            if (failure === null) {
+              console.warn("WebSocket RPC stream failed", rawError);
+            } else {
+              console.warn(
+                "[ws-transport] stream failed",
+                describeTransportFailureForDiagnostics(failure),
+              );
+            }
             const threadId = threadIdFromStreamKey(key);
             if (threadId !== null && this.threadSubscriptions.has(threadId)) {
               this.emitThreadStreamFailure({

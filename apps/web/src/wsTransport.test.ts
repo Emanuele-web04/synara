@@ -4,6 +4,8 @@
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
 import { Cause, Effect, Exit, Stream } from "effect";
+import { RpcClientError } from "effect/unstable/rpc";
+import { Socket } from "effect/unstable/socket";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATION_WS_METHODS,
@@ -58,6 +60,7 @@ import {
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
 } from "./threadDetailResumeCursors";
+import { markRequestNotSent } from "./lib/rpcTransportFailure";
 import {
   addWsCompatibilityIssueListener,
   emitWsCompatibilityIssue,
@@ -107,6 +110,10 @@ class MockWebSocket {
   open() {
     this.readyState = MockWebSocket.OPEN;
     this.emit("open");
+  }
+
+  failBeforeOpen() {
+    this.emit("error", { data: new Error("socket open failure") } as never);
   }
 
   receive(data: string) {
@@ -165,6 +172,18 @@ interface WsTransportInternals {
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
   sessionVersion: number;
+  readonly recovery: {
+    phase: "ready" | "scheduled" | "recovering" | "tripped";
+    episodeRef: string | null;
+    suppressedSessionId: number | null;
+    candidateFailedSessionId: number | null;
+    firstFailureAt: number | null;
+    escalated: boolean;
+    countedDefectSessions: Set<number>;
+    consecutiveDefects: number;
+  };
+  noteProtocolFailure(session: unknown, error: unknown): void;
+  runScheduledRecovery(episodeRef: string): void;
   reconnect(): Promise<unknown>;
   openReconnectSession(): Promise<unknown>;
   getClient(): Promise<unknown>;
@@ -184,6 +203,19 @@ interface WsTransportInternals {
   startProjectFileChangeStream(client: unknown, key: string, subscription: unknown): void;
   stopStream(key: string, options?: { readonly resetCapacityRetry?: boolean }): Promise<void>;
   emitThreadStreamFailure(failure: WsThreadStreamFailure): void;
+}
+
+function makeRecoveryState() {
+  return {
+    phase: "ready" as const,
+    episodeRef: null,
+    suppressedSessionId: null,
+    candidateFailedSessionId: null,
+    firstFailureAt: null,
+    escalated: false,
+    countedDefectSessions: new Set<number>(),
+    consecutiveDefects: 0,
+  };
 }
 
 function makeBareTransport(): {
@@ -208,7 +240,10 @@ function makeBareTransport(): {
     projectFileSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
     disposed: false,
+    state: "ready",
+    stateListeners: new Set(),
     sessionVersion: 1,
+    recovery: makeRecoveryState(),
     getClientRuntime: () => ({
       runCallback: (
         effect: Effect.Effect<unknown, Error>,
@@ -765,10 +800,12 @@ describe("WsTransport", () => {
     expect(isRuntimeInterruptFailure("All fibers interrupted without error")).toBe(false);
   });
 
-  it("rejects an in-flight unary request with a typed retryable error across a reconnect", async () => {
+  it("rejects an in-flight unary request with a typed non-replayable error across a reconnect", async () => {
     // Regression for "sign-in is broken": a transport reconnect used to leak
     // the raw squashed interrupt (`Error("All fibers interrupted without
     // error")`) to unary callers, indistinguishable from a server error.
+    // The contract is now conservative: a reconnect with unknown delivery must
+    // not be re-issued automatically, even by retry-aware callers.
     const { transport, internals } = makeBareTransport();
     const client = { "some.method": () => Effect.never };
     Object.assign(internals, {
@@ -782,7 +819,121 @@ describe("WsTransport", () => {
       _tag: "WsTransportRequestInterruptedError",
       code: "WS_REQUEST_RECONNECTED",
       method: "some.method",
+      retryable: false,
+      delivery: "unknown",
+    });
+  });
+
+  it("normalizes a latched RpcClientError instead of leaking its raw message", async () => {
+    const { transport, internals } = makeBareTransport();
+    internals.recovery.episodeRef = "sock-1234";
+    const rpcError = new RpcClientError.RpcClientError({
+      reason: new Socket.SocketOpenError({
+        kind: "Timeout",
+        cause: new Error('timeout waiting for "open"'),
+      }),
+    });
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({ "some.method": () => Effect.void })),
+      getClientRuntime: () => ({ runPromise: () => Promise.reject(rpcError) }),
+    });
+
+    await expect(transport.request("some.method", {}, { timeoutMs: null })).rejects.toMatchObject({
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+      method: "some.method",
+      retryable: false,
+      delivery: "unknown",
+      message: "Connection interrupted. Check the operation's status. (ref: sock-1234)",
+    });
+  });
+
+  it("keeps the not_sent proof on a pre-flight rejected request only", async () => {
+    const { transport, internals } = makeBareTransport();
+    const shared = new RpcClientError.RpcClientError({
+      reason: new Socket.SocketOpenError({ kind: "Timeout", cause: new Error("ping timeout") }),
+    });
+    const tagged = markRequestNotSent(new RpcClientError.RpcClientError({ reason: shared.reason }));
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({ "some.method": () => Effect.void })),
+      getClientRuntime: () => ({ runPromise: () => Promise.reject(tagged) }),
+    });
+
+    await expect(transport.request("some.method", {}, { timeoutMs: null })).rejects.toMatchObject({
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+      delivery: "not_sent",
       retryable: true,
+    });
+  });
+
+  it("does not re-issue a transport-failed request", async () => {
+    const { transport, internals } = makeBareTransport();
+    const rpcError = new RpcClientError.RpcClientError({
+      reason: new Socket.SocketCloseError({ code: 1006, closeReason: "" }),
+    });
+    const runPromise = vi.fn().mockRejectedValue(rpcError);
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({ "some.method": () => Effect.void })),
+      getClientRuntime: () => ({ runPromise }),
+    });
+
+    await expect(transport.request("some.method", {}, { timeoutMs: null })).rejects.toMatchObject({
+      _tag: "WsTransportRequestInterruptedError",
+    });
+    expect(runPromise).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses repeated failure reports for the same feature session", async () => {
+    const { transport, internals } = makeBareTransport();
+    const reconnect = vi.fn(async () => ({}));
+    internals.reconnect = reconnect;
+    const session = { id: 7, failed: false };
+    const failure = new RpcClientError.RpcClientError({
+      reason: new Socket.SocketOpenError({ kind: "Unknown", cause: new Error("refused") }),
+    });
+    const noteFailure = (
+      WsTransport.prototype as unknown as {
+        noteProtocolFailure: (session: unknown, error: unknown) => void;
+      }
+    ).noteProtocolFailure.bind(transport);
+
+    noteFailure(session, failure);
+    noteFailure(session, failure);
+    noteFailure(session, failure);
+    await Promise.resolve();
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(internals.recovery.suppressedSessionId).toBe(7);
+    expect(internals.recovery.phase).toBe("recovering");
+  });
+
+  it("opens the defect circuit breaker after two defective sessions", async () => {
+    const { transport, internals } = makeBareTransport();
+    internals.reconnect = vi.fn(async () => ({}));
+    const tripFailure = new RpcClientError.RpcClientError({
+      reason: new RpcClientError.RpcClientDefect({
+        message: "Error decoding message",
+        cause: new Error("bad frame"),
+      }),
+    });
+    const noteFailure = (
+      WsTransport.prototype as unknown as {
+        noteProtocolFailure: (session: unknown, error: unknown) => void;
+      }
+    ).noteProtocolFailure.bind(transport);
+
+    noteFailure({ id: 1, failed: false }, tripFailure);
+    await Promise.resolve();
+    expect(internals.recovery.phase).toBe("recovering");
+
+    // The candidate for the second session fails the same way: the breaker
+    // must stop the loop instead of reconnecting forever.
+    noteFailure({ id: 2, failed: false }, tripFailure);
+    expect(internals.recovery.phase).toBe("tripped");
+    await expect(internals.getClient()).rejects.toMatchObject({
+      _tag: "WsTransportRpcError",
+      message: expect.stringContaining("Connection recovery stopped"),
     });
   });
 
@@ -1361,6 +1512,7 @@ describe("WsTransport", () => {
     Object.assign(internals, {
       reconnectPromise: Promise.resolve(recoveredClient),
       clientPromise: Promise.resolve({ generation: "stale" }),
+      recovery: makeRecoveryState(),
     });
 
     await expect(internals.getClient()).resolves.toBe(recoveredClient);
@@ -1379,11 +1531,16 @@ describe("WsTransport", () => {
         .fn()
         .mockImplementationOnce(() => ({
           clientPromise: Promise.reject(new Error("starting-1")),
+          featureSession: { id: 1, failed: false },
         }))
         .mockImplementationOnce(() => ({
           clientPromise: Promise.reject(new Error("starting-2")),
+          featureSession: { id: 2, failed: false },
         }))
-        .mockImplementationOnce(() => ({ clientPromise: Promise.resolve(client) }));
+        .mockImplementationOnce(() => ({
+          clientPromise: Promise.resolve(client),
+          featureSession: { id: 3, failed: false },
+        }));
       const startChannelStream = vi.fn();
       const startShellStream = vi.fn(async () => undefined);
       const startThreadStream = vi.fn(async () => undefined);
@@ -1413,6 +1570,7 @@ describe("WsTransport", () => {
         startShellStream,
         refreshThreadSubscriptionInput: () => input,
         startThreadStream,
+        recovery: makeRecoveryState(),
       });
 
       const recovery = internals.openReconnectSession();
@@ -1454,6 +1612,7 @@ describe("WsTransport", () => {
         reconnectFailures: 0,
         lifetime,
         createSession,
+        recovery: makeRecoveryState(),
       });
 
       const recovery = internals.openReconnectSession();
@@ -1577,6 +1736,26 @@ describe("WsTransport", () => {
 
     await transport.dispose();
   });
+
+  it("starts one recovery after an idle feature socket failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+
+    const transport = new WsTransport("ws://localhost:3020");
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"), { timeout: 5_000 });
+
+    sockets[0]!.failBeforeOpen();
+    await vi.waitFor(() => expect(sockets.length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
+    sockets[1]!.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"), { timeout: 5_000 });
+
+    // One clean recovery: the failed session never loops and its library retry
+    // fibers are torn down with the old runtime before the replacement starts.
+    expect(sockets).toHaveLength(2);
+    await transport.dispose();
+  }, 15_000);
 
   it("surfaces a 426 HTTP negotiation refusal as a terminal compatibility error", async () => {
     const refusal = new WsCompatibilityError({
