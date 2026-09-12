@@ -259,6 +259,7 @@ async function dispatchKanbanDraftThreadOnce(
   const draftComposerState = composerStore.draftsByThreadId[threadId] ?? null;
   const liveSnapshot = buildKanbanComposerDraftSnapshot(draftComposerState);
   const prompt = liveSnapshot?.prompt.trim() ?? "";
+  const preDispatchPrompt = liveSnapshot?.prompt ?? "";
   if (prompt.length === 0 && liveSnapshot?.hasAttachments !== true) {
     return { kind: "open-thread", reason: "empty" };
   }
@@ -305,7 +306,6 @@ async function dispatchKanbanDraftThreadOnce(
   const composerFileComments = draftComposerState?.fileComments ?? [];
   const sendableTerminalContexts = filterTerminalContextsWithText(
     draftComposerState?.terminalContexts ?? [],
-  const preDispatchPrompt = liveSnapshot?.prompt ?? "";
   );
   const titleSeed =
     prompt ||
@@ -483,6 +483,12 @@ async function dispatchKanbanDraftThreadOnce(
     );
     kanbanUi.clearOptimisticDispatch(threadId);
     clearPendingTurnDispatch(threadId);
+    // A turn failure after the goal command was accepted must not lose the
+    // user's text: keep the composer prompt (restoring it when something
+    // cleared it mid-flight) and un-hide a promoted local draft so the draft
+    // card — or the settled thread's unsent-prompt card — stays visible.
+    restoreKanbanDraftPromptAfterFailure(threadId, preDispatchPrompt);
+    rollbackPromotingDraftAfterFailure(threadId, thread);
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
@@ -491,16 +497,10 @@ async function dispatchKanbanDraftThreadOnce(
 
   // The prompt was consumed by the dispatched turn; an open composer for this
   // thread should not keep offering it.
+  clearPendingTurnDispatch(threadId);
   useComposerDraftStore.getState().clearComposerContent(threadId);
   return { kind: "dispatched", warning: goalWarning };
 }
-    // A turn failure after the goal command was accepted must not lose the
-    // user's text: keep the composer prompt (restoring it when something
-    // cleared it mid-flight) and un-hide a promoted local draft so the draft
-  clearPendingTurnDispatch(threadId);
-    // card — or the settled thread's unsent-prompt card — stays visible.
-    restoreKanbanDraftPromptAfterFailure(threadId, preDispatchPrompt);
-    rollbackPromotingDraftAfterFailure(threadId, thread);
 
 function restoreKanbanDraftPromptAfterFailure(threadId: ThreadId, preDispatchPrompt: string): void {
   if (preDispatchPrompt.trim().length === 0) {

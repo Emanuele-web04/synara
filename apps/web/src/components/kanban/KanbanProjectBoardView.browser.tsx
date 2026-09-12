@@ -87,20 +87,6 @@ const board = {
   hiddenCount: 0,
 } satisfies KanbanProjectBoard;
 
-describe("KanbanProjectBoardView v2 (browser)", () => {
-  it("renders the four-column attention-first layout with pills and filter", async () => {
-    await render(
-      <KanbanProjectBoardView
-        board={board}
-        onOpenCard={vi.fn()}
-        onNewTask={vi.fn()}
-        prByThreadId={new Map()}
-        nowMs={NOW_MS}
-        viewMode="v2"
-      />,
-    );
-
-    for (const label of Object.values(KANBAN_COLUMN_V2_LABELS)) {
 /**
  * The inner card `<button>` for a draft title. (A plain role query is ambiguous:
  * the sortable wrapper `li` also carries `role="button"`.)
@@ -169,6 +155,20 @@ async function dragCardOntoColumn(titleSnippet: string, columnHeading: string) {
   source.dispatchEvent(pointerEvent("pointerup", toX, toY));
 }
 
+describe("KanbanProjectBoardView v2 (browser)", () => {
+  it("renders the four-column attention-first layout with pills and filter", async () => {
+    await render(
+      <KanbanProjectBoardView
+        board={board}
+        onOpenCard={vi.fn()}
+        onNewTask={vi.fn()}
+        prByThreadId={new Map()}
+        nowMs={NOW_MS}
+        viewMode="v2"
+      />,
+    );
+
+    for (const label of Object.values(KANBAN_COLUMN_V2_LABELS)) {
       await expect.element(page.getByRole("heading", { name: label })).toBeVisible();
     }
     for (const cardTitle of ["Card draft-1", "Card live-1", "Card awaiting-1", "Card done-1"]) {
