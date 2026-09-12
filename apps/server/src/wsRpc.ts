@@ -2104,6 +2104,11 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to update memory pin",
           ),
+        [WS_METHODS.mindAffirm]: (input) =>
+          rpcEffect(
+            mindService.affirm({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to affirm memory",
+          ),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>

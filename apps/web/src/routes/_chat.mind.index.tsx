@@ -24,7 +24,15 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
-import { formatMindCountLabel, optimisticForgetCount } from "~/lib/mindList";
+import {
+  countStaleMindMemories,
+  formatMindCountLabel,
+  formatMindDigestSuffix,
+  groupMindMemoriesByDay,
+  optimisticAffirmWeight,
+  optimisticForgetCount,
+  sortMindMemories,
+} from "~/lib/mindList";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
 import { cn } from "~/lib/utils";
@@ -61,17 +69,20 @@ function provenanceLabel(provenance: MindMemory["provenance"]): string | null {
 
 /**
  * Mind list row: a leading type badge, a two-line text/detail stack, and trailing
- * pin toggle plus hover-reveal delete. Not clickable — there is no memory detail
- * surface; the row is the whole interaction (pin, delete).
+ * still-true affirm plus pin toggle plus hover-reveal delete. Not clickable —
+ * there is no memory detail surface; the row is the whole interaction
+ * (affirm, pin, delete).
  */
 function MindListRow({
   memory,
   projectName,
+  onAffirm,
   onTogglePinned,
   onDelete,
 }: {
   readonly memory: MindMemory;
   readonly projectName: string;
+  readonly onAffirm: () => void;
   readonly onTogglePinned: () => void;
   readonly onDelete: () => void;
 }) {
@@ -100,6 +111,15 @@ function MindListRow({
           {memory.pinned ? " · pinned" : ""}
         </span>
       </span>
+      <button
+        type="button"
+        aria-label="Still true"
+        title="Still true"
+        onClick={onAffirm}
+        className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <CentralIcon name="checkmark-1-small" className="size-3.5" />
+      </button>
       <button
         type="button"
         aria-label={pinLabel}
@@ -171,6 +191,41 @@ function MindRouteView() {
     },
   });
 
+  // Optimistic affirm ("still true"), same rollback shape as pin: the weight
+  // bumps eagerly and the invalidate-on-settle refetch converges it.
+  const affirmMutation = useMutation({
+    mutationFn: (memory: MindMemory) =>
+      ensureNativeApi().mind.affirm({ projectId: memory.projectId, memoryId: memory.memoryId }),
+    onMutate: async (memory) => {
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
+      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
+      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+        prev
+          ? {
+              ...prev,
+              memories: prev.memories.map((item) =>
+                item.memoryId === memory.memoryId
+                  ? {
+                      ...item,
+                      weight: optimisticAffirmWeight(item.weight),
+                      accessCount: item.accessCount + 1,
+                    }
+                  : item,
+              ),
+            }
+          : prev,
+      );
+      return { previous };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      toastManager.add({ type: "success", title: "Memory affirmed" });
+    },
+    onError: (error, _memory, context) => {
+      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      toastManager.add({ type: "error", title: error.message });
+    },
+  });
   // Optimistic pin flip, same rollback shape as forget.
   const setPinnedMutation = useMutation({
     mutationFn: (input: { readonly memory: MindMemory; readonly pinned: boolean }) =>
@@ -224,13 +279,7 @@ function MindRouteView() {
 
   // The server already returns weight-desc; re-sort so optimistic pin/weight edits
   // and any out-of-order cache merges keep the same order the server would send.
-  const sortedMemories = useMemo(
-    () =>
-      [...data.memories].toSorted(
-        (a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId),
-      ),
-    [data.memories],
-  );
+  const sortedMemories = useMemo(() => sortMindMemories(data.memories), [data.memories]);
   const filteredMemories = useMemo(() => {
     const scoped =
       projectFilter === null
@@ -245,6 +294,24 @@ function MindRouteView() {
     );
   }, [sortedMemories, search, projectFilter, projectNamesById]);
 
+  // Day groups for the loaded page: newest day first, weight-desc inside a day.
+  const groupedMemories = useMemo(
+    () => groupMindMemoriesByDay(filteredMemories),
+    [filteredMemories],
+  );
+
+  // Digest signals computed client-side from the loaded rows: stale count plus
+  // cap pressure, appended to the back-compat meta count line.
+  const digestSuffix = useMemo(
+    () =>
+      formatMindDigestSuffix({
+        staleCount: countStaleMindMemories(data.memories),
+        count: data.count,
+        cap: data.cap,
+      }),
+    [data.memories, data.count, data.cap],
+  );
+
   const renderMindList = () => (
     <section className="flex flex-col gap-2">
       {filteredMemories.length === 0 ? (
@@ -256,14 +323,29 @@ function MindRouteView() {
         </div>
       ) : (
         <div className="flex flex-col">
-          {filteredMemories.map((memory) => (
-            <MindListRow
-              key={memory.memoryId}
-              memory={memory}
-              projectName={projectNamesById.get(memory.projectId) ?? "Unknown project"}
-              onTogglePinned={() => setPinnedMutation.mutate({ memory, pinned: !memory.pinned })}
-              onDelete={() => forgetMutation.mutate(memory)}
-            />
+          {groupedMemories.map((group, index) => (
+            <div key={group.key} className="flex flex-col">
+              <h2
+                className={cn(
+                  "px-2 pb-1 text-xs font-medium text-muted-foreground",
+                  index > 0 && "pt-3",
+                )}
+              >
+                {group.label}
+              </h2>
+              {group.memories.map((memory) => (
+                <MindListRow
+                  key={memory.memoryId}
+                  memory={memory}
+                  projectName={projectNamesById.get(memory.projectId) ?? "Unknown project"}
+                  onAffirm={() => affirmMutation.mutate(memory)}
+                  onTogglePinned={() =>
+                    setPinnedMutation.mutate({ memory, pinned: !memory.pinned })
+                  }
+                  onDelete={() => forgetMutation.mutate(memory)}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -292,8 +374,8 @@ function MindRouteView() {
             <div className="min-w-0 flex-1" />
             <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
               <SearchInput
-                aria-label="Search memories"
-                placeholder="Search memories"
+                aria-label="Search loaded memories"
+                placeholder="Search loaded memories"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 className="w-56"
@@ -326,6 +408,7 @@ function MindRouteView() {
                     pinnedCount,
                     cap: data.cap,
                   })}
+                  {digestSuffix}
                 </p>
                 {visibleProjects.length > 1 ? (
                   <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by project">
@@ -381,7 +464,10 @@ function MindRouteView() {
                   Mind is Synara's shared memory for your projects. Agents save durable decisions
                   and conventions here and recall them in any provider's session.
                 </p>
-                <p className="text-xs text-muted-foreground">Agents save memories as you work.</p>
+                <p className="text-xs text-muted-foreground">
+                  Agents save memories as you work — ask yours to remember a choice. Recall only
+                  reads; confirming a memory lifts its weight.
+                </p>
               </div>
             ) : (
               renderMindList()

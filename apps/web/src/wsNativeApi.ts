@@ -827,6 +827,7 @@ export function createWsNativeApi(): NativeApi {
       list: (input) => transport.request(WS_METHODS.mindList, input),
       forget: (input) => transport.request(WS_METHODS.mindForget, input),
       setPinned: (input) => transport.request(WS_METHODS.mindSetPinned, input),
+      affirm: (input) => transport.request(WS_METHODS.mindAffirm, input),
     },
     device: {
       list: (input) => transport.request(DEVICE_WS_METHODS.list, input),

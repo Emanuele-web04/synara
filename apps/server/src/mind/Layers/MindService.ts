@@ -43,6 +43,7 @@ import {
 } from "../scoring.ts";
 import {
   MindService,
+  type MindAffirmRequest,
   type MindConfirmRequest,
   type MindForgetRequest,
   type MindForgetResult,
@@ -721,6 +722,14 @@ const makeMindService = Effect.gen(function* () {
     list,
     listAll,
     setPinned,
+    affirm: (input: MindAffirmRequest) =>
+      confirm({
+        projectId: input.projectId,
+        memoryId: input.memoryId,
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: null,
+      }),
   };
   return shape;
 });

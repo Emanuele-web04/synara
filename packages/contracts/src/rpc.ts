@@ -243,6 +243,7 @@ import {
   StatsGetProfileTokenStatsResult,
 } from "./stats";
 import {
+  MindAffirmInput,
   MindForgetInput,
   MindListInput,
   MindListResult,
@@ -1294,6 +1295,12 @@ export const WsMindSetPinnedRpc = Rpc.make(WS_METHODS.mindSetPinned, {
   error: WsRpcError,
 });
 
+export const WsMindAffirmRpc = Rpc.make(WS_METHODS.mindAffirm, {
+  payload: MindAffirmInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -1427,4 +1434,5 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsMindListRpc,
   WsMindForgetRpc,
   WsMindSetPinnedRpc,
+  WsMindAffirmRpc,
 );

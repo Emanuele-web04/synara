@@ -111,6 +111,13 @@ export const MindForgetInput = Schema.Struct({
 });
 export type MindForgetInput = typeof MindForgetInput.Type;
 
+/** User affirm ("still true"): same shape as forget — project + memory id only. */
+export const MindAffirmInput = Schema.Struct({
+  projectId: ProjectId,
+  memoryId: MindMemoryId,
+});
+export type MindAffirmInput = typeof MindAffirmInput.Type;
+
 export const MindSetPinnedInput = Schema.Struct({
   projectId: ProjectId,
   memoryId: MindMemoryId,

@@ -7,6 +7,7 @@ import {
   MIND_RECALL_MAX_ITEMS,
   MIND_RECALL_QUERY_MAX_CHARS,
   MIND_RECALL_REQUEST_MAX_ITEMS,
+  MindAffirmInput,
   MindForgetInput,
   MindListInput,
   MindListResult,
@@ -16,6 +17,7 @@ import {
   MindRememberInput,
   MindSetPinnedInput,
 } from "./mind";
+import { WebSocketRequest, WS_METHODS } from "./ws";
 
 const decodes = <S extends Schema.Top & { readonly DecodingServices: never }>(
   schema: S,
@@ -149,7 +151,7 @@ describe("Mind contracts", () => {
     ).toBe(false);
   });
 
-  it("targets forget and setPinned by project and memory id", () => {
+  it("targets forget, setPinned, and affirm by project and memory id", () => {
     expect(decodes(MindForgetInput, { projectId: "project-1", memoryId: "memory-1" })).toBe(true);
     expect(decodes(MindForgetInput, { memoryId: "memory-1" })).toBe(false);
     expect(decodes(MindForgetInput, { projectId: "project-1", memoryId: "  " })).toBe(false);
@@ -159,6 +161,25 @@ describe("Mind contracts", () => {
     expect(decodes(MindSetPinnedInput, { memoryId: "memory-1", pinned: true })).toBe(false);
     expect(
       decodes(MindSetPinnedInput, { projectId: "project-1", memoryId: "memory-1", pinned: "yes" }),
+    ).toBe(false);
+    expect(decodes(MindAffirmInput, { projectId: "project-1", memoryId: "memory-1" })).toBe(true);
+    expect(decodes(MindAffirmInput, { memoryId: "memory-1" })).toBe(false);
+    expect(decodes(MindAffirmInput, { projectId: "project-1", memoryId: "  " })).toBe(false);
+  });
+
+  it("routes the affirm method over the WebSocket request body", () => {
+    expect(WS_METHODS.mindAffirm).toBe("mind.affirm");
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.affirm", projectId: "project-1", memoryId: "memory-1" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.affirm", memoryId: "memory-1" },
+      }),
     ).toBe(false);
   });
 });

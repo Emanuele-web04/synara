@@ -69,6 +69,7 @@ const PROJECTS = {
   secret: "project-mind-service-secret",
   prune: "project-mind-service-prune",
   forget: "project-mind-service-forget",
+  affirm: "project-mind-service-affirm",
   ui: "project-mind-service-ui",
   pinSweep: "project-mind-service-pin-sweep",
   xproject: "project-mind-service-xproject",
@@ -401,6 +402,51 @@ layer("MindService", (it) => {
             actor: { kind: "user" },
             threadId: null,
             turnId: "turn-confirm-3",
+          }),
+        );
+        assert.strictEqual(missing._tag, "MindMemoryNotFoundError");
+      }),
+  );
+
+  it.effect(
+    "affirm reuses the confirm path as the user: +0.15 bump, access +1, journaled as confirm",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* MindService;
+        const repository = yield* MindRepository;
+        yield* runMigrations();
+        const projectId = ProjectId.makeUnsafe(PROJECTS.affirm);
+        yield* ensureProjectRow(PROJECTS.affirm);
+        const remembered = yield* service.remember(
+          rememberRequest(projectId, "Affirm me as user", { turnId: "turn-affirm-create" }),
+        );
+
+        const affirmed = yield* service.affirm({ projectId, memoryId: remembered.memoryId });
+        assert.strictEqual(affirmed.weight, 0.75);
+        assert.strictEqual(affirmed.accessCount, 1);
+
+        // No turn context, so no idempotency key: a second affirm applies again.
+        const reaffirmed = yield* service.affirm({ projectId, memoryId: remembered.memoryId });
+        assert.strictEqual(reaffirmed.weight, 0.9);
+        assert.strictEqual(reaffirmed.accessCount, 2);
+
+        // Journaled as op confirm with the user actor and no thread/turn.
+        const journaled = yield* repository.findJournalOp({
+          memoryId: remembered.memoryId,
+          op: "confirm",
+          turnId: null,
+        });
+        assert.isTrue(Option.isSome(journaled));
+        if (Option.isSome(journaled)) {
+          assert.deepStrictEqual(journaled.value.actor, { kind: "user" });
+          assert.isNull(journaled.value.threadId);
+          assert.isNull(journaled.value.turnId);
+        }
+
+        const missing = yield* Effect.flip(
+          service.affirm({
+            memoryId: MindMemoryId.makeUnsafe("memory-missing-affirm"),
+            projectId,
           }),
         );
         assert.strictEqual(missing._tag, "MindMemoryNotFoundError");

@@ -42,6 +42,7 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  MindAffirmInput,
   MindForgetInput,
   MindListInput,
   MindListResult,
@@ -965,6 +966,7 @@ export interface NativeApi {
     list: (input: MindListInput) => Promise<MindListResult>;
     forget: (input: MindForgetInput) => Promise<void>;
     setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
+    affirm: (input: MindAffirmInput) => Promise<MindMemory>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

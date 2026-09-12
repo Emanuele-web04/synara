@@ -109,6 +109,16 @@ export interface MindSetPinnedRequest {
   readonly turnId: string | null;
 }
 
+/**
+ * User affirm ("still true") from the Mind UI: no thread or turn context, so
+ * no idempotency key — every affirm applies the confirm bump once. Reuses the
+ * confirm path with actor user and journals op `confirm`.
+ */
+export interface MindAffirmRequest {
+  readonly projectId: ProjectId;
+  readonly memoryId: MindMemoryId;
+}
+
 export interface MindServiceShape {
   /**
    * Validates (≤ 500 chars non-empty after trim), rejects secret-shaped text,
@@ -142,6 +152,11 @@ export interface MindServiceShape {
   readonly listAll: () => Effect.Effect<MindListResult, MindServiceError>;
   /** Pin/unpin pass-through; journals `pin`/`unpin`. Pinned rows never decay or prune. */
   readonly setPinned: (input: MindSetPinnedRequest) => Effect.Effect<MindMemory, MindServiceError>;
+  /**
+   * User affirm from the UI: the confirm bump (≤ +0.15, capped at 1.0, decay
+   * anchor reset, access +1) with actor user, journaled as `confirm`.
+   */
+  readonly affirm: (input: MindAffirmRequest) => Effect.Effect<MindMemory, MindServiceError>;
 }
 
 export class MindService extends ServiceMap.Service<MindService, MindServiceShape>()(
