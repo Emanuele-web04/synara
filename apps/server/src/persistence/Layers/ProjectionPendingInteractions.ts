@@ -1,7 +1,10 @@
-import { respondingInteractionReclaimCutoff } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  respondingInteractionReclaimCutoff,
+} from "@synara/shared/pendingInteractions";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer } from "effect";
+import { Array as Arr, Effect, Layer, Option, Schema } from "effect";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -61,6 +64,44 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
       FROM projection_pending_interactions
       WHERE thread_id = ${threadId}
       ORDER BY created_at ASC, interaction_kind ASC, request_id ASC
+    `,
+  });
+
+  const listUnsettledRows = SqlSchema.findAll({
+    Request: Schema.Struct({ threadId: Schema.optionalKey(Schema.String) }),
+    Result: ProjectionPendingInteraction,
+    execute: ({ threadId }) => sql`
+      SELECT interaction_kind AS "interactionKind", request_id AS "requestId",
+        thread_id AS "threadId", turn_id AS "turnId", lifecycle_generation AS "lifecycleGeneration",
+        status, decision, response_command_id AS "responseCommandId",
+        response_requested_at AS "responseRequestedAt", created_at AS "createdAt", resolved_at AS "resolvedAt"
+      FROM projection_pending_interactions
+      WHERE status != 'confirmed'
+        AND NOT (interaction_kind = 'approval' AND status = 'uncertain')
+        AND ${threadId === undefined ? sql`1 = 1` : sql`thread_id = ${threadId}`}
+    `,
+  });
+
+  // Read only response failures for candidate callbacks, never whole transcripts.
+  const failureActivities = SqlSchema.findAll({
+    Request: Schema.Struct({ threadId: Schema.optionalKey(Schema.String) }),
+    Result: Schema.Struct({
+      threadId: Schema.String,
+      kind: Schema.String,
+      createdAt: Schema.String,
+      payload: Schema.fromJsonString(Schema.Json),
+    }),
+    execute: ({ threadId }) => sql`
+      SELECT activity.thread_id AS "threadId", activity.kind,
+        activity.created_at AS "createdAt", activity.payload_json AS payload
+      FROM projection_thread_activities AS activity
+      WHERE activity.kind IN ('provider.approval.respond.failed', 'provider.user-input.respond.failed')
+        AND ${threadId === undefined ? sql`1 = 1` : sql`activity.thread_id = ${threadId}`}
+        AND EXISTS (
+          SELECT 1 FROM projection_pending_interactions AS pending
+          WHERE pending.thread_id = activity.thread_id AND pending.status != 'confirmed'
+            AND pending.request_id = json_extract(activity.payload_json, '$.requestId')
+        )
     `,
   });
 
@@ -187,6 +228,26 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
           toPersistenceSqlError("ProjectionPendingInteractionRepository.listByThreadId"),
         ),
       ),
+    listUnsettled: (input) =>
+      Effect.gen(function* () {
+        const rows = yield* listUnsettledRows(input);
+        if (rows.length === 0) return rows;
+        const activities = yield* failureActivities(input);
+        const byThread = new Map(
+          Object.entries(Arr.groupBy(activities, (activity) => activity.threadId)),
+        );
+        const matchers = new Map(
+          [...byThread].map(([threadId, failures]) => [
+            threadId,
+            createStalePendingInteractionMatcher(failures),
+          ]),
+        );
+        return rows.filter((row) => !matchers.get(row.threadId)?.(row));
+      }).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionPendingInteractionRepository.listUnsettled"),
+        ),
+      ),
     getPendingCountsByThreadId: (input) =>
       getPendingCounts(input).pipe(
         Effect.mapError(
@@ -202,8 +263,14 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
         ),
       ),
     claimResponse: (input) =>
-      claimRow(input).pipe(
-        Effect.map((rows) => rows.length === 1),
+      Effect.gen(function* () {
+        const row = yield* getRow(input);
+        if (Option.isNone(row) || row.value.status === "confirmed") return false;
+        const failures = yield* failureActivities({ threadId: input.threadId });
+        if (createStalePendingInteractionMatcher(failures)(row.value)) return false;
+        return (yield* claimRow(input)).length === 1;
+      }).pipe(
+        sql.withTransaction,
         Effect.mapError(
           toPersistenceSqlError("ProjectionPendingInteractionRepository.claimResponse"),
         ),

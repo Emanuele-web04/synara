@@ -178,3 +178,16 @@ complete current list.
 
 > **The rule that matters most:** a task is complete only after you understand and verify its result
 > — not when the provider reports that it is finished.
+
+## File previews
+
+File and explorer panels can expand across the chat area. Restore returns to the
+split layout; closing the last maximized panel returns to the chat. Closing the
+last panel in the ordinary split layout keeps the panel launcher open.
+
+Markdown previews support basic workspace Wiki links: `[[notes/design]]` opens
+`notes/design.md` from the workspace root, and `[[notes/design|Design notes]]`
+uses an alias. Include the extension for other files, such as `[[guide.pdf]]`.
+Regular Markdown links remain relative to the document directory. Code, escaped
+Wiki syntax, embeds, and heading/block links are left literal; this is basic file
+navigation rather than full Obsidian support.

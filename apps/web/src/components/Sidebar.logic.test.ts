@@ -39,6 +39,7 @@ import {
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -433,6 +434,35 @@ describe("debug feature flags menu visibility", () => {
         storageValue: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveSidebarProjectRowLabel", () => {
+  it("prefers the configured display name over the folder name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "Hubspot extension",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
+  });
+
+  it("falls back to the folder name when the display name is empty", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "   ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("hubspot-support-send-email-extension");
+  });
+
+  it("trims whitespace from the configured display name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "  Hubspot extension  ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
   });
 });
 
@@ -1321,24 +1351,24 @@ describe("resolveThreadStatusPill", () => {
 describe("resolveThreadRowClassName", () => {
   it("keeps selected active rows on the selected sidebar background", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
     expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
     expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
   it("keeps selected rows visually aligned with hover", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
     expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
     expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
   it("uses the hover sidebar background for active-only threads", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
-    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("bg-[var(--sidebar-selected)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-selected)]");
   });
 
   it("uses the sidebar accent token for hover-only rows", () => {

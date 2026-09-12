@@ -43,10 +43,10 @@ const WINDOW_ORDER = new Map([
   ["5h", 0],
   ["Daily", 1],
   ["Weekly", 2],
-  ["Weekly (overage)", 3],
-  ["Fable", 4],
-  ["Sonnet", 5],
-  ["Opus", 6],
+  ["Fable", 3],
+  ["Sonnet", 4],
+  ["Opus", 5],
+  ["Usage credits", 6],
   ["Current", 7],
 ]);
 
@@ -110,15 +110,18 @@ export function normalizeRateLimitLabel(
   if (normalized.startsWith("core_")) {
     return humanizeLabel(label);
   }
-  const durationLabel = windowLabelFromDuration(windowDurationMins);
-  if (durationLabel) return durationLabel;
-  if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
-    return "5h";
-  }
-  if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
-    return "Weekly";
-  }
-  if (normalized === "seven_day_fable" || normalized === "weekly_fable" || normalized === "fable") {
+  // Claude Code calls `seven_day_overage_included` the Fable limit. It is a model
+  // sublimit, distinct from both the account's weekly limit and paid usage credits.
+  // Resolve named buckets before duration so all weekly models keep their identity.
+  if (
+    normalized === "seven_day_fable" ||
+    normalized === "weekly_fable" ||
+    normalized === "fable" ||
+    normalized === "seven_day_overage_included" ||
+    normalized === "weekly_overage_included" ||
+    normalized === "weekly_overage" ||
+    normalized === "weekly_(overage)"
+  ) {
     return "Fable";
   }
   if (
@@ -131,13 +134,16 @@ export function normalizeRateLimitLabel(
   if (normalized === "seven_day_opus" || normalized === "weekly_opus" || normalized === "opus") {
     return "Opus";
   }
-  if (
-    normalized === "seven_day_overage_included" ||
-    normalized === "weekly_overage_included" ||
-    normalized === "weekly_overage" ||
-    normalized === "overage"
-  ) {
-    return "Weekly (overage)";
+  if (normalized === "overage" || normalized === "usage_credits") {
+    return "Usage credits";
+  }
+  const durationLabel = windowLabelFromDuration(windowDurationMins);
+  if (durationLabel) return durationLabel;
+  if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
+    return "5h";
+  }
+  if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
+    return "Weekly";
   }
   return humanizeLabel(label);
 }
@@ -259,9 +265,14 @@ function extractLimitsFromClaudePayload(
   if (!info) return undefined;
 
   const rateLimitType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
+  const label = normalizeRateLimitLabel(rateLimitType);
   const windowDurationMins =
-    rateLimitType === "five_hour" ? 300 : rateLimitType === "seven_day" ? 10_080 : undefined;
-  const normalized = normalizeLimitWindow(rateLimitType ?? "Current", {
+    label === "5h"
+      ? 300
+      : label === "Weekly" || label === "Fable" || label === "Sonnet" || label === "Opus"
+        ? 10_080
+        : undefined;
+  const normalized = normalizeLimitWindow(label, {
     utilization: info.utilization,
     resetsAt: info.resetsAt,
     windowDurationMins,

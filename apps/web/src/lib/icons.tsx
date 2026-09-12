@@ -10,6 +10,7 @@ import {
   IconAlertTriangle,
   IconArchive,
   IconArrowBackUp,
+  IconArrowForwardUp,
   IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
@@ -295,6 +296,11 @@ export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
+// Single source for every "reset / restore default / revert" affordance (settings
+// row resets, Restore defaults, effort-slider reset, space reset, file revert):
+// the Central reversed counter-clockwise arrow, never a Tabler/Lucide rotate glyph.
+export const ResetIcon: LucideIcon = centralIconWrapper("arrow-rotate-counter-clockwise");
+export const Redo2Icon = adaptIcon(IconArrowForwardUp);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);

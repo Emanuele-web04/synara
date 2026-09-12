@@ -48,9 +48,17 @@ export interface OrchestrationProjectionPipelineShape {
    * with the caller's. Use `projectEvent` (or another wrapping variant) when no
    * surrounding transaction is held.
    */
-  readonly projectHotEventInCurrentTransaction: (
-    event: OrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly projectHotEventInCurrentTransaction: (event: OrchestrationEvent) => Effect.Effect<
+    {
+      /**
+       * True when the deferred phase had no projector for this event and its
+       * cursor was advanced inside the hot transaction, so the caller must not
+       * run a separate deferred pass for it.
+       */
+      readonly deferredPhaseSettled: boolean;
+    },
+    ProjectionRepositoryError
+  >;
 
   /**
    * Project deferred repositories whose derived shell metadata is safe to

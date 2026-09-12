@@ -15,7 +15,6 @@ import {
   ThreadGoal,
   ThreadGoalAchievements,
   ThreadPinnedMessages,
-  ThreadMarkers,
   ThreadHandoff,
   ProjectId,
   ProviderInteractionMode,
@@ -77,7 +76,6 @@ export const ProjectionThread = Schema.Struct({
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
-  threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
   goal: Schema.NullOr(ThreadGoal),
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(

@@ -45,6 +45,7 @@ export const ProjectionThreadMessage = Schema.Struct({
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
+  startsNewTurn: Schema.optional(Schema.Boolean),
   isStreaming: Schema.Boolean,
   source: OrchestrationMessageSource,
   /** Server-owned orchestration event sequence for causal ordering. */
@@ -61,6 +62,8 @@ export const ProjectionThreadMessageSegmentDbRow = Schema.Struct({
   startedAt: IsoDateTime,
   endedAt: IsoDateTime,
   text: Schema.String,
+  textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
+  encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
 });
 export type ProjectionThreadMessageSegmentDbRow = typeof ProjectionThreadMessageSegmentDbRow.Type;
 

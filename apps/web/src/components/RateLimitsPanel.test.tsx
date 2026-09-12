@@ -229,7 +229,7 @@ describe("RateLimitsPanel helpers", () => {
     ]);
   });
 
-  it("humanizes the claude seven_day_overage_included window instead of leaking the raw key", () => {
+  it("maps Claude's overage-included weekly telemetry to the Fable sublimit", () => {
     const rateLimits = deriveAccountRateLimits([
       {
         activities: [
@@ -250,11 +250,55 @@ describe("RateLimitsPanel helpers", () => {
 
     expect(rows).toEqual([
       {
-        id: "claudeAgent-Weekly (overage)",
-        label: "Weekly (overage)",
+        id: "claudeAgent-Fable",
+        label: "Fable",
         remainingPercent: 22,
         resetsAt: "2099-04-04T08:03:00.000Z",
+        windowDurationMins: 10080,
       },
+    ]);
+  });
+
+  it("keeps paid usage credits separate from Fable's included weekly allowance", () => {
+    const rateLimits = deriveAccountRateLimits([
+      {
+        activities: [
+          makeActivity("credits", "account.rate-limits.updated", {
+            provider: "claudeAgent",
+            rate_limit_info: {
+              status: "allowed_warning",
+              rateLimitType: "overage",
+              utilization: 0.8,
+            },
+          }),
+        ],
+      },
+    ]);
+
+    expect(deriveVisibleRateLimitRows(rateLimits)).toEqual([
+      { id: "claudeAgent-Usage credits", label: "Usage credits", remainingPercent: 20 },
+    ]);
+  });
+
+  it("preserves model-specific weekly windows with the same duration", () => {
+    const rows = deriveVisibleRateLimitRows([
+      {
+        provider: "claudeAgent",
+        updatedAt: "2099-04-08T18:00:00.000Z",
+        limits: [
+          { window: "Weekly", usedPercent: 30, windowDurationMins: 10080 },
+          { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          { window: "seven_day_sonnet", usedPercent: 20, windowDurationMins: 10080 },
+          { window: "seven_day_opus", usedPercent: 10, windowDurationMins: 10080 },
+        ],
+      },
+    ]);
+
+    expect(rows.map(({ label, remainingPercent }) => ({ label, remainingPercent }))).toEqual([
+      { label: "Weekly", remainingPercent: 70 },
+      { label: "Fable", remainingPercent: 11 },
+      { label: "Sonnet", remainingPercent: 80 },
+      { label: "Opus", remainingPercent: 90 },
     ]);
   });
 });

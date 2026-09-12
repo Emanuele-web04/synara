@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProviderRateLimit } from "~/lib/rateLimits";
+import { deriveVisibleRateLimitRows, type ProviderRateLimit } from "~/lib/rateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
@@ -166,6 +166,48 @@ describe("useProviderUsageSummary", () => {
     expect(summary.rateLimits[0]?.limits?.[0]?.window).toBe("5h");
     expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(12);
   });
+
+  it.each([
+    ["2099-04-08T18:05:00.000Z", 10],
+    ["2099-04-08T17:55:00.000Z", 11],
+  ])(
+    "merges Fable telemetry at %s without replacing the weekly allowance",
+    (updatedAt, remaining) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+        snapshot({
+          updatedAt: "2099-04-08T18:00:00.000Z",
+          limits: [
+            { window: "5h", usedPercent: 0, windowDurationMins: 300 },
+            { window: "Weekly", usedPercent: 45, windowDurationMins: 10080 },
+            { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          ],
+        }),
+      ]);
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt,
+            limits: [{ window: "seven_day_overage_included", usedPercent: 90 }],
+          },
+        ],
+      });
+
+      expect(
+        deriveVisibleRateLimitRows(summary.rateLimits).map(({ label, remainingPercent }) => ({
+          label,
+          remainingPercent,
+        })),
+      ).toEqual([
+        { label: "5h", remainingPercent: 100 },
+        { label: "Weekly", remainingPercent: 55 },
+        { label: "Fable", remainingPercent: remaining },
+      ]);
+    },
+  );
 
   it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
     const queryClient = createQueryClient();

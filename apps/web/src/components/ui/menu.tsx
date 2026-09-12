@@ -5,6 +5,7 @@ import { ChevronRightIcon } from "~/lib/icons";
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { observeNativeSurfaceOverlay } from "~/lib/nativeSurfaceOcclusion";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
@@ -67,6 +68,7 @@ function MenuPopupBase({
   alignOffset,
   side: sideProp,
   anchor,
+  collisionAvoidance,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -74,6 +76,10 @@ function MenuPopupBase({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  /** Root menus default to flipping only along their own axis (no top/bottom fallback for
+   *  a side-placed menu); pass `{ fallbackAxisSide: "end" }` for side-placed root menus so
+   *  they drop below the anchor when neither side fits. */
+  collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal" | undefined;
 }) {
@@ -91,9 +97,11 @@ function MenuPopupBase({
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
+        ref={observeNativeSurfaceOverlay}
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionAvoidance={collisionAvoidance}
         className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
         data-slot="menu-positioner"
         side={side}
@@ -103,8 +111,9 @@ function MenuPopupBase({
           className={cn(
             "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
-            isComposerSurface ? className : null,
             popupSurfaceClassName,
+            // Last so a caller's className can override surface tokens (e.g. a rounder radius).
+            isComposerSurface ? className : null,
           )}
           data-slot="menu-popup"
           {...props}
@@ -395,6 +404,12 @@ function MenuSub({ keepOpenOnFocusOut: keepOpenOnFocusOutProp, ...props }: MenuS
   );
 }
 
+/** Unstyled submenu trigger for bespoke layouts (e.g. the effort slider card's stacked
+ *  model label). Prefer `MenuSubTrigger` for regular option rows. */
+function MenuSubTriggerBase(props: MenuPrimitive.SubmenuTrigger.Props) {
+  return <MenuPrimitive.SubmenuTrigger data-slot="menu-sub-trigger-base" {...props} />;
+}
+
 function MenuSubTrigger({
   className,
   inset,
@@ -429,17 +444,21 @@ function MenuSubPopup({
   sideOffset: sideOffsetProp,
   alignOffset,
   align: alignProp,
+  side: sideProp,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
+  /** Cascade direction; `inline-start` when the parent menu already opened toward the start. */
+  side?: "inline-end" | "inline-start";
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal";
 }) {
   const surface = surfaceProp ?? "default";
   const sideOffset = sideOffsetProp ?? 0;
   const align = alignProp ?? "start";
+  const side = sideProp ?? "inline-end";
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (
@@ -449,7 +468,7 @@ function MenuSubPopup({
       className={className}
       data-slot="menu-sub-content"
       pickerSize={pickerSize}
-      side="inline-end"
+      side={side}
       sideOffset={sideOffset}
       surface={surface}
       {...props}
@@ -473,5 +492,6 @@ export {
   MenuShortcut,
   MenuSub,
   MenuSubTrigger,
+  MenuSubTriggerBase,
   MenuSubPopup,
 };

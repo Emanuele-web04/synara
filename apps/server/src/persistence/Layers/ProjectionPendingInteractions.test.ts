@@ -2,6 +2,8 @@ import { ApprovalRequestId, ThreadId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { ProjectionPendingInteractionRepository } from "../Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "./ProjectionPendingInteractions.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
@@ -131,6 +133,55 @@ layer("ProjectionPendingInteractionRepository", (it) => {
         assert.strictEqual(row.value.responseCommandId, "command-claim-a");
       }
     }),
+  );
+
+  it.effect(
+    "never reclaims an explicitly invalidated callback, but preserves replacements and other threads",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* ProjectionPendingInteractionRepository;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("expired-thread");
+        const requestId = ApprovalRequestId.makeUnsafe("expired-request");
+        const row = {
+          interactionKind: "userInput" as const,
+          threadId,
+          requestId,
+          turnId: null,
+          lifecycleGeneration: "old",
+          status: "uncertain" as const,
+          decision: null,
+          responseCommandId: null,
+          responseRequestedAt: null,
+          createdAt: "2026-09-10T10:00:00.000Z",
+          resolvedAt: null,
+        };
+        yield* repository.upsert(row);
+        const payload = JSON.stringify({
+          requestId,
+          lifecycleGeneration: "old",
+          detail: buildStalePendingRequestFailureDetail("user-input", requestId),
+        });
+        yield* sql`INSERT INTO projection_thread_activities (activity_id, thread_id, tone, kind, summary, payload_json, turn_id, created_at, sequence)
+        VALUES ('expired-activity', ${threadId}, 'error', 'provider.user-input.respond.failed', 'Expired', ${payload}, NULL, '2026-09-10T10:01:00.000Z', 1)`;
+        const claim = {
+          threadId,
+          requestId,
+          interactionKind: "userInput" as const,
+          lifecycleGeneration: "old",
+          responseCommandId: "retry-expired" as never,
+          decision: null,
+          requestedAt: "2026-09-10T10:02:00.000Z",
+        };
+        assert.isFalse(yield* repository.claimResponse(claim));
+        assert.deepEqual(yield* repository.listUnsettled({ threadId }), []);
+        yield* repository.upsert({ ...row, lifecycleGeneration: "new", status: "pending" });
+        assert.equal((yield* repository.listUnsettled({ threadId })).length, 1);
+        assert.isTrue(yield* repository.claimResponse({ ...claim, lifecycleGeneration: "new" }));
+        const otherThread = ThreadId.makeUnsafe("other-expired-thread");
+        yield* repository.upsert({ ...row, threadId: otherThread });
+        assert.isTrue(yield* repository.claimResponse({ ...claim, threadId: otherThread }));
+      }),
   );
 
   it.effect("re-claims an uncertain interaction so a later response can settle it", () =>

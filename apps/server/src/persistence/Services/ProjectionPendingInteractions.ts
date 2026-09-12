@@ -65,6 +65,10 @@ export interface ProjectionPendingInteractionRepositoryShape {
   readonly listByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
+  /** Outstanding callbacks, excluding explicit invalidations; omitting threadId is for boot recovery. */
+  readonly listUnsettled: (input: {
+    readonly threadId?: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
   readonly getPendingCountsByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ProjectionPendingInteractionCounts, ProjectionRepositoryError>;

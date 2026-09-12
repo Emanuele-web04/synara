@@ -19,11 +19,25 @@ const isomorphicLocalStorage: Storage =
         };
       })();
 
+// Reuse the JSON schema (and Effect's compiled parser) across subscribers.
+// Cache only schema machinery: every read still fetches and validates the current value.
+const jsonSchemasByCodec = new WeakMap<Schema.Top, Schema.Codec<unknown, string>>();
+
+function getJsonSchema<T, E>(schema: Schema.Codec<T, E>): Schema.Codec<T, string> {
+  let jsonSchema = jsonSchemasByCodec.get(schema);
+  if (!jsonSchema) {
+    jsonSchema = Schema.fromJsonString(schema);
+    jsonSchemasByCodec.set(schema, jsonSchema);
+  }
+  // The schema identity ties the cached decoded type to the caller's T.
+  return jsonSchema as Schema.Codec<T, string>;
+}
+
 const decode = <T, E>(schema: Schema.Codec<T, E>, value: string) =>
-  Schema.decodeSync(Schema.fromJsonString(schema))(value);
+  Schema.decodeSync(getJsonSchema(schema))(value);
 
 const encode = <T, E>(schema: Schema.Codec<T, E>, value: T) =>
-  Schema.encodeSync(Schema.fromJsonString(schema))(value);
+  Schema.encodeSync(getJsonSchema(schema))(value);
 
 export const getLocalStorageItem = <T, E>(key: string, schema: Schema.Codec<T, E>): T | null => {
   const item = isomorphicLocalStorage.getItem(key);

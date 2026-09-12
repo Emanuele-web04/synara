@@ -209,7 +209,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "context-restart-entry",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Native session history was unavailable, so the model continued from a recap.",
+              label: "The session's history was lost, so the model continues from a summary.",
               tone: "error",
               activityKind: "provider.context.changed",
               providerContextLifecycle: {
@@ -219,7 +219,7 @@ describe("MessagesTimeline", () => {
                 sessionRestarted: true,
                 recapInjected: true,
                 recapCharacters: 4_200,
-                recapPreview: "Bounded recap preview",
+                recapPreview: "Bounded summary preview",
                 recapPreviewTruncated: true,
               },
             },
@@ -228,10 +228,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain("history was lost, so the model continues from a summary.");
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
-    expect(markup).not.toContain("Bounded recap preview");
+    expect(markup).not.toContain("Bounded summary preview");
   });
 
   it("keeps small transcripts on the simple non-virtualized path", async () => {
@@ -363,7 +363,9 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-1.5");
+    expect(markup).toContain("chat-user-message-bubble");
+    const bubbleClassName = markup.match(/class="([^"]*chat-user-message-bubble[^"]*)"/)?.[1];
+    expect(bubbleClassName?.split(" ")).toContain("py-2.5");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
@@ -1241,6 +1243,23 @@ describe("MessagesTimeline", () => {
 
   it("keeps the generic working copy alongside the active compaction entry", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [compactionEntry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "work-compacting",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+          payload: {
+            itemType: "context_compaction",
+            status: "inProgress",
+            data: { item: { type: "contextCompaction", id: "compaction-1" } },
+          },
+        }),
+      ],
+      undefined,
+    );
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -1252,13 +1271,7 @@ describe("MessagesTimeline", () => {
             id: "entry-compacting",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-compacting",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Compacting conversation...",
-              tone: "info",
-              activityKind: "context-compaction",
-            },
+            entry: compactionEntry!,
           },
         ]}
         turnDiffSummaryByAssistantMessageId={new Map()}
@@ -1277,7 +1290,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Compacting conversation...");
+    expect(markup).toContain("Compacting context");
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain("Working for");
     expect(markup).not.toContain("h-px flex-1 bg-border");

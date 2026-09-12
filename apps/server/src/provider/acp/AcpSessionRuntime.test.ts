@@ -21,6 +21,121 @@ import {
 } from "./AcpSessionRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 
+it.each(["overflow", "scope close"])(
+  "releases a stalled SDK notification handler on %s",
+  async (mode) => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const promptStarted = Deferred.makeUnsafe<void>();
+    const handlerStarted = Deferred.makeUnsafe<void>();
+    let notificationsHandled = 0;
+    let handlerInterrupted = false;
+    let agentConnection: { close(error?: unknown): void } | undefined;
+    const agentApp = OfficialAcp.agent({ name: "memory-test" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+      }))
+      .onRequest(OfficialAcp.methods.agent.session.new, () => ({ sessionId: "memory-session" }))
+      .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
+        Deferred.doneUnsafe(promptStarted, Effect.void);
+        return new Promise<never>(() => {});
+      });
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          const input = new ReadableStream<Uint8Array>({
+            pull: (controller) =>
+              Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => {
+                controller.enqueue(chunk);
+              }),
+          });
+          const output = new WritableStream<Uint8Array>({
+            write: (chunk) =>
+              Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
+          });
+          agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "memory-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime;
+          yield* runtime.start();
+          yield* runtime.handleSessionUpdate(() =>
+            Effect.gen(function* () {
+              notificationsHandled++;
+              yield* Deferred.succeed(handlerStarted, undefined);
+              yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  handlerInterrupted = true;
+                }),
+              ),
+            ),
+          );
+          const prompt = yield* runtime
+            .prompt({ prompt: [{ type: "text", text: "test" }] })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(promptStarted);
+          const frame = new TextEncoder().encode(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId: "memory-session",
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "x".repeat(1024 * 1024) },
+                },
+              },
+            }) + "\n",
+          );
+          yield* Queue.offer(agentToClient, frame);
+          yield* Deferred.await(handlerStarted);
+          if (mode === "scope close") return;
+          for (let index = 0; index < 33; index++) yield* Queue.offer(agentToClient, frame);
+          const error = yield* Fiber.join(prompt).pipe(Effect.flip);
+          expect(error).toMatchObject({
+            _tag: "AcpTransportError",
+            detail: expect.stringContaining("memory budget"),
+          });
+          expect(notificationsHandled).toBe(1);
+        }).pipe(Effect.provide(runtimeLayer), Effect.scoped),
+      );
+      expect(handlerInterrupted).toBe(true);
+    } finally {
+      agentConnection?.close();
+      await Effect.runPromise(Queue.shutdown(clientToAgent));
+      await Effect.runPromise(Queue.shutdown(agentToClient));
+    }
+  },
+  10_000,
+);
+
 describe("makeAcpIncomingFrameGuard", () => {
   const encode = (value: string) => new TextEncoder().encode(value);
 

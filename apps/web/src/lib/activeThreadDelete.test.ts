@@ -104,9 +104,11 @@ describe("deleteActiveThreadFromClient", () => {
       "prepare",
       "thread.delete",
       "terminal.dispose",
+      "terminal.dispose",
       "reconcile",
       "onDeleted",
     ]);
+    expect(harness.disposeThread.mock.calls).toEqual([[THREAD_ID], [`dock-terminal:${THREAD_ID}`]]);
     expect(onDeleted).toHaveBeenCalledWith({ thread: THREAD, prepared: "prepared" });
   });
 

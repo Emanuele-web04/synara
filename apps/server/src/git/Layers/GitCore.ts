@@ -27,11 +27,19 @@ import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import {
+  DEFAULT_GIT_RECENT_COMMIT_LIMIT,
+  GIT_READ_FILE_AT_REV_MAX_BYTES,
+  type GitBlameLineResult,
+  type GitRecentCommit,
+} from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
+import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -45,6 +53,7 @@ import {
   type GitCoreShape,
   type ExecuteGitInput,
   type ExecuteGitResult,
+  type GitWorkingTreePatch,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
 
@@ -110,7 +119,18 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
 }
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const RECENT_COMMIT_FIELD_SEPARATOR = "\u001f";
+const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
+  sha: "0".repeat(40),
+  shortSha: "",
+  author: "",
+  authorEmail: "",
+  authorTime: "",
+  summary: "",
+  uncommitted: true,
+};
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
+const BLAME_LINE_TIMEOUT_MS = 10_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
@@ -164,19 +184,70 @@ function hasNodeErrorCode(cause: unknown, code: string): boolean {
   );
 }
 
-function joinPatchSegments(segments: ReadonlyArray<string>): string {
-  let combined = "";
-  for (const segment of segments) {
-    if (segment.length === 0) continue;
-    if (combined.length > 0 && !combined.endsWith("\n")) {
-      combined += "\n";
-    }
-    combined += segment;
-    if (!combined.endsWith("\n")) {
-      combined += "\n";
-    }
+/** Returns the longest UTF-8 prefix that fits without splitting a code point. */
+function truncateUtf8Prefix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.byteLength <= maxBytes) return value;
+
+  let prefixEnd = maxBytes;
+  while (prefixEnd > 0 && ((encoded[prefixEnd] ?? 0) & 0xc0) === 0x80) {
+    prefixEnd -= 1;
   }
-  return combined;
+  return encoded.subarray(0, prefixEnd).toString("utf8");
+}
+
+interface PatchAccumulator {
+  readonly chunks: string[];
+  bytes: number;
+  truncated: boolean;
+  endsWithNewline: boolean;
+}
+
+function makePatchAccumulator(): PatchAccumulator {
+  return { chunks: [], bytes: 0, truncated: false, endsWithNewline: false };
+}
+
+function appendPatchSegment(
+  accumulator: PatchAccumulator,
+  segment: string,
+  segmentTruncated: boolean,
+  maxOutputBytes: number,
+): void {
+  if (accumulator.truncated) return;
+  if (segment.length === 0) {
+    accumulator.truncated = segmentTruncated;
+    return;
+  }
+
+  if (accumulator.bytes > 0 && !accumulator.endsWithNewline) {
+    if (accumulator.bytes >= maxOutputBytes) {
+      accumulator.truncated = true;
+      return;
+    }
+    accumulator.chunks.push("\n");
+    accumulator.bytes += 1;
+    accumulator.endsWithNewline = true;
+  }
+
+  const segmentBytes = Buffer.byteLength(segment, "utf8");
+  const remainingBytes = maxOutputBytes - accumulator.bytes;
+  const retained =
+    segmentBytes <= remainingBytes ? segment : truncateUtf8Prefix(segment, remainingBytes);
+  const retainedBytes = retained === segment ? segmentBytes : Buffer.byteLength(retained, "utf8");
+  if (retained.length > 0) {
+    accumulator.chunks.push(retained);
+    accumulator.bytes += retainedBytes;
+    accumulator.endsWithNewline = retained.endsWith("\n");
+  }
+  accumulator.truncated = segmentTruncated || retainedBytes < segmentBytes;
+}
+
+function toWorkingTreePatch(accumulator: PatchAccumulator): GitWorkingTreePatch {
+  return {
+    patch: accumulator.chunks.join(""),
+    truncated: accumulator.truncated,
+  };
 }
 
 function parseBranchLine(line: string): { name: string; current: boolean } | null {
@@ -192,6 +263,19 @@ function parseBranchLine(line: string): { name: string; current: boolean } | nul
     name,
     current: trimmed.startsWith("* "),
   };
+}
+
+function parseRecentCommitLines(stdout: string): ReadonlyArray<GitRecentCommit> {
+  const commits: GitRecentCommit[] = [];
+  for (const line of stdout.split("\n")) {
+    if (line.length === 0) continue;
+    const [sha = "", shortSha = "", subject = "", committedAt = ""] = line.split(
+      RECENT_COMMIT_FIELD_SEPARATOR,
+    );
+    if (sha.length === 0 || shortSha.length === 0) continue;
+    commits.push({ sha, shortSha, subject, committedAt });
+  }
+  return commits;
 }
 
 function parseRemoteNames(stdout: string): ReadonlyArray<string> {
@@ -327,6 +411,13 @@ function createGitCommandError(
     detail,
     ...(cause !== undefined ? { cause } : {}),
   });
+}
+
+function isSuccessfulNoIndexDiff(result: ExecuteGitResult): boolean {
+  // `--no-index` uses code 1 both for a normal difference and for some read errors.
+  // A produced diff record distinguishes the normal case. Stderr is not decisive because
+  // Git may emit advisory warnings (for example, line-ending conversion) alongside it.
+  return result.code === 0 || (result.code === 1 && result.stdout.length > 0);
 }
 
 const DIRTY_WORKTREE_PATTERN =
@@ -551,34 +642,64 @@ const createTrace2Monitor = Effect.fn(function* (
   };
 });
 
+export interface CollectedGitOutput {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
 export const collectGitOutput = Effect.fn(function* <E>(
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
   stream: Stream.Stream<Uint8Array, E>,
   maxOutputBytes: number,
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
   outputMode: "error" | "truncate",
-): Effect.fn.Return<string, GitCommandError> {
+  lineDelimiter: "\n" | "\0" = "\n",
+): Effect.fn.Return<CollectedGitOutput, GitCommandError> {
   const decoder = new TextDecoder();
-  let bytes = 0;
+  let receivedBytes = 0;
+  let retainedBytes = 0;
   let text = "";
   let lineBuffer = "";
+  let truncated = false;
+  let retainedPrefixComplete = false;
+  const findSeparator = () =>
+    lineDelimiter === "\0" ? lineBuffer.indexOf("\0") : lineBuffer.search(/[\r\n]/);
+
+  const appendRetainedPrefix = (decoded: string) => {
+    if (retainedPrefixComplete || decoded.length === 0) return;
+    const decodedBytes = Buffer.byteLength(decoded, "utf8");
+    const remainingBytes = maxOutputBytes - retainedBytes;
+    const retained =
+      decodedBytes <= remainingBytes ? decoded : truncateUtf8Prefix(decoded, remainingBytes);
+    const appendedBytes = retained === decoded ? decodedBytes : Buffer.byteLength(retained, "utf8");
+    text += retained;
+    retainedBytes += appendedBytes;
+    if (appendedBytes < decodedBytes) {
+      retainedPrefixComplete = true;
+      truncated = true;
+    }
+  };
 
   const emitCompleteLines = (flush: boolean) =>
     Effect.gen(function* () {
-      let separatorIndex = lineBuffer.search(/[\r\n]/);
+      let separatorIndex = findSeparator();
       while (separatorIndex >= 0) {
         const line = lineBuffer.slice(0, separatorIndex);
         const separatorWidth =
-          lineBuffer[separatorIndex] === "\r" && lineBuffer[separatorIndex + 1] === "\n" ? 2 : 1;
+          lineDelimiter !== "\0" &&
+          lineBuffer[separatorIndex] === "\r" &&
+          lineBuffer[separatorIndex + 1] === "\n"
+            ? 2
+            : 1;
         lineBuffer = lineBuffer.slice(separatorIndex + separatorWidth);
         if (line.length > 0 && onLine) {
           yield* onLine(line);
         }
-        separatorIndex = lineBuffer.search(/[\r\n]/);
+        separatorIndex = findSeparator();
       }
 
       if (flush) {
-        const trailing = lineBuffer.replace(/\r$/, "");
+        const trailing = lineDelimiter === "\0" ? lineBuffer : lineBuffer.replace(/\r$/, "");
         lineBuffer = "";
         if (trailing.length > 0 && onLine) {
           yield* onLine(trailing);
@@ -588,19 +709,25 @@ export const collectGitOutput = Effect.fn(function* <E>(
 
   yield* Stream.runForEach(stream, (chunk) =>
     Effect.gen(function* () {
-      bytes += chunk.byteLength;
-      if (bytes > maxOutputBytes && outputMode === "error") {
-        return yield* new GitCommandError({
-          operation: input.operation,
-          command: commandLabel(input.args),
-          cwd: input.cwd,
-          detail: `${commandLabel(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
-        });
+      receivedBytes += chunk.byteLength;
+      if (receivedBytes > maxOutputBytes) {
+        truncated = true;
+        if (outputMode === "error") {
+          return yield* new GitCommandError({
+            operation: input.operation,
+            command: commandLabel(input.args),
+            cwd: input.cwd,
+            detail: `${commandLabel(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
+          });
+        }
+      }
+      // Once the retained UTF-8 prefix is complete, keep draining the pipe so
+      // the child can exit promptly, but skip decoding when no listener needs it.
+      if (outputMode === "truncate" && retainedPrefixComplete && !onLine) {
+        return;
       }
       const decoded = decoder.decode(chunk, { stream: true });
-      if (text.length < maxOutputBytes) {
-        text += decoded.slice(0, maxOutputBytes - text.length);
-      }
+      appendRetainedPrefix(decoded);
       lineBuffer += decoded;
       yield* emitCompleteLines(false);
       if (outputMode === "truncate" && lineBuffer.length > maxOutputBytes) {
@@ -610,12 +737,10 @@ export const collectGitOutput = Effect.fn(function* <E>(
   ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.")));
 
   const remainder = decoder.decode();
-  if (text.length < maxOutputBytes) {
-    text += remainder.slice(0, maxOutputBytes - text.length);
-  }
+  appendRetainedPrefix(remainder);
   lineBuffer += remainder;
   yield* emitCompleteLines(true);
-  return text;
+  return { text, truncated };
 });
 
 export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"] }) =>
@@ -687,7 +812,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           // second cleanup attempt.
           yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
 
-          const [stdout, stderr, exitCode] = yield* Effect.all(
+          const [stdoutResult, stderrResult, exitCode] = yield* Effect.all(
             [
               collectGitOutput(
                 commandInput,
@@ -695,6 +820,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 maxOutputBytes,
                 input.progress?.onStdoutLine,
                 outputMode,
+                input.progress?.stdoutLineDelimiter,
               ),
               collectGitOutput(
                 commandInput,
@@ -713,7 +839,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           yield* trace2Monitor.flush;
 
           if (!input.allowNonZeroExit && exitCode !== 0) {
-            const trimmedStderr = stderr.trim();
+            const trimmedStderr = stderrResult.text.trim();
             return yield* new GitCommandError({
               operation: commandInput.operation,
               command: commandLabel(commandInput.args),
@@ -725,7 +851,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             });
           }
 
-          return { code: exitCode, stdout, stderr } satisfies ExecuteGitResult;
+          return {
+            code: exitCode,
+            stdout: stdoutResult.text,
+            stderr: stderrResult.text,
+            stdoutTruncated: stdoutResult.truncated,
+            stderrTruncated: stderrResult.truncated,
+          } satisfies ExecuteGitResult;
         });
 
         return yield* commandEffect.pipe(
@@ -754,7 +886,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       cwd: string,
       args: readonly string[],
       options: ExecuteGitOptions = {},
-    ): Effect.Effect<{ code: number; stdout: string; stderr: string }, GitCommandError> =>
+    ): Effect.Effect<ExecuteGitResult, GitCommandError> =>
       execute({
         operation,
         cwd,
@@ -1612,55 +1744,109 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const readUntrackedPatches = (cwd: string, operationPrefix: string) =>
-      runGitStdout(
+    const listUntrackedFiles = (
+      cwd: string,
+      operationPrefix: string,
+      env?: NodeJS.ProcessEnv,
+      filePath?: string,
+    ) =>
+      executeGit(
         `${operationPrefix}.untrackedFiles`,
         cwd,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-        true,
-      ).pipe(
-        Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)),
+        [
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "-z",
+          ...(filePath === undefined ? [] : ["--", `:(literal)${filePath}`]),
+        ],
+        { allowNonZeroExit: true, ...(env ? { env } : {}) },
+      ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
+
+    const readUntrackedPatches = (
+      cwd: string,
+      operationPrefix: string,
+      accumulator: PatchAccumulator,
+      files?: ReadonlyArray<string>,
+      maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
+    ) => {
+      if (accumulator.truncated) {
+        return Effect.succeed(toWorkingTreePatch(accumulator));
+      }
+      const resolveFiles: Effect.Effect<ReadonlyArray<string>, GitCommandError> = files
+        ? Effect.succeed(files)
+        : listUntrackedFiles(cwd, operationPrefix);
+      return resolveFiles.pipe(
         Effect.flatMap((untrackedFiles) =>
-          Effect.forEach(
-            untrackedFiles,
-            (filePath) =>
+          Effect.gen(function* () {
+            // Sequential capture is intentional: parallel children would race for the shared
+            // budget and make the retained file prefix nondeterministic. Stop launching work as
+            // soon as the ordered prefix is full.
+            for (const filePath of untrackedFiles.toSorted()) {
+              if (accumulator.truncated) break;
+              const separatorBytes = accumulator.bytes > 0 && !accumulator.endsWithNewline ? 1 : 0;
+              const remainingBytes = maxOutputBytes - accumulator.bytes - separatorBytes;
+              if (remainingBytes <= 0) {
+                accumulator.truncated = true;
+                break;
+              }
+
               // Git diff omits untracked files, so synthesize a normal patch for each one.
-              executeGit(
-                `${operationPrefix}.untrackedPatch`,
-                cwd,
-                [
-                  "diff",
-                  "--no-index",
-                  "--patch",
-                  "--no-color",
-                  "--src-prefix=a/",
-                  "--dst-prefix=b/",
-                  "--",
-                  "/dev/null",
-                  filePath,
-                ],
-                {
-                  allowNonZeroExit: true,
-                  timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-                },
-              ).pipe(Effect.map((result) => result.stdout)),
-            { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
-          ),
+              const operation = `${operationPrefix}.untrackedPatch`;
+              const args = [
+                "diff",
+                "--no-index",
+                "--patch",
+                "--no-color",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--",
+                "/dev/null",
+                filePath,
+              ];
+              const result = yield* executeGit(operation, cwd, args, {
+                allowNonZeroExit: true,
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                maxOutputBytes: remainingBytes,
+                outputMode: "truncate",
+              });
+              const stderr = result.stderr.trim();
+              if (!isSuccessfulNoIndexDiff(result)) {
+                return yield* createGitCommandError(
+                  operation,
+                  cwd,
+                  args,
+                  stderr.length > 0
+                    ? stderr
+                    : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                );
+              }
+              appendPatchSegment(
+                accumulator,
+                result.stdout,
+                result.stdoutTruncated === true,
+                maxOutputBytes,
+              );
+            }
+            return toWorkingTreePatch(accumulator);
+          }),
         ),
       );
+    };
 
     // `git diff --no-index` exits 1 both when it found differences (the expected
     // outcome for an untracked file vs /dev/null) and when it could not read the
     // path (e.g. the file vanished between `ls-files` and the diff). Only the former
-    // may be treated as success: it produces a numstat record and no stderr.
-    const readUntrackedNumstats = (cwd: string, operationPrefix: string) =>
-      runGitStdout(`${operationPrefix}.untrackedFiles`, cwd, [
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-      ]).pipe(
-        Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)),
+    // may be treated as success: it produces a numstat record.
+    const readUntrackedNumstats = (
+      cwd: string,
+      operationPrefix: string,
+      files?: ReadonlyArray<string>,
+    ) => {
+      const resolveFiles: Effect.Effect<ReadonlyArray<string>, GitCommandError> = files
+        ? Effect.succeed(files)
+        : listUntrackedFiles(cwd, operationPrefix);
+      return resolveFiles.pipe(
         Effect.flatMap((untrackedFiles) =>
           Effect.forEach(
             untrackedFiles,
@@ -1673,10 +1859,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               }).pipe(
                 Effect.flatMap((result) => {
                   const stderr = result.stderr.trim();
-                  if (
-                    result.code === 0 ||
-                    (result.code === 1 && stderr.length === 0 && result.stdout.length > 0)
-                  ) {
+                  if (isSuccessfulNoIndexDiff(result)) {
                     return Effect.succeed(result.stdout);
                   }
                   return Effect.fail(
@@ -1696,6 +1879,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ),
         ),
       );
+    };
 
     const resolveBranchMergeBase = (cwd: string) =>
       Effect.gen(function* () {
@@ -1737,20 +1921,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const readUnstagedPatch: GitCoreShape["readUnstagedPatch"] = (cwd) =>
       Effect.gen(function* () {
-        const trackedPatch = yield* executeGit(
+        const tracked = yield* executeGit(
           "GitCore.readUnstagedPatch.trackedPatch",
           cwd,
           ["diff", "--patch", "--no-color", "--no-ext-diff"],
           {
             allowNonZeroExit: true,
             timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+            outputMode: "truncate",
           },
-        ).pipe(Effect.map((result) => result.stdout));
-        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readUnstagedPatch");
-
-        return {
-          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
-        };
+        );
+        const accumulator = makePatchAccumulator();
+        appendPatchSegment(
+          accumulator,
+          tracked.stdout,
+          tracked.stdoutTruncated === true,
+          DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        return yield* readUntrackedPatches(cwd, "GitCore.readUnstagedPatch", accumulator);
       });
 
     const readStagedPatch: GitCoreShape["readStagedPatch"] = (cwd) =>
@@ -1761,11 +1950,29 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         {
           allowNonZeroExit: true,
           timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+          maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+          outputMode: "truncate",
         },
-      ).pipe(Effect.map((result) => ({ patch: result.stdout })));
+      ).pipe(
+        Effect.map((result) => ({
+          patch: result.stdout,
+          truncated: result.stdoutTruncated === true,
+        })),
+      );
 
-    const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd) =>
+    const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd, filePath) =>
       Effect.gen(function* () {
+        if (
+          filePath !== undefined &&
+          (!isWorkspaceRelativePathSafe(filePath) || filePath.includes("\0"))
+        ) {
+          return yield* createGitCommandError(
+            "GitCore.readWorkingTreePatch.path",
+            cwd,
+            ["diff"],
+            "File path must be a workspace-relative file path.",
+          );
+        }
         const headExists = yield* executeGit(
           "GitCore.readWorkingTreePatch.headExists",
           cwd,
@@ -1773,46 +1980,441 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
-        const trackedPatch = yield* executeGit(
+        const paths: string[] = filePath === undefined ? [] : [filePath];
+        let untrackedFiles: ReadonlyArray<string> | undefined;
+        if (filePath !== undefined) {
+          const isDirectory = yield* Effect.tryPromise({
+            try: () =>
+              nodeFs.lstat(nodePath.join(cwd, filePath)).then(
+                (stat) => stat.isDirectory(),
+                (error: NodeJS.ErrnoException) => {
+                  if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+                  throw error;
+                },
+              ),
+            catch: (cause) =>
+              createGitCommandError(
+                "GitCore.readWorkingTreePatch.path",
+                cwd,
+                ["diff"],
+                String(cause),
+              ),
+          });
+          const baseType = headExists
+            ? yield* executeGit(
+                "GitCore.readWorkingTreePatch.baseType",
+                cwd,
+                ["cat-file", "-t", `HEAD:${filePath}`],
+                { allowNonZeroExit: true },
+              )
+            : null;
+          if (isDirectory || baseType?.stdout.trim() === "tree") {
+            return yield* createGitCommandError(
+              "GitCore.readWorkingTreePatch.path",
+              cwd,
+              ["diff"],
+              "A file diff cannot target a directory.",
+            );
+          }
+          untrackedFiles = yield* listUntrackedFiles(
+            cwd,
+            "GitCore.readWorkingTreePatch",
+            undefined,
+            filePath,
+          );
+          // A destination alone hides its rename relationship from Git. Stream
+          // rename metadata so unrelated paths cannot exhaust the capture limit,
+          // then include the old name in the bounded patch.
+          if (headExists && baseType?.code !== 0 && !untrackedFiles.includes(filePath)) {
+            let field = 0;
+            let sourcePath = "";
+            yield* executeGit(
+              "GitCore.readWorkingTreePatch.renamePaths",
+              cwd,
+              ["diff", "--name-status", "-z", "--diff-filter=R", "--no-ext-diff", "HEAD"],
+              {
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                outputMode: "truncate",
+                progress: {
+                  stdoutLineDelimiter: "\0",
+                  onStdoutLine: (record) =>
+                    Effect.sync(() => {
+                      if (field === 1) sourcePath = record;
+                      if (field === 2 && record === filePath) paths.push(sourcePath);
+                      field = (field + 1) % 3;
+                    }),
+                },
+              },
+            );
+          }
+        }
+
+        const tracked = yield* executeGit(
           "GitCore.readWorkingTreePatch.trackedPatch",
           cwd,
-          headExists
-            ? ["diff", "--patch", "--no-color", "--no-ext-diff", "HEAD"]
-            : ["diff", "--patch", "--no-color", "--no-ext-diff", EMPTY_TREE_OBJECT_ID],
+          [
+            "diff",
+            "--patch",
+            "--no-color",
+            "--no-ext-diff",
+            headExists ? "HEAD" : EMPTY_TREE_OBJECT_ID,
+            ...(filePath === undefined ? [] : ["--", ...paths.map((path) => `:(literal)${path}`)]),
+          ],
           {
             allowNonZeroExit: true,
             timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+            outputMode: "truncate",
           },
+        );
+
+        const accumulator = makePatchAccumulator();
+        appendPatchSegment(
+          accumulator,
+          tracked.stdout,
+          tracked.stdoutTruncated === true,
+          DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        return yield* readUntrackedPatches(
+          cwd,
+          "GitCore.readWorkingTreePatch",
+          accumulator,
+          untrackedFiles,
+        );
+      });
+
+    const readFileAtRev: GitCoreShape["readFileAtRev"] = (input) =>
+      Effect.gen(function* () {
+        const filePath = input.filePath.trim();
+        if (!isWorkspaceRelativePathSafe(filePath)) {
+          return yield* createGitCommandError(
+            "GitCore.readFileAtRev",
+            input.cwd,
+            ["cat-file", "blob", filePath],
+            "File path must be a workspace-relative path.",
+          );
+        }
+
+        const maxBytes = input.maxBytes ?? GIT_READ_FILE_AT_REV_MAX_BYTES;
+        // The index is not a commit: its blob is addressed as `:<path>`.
+        const baseRev =
+          input.base === "index"
+            ? null
+            : input.base === "branch"
+              ? yield* resolveBranchMergeBase(input.cwd)
+              : input.rev?.trim() || "HEAD";
+
+        // `missing` is reserved for a valid revision that lacks the path; a
+        // revision that no longer resolves (a deleted compare branch) is an
+        // error, not an empty base.
+        const resolvedRev =
+          baseRev === null
+            ? "index"
+            : yield* resolveCommitObjectId(input.cwd, baseRev, "GitCore.readFileAtRev.revParse");
+
+        const blobRef = baseRev === null ? `:0:${filePath}` : `${resolvedRev}:${filePath}`;
+        const sizeResult = yield* executeGit(
+          "GitCore.readFileAtRev.size",
+          input.cwd,
+          ["cat-file", "-s", blobRef],
+          { allowNonZeroExit: true },
+        );
+        if (sizeResult.code !== 0) {
+          return { contents: "", resolvedRev, missing: true, truncated: false };
+        }
+        const blobSize = Number.parseInt(sizeResult.stdout.trim(), 10);
+        const truncated = Number.isFinite(blobSize) && blobSize > maxBytes;
+
+        const contents = yield* executeGit(
+          "GitCore.readFileAtRev.blob",
+          input.cwd,
+          ["cat-file", "blob", blobRef],
+          { maxOutputBytes: maxBytes, outputMode: "truncate" },
         ).pipe(Effect.map((result) => result.stdout));
 
-        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readWorkingTreePatch");
+        if (contents.includes("\u0000")) {
+          return yield* createGitCommandError(
+            "GitCore.readFileAtRev",
+            input.cwd,
+            ["cat-file", "blob", blobRef],
+            "File at this revision appears to be binary.",
+          );
+        }
 
-        return {
-          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
-        };
+        return { contents, resolvedRev, missing: false, truncated };
       });
 
     const readBranchPatch: GitCoreShape["readBranchPatch"] = (cwd) =>
       Effect.gen(function* () {
         const mergeBase = yield* resolveBranchMergeBase(cwd);
 
-        const trackedPatch = yield* executeGit(
+        const tracked = yield* executeGit(
           "GitCore.readBranchPatch.trackedPatch",
           cwd,
           ["diff", "--patch", "--minimal", "--no-color", "--no-ext-diff", mergeBase],
           {
             timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
             maxOutputBytes: 10_000_000,
+            outputMode: "truncate",
           },
-        ).pipe(Effect.map((result) => result.stdout));
-        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readBranchPatch");
-
-        return {
-          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
-        };
+        );
+        const accumulator = makePatchAccumulator();
+        appendPatchSegment(
+          accumulator,
+          tracked.stdout,
+          tracked.stdoutTruncated === true,
+          10_000_000,
+        );
+        return yield* readUntrackedPatches(
+          cwd,
+          "GitCore.readBranchPatch",
+          accumulator,
+          undefined,
+          10_000_000,
+        );
       });
 
-    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope) =>
+    const resolveCommitObjectId = (cwd: string, rev: string, operation: string) =>
+      Effect.gen(function* () {
+        if (rev.startsWith("-")) {
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            ["rev-parse", "--verify", "--quiet", rev],
+            `"${rev}" is not a valid revision.`,
+          );
+        }
+        const verified = yield* executeGit(
+          operation,
+          cwd,
+          ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`],
+          { allowNonZeroExit: true },
+        );
+        const objectId = verified.stdout.trim();
+        if (verified.code !== 0 || objectId.length === 0) {
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`],
+            `Cannot resolve "${rev}" to a commit in this repository.`,
+          );
+        }
+        return objectId;
+      });
+
+    const blameLine: GitCoreShape["blameLine"] = (input) =>
+      Effect.gen(function* () {
+        // The revision comes from the client, so it is resolved to an object ID
+        // before it is placed on the blame command line; an option-like value
+        // would otherwise be parsed as a blame flag rather than a revision.
+        const requestedRev = input.rev?.trim() ?? "";
+        const resolvedRev =
+          input.base === "branch"
+            ? yield* resolveBranchMergeBase(input.cwd)
+            : requestedRev.length === 0
+              ? null
+              : yield* resolveCommitObjectId(input.cwd, requestedRev, "GitCore.blameLine.revParse");
+        const args = [
+          "blame",
+          "--porcelain",
+          "-L",
+          `${input.line},${input.line}`,
+          ...(resolvedRev ? [resolvedRev] : []),
+          "--",
+          input.filePath,
+        ];
+        const result = yield* executeGit("GitCore.blameLine", input.cwd, args, {
+          timeoutMs: BLAME_LINE_TIMEOUT_MS,
+          allowNonZeroExit: true,
+        });
+        if (result.code !== 0) {
+          // A working-tree line in a file HEAD does not know (untracked, newly
+          // staged, or any file in a repository without commits) has no history
+          // yet: report it as uncommitted rather than failing the popover.
+          if (resolvedRev === null && /no such (?:path|ref)/i.test(result.stderr)) {
+            return UNCOMMITTED_BLAME_RESULT;
+          }
+          return yield* createGitCommandError(
+            "GitCore.blameLine",
+            input.cwd,
+            args,
+            result.stderr.trim() || "git blame failed",
+          );
+        }
+
+        const parsed = parseGitBlamePorcelain(result.stdout);
+        if (!parsed) {
+          return yield* createGitCommandError(
+            "GitCore.blameLine",
+            input.cwd,
+            args,
+            "git blame returned no attribution for this line.",
+          );
+        }
+        return parsed;
+      });
+
+    // `git diff <ref>` only visits paths the index tracks, so a path the ref
+    // has, the index dropped, and the working tree recreated would show up
+    // twice: as a tracked deletion plus a synthesized untracked addition. A
+    // temporary index populated from the ref makes git itself diff every ref
+    // path against the working tree (with its own path quoting, mode, and
+    // size handling), and `ls-files --others` against that index yields
+    // exactly the working tree files the ref does not have.
+    const withRefIndex = <A>(
+      cwd: string,
+      resolvedRef: string,
+      operationPrefix: string,
+      use: (
+        env: NodeJS.ProcessEnv,
+        seededGitlinks: ReadonlySet<string>,
+      ) => Effect.Effect<A, GitCommandError>,
+    ): Effect.Effect<A, GitCommandError> =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tempIndexDir = yield* fileSystem
+            .makeTempDirectoryScoped({ prefix: `synara-ref-index-${process.pid}-` })
+            .pipe(
+              Effect.mapError((cause) =>
+                createGitCommandError(
+                  `${operationPrefix}.readTree`,
+                  cwd,
+                  ["read-tree", resolvedRef],
+                  cause.message,
+                ),
+              ),
+            );
+          const env = { GIT_INDEX_FILE: nodePath.join(tempIndexDir, "index") };
+          yield* executeGit(`${operationPrefix}.readTree`, cwd, ["read-tree", resolvedRef], {
+            env,
+            fallbackErrorMessage: "git read-tree failed",
+          });
+          // Seed changed gitlinks from the real index so Git, rather than a
+          // /dev/null filesystem comparison, renders their mode and commit.
+          // This also works when a submodule has not been initialized.
+          const additions = yield* executeGit(
+            `${operationPrefix}.gitlinkAdditions`,
+            cwd,
+            [
+              "diff",
+              "--cached",
+              "--raw",
+              "--no-abbrev",
+              "--no-renames",
+              "--diff-filter=AMT",
+              "-z",
+              resolvedRef,
+            ],
+            { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+          ).pipe(Effect.map((result) => result.stdout.split("\0")));
+          const seededGitlinks = new Set<string>();
+          for (let index = 0; index + 1 < additions.length; index += 2) {
+            const entry = additions[index]?.split(" ");
+            const filePath = additions[index + 1];
+            const objectId = entry?.[3];
+            if (entry?.[1] !== "160000" || !objectId || !filePath) continue;
+            yield* executeGit(
+              `${operationPrefix}.seedGitlink`,
+              cwd,
+              [
+                "update-index",
+                "--add",
+                "--replace",
+                "--cacheinfo",
+                `160000,${objectId},${filePath}`,
+              ],
+              { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+            );
+            seededGitlinks.add(filePath);
+          }
+          return yield* use(env, seededGitlinks);
+        }),
+      );
+
+    // Working tree files the ref lacks: the temporary index's untracked
+    // listing, plus paths the real index tracks that an ignore rule would hide
+    // from that listing (a force-added build artifact, for example).
+    const listWorkingTreeAdditionsAgainstRef = (
+      cwd: string,
+      resolvedRef: string,
+      env: NodeJS.ProcessEnv,
+      operationPrefix: string,
+      seededGitlinks: ReadonlySet<string>,
+    ) =>
+      Effect.gen(function* () {
+        const others = yield* listUntrackedFiles(cwd, operationPrefix, env);
+        const trackedAdditions = yield* executeGit(
+          `${operationPrefix}.trackedAdditions`,
+          cwd,
+          [
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            "-z",
+            "--no-ext-diff",
+            resolvedRef,
+          ],
+          { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+        ).pipe(
+          Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)),
+        );
+        return [...new Set([...others, ...trackedAdditions])].filter(
+          (filePath) => !seededGitlinks.has(filePath.replace(/\/$/, "")),
+        );
+      });
+
+    const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
+      Effect.gen(function* () {
+        const resolvedRef = yield* resolveCommitObjectId(
+          cwd,
+          ref,
+          "GitCore.readRefPatch.verifyRef",
+        );
+
+        return yield* withRefIndex(
+          cwd,
+          resolvedRef,
+          "GitCore.readRefPatch",
+          (env, seededGitlinks) =>
+            Effect.gen(function* () {
+              const tracked = yield* executeGit(
+                "GitCore.readRefPatch.trackedPatch",
+                cwd,
+                ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
+                {
+                  env,
+                  timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                  maxOutputBytes: 10_000_000,
+                  outputMode: "truncate",
+                },
+              );
+              const untrackedFiles = yield* listWorkingTreeAdditionsAgainstRef(
+                cwd,
+                resolvedRef,
+                env,
+                "GitCore.readRefPatch",
+                seededGitlinks,
+              );
+              const accumulator = makePatchAccumulator();
+              appendPatchSegment(
+                accumulator,
+                tracked.stdout,
+                tracked.stdoutTruncated === true,
+                10_000_000,
+              );
+              return yield* readUntrackedPatches(
+                cwd,
+                "GitCore.readRefPatch",
+                accumulator,
+                untrackedFiles,
+                10_000_000,
+              );
+            }),
+        );
+      });
+
+    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope, ref) =>
       Effect.gen(function* () {
         let trackedArgs: ReadonlyArray<string>;
         let includeUntracked = false;
@@ -1829,6 +2431,45 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             trackedArgs = ["diff", "--numstat", "-z", "--minimal", "--no-ext-diff", mergeBase];
             includeUntracked = true;
             break;
+          }
+          case "ref": {
+            const compareRef = (ref ?? "").trim();
+            const resolvedRef = yield* resolveCommitObjectId(
+              cwd,
+              compareRef,
+              "GitCore.readDiffStats.verifyRef",
+            );
+            return yield* withRefIndex(
+              cwd,
+              resolvedRef,
+              "GitCore.readDiffStats",
+              (env, seededGitlinks) =>
+                Effect.gen(function* () {
+                  const tracked = yield* executeGit(
+                    "GitCore.readDiffStats.tracked",
+                    cwd,
+                    ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef],
+                    { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, maxOutputBytes: 10_000_000 },
+                  ).pipe(Effect.map((result) => result.stdout));
+                  const untracked = yield* readUntrackedNumstats(
+                    cwd,
+                    "GitCore.readDiffStats",
+                    yield* listWorkingTreeAdditionsAgainstRef(
+                      cwd,
+                      resolvedRef,
+                      env,
+                      "GitCore.readDiffStats",
+                      seededGitlinks,
+                    ),
+                  );
+                  const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
+                  return {
+                    additions: totals.insertions,
+                    deletions: totals.deletions,
+                    fileCount: totals.files.length,
+                  };
+                }),
+            );
           }
           case "workingTree":
           default: {
@@ -2326,6 +2967,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const branches = [...localBranches, ...remoteBranches];
 
         return { branches, isRepo: true, hasOriginRemote: remoteNames.includes("origin") };
+      });
+
+    const listRecentCommits: GitCoreShape["listRecentCommits"] = (input) =>
+      Effect.gen(function* () {
+        const limit = input.limit ?? DEFAULT_GIT_RECENT_COMMIT_LIMIT;
+        const result = yield* executeGit(
+          "GitCore.listRecentCommits",
+          input.cwd,
+          ["log", "--format=%H%x1f%h%x1f%s%x1f%cI", "-n", String(limit)],
+          {
+            timeoutMs: 10_000,
+            allowNonZeroExit: true,
+          },
+        ).pipe(
+          Effect.catchIf(isMissingGitCwdError, () =>
+            Effect.succeed({ code: 128, stdout: "", stderr: "fatal: not a git repository" }),
+          ),
+        );
+
+        if (result.code !== 0) {
+          return { commits: [] };
+        }
+
+        return { commits: parseRecentCommitLines(result.stdout) };
       });
 
     const createWorktree: GitCoreShape["createWorktree"] = (input) =>
@@ -3467,6 +4132,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readUnstagedPatch,
       readStagedPatch,
       readBranchPatch,
+      blameLine,
+      readFileAtRev,
+      readRefPatch,
       readDiffStats,
       prepareCommitContext,
       commit,
@@ -3475,6 +4143,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readRangeContext,
       readConfigValue,
       listBranches,
+      listRecentCommits,
       createWorktree,
       recordWorktreeOwnership,
       verifyWorktreeOwnership,

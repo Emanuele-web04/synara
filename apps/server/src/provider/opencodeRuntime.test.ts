@@ -5,7 +5,8 @@
 
 import { pathToFileURL } from "node:url";
 
-import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
@@ -149,6 +150,42 @@ function openCodeRuntimePoolTestLayer(state: {
     TestClock.layer(),
   );
 }
+
+it("bounds optional console discovery and aborts its stalled HTTP request", async () => {
+  const requested = Effect.runSync(Deferred.make<void>());
+  let requestSignal: AbortSignal | undefined;
+  const client = {
+    provider: { list: async () => ({ data: { all: [], connected: [], default: {} } }) },
+    app: { agents: async () => ({ data: [] }) },
+    experimental: {
+      console: {
+        get: async (_input: unknown, options?: { signal?: AbortSignal }) => {
+          requestSignal = options?.signal;
+          Effect.runSync(Deferred.succeed(requested, undefined));
+          return await new Promise(() => {});
+        },
+      },
+    },
+  } as unknown as OpencodeClient;
+  const inventory = await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* OpenCodeRuntime;
+      const loading = yield* runtime.loadOpenCodeInventory(client).pipe(Effect.forkChild);
+      yield* Deferred.await(requested);
+      yield* TestClock.adjust("2 seconds");
+      return yield* Fiber.join(loading);
+    }).pipe(
+      Effect.provide(openCodeRuntimePoolTestLayer({ spawnUrls: [], killUrls: [] })),
+      Effect.scoped,
+    ),
+  );
+  expect(inventory).toEqual({
+    providerList: { all: [], connected: [], default: {} },
+    agents: [],
+    consoleState: null,
+  });
+  expect(requestSignal?.aborted).toBe(true);
+});
 
 describe("toOpenCodeFileParts", () => {
   it("materializes image attachments as SDK file parts", () => {

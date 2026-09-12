@@ -368,6 +368,69 @@ describe("AcpRuntimeModel", () => {
     }
   });
 
+  it("projects Cursor subagent Task tool calls as collab agent runs titled by description", () => {
+    const started = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "toolu_task",
+        title: "Task: Explore composer model/effort UI",
+        kind: "other",
+        status: "pending",
+        rawInput: {
+          _toolName: "task",
+          prompt: "Explore the composer and report back with file paths.",
+          description: "Explore composer model/effort UI",
+          subagentType: { unspecified: {} },
+        },
+      },
+    } satisfies Acp.SessionNotification);
+    const startedEvent = started.events[0];
+    expect(startedEvent?._tag).toBe("ToolCallUpdated");
+    if (startedEvent?._tag !== "ToolCallUpdated") return;
+    expect(startedEvent.toolCall).toEqual({
+      toolCallId: "toolu_task",
+      kind: "agent",
+      title: "Explore composer model/effort UI",
+      status: "pending",
+      data: {
+        toolCallId: "toolu_task",
+        kind: "agent",
+        tool: "task",
+        prompt: "Explore the composer and report back with file paths.",
+        rawInput: {
+          _toolName: "task",
+          prompt: "Explore the composer and report back with file paths.",
+          description: "Explore composer model/effort UI",
+          subagentType: { unspecified: {} },
+        },
+      },
+    });
+
+    // Cursor's completion update carries only bookkeeping output; the merged state
+    // must keep the subagent kind/title and not surface that output as detail.
+    const completed = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "toolu_task",
+        status: "completed",
+        rawOutput: { durationMs: 328175, isBackground: false },
+      },
+    } satisfies Acp.SessionNotification);
+    const completedEvent = completed.events[0];
+    if (completedEvent?._tag !== "ToolCallUpdated") return;
+    const merged = mergeToolCallState(startedEvent.toolCall, completedEvent.toolCall);
+    expect(merged).toMatchObject({
+      toolCallId: "toolu_task",
+      kind: "agent",
+      status: "completed",
+      title: "Explore composer model/effort UI",
+      data: { tool: "task", kind: "agent" },
+    });
+    expect(merged.detail).toBeUndefined();
+  });
+
   it("trims padded current mode updates before emitting a mode change", () => {
     const result = parseSessionUpdateEvent({
       sessionId: "session-1",

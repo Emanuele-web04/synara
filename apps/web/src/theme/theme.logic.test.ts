@@ -337,6 +337,9 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--composer-surface"]).not.toBe(cssVariables.variables["--card"]);
     expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
+    expect(cssVariables.variables["--sidebar-selected"]).toBe(
+      cssVariables.variables["--app-user-message-background"],
+    );
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe(
       `"Jetbrains Mono", ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`,

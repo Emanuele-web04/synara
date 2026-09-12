@@ -475,6 +475,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // Fired idle callbacks outlive their timer map entry, so use generations to
     // invalidate async stop work when new user work starts in that gap.
     const runtimeIdleGenerations = new Map<ThreadId, symbol>();
+    const runtimeIdleCleanupGenerations = new Map<ThreadId, symbol>();
     const runtimeIdleStopsInFlight = new Map<ThreadId, Promise<void>>();
     const providerInterruptionFences = new Map<ThreadId, ProviderInterruptionFence>();
     const targetedChildInterruptTombstones = new Map<string, TargetedChildInterruptTombstone>();
@@ -482,10 +483,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       0,
       options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
     );
-    let stopIdleRuntimeSession: ((threadId: ThreadId, generation: symbol) => void) | null = null;
+    let stopIdleRuntimeSession:
+      | ((threadId: ThreadId, generation: symbol, cleanupStarted?: boolean) => void)
+      | null = null;
 
     const invalidateRuntimeIdleGeneration = (threadId: ThreadId): symbol => {
       const generation = Symbol(String(threadId));
+      runtimeIdleCleanupGenerations.delete(threadId);
       runtimeIdleGenerations.set(threadId, generation);
       return generation;
     };
@@ -496,6 +500,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const retireRuntimeIdleGeneration = (threadId: ThreadId, generation?: symbol): void => {
       if (generation === undefined || isRuntimeIdleGenerationCurrent(threadId, generation)) {
         runtimeIdleGenerations.delete(threadId);
+        runtimeIdleCleanupGenerations.delete(threadId);
       }
     };
 
@@ -739,6 +744,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         case "session.exited":
           clearLiveRuntimeTasks(event.threadId);
+          // Adapters may emit this before descendant cleanup is verified.
+          // An owned idle teardown must keep its retry until the barrier passes.
+          if (runtimeIdleCleanupGenerations.has(event.threadId)) {
+            return;
+          }
           clearRuntimeIdleTimer(event.threadId);
           retireRuntimeIdleGeneration(event.threadId);
           return;
@@ -1666,10 +1676,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
             } as const;
           }
-          return yield* toValidationError(
-            input.operation,
-            `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
-          );
+          return yield* new ProviderValidationError({
+            operation: input.operation,
+            issue: `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          });
         }
         const adapter = yield* registry.getByProvider(binding.provider);
         if (input.allowRecovery) {
@@ -2563,10 +2574,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             allowRecovery: false,
           });
           if (!routed.isActive) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
-            );
+              issue: `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
+              reason: "runtime-unavailable",
+            });
           }
           const routedGeneration = routed.lifecycleGeneration ?? currentGeneration;
           if (
@@ -2583,10 +2595,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             input.lifecycleGeneration !== undefined &&
             input.lifecycleGeneration !== routedGeneration
           ) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
-            );
+              issue: `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
+              reason: "stale-interaction",
+            });
           }
           if (response.kind === "approval") {
             yield* routed.adapter.respondToRequest(
@@ -2704,8 +2717,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (activeSession?.resumeCursor !== undefined) {
                 resumeCursor = activeSession.resumeCursor;
               }
-              yield* adapter.stopSession(input.threadId);
             }
+            // A non-routable session may still own an unreaped process tree.
+            // Retry the cleanup barrier before recording a stopped binding.
+            if (!isExpectedIdleStopCurrent()) {
+              return;
+            }
+            yield* adapter.stopSession(input.threadId);
             if (!isExpectedIdleStopCurrent()) {
               return;
             }
@@ -2747,25 +2765,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
-    stopIdleRuntimeSession = (threadId, generation) => {
+    stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
+        if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
+          return;
+        }
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         if (!binding) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
 
-        const adapter = yield* registry.getByProvider(binding.provider);
-        const sessions = yield* adapter.listSessions();
-        const session = sessions.find((entry) => entry.threadId === threadId);
         const bindingRuntimePayload = runtimePayloadRecord(binding.runtimePayload);
         if (
-          bindingRuntimePayload.activeTurnId !== null &&
-          bindingRuntimePayload.activeTurnId !== undefined
+          (bindingRuntimePayload.activeTurnId !== null &&
+            bindingRuntimePayload.activeTurnId !== undefined) ||
+          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0
         ) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
+        // Once cleanup starts the adapter can disappear from listSessions
+        // before its descendants exit. The same idle generation still owns
+        // that cleanup; new work invalidates it before acquiring the lease.
+        if (cleanupStarted) {
+          yield* stopRuntimeSessionInternal({ threadId }, generation);
+          return;
+        }
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const sessions = yield* adapter.listSessions();
+        const session = sessions.find((entry) => entry.threadId === threadId);
         const isIdleReadySession =
           session?.status === "ready" ||
           (session?.status === "running" &&
@@ -2791,14 +2820,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         }
 
+        cleanupStarted = true;
+        runtimeIdleCleanupGenerations.set(threadId, generation);
         yield* stopRuntimeSessionInternal({ threadId }, generation);
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider.session.idle_stop_failed", {
+        Effect.catchCause((cause) => {
+          if (
+            !Cause.hasInterruptsOnly(cause) &&
+            isRuntimeIdleGenerationCurrent(threadId, generation)
+          ) {
+            const timer = setTimeout(
+              () => {
+                runtimeIdleTimers.delete(threadId);
+                stopIdleRuntimeSession?.(threadId, generation, cleanupStarted);
+              },
+              Math.max(1_000, Math.min(runtimeIdleStopMs, 30_000)),
+            );
+            timer.unref();
+            runtimeIdleTimers.set(threadId, timer);
+          }
+          return Effect.logWarning("provider.session.idle_stop_failed", {
             threadId,
             cause,
-          }),
-        ),
+          });
+        }),
       );
       const stopPromise = Effect.runPromise(stopEffect).finally(() => {
         if (runtimeIdleStopsInFlight.get(threadId) === stopPromise) {
@@ -3094,6 +3139,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             clearLiveRuntimeTasks(threadId);
           }
           runtimeIdleGenerations.clear();
+          runtimeIdleCleanupGenerations.clear();
           runtimeIdleStopsInFlight.clear();
           stopIdleRuntimeSession = null;
         }).pipe(

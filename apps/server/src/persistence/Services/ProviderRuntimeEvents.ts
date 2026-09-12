@@ -68,6 +68,18 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly eventSequence: number;
     readonly updatedAt: string;
   }) => Effect.Effect<boolean, PersistenceSqlError>;
+  /**
+   * Acknowledge every stored row in (cursor, throughSequence] in one
+   * transaction. Equivalent to calling advanceConsumerCursor for each of those
+   * rows in order, including open-turn bookkeeping and retention, but paying
+   * one commit per drained page instead of one per event. Returns false when
+   * the cursor is not positioned exactly below those rows.
+   */
+  readonly advanceConsumerCursorThrough: (input: {
+    readonly consumerName: string;
+    readonly throughSequence: number;
+    readonly updatedAt: string;
+  }) => Effect.Effect<boolean, PersistenceSqlError>;
 }
 
 export class ProviderRuntimeEventRepository extends ServiceMap.Service<

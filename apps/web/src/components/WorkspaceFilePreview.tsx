@@ -11,6 +11,12 @@ import type {
   ProjectFileLineEnding,
   ProjectReadFileResult,
 } from "@synara/contracts";
+import type { FileContents as PierreFileContents } from "@pierre/diffs";
+import {
+  Editor as PierreEditor,
+  type EditorOptions as PierreEditorOptions,
+} from "@pierre/diffs/edit";
+import { EditProvider, File as PierreFile } from "@pierre/diffs/react";
 import {
   isSupportedLocalImagePath,
   isSupportedLocalPdfPath,
@@ -31,6 +37,9 @@ import {
   use,
   useCallback,
   useEffect,
+  useInsertionEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -43,9 +52,15 @@ import {
   getSelectionWithin,
   type ChatFileReference,
 } from "~/lib/chatReferences";
-import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
+import {
+  buildDiffPanelUnsafeCSS,
+  resolveDiffThemeName,
+  type DiffThemeName,
+} from "~/lib/diffRendering";
+import { extractEditorGutterChanges, type EditorGutterChangeRange } from "~/lib/editorGutterDiff";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
+import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { PlusIcon } from "~/lib/icons";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
 import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
@@ -57,7 +72,7 @@ import {
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
-import { gitQueryKeys } from "~/lib/gitReactQuery";
+import { gitQueryKeys, refreshGitWorkingTreeDiffsForCwd } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -68,8 +83,10 @@ import {
   highlightCodeToHtmlWithFallback,
 } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
+import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import ChatMarkdown from "./ChatMarkdown";
+import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { useFileLineCommenting } from "./chat/useFileLineCommenting";
@@ -257,6 +274,225 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   );
 }
 
+function createPierreEditor(options: PierreEditorOptions<undefined>) {
+  return new PierreEditor(options);
+}
+
+type EditableFileContentsProps = {
+  path: string;
+  contents: string;
+  cacheKey: string;
+  hidden: boolean;
+  themeName: DiffThemeName;
+  theme: "light" | "dark";
+  saving: boolean;
+  invalid: boolean;
+  onContentsChange: (contents: string) => void;
+  onSave: () => void;
+};
+
+function PierreEditableFileContents(props: EditableFileContentsProps) {
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const editorId = useId();
+  const labelEditor = useCallback(() => {
+    editorContainerRef.current
+      ?.querySelector("diffs-container")
+      ?.shadowRoot?.querySelector<HTMLElement>('[contenteditable="true"]')
+      ?.setAttribute("aria-label", `Edit ${props.path}`);
+  }, [props.path]);
+  const editorObserverRef = useRef<MutationObserver | null>(null);
+  const attachEditor = useCallback(() => {
+    const shadowRoot = editorContainerRef.current?.querySelector("diffs-container")?.shadowRoot;
+    if (!shadowRoot) return;
+    labelEditor();
+    if (editorObserverRef.current === null) {
+      editorObserverRef.current = new MutationObserver(labelEditor);
+    }
+    editorObserverRef.current.observe(shadowRoot, { childList: true, subtree: true });
+  }, [labelEditor]);
+  useEffect(() => {
+    attachEditor();
+    return () => {
+      editorObserverRef.current?.disconnect();
+      editorObserverRef.current = null;
+    };
+  }, [attachEditor]);
+  // Local typing updates this snapshot in the same batch as the parent draft.
+  // Only a different incoming document (reload/watcher) resets Pierre's history.
+  const [document, setDocument] = useState({
+    contents: props.contents,
+    seedContents: props.contents,
+    revision: 0,
+  });
+  if (document.contents !== props.contents) {
+    setDocument({
+      contents: props.contents,
+      seedContents: props.contents,
+      revision: document.revision + 1,
+    });
+  }
+  const onContentsChangeRef = useRef(props.onContentsChange);
+  useInsertionEffect(() => {
+    onContentsChangeRef.current = props.onContentsChange;
+  });
+  const file = useMemo<PierreFileContents>(
+    () => ({
+      name: props.path,
+      contents: document.seedContents,
+      lang: getSyntaxLanguageForPath(props.path),
+      cacheKey: `${props.cacheKey}:${editorId}:${document.revision}`,
+    }),
+    [document.seedContents, document.revision, editorId, props.cacheKey, props.path],
+  );
+  const editorOptions = useMemo<PierreEditorOptions<undefined>>(
+    () => ({
+      onAttach: attachEditor,
+      onChange: (nextFile) => {
+        const contents = nextFile.contents;
+        setDocument((current) => ({ ...current, contents }));
+        onContentsChangeRef.current(contents);
+      },
+    }),
+    [attachEditor],
+  );
+
+  return (
+    <div
+      ref={editorContainerRef}
+      className="editor-file-editor__pierre"
+      hidden={props.hidden}
+      aria-busy={props.saving}
+      aria-invalid={props.invalid ? "true" : undefined}
+      onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          props.onSave();
+        }
+      }}
+    >
+      <EditProvider createEditor={createPierreEditor}>
+        <PierreFile
+          file={file}
+          edit
+          editorOptions={editorOptions}
+          options={{
+            disableFileHeader: true,
+            overflow: "scroll",
+            preferredHighlighter: "shiki-js",
+            theme: props.themeName,
+            unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
+          }}
+        />
+      </EditProvider>
+    </div>
+  );
+}
+
+// Keep the editing engine stable for the open document: changing it while
+// typing would discard focus, selection and native undo history.
+function EditableFileContents(props: EditableFileContentsProps) {
+  const [plainText] = useState(
+    () =>
+      props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ||
+      props.contents.split("\n").length > 1_000,
+  );
+  return plainText ? (
+    <NumberedPlainEditableFileContents {...props} />
+  ) : (
+    <PierreEditableFileContents {...props} />
+  );
+}
+
+function NumberedPlainEditableFileContents(props: EditableFileContentsProps) {
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const lineCount = props.contents.split("\n").length;
+  const numbers = useMemo(
+    () =>
+      lineCount <= MAX_PLAIN_NUMBERED_LINES
+        ? Array.from({ length: lineCount }, (_, index) => (
+            <span key={index} className="editor-file-editor__gutter-line">
+              {index + 1}
+            </span>
+          ))
+        : null,
+    [lineCount],
+  );
+  const syncGutter = useCallback(() => {
+    if (editorRef.current && gutterRef.current)
+      gutterRef.current.style.transform = `translateY(${-editorRef.current.scrollTop}px)`;
+  }, []);
+  useEffect(syncGutter, [props.contents, props.hidden, syncGutter]);
+  return (
+    <div className="editor-file-editor-wrap" hidden={props.hidden}>
+      {numbers ? (
+        <div className="editor-file-editor__gutter" aria-hidden="true">
+          <div ref={gutterRef}>{numbers}</div>
+        </div>
+      ) : null}
+      <textarea
+        ref={editorRef}
+        className="editor-file-editor"
+        aria-label={`Edit ${props.path}`}
+        aria-busy={props.saving}
+        aria-invalid={props.invalid ? "true" : undefined}
+        value={props.contents}
+        spellCheck={false}
+        wrap="off"
+        onScroll={syncGutter}
+        onChange={(event) => props.onContentsChange(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            props.onSave();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function filePreviewRowOffset(rows: number): string {
+  return `calc(var(--editor-file-padding, 1rem) + ${rows} * var(--editor-file-line-height, 1.65) * 1em)`;
+}
+
+function filePreviewRowSpan(rows: number): string {
+  return `calc(${rows} * var(--editor-file-line-height, 1.65) * 1em)`;
+}
+
+function FilePreviewChangeGutter(props: {
+  ranges: readonly EditorGutterChangeRange[];
+  subtle: boolean;
+}) {
+  return (
+    <div
+      className="editor-file-viewer__change-gutter"
+      data-subtle={props.subtle ? "true" : undefined}
+      aria-hidden="true"
+    >
+      {props.ranges.map((range) =>
+        range.kind === "deleted" ? (
+          <span
+            key={`deleted-${range.startLine}`}
+            className="editor-file-viewer__change-notch"
+            style={{ top: filePreviewRowOffset(range.startLine) }}
+          />
+        ) : (
+          <span
+            key={`${range.kind}-${range.startLine}-${range.endLine}`}
+            className="editor-file-viewer__change-bar"
+            data-change={range.kind}
+            style={{
+              top: filePreviewRowOffset(range.startLine - 1),
+              height: filePreviewRowSpan(range.endLine - range.startLine + 1),
+            }}
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
 // Mimics indented code lines so the placeholder reads as a file body
 // instead of a generic spinner block.
 const FILE_PREVIEW_SKELETON_LINES = [
@@ -319,6 +555,7 @@ export interface WorkspaceFilePreviewProps {
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
+  onEditFile?: ((filePath: string) => void) | undefined;
 }
 
 type EditableLineEnding = Exclude<ProjectFileLineEnding, "mixed">;
@@ -461,6 +698,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     isWorkspaceRelativePathSafe(requestedFilePath)
       ? requestedFilePath
       : null);
+  // Decided below once the file and its editability are known; the watcher
+  // callback reads the latest value through the ref.
+  const changeGutterEnabledRef = useRef(false);
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
@@ -468,10 +708,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd: workspaceRoot,
         relativePath: requestedFilePath,
       });
-      void queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
-        refetchType: "none",
-      });
+      if (changeGutterEnabledRef.current) {
+        // The gutter renders from the active diff query, so refresh it now;
+        // a bare invalidation would leave the markers stale until refocus.
+        void refreshGitWorkingTreeDiffsForCwd(queryClient, workspaceRoot);
+      } else {
+        void queryClient.invalidateQueries({
+          queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
+          refetchType: "none",
+        });
+      }
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
@@ -569,7 +815,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.version !== null &&
     fileQuery.data.encoding !== null &&
     fileQuery.data.lineEnding !== null &&
-    fileQuery.data.lineEnding !== "mixed"
+    fileQuery.data.lineEnding !== "mixed" &&
+    !fileQuery.data.symlink
       ? {
           key: `${workspaceRoot}\0${fileQuery.data.relativePath}`,
           relativePath: fileQuery.data.relativePath,
@@ -598,13 +845,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
-        : fileQuery.data.truncated
-          ? "Large files are read-only."
-          : fileQuery.data.lineEnding === "mixed"
-            ? "Files with mixed line endings are read-only to preserve their exact format."
-            : fileQuery.data.version === null || fileQuery.data.encoding === null
-              ? "This file format is read-only."
-              : null;
+        : resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data);
 
   const handleEditBufferChange = (contents: string) => {
     if (!editableDocument) return;
@@ -714,6 +955,30 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         );
       });
   };
+  // Wait for the file read before asking for the working-tree diff: while the
+  // read is pending the editable document is still unresolved, and an editor
+  // that turns out to be editable never needs the read-only gutter.
+  const changeGutterEnabled =
+    props.workspaceRoot !== null &&
+    resolvedWorkspaceRelativePath !== null &&
+    fileQuery.data !== undefined &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    !showMarkdownPreview &&
+    editableDocument === null;
+  changeGutterEnabledRef.current = changeGutterEnabled;
+  const workingTreeDiffQuery = useQuery(
+    gitWorkingTreeDiffQueryOptions({
+      cwd: props.workspaceRoot,
+      filePath: resolvedWorkspaceRelativePath,
+      enabled: changeGutterEnabled,
+    }),
+  );
+  const workingTreePatch = changeGutterEnabled ? workingTreeDiffQuery.data?.patch : undefined;
+  const { ranges: changeRanges, wholeFileAddition: changeGutterSubtle } = useMemo(
+    () => extractEditorGutterChanges(workingTreePatch, resolvedWorkspaceRelativePath),
+    [workingTreePatch, resolvedWorkspaceRelativePath],
+  );
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
   // was selected, mirroring the transcript flow. In the source view the DOM
   // mirrors the file's lines/columns 1:1, so a selection resolves to an exact
@@ -860,6 +1125,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.lineEnding !== null &&
     fileQuery.data.lineEnding !== "mixed" &&
     !editBufferDirty;
+  const { onEditFile } = props;
+  // The editor writes the path back in place, so it is offered only for
+  // sources the shared editor rules consider writable (symlinks included).
+  const editFile =
+    onEditFile &&
+    canToggleTasks &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    filePath !== null &&
+    fileQuery.data !== undefined &&
+    resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data) === null
+      ? () => onEditFile(filePath)
+      : undefined;
 
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
@@ -939,6 +1217,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onAskWhyInChat={onAskWhyInChat}
         contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
         truncated={fileQuery.data?.truncated ?? false}
+        onEditFile={editFile}
         dirty={editBufferDirty}
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
@@ -992,6 +1271,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
               : "Could not refresh file."}
         </div>
       ) : null}
+      {changeGutterEnabled && workingTreeDiffQuery.data?.truncated === true ? (
+        <DiffTruncationWarning className="rounded-none border-x-0 border-t-0">
+          Only part of this file&apos;s working-tree diff is available. Change markers may be
+          incomplete.
+        </DiffTruncationWarning>
+      ) : null}
       {locatingOutOfRootFile ? (
         <FilePreviewLoadingState />
       ) : fileIsImage ? (
@@ -1022,114 +1307,125 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </PanelStateMessage>
       ) : !hasFileContents ? (
         <FilePreviewLoadingState />
-      ) : activeEditBuffer && editableDocument && !showMarkdownPreview ? (
-        <textarea
-          className="editor-file-editor"
-          aria-label={`Edit ${filePath}`}
-          aria-busy={activeEditBuffer.saving}
-          aria-invalid={activeEditBuffer.error ? "true" : undefined}
-          value={activeEditBuffer.contents}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          onChange={(event) => handleEditBufferChange(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-              event.preventDefault();
-              void handleEditBufferSave();
-            }
-          }}
-        />
       ) : (
-        <div
-          ref={contentsRef}
-          className={cn(
-            "editor-file-viewer min-h-0 flex-1 overflow-auto",
-            showMarkdownPreview && "editor-file-viewer--markdown-preview",
-          )}
-          onContextMenu={handleContentsContextMenu}
-          onMouseUp={previewSelectionAction.onContainerMouseUp}
-          onMouseMove={lineCommenting.onContainerMouseMove}
-          onMouseLeave={lineCommenting.onContainerMouseLeave}
-        >
-          {showMarkdownPreview ? (
-            <div className="editor-markdown-preview">
-              <ChatMarkdown
-                text={displayedFileContents}
-                cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
-                isStreaming={false}
-                className="editor-markdown-preview__body text-sm leading-relaxed"
-                {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
-              />
-            </div>
-          ) : (
-            <FileContentsView path={filePath} contents={fileContents} themeName={diffThemeName} />
-          )}
-          {!showMarkdownPreview && lineCount > 0 ? (
-            <span className="sr-only">{lineCount} lines</span>
-          ) : null}
-          {previewSelectionAction.pendingAction ? (
-            <TranscriptSelectionAction
-              left={previewSelectionAction.pendingAction.left}
-              top={previewSelectionAction.pendingAction.top}
-              placement={previewSelectionAction.pendingAction.placement}
-              onAddToChat={previewSelectionAction.commit}
+        <>
+          {activeEditBuffer && editableDocument ? (
+            <EditableFileContents
+              key={activeEditBuffer.key}
+              path={filePath}
+              contents={activeEditBuffer.contents}
+              cacheKey={activeEditBuffer.key}
+              hidden={showMarkdownPreview}
+              themeName={diffThemeName}
+              theme={resolvedTheme}
+              saving={activeEditBuffer.saving}
+              invalid={activeEditBuffer.error !== null}
+              onContentsChange={handleEditBufferChange}
+              onSave={() => {
+                void handleEditBufferSave();
+              }}
             />
           ) : null}
-          {lineCommentingEnabled && hoveredCommentLine && !activeCommentLine ? (
-            <button
-              type="button"
-              className="editor-file-viewer__comment-add"
-              style={{
-                top: hoveredCommentLine.top,
-                left: hoveredCommentLine.left,
-                height: hoveredCommentLine.height,
-              }}
-              aria-label={`Comment on line ${hoveredCommentLine.lineNumber}`}
-              title="Comment"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                lineCommenting.openComment(hoveredCommentLine);
-              }}
+          {!activeEditBuffer || !editableDocument || showMarkdownPreview ? (
+            <div
+              ref={contentsRef}
+              className={cn(
+                "editor-file-viewer min-h-0 flex-1 overflow-auto",
+                showMarkdownPreview && "editor-file-viewer--markdown-preview",
+              )}
+              onContextMenu={handleContentsContextMenu}
+              onMouseUp={previewSelectionAction.onContainerMouseUp}
+              onMouseMove={lineCommenting.onContainerMouseMove}
+              onMouseLeave={lineCommenting.onContainerMouseLeave}
             >
-              <span className="editor-file-viewer__comment-add-glyph">
-                <PlusIcon className="size-3.5" />
-              </span>
-            </button>
+              {showMarkdownPreview ? (
+                <div className="editor-markdown-preview">
+                  <ChatMarkdown
+                    text={displayedFileContents}
+                    cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
+                    wikiLinkRoot={props.workspaceRoot ?? undefined}
+                    isStreaming={false}
+                    className="editor-markdown-preview__body text-sm leading-relaxed"
+                    {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
+                  />
+                </div>
+              ) : (
+                <FileContentsView
+                  path={filePath}
+                  contents={fileContents}
+                  themeName={diffThemeName}
+                />
+              )}
+              {!showMarkdownPreview && changeRanges.length > 0 ? (
+                <FilePreviewChangeGutter ranges={changeRanges} subtle={changeGutterSubtle} />
+              ) : null}
+              {!showMarkdownPreview && lineCount > 0 ? (
+                <span className="sr-only">{lineCount} lines</span>
+              ) : null}
+              {previewSelectionAction.pendingAction ? (
+                <TranscriptSelectionAction
+                  left={previewSelectionAction.pendingAction.left}
+                  top={previewSelectionAction.pendingAction.top}
+                  placement={previewSelectionAction.pendingAction.placement}
+                  onAddToChat={previewSelectionAction.commit}
+                />
+              ) : null}
+              {lineCommentingEnabled && hoveredCommentLine && !activeCommentLine ? (
+                <button
+                  type="button"
+                  className="editor-file-viewer__comment-add"
+                  style={{
+                    top: hoveredCommentLine.top,
+                    left: hoveredCommentLine.left,
+                    height: hoveredCommentLine.height,
+                  }}
+                  aria-label={`Comment on line ${hoveredCommentLine.lineNumber}`}
+                  title="Comment"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    lineCommenting.openComment(hoveredCommentLine);
+                  }}
+                >
+                  <span className="editor-file-viewer__comment-add-glyph">
+                    <PlusIcon className="size-3.5" />
+                  </span>
+                </button>
+              ) : null}
+              {lineCommentingEnabled && activeCommentLine ? (
+                <>
+                  <div
+                    className="editor-file-viewer__comment-line-highlight"
+                    style={{ top: activeCommentLine.top, height: activeCommentLine.height }}
+                    aria-hidden="true"
+                  />
+                  <FileLineCommentBox
+                    lineLabel={formatFileCommentRange({
+                      startLine: activeCommentLine.lineNumber,
+                      endLine: activeCommentLine.lineNumber,
+                    })}
+                    top={activeCommentLine.top + activeCommentLine.height}
+                    left={activeCommentLine.left}
+                    width={Math.max(
+                      240,
+                      Math.min(440, activeCommentLine.containerWidth - activeCommentLine.left - 16),
+                    )}
+                    onCancel={lineCommenting.closeComment}
+                    onSubmit={(text) => {
+                      commitLineComment({
+                        startLine: activeCommentLine.lineNumber,
+                        endLine: activeCommentLine.lineNumber,
+                        text,
+                      });
+                      lineCommenting.closeComment();
+                    }}
+                  />
+                </>
+              ) : null}
+            </div>
           ) : null}
-          {lineCommentingEnabled && activeCommentLine ? (
-            <>
-              <div
-                className="editor-file-viewer__comment-line-highlight"
-                style={{ top: activeCommentLine.top, height: activeCommentLine.height }}
-                aria-hidden="true"
-              />
-              <FileLineCommentBox
-                lineLabel={formatFileCommentRange({
-                  startLine: activeCommentLine.lineNumber,
-                  endLine: activeCommentLine.lineNumber,
-                })}
-                top={activeCommentLine.top + activeCommentLine.height}
-                left={activeCommentLine.left}
-                width={Math.max(
-                  240,
-                  Math.min(440, activeCommentLine.containerWidth - activeCommentLine.left - 16),
-                )}
-                onCancel={lineCommenting.closeComment}
-                onSubmit={(text) => {
-                  commitLineComment({
-                    startLine: activeCommentLine.lineNumber,
-                    endLine: activeCommentLine.lineNumber,
-                    text,
-                  });
-                  lineCommenting.closeComment();
-                }}
-              />
-            </>
-          ) : null}
-        </div>
+        </>
       )}
     </div>
   );

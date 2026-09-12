@@ -2,8 +2,8 @@
 // Purpose: Auto-dispatch composer queued turns for every thread, including ones
 //          whose ChatView is unmounted, using the same gates as the open chat.
 // Layer: Web subscription utility
-// Exports: drain gates, exclusive per-thread send lock, locked-dispatch helper,
-//          steer-gate sharing, ChatView claim/release, watcher start
+// Exports: drain gates, bounded retry state, exclusive per-thread send lock,
+//          locked-dispatch helper, steer-gate sharing, ChatView claim/release, watcher start
 
 import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 
@@ -329,6 +329,12 @@ function hasRelevantThreadStateChanged(current: AppState, previous: AppState): b
 
 function resetRetriesForRelevantThreadChanges(current: AppState, previous: AppState): void {
   for (const threadId of retryStateByThreadId.keys()) {
+    // ChatView owns relevant state transitions while claimed. Let it consume
+    // the same bounded retry budget instead of treating its own error reset as
+    // a fresh background-drain attempt.
+    if (claimedThreadIds.has(threadId)) {
+      continue;
+    }
     if (threadDrainSignal(current, threadId) !== threadDrainSignal(previous, threadId)) {
       retryStateByThreadId.delete(threadId);
     }
@@ -469,7 +475,10 @@ function scheduleQueuedComposerDrainWake(expiresInMs: number | null): void {
   );
 }
 
-function recordQueuedComposerDispatchFailure(threadId: ThreadId, queuedTurnId: string): void {
+export function recordQueuedComposerAutoDispatchFailure(
+  threadId: ThreadId,
+  queuedTurnId: string,
+): void {
   const previous = retryStateByThreadId.get(threadId);
   const failureCount = previous?.queuedTurnId === queuedTurnId ? previous.failureCount + 1 : 1;
   const retryDelay = QUEUED_COMPOSER_RETRY_DELAYS_MS[failureCount - 1];
@@ -480,7 +489,10 @@ function recordQueuedComposerDispatchFailure(threadId: ThreadId, queuedTurnId: s
   });
 }
 
-function retryDelayForThread(threadId: ThreadId, queuedTurnId: string): number | null | undefined {
+export function getQueuedComposerAutoDispatchRetryDelay(
+  threadId: ThreadId,
+  queuedTurnId: string,
+): number | null | undefined {
   const retryState = retryStateByThreadId.get(threadId);
   if (!retryState || retryState.queuedTurnId !== queuedTurnId) {
     return undefined;
@@ -489,6 +501,10 @@ function retryDelayForThread(threadId: ThreadId, queuedTurnId: string): number |
     return null;
   }
   return retryState.retryAt - nowMs();
+}
+
+export function clearQueuedComposerAutoDispatchRetry(threadId: ThreadId): void {
+  retryStateByThreadId.delete(threadId);
 }
 
 function runQueuedComposerDrainPass(): void {
@@ -511,7 +527,7 @@ function runQueuedComposerDrainPass(): void {
     if (!nextQueuedTurn) {
       continue;
     }
-    const retryDelay = retryDelayForThread(threadId, nextQueuedTurn.id);
+    const retryDelay = getQueuedComposerAutoDispatchRetryDelay(threadId, nextQueuedTurn.id);
     if (retryDelay === null) {
       continue;
     }
@@ -546,7 +562,7 @@ function runQueuedComposerDrainPass(): void {
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
           return;
         }
-        recordQueuedComposerDispatchFailure(threadId, nextQueuedTurn.id);
+        recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
       },
     });
   }

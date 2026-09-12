@@ -12,7 +12,6 @@ import type {
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
   PinnedMessage,
-  ThreadMarker,
   ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -117,6 +116,7 @@ export interface ChatMessage {
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   dispatchOrigin?: MessageDispatchOrigin;
+  startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;
@@ -247,7 +247,6 @@ export interface Thread extends ThreadWorkspaceState {
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;
@@ -296,7 +295,6 @@ export interface ThreadShell extends ThreadWorkspaceState {
   // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
   // from the previous shell rather than clobbering with `undefined`.
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;

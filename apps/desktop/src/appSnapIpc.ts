@@ -13,6 +13,8 @@ import type {
 import type { DesktopAppSnapManager } from "./appSnapManager";
 import { APPSNAP_IPC_CHANNELS } from "./ipcChannels";
 
+const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
+
 export function sendAppSnapState(
   webContents: WebContents | null | undefined,
   state: DesktopAppSnapState,
@@ -64,5 +66,25 @@ export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopApp
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.acknowledgeCapture);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.acknowledgeCapture, async (_event, captureId: unknown) => {
     if (typeof captureId === "string") await manager.acknowledgeCapture(captureId);
+  });
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.listWindows);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.listWindows, async () => manager.listWindows());
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.captureWindow);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.captureWindow, async (_event, input: unknown) => {
+    const windowId =
+      typeof input === "object" && input !== null
+        ? (input as { windowId?: unknown }).windowId
+        : undefined;
+    if (
+      typeof windowId !== "number" ||
+      !Number.isInteger(windowId) ||
+      windowId <= 0 ||
+      windowId > MAX_MACOS_WINDOW_ID
+    ) {
+      throw new Error("captureWindow requires a valid macOS window id.");
+    }
+    return manager.captureWindow(windowId);
   });
 }
