@@ -1,0 +1,125 @@
+---
+title: Oh My Pi
+description: Install, authenticate, verify, and run Oh My Pi through Synara.
+---
+
+Synara connects to Oh My Pi through its `omp` executable and Agent Client Protocol mode. Oh My Pi owns the account, model routing, credentials, thinking levels, and provider service; Synara supplies the task, repository environment, transcript, approvals, review surfaces, and Git workflow around the session.
+
+## Install
+
+Follow the official quickstart:
+
+```bash
+omp --version
+```
+
+Verify that the executable is available:
+
+```bash
+omp --version
+```
+
+If `omp` is not on `PATH`, set the Oh My Pi binary path in Synara provider settings to the full path of the executable.
+
+## Authenticate
+
+Start Oh My Pi interactively:
+
+```bash
+omp
+```
+
+Complete the sign-in flow inside the terminal. Oh My Pi stores its user state under `~/.omp/` by default. Do not commit credentials or paste them into a task transcript.
+
+## Verify
+
+From a disposable repository:
+
+```bash
+omp --version
+omp models --json
+```
+
+Confirm that `omp models --json` lists at least one model. This verifies the binary, provider credentials, and model catalog before Synara is involved.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Oh My Pi
+
+Open provider settings and confirm that Synara detects `omp`.
+
+</Step>
+<Step>
+
+### Confirm authentication
+
+Run `omp` directly first so `~/.omp` credentials exist. Synara reads the resulting model availability rather than duplicating the secret.
+
+</Step>
+<Step>
+
+### Refresh models and thinking levels
+
+Oh My Pi publishes its full multi-provider catalog through `omp models --json`, with each model carrying its own thinking efforts inline. Confirm that the expected models appear before starting the task.
+
+Thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Availability varies per model.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a clean repository and conservative permissions. Review the selected autonomy or plan mode before allowing edits and commands.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Oh My Pi sessions can expose:
+
+- Models from the `omp models --json` catalog and their thinking levels
+- Tool calls, command output, file changes, and assistant text
+- Permission and autonomy controls supplied by the runtime
+- Session configuration negotiated at startup
+- Synara's terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
+
+Synara applies Oh My Pi's model and thinking choices through ACP session configuration because command-line model flags are not authoritative in every ACP release.
+
+Synara does not currently classify Oh My Pi as supporting native live-turn steering.
+
+## Updating
+
+Use Oh My Pi's supported update path, then restart Synara. Create a new task after an update that changes ACP configuration, model discovery, authentication, or autonomy modes.
+
+## Troubleshooting
+
+### OMP is not detected
+
+1. Run `omp --version` from a fresh terminal.
+2. Confirm the installer directory is on `PATH`.
+3. Check Synara's custom binary path.
+4. Restart Synara after installation or environment changes.
+
+### No models are available
+
+Run `omp` directly and complete authentication so `~/.omp` credentials exist, then confirm `omp models --json` returns models before refreshing Synara.
+
+### The model catalog differs between projects
+
+Check the configured agent directory. A custom agent directory selects a different profile directory (auth, sessions, skills, models) for every Synara invocation through `PI_CODING_AGENT_DIR`.
+
+### Thinking levels are missing for a model
+
+Update Oh My Pi, authenticate directly, and start a new Synara session. Thinking levels are advertised per model by the runtime; non-reasoning models expose none.
+
+## Official documentation
+
+- [Oh My Pi documentation](https://omp.sh/docs)
+- [Oh My Pi quickstart](https://omp.sh/docs/quickstart)
+- [Oh My Pi repository](https://github.com/can1357/oh-my-pi)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
