@@ -82,6 +82,36 @@ describe("computer WebSocket handlers", () => {
     ]);
   });
 
+  it.each([
+    ["click", COMPUTER_WS_METHODS.click],
+    ["doubleClick", COMPUTER_WS_METHODS.doubleClick],
+    ["rightClick", COMPUTER_WS_METHODS.rightClick],
+  ] as const)("preserves modifiers in %s requests", async (method, rpcMethod) => {
+    const { backend, manager, handlers } = setup();
+    await Effect.runPromise(handlers[rpcMethod]({ x: 40, y: 50, modifiers: ["ctrl", "shift"] }));
+    expect(backend.callsFor(method).map((call) => call.args)).toEqual([
+      [{ x: 40, y: 50 }, ["ctrl", "shift"]],
+    ]);
+    await manager.dispose();
+  });
+
+  it("preserves modifiers in scroll requests", async () => {
+    const { backend, manager, handlers } = setup();
+    await Effect.runPromise(
+      handlers[COMPUTER_WS_METHODS.scroll]({
+        x: 40,
+        y: 50,
+        deltaX: 0,
+        deltaY: 48,
+        modifiers: ["ctrl"],
+      }),
+    );
+    expect(backend.callsFor("scroll").map((call) => call.args)).toEqual([
+      [{ x: 40, y: 50 }, 0, 48, ["ctrl"]],
+    ]);
+    await manager.dispose();
+  });
+
   it("presses a bare key and turns modifiers into a held chord", async () => {
     const { backend, handlers } = setup();
 

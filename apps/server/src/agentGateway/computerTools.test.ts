@@ -282,6 +282,7 @@ describe("agent gateway computer tools", () => {
         "computer_double_click",
         "computer_triple_click",
         "computer_right_click",
+        "computer_move_cursor",
         "computer_drag",
         "computer_scroll",
         "computer_type_text",
@@ -293,17 +294,15 @@ describe("agent gateway computer tools", () => {
         "computer_activate_window",
       ]),
     );
-    // A hover posts no event, presses nothing, and no longer aims the keyboard,
-    // so there is nothing for a human to approve and nothing destructive to
-    // warn about. It was gated back when `move` still re-pointed the keyboard.
-    expect(computerToolRequiresApproval("computer_move_cursor")).toBe(false);
+    // Hover can change application state and raise a target window on Linux.
+    expect(computerToolRequiresApproval("computer_move_cursor")).toBe(true);
     expect(
       (
         byName.get("computer_move_cursor")?.definition.annotations as
           | { destructiveHint?: boolean }
           | undefined
       )?.destructiveHint,
-    ).toBe(false);
+    ).toBe(true);
     // Waiting touches nothing at all.
     expect(computerToolRequiresApproval("computer_wait")).toBe(false);
     for (const name of COMPUTER_APPROVAL_REQUIRED_TOOLS) {
@@ -1168,12 +1167,21 @@ describe("agent gateway computer tools", () => {
     }
   });
 
-  it("refuses action tools for providers without an approval gate", async () => {
-    const { backend, call } = await setup();
-    const result = await call("computer_click", { x: 10, y: 10 }, "antigravity");
-    expect(result.isError).toBe(true);
-    expect(backend.callsFor("click")).toHaveLength(0);
-  });
+  it.each(["computer_click", "computer_move_cursor"])(
+    "refuses %s before input or restacking when its provider has no approval gate",
+    async (name) => {
+      const { backend, manager, call } = await setup();
+      const result = await call(name, { label: "Calculate", role: "button" }, "antigravity");
+      expect(result.isError).toBe(true);
+      expect(resultJson(result)).toMatchObject({
+        error: { code: "ComputerApprovalRequired" },
+      });
+      expect(backend.callsFor("click")).toHaveLength(0);
+      expect(backend.callsFor("moveCursor")).toHaveLength(0);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+      await manager.dispose();
+    },
+  );
 
   /**
    * A provider added to this set skips the approval card entirely, so a name

@@ -2408,6 +2408,113 @@ describe("KWinComputerBackend", () => {
     await backend.dispose();
   });
 
+  it.each(["click", "doubleClick", "rightClick", "scroll"] as const)(
+    "refuses unsupported modifiers before %s sends pointer input",
+    async (action) => {
+      const dbus = new FakeDbus();
+      const backend = makeBackend(dbus);
+      try {
+        const result =
+          action === "scroll"
+            ? backend.scroll({ x: 40, y: 50 }, 0, 48, undefined, ["ctrl"])
+            : backend[action]({ x: 40, y: 50 }, undefined, ["shift"]);
+        await expect(result).rejects.toThrow("does not support modifier keys");
+        expect(dbus.plugin.calls).toEqual([]);
+      } finally {
+        await backend.dispose();
+      }
+    },
+  );
+
+  it("stops a pointer glide when its desktop operation is cancelled", async () => {
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus, { glideDurationMs: 0 });
+    const controller = new AbortController();
+    const move = dbus.plugin.movePointer;
+    dbus.plugin.movePointer = async (x, y) => {
+      const result = await move(x, y);
+      controller.abort();
+      return result;
+    };
+    try {
+      await expect(
+        new DesktopOperationQueue().run(
+          () => backend.moveCursor({ x: 400, y: 400 }),
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+      expect(dbus.plugin.calls.filter((call) => call.method === "movePointer")).toHaveLength(1);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it("releases a cancelled drag without moving the held button any further", async () => {
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus, { glideDurationMs: 0 });
+    const controller = new AbortController();
+    const button = dbus.plugin.button;
+    let movesAtPress = 0;
+    dbus.plugin.button = async (code, pressed) => {
+      const result = await button(code, pressed);
+      if (pressed) {
+        movesAtPress = dbus.plugin.calls.filter((call) => call.method === "movePointer").length;
+        controller.abort();
+      }
+      return result;
+    };
+    try {
+      await expect(
+        new DesktopOperationQueue().run(
+          () => backend.drag({ x: 10, y: 10 }, { x: 400, y: 400 }, 100),
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+      expect(dbus.plugin.calls.filter((call) => call.method === "movePointer")).toHaveLength(
+        movesAtPress,
+      );
+      expect(
+        dbus.plugin.calls.filter((call) => call.method === "button").map((call) => call.args),
+      ).toEqual([
+        [272, true],
+        [272, false],
+      ]);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it.each(["click", "scroll"] as const)(
+    "does not send %s input when cancellation arrives after its pointer move",
+    async (action) => {
+      const dbus = new FakeDbus();
+      const backend = makeBackend(dbus, { glideDurationMs: 0 });
+      const controller = new AbortController();
+      const move = backend.moveCursor.bind(backend);
+      backend.moveCursor = async (point) => {
+        const result = await move(point);
+        controller.abort();
+        return result;
+      };
+      try {
+        await expect(
+          new DesktopOperationQueue().run(
+            () =>
+              action === "click"
+                ? backend.click({ x: 40, y: 50 })
+                : backend.scroll({ x: 40, y: 50 }, 0, 48),
+            controller.signal,
+          ),
+        ).rejects.toThrow();
+        expect(
+          dbus.plugin.calls.filter((call) => ["button", "axis"].includes(call.method)),
+        ).toEqual([]);
+      } finally {
+        await backend.dispose();
+      }
+    },
+  );
+
   it("omits clamp feedback when the pointer lands on the requested point", async () => {
     const dbus = new FakeDbus();
     const backend = makeBackend(dbus, { glideDurationMs: 0 });
@@ -2789,6 +2896,59 @@ describe("KWinComputerBackend", () => {
     expect(dbus.plugin.calls).toContainEqual({ method: "focusWindow", args: ["window-1"] });
     expect(dbus.plugin.calls).toContainEqual({ method: "clearFocusWindow", args: [] });
     await backend.dispose();
+  });
+
+  it("does not orphan a timer when stream attachments overlap an initial capture", async () => {
+    vi.useFakeTimers();
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus, { stillIntervalMs: 100 });
+    const capture = deferred<Uint8Array>();
+    const captureStarted = deferred<void>();
+    dbus.plugin.captureRegion = async () => {
+      captureStarted.resolve();
+      return capture.promise;
+    };
+    try {
+      const first = backend.attachStream(() => undefined);
+      await captureStarted.promise;
+      await backend.attachStream(() => undefined);
+      capture.resolve(PNG_1X1);
+      await first;
+      await backend.detachStream();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      capture.resolve(PNG_1X1);
+      await backend.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a stream detached when connection finishes after detach", async () => {
+    vi.useFakeTimers();
+    const dbus = new FakeDbus();
+    const backend = makeBackend(dbus);
+    const connected = deferred<void>();
+    const connecting = deferred<void>();
+    const connectPlugin = dbus.connectPlugin;
+    dbus.connectPlugin = async () => {
+      connecting.resolve();
+      await connected.promise;
+      return connectPlugin();
+    };
+    const listener = vi.fn();
+    try {
+      const attachment = backend.attachStream(listener);
+      await connecting.promise;
+      await backend.detachStream();
+      connected.resolve();
+      await attachment;
+      expect(listener).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      connected.resolve();
+      await backend.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("clears the old stream timer before attaching a replacement listener", async () => {

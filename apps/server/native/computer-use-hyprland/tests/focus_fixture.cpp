@@ -114,6 +114,15 @@ int main() {
     seat.m_state.keyboardFocus = human;
     pointerEntered = keyboardEntered = human.get();
     check(movePointer(100, 100), "standalone move refused");
+    for (const double invalid : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+        check(!movePointer(invalid, 200), "non-finite x accepted");
+        check(!movePointer(200, invalid), "non-finite y accepted");
+        check(g.pos.x == 100 && g.pos.y == 100, "invalid move changed cursor position");
+        check(!injectAxis(invalid, 80), "non-finite horizontal scroll accepted");
+        check(!injectAxis(80, invalid), "non-finite vertical scroll accepted");
+        check(axisEvents == 0, "invalid scroll delivered input");
+        check(pointerEntered == human.get(), "invalid input changed human focus");
+    }
     g.humanHeldButtons.insert(272);
     const auto beforeDrag = pointerEntered;
     check(!movePointer(250, 250), "agent moved during human drag");

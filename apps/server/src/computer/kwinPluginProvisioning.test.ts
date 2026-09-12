@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +125,25 @@ describe("session env script", () => {
     expect(await readFile(path, "utf8")).toContain("/other");
     // Sourced by the session, so it has to be executable.
     expect((await stat(path)).mode & 0o111).toBeTruthy();
+  });
+
+  it("preserves shell metacharacters in the plugin root as literal path characters", () => {
+    const root =
+      "/home/$SYNARA_AUDIT_VARIABLE `printf substituted` $(printf substituted) \"double\" 'single' \\.local/qt6/plugins";
+    const script = renderEnvScript(root);
+    const result = execFileSync(
+      "sh",
+      ["-c", `${script}\n${script}\nprintf '%s' "$QT_PLUGIN_PATH"`],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          SYNARA_AUDIT_VARIABLE: "expanded",
+          QT_PLUGIN_PATH: "/opt/existing",
+        },
+      },
+    );
+    expect(result).toBe(`${root}:/opt/existing`);
   });
 });
 

@@ -1452,9 +1452,13 @@ std::string windowsJson() {
     return windows.build();
 }
 
-bool startSession() {
+void requireControlAvailable() {
     if (g.releasedByUser)
         throw sdbus::Error(sdbus::Error::Name{ERR_RELEASED}, std::string("computer control was released with ") + RELEASE_SHORTCUT_LABEL);
+}
+
+bool startSession() {
+    requireControlAvailable();
     g.running = true;
     g.stopReason.clear();
     // Start where the ghost last was, clamped in case outputs changed.
@@ -1538,6 +1542,8 @@ struct InputFocusHandback {
 
 bool movePointer(double x, double y) {
     if (!requireRunning())
+        return false;
+    if (!std::isfinite(x) || !std::isfinite(y))
         return false;
     if (!g.humanHeldButtons.empty() || (g_pInputManager && g_pInputManager->hasHeldButtons())) return false;
     const InputFocusHandback handback;
@@ -1638,6 +1644,8 @@ int scrollValue120(double pixels) {
 // matching wl_pointer's axis directions.
 bool injectAxis(double horizontal, double vertical) {
     if (!requireRunning())
+        return false;
+    if (!std::isfinite(horizontal) || !std::isfinite(vertical))
         return false;
     const InputFocusHandback handback;
     const bool focused = updatePointerFocus();
@@ -1944,6 +1952,7 @@ std::optional<CBox> intersectBoxes(const CBox& a, const CBox& b) {
 }
 
 std::vector<uint8_t> captureWindow(const std::string& windowId, uint32_t maxDimension) {
+    requireControlAvailable();
     if (g.running)
         noteActivity();
     if (!g_pHyprRenderer || !g_pHyprOpenGL)
@@ -1985,6 +1994,7 @@ std::vector<uint8_t> captureWindow(const std::string& windowId, uint32_t maxDime
 }
 
 std::vector<uint8_t> captureRegion(int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t maxDimension) {
+    requireControlAvailable();
     if (g.running)
         noteActivity();
     if (!g_pHyprRenderer || !g_pHyprOpenGL)

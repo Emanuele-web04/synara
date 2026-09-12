@@ -97,10 +97,8 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_double_click",
   "computer_triple_click",
   "computer_right_click",
-  // `computer_move_cursor` is deliberately absent: it moves the agent's own
-  // overlay, posts only mouse movement, and never aims the keyboard, so there is
-  // nothing for a human to approve. It was gated when a hover still re-pointed
-  // the keyboard at whatever it passed over.
+  // Hover sends application input and may raise its target window on Linux.
+  "computer_move_cursor",
   "computer_drag",
   "computer_scroll",
   "computer_type_text",
@@ -1000,12 +998,6 @@ export function makeAgentGatewayComputerTools(
     description: string,
     inputSchema: Record<string, unknown>,
     run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
-    /**
-     * Overrides the write annotations for an action that is not one. Only the
-     * hover uses it: it posts mouse movement, presses nothing, and never aims the
-     * keyboard, so `destructiveHint: true` was telling every provider to treat
-     * a look as a change.
-     */
     annotations: Record<string, unknown> = WRITE_TOOL_ANNOTATIONS,
   ): ToolEntry => ({
     requiredCapability: COMPUTER_CONTROL_CAPABILITY,
@@ -1499,11 +1491,6 @@ export function makeAgentGatewayComputerTools(
       targetSchema,
       async (args, context) =>
         manager.moveCursor(context.callerThreadId, readTarget(args, context)),
-      // Not destructive and not approval-gated: it changes only where the
-      // agent's own overlay is drawn. `readOnlyHint` stays false because
-      // something on screen does move, so a provider that surfaces write tools
-      // still shows it.
-      { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ),
     observedActionEntry(
       "computer_drag",

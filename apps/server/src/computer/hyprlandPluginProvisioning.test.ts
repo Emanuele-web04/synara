@@ -223,7 +223,7 @@ describe("provisioning", () => {
     const prebuiltRoot = await prebuiltRootWith({
       hyprlandVersion: "0.56.2",
       bytes: "tampered",
-      sha256: "00",
+      sha256: "0".repeat(64),
     });
 
     await expect(provisionHyprlandPlugin(await baseDeps({ prebuiltRoot }))).rejects.toThrow(

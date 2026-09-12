@@ -38,7 +38,7 @@ import {
   type KWinPrebuiltBuiltOn,
   type LinuxDistribution,
 } from "./provisioning/linuxDistribution.ts";
-import { verifyPrebuilt } from "./provisioning/prebuiltVerification.ts";
+import { isPrebuiltBinaryRecord, verifyPrebuilt } from "./provisioning/prebuiltVerification.ts";
 
 /**
  * The env script's name, which is also the uninstall instruction: this file and
@@ -103,7 +103,7 @@ export function renderEnvScript(qtPluginRoot: string): string {
     "# Written by Synara so KWin can find the computer-use plugin in your home",
     "# directory instead of /usr. Delete this file and the directory below to",
     "# undo it; nothing else on the system was changed.",
-    `synara_plugin_root="${qtPluginRoot}"`,
+    `synara_plugin_root='${qtPluginRoot.replace(/'/g, "'\\''")}'`,
     'case ":${QT_PLUGIN_PATH}:" in',
     '  *":${synara_plugin_root}:"*) ;;',
     '  *) QT_PLUGIN_PATH="${synara_plugin_root}${QT_PLUGIN_PATH:+:${QT_PLUGIN_PATH}}" ;;',
@@ -191,8 +191,6 @@ export function selectPrebuilt(
   );
 }
 
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-
 /**
  * Reads a manifest, dropping any entry that could not be acted on anyway.
  *
@@ -212,20 +210,9 @@ export async function readPrebuiltManifest(path: string): Promise<PrebuiltManife
   const builds = (parsed as { builds?: unknown }).builds;
   if (!Array.isArray(builds)) return undefined;
   const accepted = builds.flatMap((entry) => {
-    const build = entry as Partial<PrebuiltBuild> | null;
-    if (!build || typeof build !== "object") return [];
-    const { kwinVersion, arch, builtOn, file, sha256 } = build;
-    if (
-      !isText(kwinVersion) ||
-      !isText(arch) ||
-      !isPrebuiltBuiltOn(builtOn) ||
-      !isText(file) ||
-      !isText(sha256)
-    ) {
-      return [];
-    }
-    if (file.includes("/") || file.includes("\\") || file === "." || file === "..") return [];
-    if (!SHA256_HEX.test(sha256)) return [];
+    if (!isPrebuiltBinaryRecord(entry)) return [];
+    const { kwinVersion, arch, builtOn, file, sha256 } = entry;
+    if (!isText(kwinVersion) || !isPrebuiltBuiltOn(builtOn)) return [];
     return [{ kwinVersion, arch, builtOn, file, sha256 } satisfies PrebuiltBuild];
   });
   return accepted.length > 0 ? { builds: accepted } : undefined;

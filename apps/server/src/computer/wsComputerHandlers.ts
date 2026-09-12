@@ -220,11 +220,20 @@ export function makeWsComputerHandlers(
         "Failed to launch computer application",
       ),
     [COMPUTER_WS_METHODS.click]: (input) =>
-      attempt(() => manager.click(undefined, input), "Failed to click on computer"),
+      attempt(
+        () => manager.click(undefined, input, input.modifiers),
+        "Failed to click on computer",
+      ),
     [COMPUTER_WS_METHODS.doubleClick]: (input) =>
-      attempt(() => manager.doubleClick(undefined, input), "Failed to double-click on computer"),
+      attempt(
+        () => manager.doubleClick(undefined, input, input.modifiers),
+        "Failed to double-click on computer",
+      ),
     [COMPUTER_WS_METHODS.rightClick]: (input) =>
-      attempt(() => manager.rightClick(undefined, input), "Failed to right-click on computer"),
+      attempt(
+        () => manager.rightClick(undefined, input, input.modifiers),
+        "Failed to right-click on computer",
+      ),
     [COMPUTER_WS_METHODS.moveCursor]: (input) =>
       attempt(() => manager.moveCursor(undefined, input), "Failed to move computer cursor"),
     [COMPUTER_WS_METHODS.drag]: (input) =>
@@ -234,7 +243,14 @@ export function makeWsComputerHandlers(
       ),
     [COMPUTER_WS_METHODS.scroll]: (input) =>
       attempt(
-        () => manager.scroll(undefined, scrollTarget(input), input.deltaX, input.deltaY),
+        () =>
+          manager.scroll(
+            undefined,
+            scrollTarget(input),
+            input.deltaX,
+            input.deltaY,
+            input.modifiers,
+          ),
         "Failed to scroll on computer",
       ),
     [COMPUTER_WS_METHODS.typeText]: (input) =>

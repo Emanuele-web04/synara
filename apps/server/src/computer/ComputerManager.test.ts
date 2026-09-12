@@ -887,6 +887,38 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("releases ownership after focus cleanup fails and requires cleanup before the next input", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    const states: ThreadComputerState[] = [];
+    manager.onEvent((event) => {
+      if (event.type === "computer.thread-state") states.push(event.state);
+    });
+    await manager.getThreadState("thread-b");
+    await manager.click("thread-a", { x: 10, y: 10 });
+
+    backend.failNext("clearFocusWindow", new Error("Compositor disconnected"));
+    await expect(manager.releaseDesktopControl("thread-a")).rejects.toThrow(
+      "Compositor disconnected",
+    );
+    const released = states.findLast((state) => state.threadId === "thread-b");
+    expect(released?.controlledByOtherThread).toBe(false);
+    expect(released?.controlOwnerThreadId).toBeUndefined();
+
+    backend.failNext("clearFocusWindow", new Error("Compositor still disconnected"));
+    await expect(manager.typeText("thread-b", "hello")).rejects.toThrow(
+      "Compositor still disconnected",
+    );
+    expect(backend.callsFor("typeText")).toHaveLength(0);
+    expect((await manager.getThreadState("thread-b")).controlOwnerThreadId).toBeUndefined();
+
+    await expect(manager.typeText("thread-b", "hello")).resolves.toMatchObject({
+      action: "computer_type_text",
+    });
+    expect(backend.callsFor("typeText")).toHaveLength(1);
+    await manager.dispose();
+  });
+
   /**
    * The release the lease reactor sends on session.exited can land while the
    * dead session's last call is still executing — a gateway call cannot be

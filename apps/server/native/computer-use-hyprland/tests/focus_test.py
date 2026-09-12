@@ -1,4 +1,4 @@
-"""Compile production input functions against a minimal Wayland seat model.
+"""Compile production input and capture functions against isolated models.
 
 No compositor is started or contacted. The fixture records which surface a
 client's shared pointer/keyboard would deliver each event to.
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def definition(source, name, kind="function"):
-    pattern = (r"^struct " if kind == "struct" else r"^(?:void|bool|int|double) ")
+    pattern = (r"^struct " if kind == "struct" else r"^(?:void|bool|int|double|std::vector<uint8_t>) ")
     pattern += re.escape(name) + (r" \{" if kind == "struct" else r"\([^\n]*\) \{")
     match = re.search(pattern, source, re.MULTILINE)
     if not match:
@@ -28,6 +28,18 @@ def definition(source, name, kind="function"):
 
 
 class FocusRegressionTest(unittest.TestCase):
+    def test_capture_respects_emergency_release(self):
+        source = (ROOT / "synarahyprlandplugin.cpp").read_text()
+        definitions = [definition(source, name) for name in
+                       ["requireControlAvailable", "captureWindow", "captureRegion"]]
+        fixture = (ROOT / "tests/capture_guard_fixture.cpp").read_text()
+        with tempfile.TemporaryDirectory(prefix="synara-capture-guard-test-") as directory:
+            cpp = Path(directory) / "capture_guard.cpp"
+            cpp.write_text(fixture.replace("// PRODUCTION_DEFINITIONS", "\n\n".join(definitions)))
+            binary = Path(directory) / "capture-guard-test"
+            subprocess.run(["g++", "-std=c++20", "-Wall", "-Wextra", str(cpp), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_capture_transforms(self):
         with tempfile.TemporaryDirectory(prefix="synara-transform-test-") as directory:
             binary = Path(directory) / "capture-test"

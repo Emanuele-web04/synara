@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ComputerWindow } from "@synara/contracts";
 
 import { AtspiHelperClient } from "./atspiClient.ts";
+import { DesktopOperationQueue } from "./DesktopOperationQueue.ts";
 
 class FakeHelperProcess extends EventEmitter {
   readonly stdin = new PassThrough();
@@ -26,6 +27,94 @@ const WINDOW: ComputerWindow = {
 };
 
 describe("AtspiHelperClient", () => {
+  it("ignores replies and errors from a helper replaced after a timeout", async () => {
+    vi.useFakeTimers();
+    const oldChild = new FakeHelperProcess();
+    const child = new FakeHelperProcess();
+    const ids: number[] = [];
+    child.stdin.on("data", (chunk) => ids.push(JSON.parse(chunk.toString()).id));
+    const spawnProcess = vi.fn().mockReturnValueOnce(oldChild).mockReturnValue(child);
+    const client = new AtspiHelperClient({ requestTimeoutMs: 100, spawnProcess });
+    try {
+      const first = expect(client.readTrees([WINDOW])).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(100);
+      await first;
+      const second = client.setText({ window: WINDOW, path: [], text: "value" });
+      let settled = false;
+      void second.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(ids).toHaveLength(1);
+
+      oldChild.stdout.write(JSON.stringify({ id: ids[0], result: { ok: true } }) + "\n");
+      oldChild.emit("error", new Error("late helper error"));
+      for (const stream of [oldChild.stdin, oldChild.stdout, oldChild.stderr]) {
+        stream.emit("error", new Error("late stream error"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      child.stdout.write(JSON.stringify({ id: ids[0], result: { ok: false } }) + "\n");
+      await expect(second).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(oldChild.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      await client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["stdin", "stdout", "stderr"] as const)("contains an idle %s error", async (name) => {
+    const child = scriptedHelper([], () => ({ trees: [] }));
+    const client = new AtspiHelperClient({
+      spawnProcess: () => child as unknown as ChildProcessWithoutNullStreams,
+    });
+    try {
+      await expect(client.readTrees([WINDOW])).resolves.toEqual([]);
+      expect(() => child[name].emit("error", new Error("pipe failed"))).not.toThrow();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("does not send a semantic write cancelled during helper restart", async () => {
+    vi.useFakeTimers();
+    const oldChild = new FakeHelperProcess();
+    const child = scriptedHelper([], () => ({ ok: true }));
+    const sent = vi.spyOn(child.stdin, "write");
+    const spawnProcess = vi.fn().mockReturnValueOnce(oldChild).mockReturnValue(child);
+    const client = new AtspiHelperClient({ requestTimeoutMs: 100, spawnProcess });
+    const queue = new DesktopOperationQueue();
+    const controller = new AbortController();
+    try {
+      const first = expect(client.readTrees([WINDOW])).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(100);
+      await first;
+      const write = queue.run(
+        () => client.setText({ window: WINDOW, path: [], text: "value" }),
+        controller.signal,
+      );
+      const rejected = expect(write).rejects.toThrow("cancelled");
+      await vi.advanceTimersByTimeAsync(100);
+      controller.abort(new Error("cancelled"));
+      await vi.advanceTimersByTimeAsync(400);
+      await rejected;
+      expect(sent).not.toHaveBeenCalled();
+    } finally {
+      await client.dispose();
+      await queue.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("starts the timeout only when the single-threaded helper can accept the next request", async () => {
     vi.useFakeTimers();
     const child = new FakeHelperProcess();

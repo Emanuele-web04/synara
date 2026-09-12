@@ -10,7 +10,7 @@ import {
 
 import type { ComputerWindow } from "@synara/contracts";
 import type { AtspiWindowTree } from "./atspiTreeTargeting.ts";
-import { desktopOperationSignal } from "./DesktopOperationQueue.ts";
+import { assertDesktopOperationActive, desktopOperationSignal } from "./DesktopOperationQueue.ts";
 
 const HELPER_READ_TREE_METHOD = "read-tree";
 const HELPER_SET_TEXT_METHOD = "set-text";
@@ -131,16 +131,7 @@ export class AtspiHelperClient implements AtspiTreeReader {
     this.framer = null;
     this.writer = null;
     this.registry = null;
-    process?.stdin.end();
-    process?.kill("SIGTERM");
-    // SIGTERM is a request; a helper wedged in an uninterruptible read would
-    // ignore it and linger attached to the compositor. A short grace, then the
-    // kill that cannot be declined.
-    if (process) {
-      const survivor = setTimeout(() => process.kill("SIGKILL"), ATSPI_KILL_GRACE_MS);
-      survivor.unref?.();
-      void process.once("exit", () => clearTimeout(survivor));
-    }
+    if (process) terminateHelper(process);
     await this.startPromise?.catch(() => undefined);
     this.startPromise = null;
   }
@@ -166,6 +157,9 @@ export class AtspiHelperClient implements AtspiTreeReader {
   private async requestNow(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (this.disposed) throw new Error("AT-SPI helper is disposed.");
     await this.ensureStarted();
+    // Restart backoff can outlive the operation's permission or cancellation.
+    // Check again before sending a write to the replacement helper.
+    assertDesktopOperationActive();
     const registry = this.registry;
     const writer = this.writer;
     if (!registry || !writer) throw new Error("AT-SPI helper transport is unavailable.");
@@ -251,9 +245,19 @@ export class AtspiHelperClient implements AtspiTreeReader {
         ),
     });
     this.registry.processStarted();
-    child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(chunk));
+    // Streams can fail after a write has completed or after the helper was
+    // replaced. Keep these listeners attached so late errors are contained.
+    const onTransportError = (error: Error) => {
+      if (this.process === child) this.resetProcess(error);
+    };
+    child.on("error", onTransportError);
+    child.stdin.on("error", onTransportError);
+    child.stdout.on("error", onTransportError);
+    child.stderr.on("error", onTransportError);
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (this.process === child) this.consumeStdout(chunk);
+    });
     child.stderr.resume();
-    child.on("error", (error) => this.resetProcess(error));
     child.on("exit", (code, signal) => {
       if (this.process !== child) return;
       this.resetProcess(
@@ -300,8 +304,18 @@ export class AtspiHelperClient implements AtspiTreeReader {
     this.writer = null;
     this.registry = null;
     this.reconnectFailures = Math.min(this.reconnectFailures + 1, 5);
-    if (child && !child.killed) child.kill("SIGTERM");
+    if (child) terminateHelper(child);
   }
+}
+
+/** Timed-out helpers need the same bounded shutdown as an explicitly disposed one. */
+function terminateHelper(child: ChildProcessWithoutNullStreams): void {
+  child.stdin.end();
+  if (child.exitCode != null || child.signalCode != null) return;
+  const survivor = setTimeout(() => child.kill("SIGKILL"), ATSPI_KILL_GRACE_MS);
+  survivor.unref?.();
+  child.once("exit", () => clearTimeout(survivor));
+  if (!child.killed) child.kill("SIGTERM");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

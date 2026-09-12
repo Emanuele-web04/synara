@@ -15,6 +15,7 @@ import {
   type ComputerCapabilities,
   type ComputerHealth,
   type ComputerId,
+  type ComputerInputModifier,
   type ComputerLaunchAppResult,
   type ComputerPoint,
   type ComputerRect,
@@ -406,6 +407,7 @@ export class KWinComputerBackend implements ComputerBackend {
   private refusedInstance: string | undefined;
   private streamListener: ComputerFrameListener | undefined;
   private streamTimer: ReturnType<typeof setInterval> | undefined;
+  private streamGeneration = 0;
   private stillInFlight = false;
   private readonly stillDedupe = new StillFrameDedupe();
   private captureQueue: Promise<void> = Promise.resolve();
@@ -855,13 +857,23 @@ export class KWinComputerBackend implements ComputerBackend {
     });
   }
 
-  async click(point: ComputerPoint): Promise<ComputerBackendActionResult> {
+  async click(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    this.rejectPointerModifiers(modifiers);
     const moved = await this.moveCursor(point);
     await this.pressButton(EVDEV_BUTTON_CODES.left);
     return moved;
   }
 
-  async doubleClick(point: ComputerPoint): Promise<ComputerBackendActionResult> {
+  async doubleClick(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    this.rejectPointerModifiers(modifiers);
     const moved = await this.moveCursor(point);
     await this.pressButton(EVDEV_BUTTON_CODES.left);
     await this.sleep(60);
@@ -869,7 +881,12 @@ export class KWinComputerBackend implements ComputerBackend {
     return moved;
   }
 
-  async rightClick(point: ComputerPoint): Promise<ComputerBackendActionResult> {
+  async rightClick(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    this.rejectPointerModifiers(modifiers);
     const moved = await this.moveCursor(point);
     await this.pressButton(EVDEV_BUTTON_CODES.right);
     return moved;
@@ -912,11 +929,25 @@ export class KWinComputerBackend implements ComputerBackend {
     point: ComputerPoint | null,
     deltaX: number,
     deltaY: number,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerBackendActionResult> {
+    this.rejectPointerModifiers(modifiers);
     const plugin = await this.ensurePlugin();
     const moved = point ? await this.moveCursor(point) : {};
-    await this.pluginSuccess("axis", () => plugin.axis(deltaX, deltaY));
+    await this.pluginSuccess("axis", () => {
+      assertDesktopOperationActive();
+      return plugin.axis(deltaX, deltaY);
+    });
     return moved;
+  }
+
+  private rejectPointerModifiers(modifiers: readonly ComputerInputModifier[] | undefined): void {
+    if (modifiers?.length) {
+      throw new ComputerBackendError(
+        `Synara ${this.integrationName} does not support modifier keys during clicks or scrolling. No pointer input was sent.`,
+      );
+    }
   }
 
   async typeText(text: string): Promise<ComputerBackendActionResult> {
@@ -1042,18 +1073,17 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   async attachStream(listener: ComputerFrameListener): Promise<void> {
+    const generation = ++this.streamGeneration;
     if (this.streamTimer !== undefined) clearInterval(this.streamTimer);
     this.streamTimer = undefined;
+    this.streamListener = undefined;
     await this.ensurePlugin();
-    // An overlapping attach (a second pane joining mid-attach) cleared the
-    // first interval above, but the await let the FIRST attach resume here and
-    // install its own interval — which nothing would ever clear again, because
-    // `streamTimer` now names the second one. Cleared once more so exactly the
-    // newest attach's interval survives.
-    if (this.streamTimer !== undefined) clearInterval(this.streamTimer);
+    if (this.disposed || generation !== this.streamGeneration) return;
     this.streamListener = listener;
     this.stillDedupe.reset();
     await this.publishStillFrame();
+    // A replacement or detach can also arrive during the first capture.
+    if (this.disposed || generation !== this.streamGeneration) return;
     this.streamTimer = setInterval(() => {
       void this.publishStillFrame();
     }, this.stillIntervalMs);
@@ -1061,6 +1091,7 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   async detachStream(): Promise<void> {
+    this.streamGeneration += 1;
     this.stillDedupe.reset();
     this.streamListener = undefined;
     if (this.streamTimer !== undefined) clearInterval(this.streamTimer);
@@ -1763,14 +1794,21 @@ export class KWinComputerBackend implements ComputerBackend {
     return {
       movePointer: (x, y, operation) => {
         const origin = this.currentOrigin();
-        return this.pluginSuccess(operation, () => plugin.movePointer(x + origin.x, y + origin.y));
+        return this.pluginSuccess(operation, () => {
+          assertDesktopOperationActive();
+          return plugin.movePointer(x + origin.x, y + origin.y);
+        });
       },
       button: (code, pressed, operation) =>
-        this.pluginSuccess(operation, () => plugin.button(code, pressed)),
-      key: (code, pressed, operation) => {
-        if (pressed) assertDesktopOperationActive();
-        return this.pluginSuccess(operation, () => plugin.key(code, pressed));
-      },
+        this.pluginSuccess(operation, () => {
+          if (pressed) assertDesktopOperationActive();
+          return plugin.button(code, pressed);
+        }),
+      key: (code, pressed, operation) =>
+        this.pluginSuccess(operation, () => {
+          if (pressed) assertDesktopOperationActive();
+          return plugin.key(code, pressed);
+        }),
     };
   }
 
@@ -1869,6 +1907,7 @@ export class KWinComputerBackend implements ComputerBackend {
    */
   private async publishStillFrame(): Promise<void> {
     const listener = this.streamListener;
+    const generation = this.streamGeneration;
     if (
       !listener ||
       this.pluginHealth?.capture !== true ||
@@ -1885,7 +1924,8 @@ export class KWinComputerBackend implements ComputerBackend {
       // a payload that is not a PNG must fail here rather than in a decoder in
       // the browser, where the only symptom is a blank pane.
       readPngDimensions(data, { source: this.captureSource });
-      if (this.streamListener !== listener) return;
+      if (this.disposed || generation !== this.streamGeneration || this.streamListener !== listener)
+        return;
       if (!this.stillDedupe.shouldPublish(data, this.stillDedupe.takeForce(false))) return;
       const frame = {
         sequence: this.nextSequence++,

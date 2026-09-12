@@ -3107,12 +3107,6 @@ bool SynaraComputerUsePlugin::updatePointerFocus()
     // re-enter re-decides. The old delivery is always torn down by the same call
     // that knows how it was made.
     if (m_pointerWindow != window) {
-        // Released on the surface that saw the press, before anything moves, for
-        // the same reason the keyboard does it below: a button still held while
-        // the pointer migrates would stay down in the window being left - nothing
-        // else will ever send it a release - and the matching release would land
-        // on the new window as a press it never got.
-        releasePressedButtons();
         clearPointerDelivery();
         m_pointerWindow = window;
         m_pointerDirect = usePointerDirectInjection(window);
@@ -3139,6 +3133,9 @@ bool SynaraComputerUsePlugin::updatePointerFocus()
  */
 void SynaraComputerUsePlugin::clearPointerDelivery()
 {
+    // The old destination must receive releases before its focus is dropped,
+    // including when the pointer moves onto empty desktop or outside a target.
+    releasePressedButtons();
     if (m_directPointerSurface) {
         directPointerLeave();
     } else if (m_pointerWindow && m_seat) {

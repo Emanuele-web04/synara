@@ -20,6 +20,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { withProvisioningFileLock } from "./provisioning/fileLock.ts";
+import { isPrebuiltBinaryRecord } from "./provisioning/prebuiltVerification.ts";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -143,14 +144,22 @@ export async function readHyprlandPrebuiltManifest(
 ): Promise<HyprlandPrebuiltManifest | undefined> {
   const raw = await readFile(path, "utf8").catch(() => undefined);
   if (raw === undefined) return undefined;
+  let parsed: unknown;
   try {
-    const builds = (JSON.parse(raw) as { builds?: unknown }).builds;
-    return Array.isArray(builds)
-      ? { builds: builds as readonly HyprlandPrebuiltBuild[] }
-      : undefined;
+    parsed = JSON.parse(raw);
   } catch {
     return undefined;
   }
+  if (parsed === null || typeof parsed !== "object") return undefined;
+  const builds = (parsed as { builds?: unknown }).builds;
+  if (!Array.isArray(builds)) return undefined;
+  const accepted = builds.flatMap((entry) => {
+    if (!isPrebuiltBinaryRecord(entry)) return [];
+    const { hyprlandVersion, arch, file, sha256 } = entry;
+    if (typeof hyprlandVersion !== "string" || hyprlandVersion.trim() === "") return [];
+    return [{ hyprlandVersion, arch, file, sha256 } satisfies HyprlandPrebuiltBuild];
+  });
+  return accepted.length > 0 ? { builds: accepted } : undefined;
 }
 
 /** Exact match on version and arch, never nearest — same reasoning as KWin's. */

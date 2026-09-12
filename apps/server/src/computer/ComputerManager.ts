@@ -1105,10 +1105,11 @@ export class ComputerManager {
     target: ComputerTarget | null,
     deltaX: number,
     deltaY: number,
+    modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const resolved = await this.prepareScrollTarget(target);
-      const result = await this.injectScroll(resolved, deltaX, deltaY, undefined);
+      const result = await this.injectScroll(resolved, deltaX, deltaY, modifiers);
       return this.actionResult(
         threadId,
         "computer_scroll",
@@ -1783,13 +1784,22 @@ export class ComputerManager {
       this.lease.releaseRequested = true;
       return;
     }
-    await this.operations.run(async () => {
-      if (this.lease?.threadId !== owner) return;
-      await this.backend.clearFocusWindow?.();
-      this.lease = null;
-      await this.announceDrivingAgent(null);
-    });
-    await this.publishAllThreads();
+    try {
+      await this.operations.run(async () => {
+        if (this.lease?.threadId !== owner) return;
+        try {
+          await this.backend.clearFocusWindow?.();
+        } finally {
+          // A disconnected compositor must not leave a completed thread owning
+          // the desktop. The next owner must clear focus successfully in
+          // claimDesktopControl before it can acquire the lease or send input.
+          this.lease = null;
+          await this.announceDrivingAgent(null);
+        }
+      });
+    } finally {
+      await this.publishAllThreads();
+    }
   }
 
   /**
