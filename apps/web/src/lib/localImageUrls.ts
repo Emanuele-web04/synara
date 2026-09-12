@@ -9,7 +9,7 @@ import {
   LOCAL_IMAGE_ROUTE_PATH,
   SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
 } from "@synara/shared/localPreviewFiles";
-import { isWindowsAbsolutePath } from "@synara/shared/path";
+import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
@@ -48,6 +48,12 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
     normalized.startsWith("../") ||
     !/^[a-z][a-z0-9+.-]*:/i.test(normalized)
   );
+}
+
+// Grants must name the same decoded file as the preview HTTP request.
+export function localImageAbsolutePath(src: string): string | null {
+  const normalized = normalizeMarkdownImagePath(src);
+  return isLocalImageMarkdownSrc(src) && isLocalAbsolutePath(normalized) ? normalized : null;
 }
 
 export function buildLocalImageUrl(input: {

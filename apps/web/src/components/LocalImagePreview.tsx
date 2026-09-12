@@ -110,21 +110,24 @@ export function useLocalImageDownloadClick(input: {
   downloadUrl: string;
   downloadName: string;
   errorTitle?: string | undefined;
+  resolveDownloadUrl?: (() => Promise<string>) | undefined;
 }) {
   return (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    void downloadUrlAsBlob({
-      url: input.downloadUrl,
-      filename: input.downloadName,
-    }).catch((error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: input.errorTitle ?? "Could not download image",
-        description:
-          error instanceof Error ? error.message : "The file may have moved or be unavailable.",
+    void Promise.resolve()
+      .then(async () => {
+        const url = input.resolveDownloadUrl ? await input.resolveDownloadUrl() : input.downloadUrl;
+        await downloadUrlAsBlob({ url, filename: input.downloadName });
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: input.errorTitle ?? "Could not download image",
+          description:
+            error instanceof Error ? error.message : "The file may have moved or be unavailable.",
+        });
       });
-    });
   };
 }
 
