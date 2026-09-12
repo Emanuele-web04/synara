@@ -1,9 +1,6 @@
-import {
-  PROVIDER_DISPLAY_NAMES,
-  type MindListResult,
-  type MindMemory,
-  type MindMemoryType,
-} from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
+import { type MindListResult, type MindMemory, type MindMemoryType } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
 import { type VariantProps } from "class-variance-authority";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
@@ -94,6 +91,9 @@ function MindListRow({
         <span className="truncate text-xs text-muted-foreground">
           {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}{" "}
           · {provenanceLabel(memory.provenance)}
+          {memory.accessCount > 0
+            ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
+            : ""}
           {memory.pinned ? " · pinned" : ""}
         </span>
       </span>
@@ -126,6 +126,7 @@ function MindRouteView() {
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
   const [search, setSearch] = useState("");
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
 
   const mindQuery = useQuery({
     queryKey: mindQueryKey,
@@ -203,6 +204,16 @@ function MindRouteView() {
     [projects],
   );
 
+  // Projects present in the loaded page, for the filter chips.
+  const visibleProjects = useMemo(() => {
+    const ids = [...new Set(data.memories.map((memory) => memory.projectId))];
+    return ids.map((id) => ({ id, name: projectNamesById.get(id) ?? "Unknown project" }));
+  }, [data.memories, projectNamesById]);
+  const pinnedCount = useMemo(
+    () => data.memories.filter((memory) => memory.pinned).length,
+    [data.memories],
+  );
+
   // The server already returns weight-desc; re-sort so optimistic pin/weight edits
   // and any out-of-order cache merges keep the same order the server would send.
   const sortedMemories = useMemo(
@@ -213,14 +224,18 @@ function MindRouteView() {
     [data.memories],
   );
   const filteredMemories = useMemo(() => {
+    const scoped =
+      projectFilter === null
+        ? sortedMemories
+        : sortedMemories.filter((memory) => memory.projectId === projectFilter);
     const query = search.trim().toLowerCase();
-    if (query.length === 0) return sortedMemories;
-    return sortedMemories.filter(
+    if (query.length === 0) return scoped;
+    return scoped.filter(
       (memory) =>
         memory.text.toLowerCase().includes(query) ||
         (projectNamesById.get(memory.projectId) ?? "").toLowerCase().includes(query),
     );
-  }, [sortedMemories, search, projectNamesById]);
+  }, [sortedMemories, search, projectFilter, projectNamesById]);
 
   const renderMindList = () => (
     <section className="flex flex-col gap-2">
@@ -294,6 +309,43 @@ function MindRouteView() {
             <h1 className="px-2 font-heading text-2xl font-semibold tracking-tight text-foreground">
               Mind
             </h1>
+            {data.memories.length > 0 ? (
+              <div className="flex flex-col gap-2 px-2">
+                <p className="text-xs text-muted-foreground">
+                  {data.count} {pluralize(data.count, "memory", "memories")} · {pinnedCount} pinned
+                  · cap {data.cap}
+                </p>
+                {visibleProjects.length > 1 ? (
+                  <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by project">
+                    <Button
+                      type="button"
+                      size="chip"
+                      variant="ghost"
+                      data-pressed={projectFilter === null}
+                      aria-pressed={projectFilter === null}
+                      onClick={() => setProjectFilter(null)}
+                    >
+                      All
+                    </Button>
+                    {visibleProjects.map((project) => (
+                      <Button
+                        key={project.id}
+                        type="button"
+                        size="chip"
+                        variant="ghost"
+                        data-pressed={projectFilter === project.id}
+                        aria-pressed={projectFilter === project.id}
+                        onClick={() =>
+                          setProjectFilter(projectFilter === project.id ? null : project.id)
+                        }
+                      >
+                        {project.name}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {mindQuery.isError ? (
               <Alert variant="error" size="sm" className="text-destructive">
                 <AlertDescription>
