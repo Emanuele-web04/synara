@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProviderRateLimit } from "~/lib/rateLimits";
+import { deriveVisibleRateLimitRows, type ProviderRateLimit } from "~/lib/rateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
@@ -139,6 +139,44 @@ describe("useProviderUsageSummary", () => {
       { label: "24h", value: "123M tokens", subtitle: "12 recent sessions" },
     ]);
   });
+
+  it.each(["2099-04-08T18:05:00.000Z", "2099-04-08T17:55:00.000Z"])(
+    "keeps overage telemetry independent from live Weekly and Fable at %s",
+    (updatedAt) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+        snapshot({
+          updatedAt: "2099-04-08T18:00:00.000Z",
+          limits: [
+            { window: "Weekly", usedPercent: 45, windowDurationMins: 10080 },
+            { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          ],
+        }),
+      ]);
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt,
+            limits: [{ window: "seven_day_overage_included", usedPercent: 90 }],
+          },
+        ],
+      });
+
+      expect(
+        deriveVisibleRateLimitRows(summary.rateLimits).map(({ label, remainingPercent }) => ({
+          label,
+          remainingPercent,
+        })),
+      ).toEqual([
+        { label: "Weekly", remainingPercent: 55 },
+        { label: "Fable", remainingPercent: 11 },
+        { label: "Weekly (overage)", remainingPercent: 10 },
+      ]);
+    },
+  );
 
   it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
     const queryClient = createQueryClient();

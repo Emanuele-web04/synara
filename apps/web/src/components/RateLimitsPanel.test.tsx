@@ -229,7 +229,7 @@ describe("RateLimitsPanel helpers", () => {
     ]);
   });
 
-  it("humanizes the claude seven_day_overage_included window instead of leaking the raw key", () => {
+  it("keeps the claude seven_day_overage_included window independent from Fable and Weekly", () => {
     const rateLimits = deriveAccountRateLimits([
       {
         activities: [
@@ -254,7 +254,71 @@ describe("RateLimitsPanel helpers", () => {
         label: "Weekly (overage)",
         remainingPercent: 22,
         resetsAt: "2099-04-04T08:03:00.000Z",
+        windowDurationMins: 10080,
       },
+    ]);
+  });
+
+  it("keeps paid usage credits separate from the included weekly window", () => {
+    const rateLimits = deriveAccountRateLimits([
+      {
+        activities: [
+          makeActivity("credits", "account.rate-limits.updated", {
+            provider: "claudeAgent",
+            rate_limit_info: {
+              status: "allowed_warning",
+              rateLimitType: "overage",
+              utilization: 0.8,
+            },
+          }),
+        ],
+      },
+    ]);
+
+    expect(deriveVisibleRateLimitRows(rateLimits)).toEqual([
+      { id: "claudeAgent-Usage credits", label: "Usage credits", remainingPercent: 20 },
+    ]);
+  });
+
+  it("preserves model-specific weekly windows that share the same duration", () => {
+    const rows = deriveVisibleRateLimitRows([
+      {
+        provider: "claudeAgent",
+        updatedAt: "2099-04-08T18:00:00.000Z",
+        limits: [
+          { window: "Weekly", usedPercent: 30, windowDurationMins: 10080 },
+          { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          { window: "seven_day_sonnet", usedPercent: 20, windowDurationMins: 10080 },
+          { window: "seven_day_opus", usedPercent: 10, windowDurationMins: 10080 },
+        ],
+      },
+    ]);
+
+    expect(rows.map(({ label, remainingPercent }) => ({ label, remainingPercent }))).toEqual([
+      { label: "Weekly", remainingPercent: 70 },
+      { label: "Fable", remainingPercent: 11 },
+      { label: "Sonnet", remainingPercent: 80 },
+      { label: "Opus", remainingPercent: 90 },
+    ]);
+  });
+
+  it("preserves unmapped provider labels instead of collapsing them into the duration bucket", () => {
+    const rows = deriveVisibleRateLimitRows([
+      {
+        provider: "claudeAgent",
+        updatedAt: "2099-04-08T18:00:00.000Z",
+        limits: [
+          { window: "Weekly", usedPercent: 30, windowDurationMins: 10080 },
+          { window: "Opus 4.5", usedPercent: 70, windowDurationMins: 10080 },
+          { window: "Plus", usedPercent: 12, windowDurationMins: 300 },
+        ],
+      },
+    ]);
+
+    expect(rows.map(({ label, remainingPercent }) => ({ label, remainingPercent }))).toEqual([
+      { label: "Weekly", remainingPercent: 70 },
+      { label: "Opus 4.5", remainingPercent: 30 },
+      { label: "Plus", remainingPercent: 88 },
     ]);
   });
 });

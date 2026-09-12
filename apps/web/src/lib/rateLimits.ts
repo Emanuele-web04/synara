@@ -43,12 +43,17 @@ const WINDOW_ORDER = new Map([
   ["5h", 0],
   ["Daily", 1],
   ["Weekly", 2],
-  ["Weekly (overage)", 3],
-  ["Fable", 4],
-  ["Sonnet", 5],
-  ["Opus", 6],
-  ["Current", 7],
+  ["Fable", 3],
+  ["Sonnet", 4],
+  ["Opus", 5],
+  ["Weekly (overage)", 6],
+  ["Usage credits", 20],
+  ["Current", 30],
 ]);
+
+// Unmapped provider labels keep their identity and sort together before the paid-credits
+// bucket, so an account window always stays ahead of an unrecognized provider-specific row.
+const UNKNOWN_WINDOW_ORDER = 10;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -89,57 +94,107 @@ function toIsoReset(value: unknown): string | undefined {
   return toResetString(value);
 }
 
+// Single source of truth for the duration behind a canonical window identity. Claude's
+// per-model weekly windows share 10080 with the account Weekly window on purpose; keeping
+// the identity separate even when the duration matches is the whole point of this table.
+const WINDOW_DURATION_MINS = new Map<string, number>([
+  ["5h", 5 * 60],
+  ["Daily", 24 * 60],
+  ["Weekly", 7 * 24 * 60],
+  ["Fable", 7 * 24 * 60],
+  ["Sonnet", 7 * 24 * 60],
+  ["Opus", 7 * 24 * 60],
+  ["Weekly (overage)", 7 * 24 * 60],
+]);
+
+export function windowDurationMinsForWindowLabel(label: string | undefined): number | undefined {
+  return label ? WINDOW_DURATION_MINS.get(label) : undefined;
+}
+
 function windowLabelFromDuration(windowDurationMins: number | undefined): string | undefined {
-  if (windowDurationMins === 300) return "5h";
-  if (windowDurationMins === 10_080) return "Weekly";
+  if (windowDurationMins === 5 * 60) return "5h";
+  // Reverse inference stays limited to the account session/weekly windows. `Daily = 1440`
+  // intentionally has no reverse mapping, matching the previous fallback behavior.
+  if (windowDurationMins === 7 * 24 * 60) return "Weekly";
   return undefined;
 }
+
+// Exact-match aliases, normalized as `lowercase` with `_`/spaces/dashes collapsed to `_`.
+// Resolved before the duration fallback so model-scoped windows keep their identity even
+// when they share the account window's duration.
+const WINDOW_LABEL_ALIASES = new Map<string, string>([
+  ["fable", "Fable"],
+  ["seven_day_fable", "Fable"],
+  ["weekly_fable", "Fable"],
+  ["sonnet", "Sonnet"],
+  ["seven_day_sonnet", "Sonnet"],
+  ["weekly_sonnet", "Sonnet"],
+  ["opus", "Opus"],
+  ["seven_day_opus", "Opus"],
+  ["weekly_opus", "Opus"],
+  // Claude Code reports its included overage allowance as `*_overage_included`. Its model
+  // scope is not proven, so it stays an independent window here; paid overage stays separate.
+  ["seven_day_overage_included", "Weekly (overage)"],
+  ["weekly_overage_included", "Weekly (overage)"],
+  ["weekly_overage", "Weekly (overage)"],
+  ["weekly_(overage)", "Weekly (overage)"],
+  ["overage", "Usage credits"],
+  ["usage_credits", "Usage credits"],
+]);
+
+// Provider-generic keys whose identity comes from the duration first, then from a canonical
+// fallback name. Any key outside this set and the aliases keeps its own trimmed identity.
+const GENERIC_WINDOW_KEYS = new Map<string, string>([
+  ["session", "5h"],
+  ["five_hour", "5h"],
+  ["5h", "5h"],
+  ["seven_day", "Weekly"],
+  ["7d", "Weekly"],
+  ["weekly", "Weekly"],
+  ["daily", "Daily"],
+  ["current", "Current"],
+  ["primary", "Primary"],
+  ["secondary", "Secondary"],
+]);
 
 export function normalizeRateLimitLabel(
   label: string | undefined,
   windowDurationMins?: number,
 ): string {
-  if (!label) return windowLabelFromDuration(windowDurationMins) ?? "Current";
+  const trimmed = label?.trim() ?? "";
+  if (!trimmed) {
+    return windowLabelFromDuration(windowDurationMins) ?? "Current";
+  }
 
-  const normalized = label
-    .trim()
-    .toLowerCase()
-    .replace(/[_\s-]+/g, "_");
+  const normalizedKey = trimmed.toLowerCase().replace(/[_\s-]+/g, "_");
   // Named pools can share the same duration as standard limits. Keep the pool prefix so
   // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
-  if (normalized.startsWith("core_")) {
-    return humanizeLabel(label);
+  if (normalizedKey.startsWith("core_")) {
+    return humanizeLabel(trimmed);
   }
-  const durationLabel = windowLabelFromDuration(windowDurationMins);
-  if (durationLabel) return durationLabel;
-  if (normalized === "session" || normalized === "five_hour" || normalized === "5h") {
-    return "5h";
+
+  const alias = WINDOW_LABEL_ALIASES.get(normalizedKey);
+  if (alias) {
+    return alias;
   }
-  if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
-    return "Weekly";
+
+  const generic = GENERIC_WINDOW_KEYS.get(normalizedKey);
+  if (generic) {
+    return windowLabelFromDuration(windowDurationMins) ?? generic;
   }
-  if (normalized === "seven_day_fable" || normalized === "weekly_fable" || normalized === "fable") {
-    return "Fable";
-  }
-  if (
-    normalized === "seven_day_sonnet" ||
-    normalized === "weekly_sonnet" ||
-    normalized === "sonnet"
-  ) {
-    return "Sonnet";
-  }
-  if (normalized === "seven_day_opus" || normalized === "weekly_opus" || normalized === "opus") {
-    return "Opus";
-  }
-  if (
-    normalized === "seven_day_overage_included" ||
-    normalized === "weekly_overage_included" ||
-    normalized === "weekly_overage" ||
-    normalized === "overage"
-  ) {
-    return "Weekly (overage)";
-  }
-  return humanizeLabel(label);
+
+  // Unmapped provider labels keep their trimmed identity so model-scoped or pool-scoped
+  // windows never collapse into a generic duration bucket. `Opus 4.5` stays `Opus 4.5`.
+  return trimmed;
+}
+
+/**
+ * Display-only formatting for a normalized window identity. Pure machine keys (`snake_case`)
+ * are humanized; every other identity is shown exactly as reported. Identity itself never
+ * changes here, so display text cannot re-trigger merging or lose the raw label.
+ */
+export function formatRateLimitDisplayLabel(identity: string): string {
+  return /^[a-z0-9]+(_[a-z0-9]+)+$/u.test(identity) ? humanizeLabel(identity) : identity;
 }
 
 function humanizeLabel(label: string): string {
@@ -151,7 +206,17 @@ function humanizeLabel(label: string): string {
 }
 
 function compareWindowLabels(a: string, b: string): number {
-  return (WINDOW_ORDER.get(a) ?? 99) - (WINDOW_ORDER.get(b) ?? 99);
+  const orderA = WINDOW_ORDER.get(a) ?? UNKNOWN_WINDOW_ORDER;
+  const orderB = WINDOW_ORDER.get(b) ?? UNKNOWN_WINDOW_ORDER;
+  if (orderA !== orderB) {
+    return orderA - orderB;
+  }
+  // Deterministic code-unit comparison: stable across machines and locales, and consistent
+  // with treating the identity (including its case) as meaningful.
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
 }
 
 function normalizeLimitWindow(
@@ -259,9 +324,11 @@ function extractLimitsFromClaudePayload(
   if (!info) return undefined;
 
   const rateLimitType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
-  const windowDurationMins =
-    rateLimitType === "five_hour" ? 300 : rateLimitType === "seven_day" ? 10_080 : undefined;
-  const normalized = normalizeLimitWindow(rateLimitType ?? "Current", {
+  // Normalize the identity first, then resolve a known duration from that identity. Claude
+  // per-model weekly windows share 10080 with the account Weekly window without collapsing.
+  const label = normalizeRateLimitLabel(rateLimitType);
+  const windowDurationMins = windowDurationMinsForWindowLabel(label);
+  const normalized = normalizeLimitWindow(label, {
     utilization: info.utilization,
     resetsAt: info.resetsAt,
     windowDurationMins,

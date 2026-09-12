@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deriveProviderUsageDisplayRows,
   providerUsagePaceDetails,
+  providerUsageProgressTrackProps,
   selectPrimaryProviderUsageDisplayRow,
 } from "./providerUsageDisplay";
 
@@ -126,5 +127,61 @@ describe("providerUsageDisplay", () => {
 
     expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly", "Core 5h", "Core Weekly"]);
     expect(rows.find((row) => row.label === "Core 5h")?.resetText).toContain("Resets in");
+  });
+
+  it("keeps the machine identity while humanizing it only for display", () => {
+    const [row] = deriveProviderUsageDisplayRows([
+      {
+        provider: "opencode",
+        updatedAt: "2026-06-09T12:00:00.000Z",
+        limits: [{ window: "a_b", usedPercent: 10, windowDurationMins: 300 }],
+      },
+    ]);
+
+    expect(row?.label).toBe("a_b");
+    expect(row?.displayLabel).toBe("A B");
+    expect(row ? providerUsageProgressTrackProps(row).label : null).toBe("A B remaining");
+    expect(row ? providerUsageProgressTrackProps(row).remainingPercent : null).toBe(90);
+  });
+
+  it("uses a provided non-standard duration for pace and leaves unmapped durations empty", () => {
+    vi.setSystemTime("2026-06-09T12:00:00.000Z");
+
+    const rows = deriveProviderUsageDisplayRows([
+      {
+        provider: "opencode",
+        updatedAt: "2026-06-09T12:00:00.000Z",
+        limits: [
+          {
+            window: "Monthly",
+            usedPercent: 50,
+            resetsAt: "2026-06-24T12:00:00.000Z",
+            windowDurationMins: 43_200,
+          },
+          { window: "Mystery", usedPercent: 10 },
+        ],
+      },
+    ]);
+
+    const monthly = rows.find((row) => row.label === "Monthly");
+    const mystery = rows.find((row) => row.label === "Mystery");
+    expect(monthly?.pace?.status).toBe("on-track");
+    expect(mystery?.pace).toBeNull();
+    expect(mystery?.markerPercent).toBeNull();
+  });
+
+  it("falls back to the shared registry duration for model windows without a reported one", () => {
+    vi.setSystemTime("2026-06-09T12:00:00.000Z");
+
+    const [row] = deriveProviderUsageDisplayRows([
+      {
+        provider: "claudeAgent",
+        updatedAt: "2026-06-09T12:00:00.000Z",
+        limits: [{ window: "Fable", usedPercent: 10, resetsAt: "2026-06-12T12:00:00.000Z" }],
+      },
+    ]);
+
+    expect(row?.displayLabel).toBe("Fable");
+    expect(row?.pace).not.toBeNull();
   });
 });
