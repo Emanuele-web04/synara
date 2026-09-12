@@ -33,7 +33,11 @@ class FakeCodexChild extends EventEmitter {
   }
 }
 
-function createStartupHarness(failingMethod?: string, failure: "error" | "exit" = "error") {
+function createStartupHarness(
+  failingMethod?: string,
+  failure: "error" | "exit" | "delayed-response" = "error",
+  resumeExistingThread = true,
+) {
   const child = new FakeCodexChild();
   const requests: string[] = [];
   const transportError = new Error("Codex pipe failed during startup: ECONNRESET");
@@ -41,10 +45,18 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     const request = JSON.parse(chunk.toString()) as { id?: number; method: string };
     requests.push(request.method);
     if (request.method === failingMethod) {
-      queueMicrotask(() => {
-        if (failure === "exit") child.exit();
-        else child.emit("error", transportError);
-      });
+      if (failure === "delayed-response" && request.id !== undefined) {
+        setTimeout(() => {
+          child.stdout.write(
+            `${JSON.stringify({ id: request.id, result: { thread: { id: "native-thread" } } })}\n`,
+          );
+        }, 25_000);
+      } else {
+        queueMicrotask(() => {
+          if (failure === "exit") child.exit();
+          else child.emit("error", transportError);
+        });
+      }
     } else if (request.id !== undefined) {
       queueMicrotask(() => {
         const result =
@@ -62,6 +74,10 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     return { escalated: false, signalErrors: [], capturedBeforeRootExit };
   });
   const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+  const errorMethods: string[] = [];
+  manager.on("event", (event) => {
+    if (event.kind === "error") errorMethods.push(event.method);
+  });
   const internals = manager as unknown as {
     assertSupportedCodexCliVersion: () => Promise<void>;
     buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
@@ -72,16 +88,78 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
-    resumeCursor: { threadId: "codex-existing-thread" },
+    ...(resumeExistingThread ? { resumeCursor: { threadId: "codex-existing-thread" } } : {}),
   };
   const expectedErrorMessage =
     failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;
-  return { manager, child, input, requests, teardownProcessTree, expectedErrorMessage };
+  const expectedThrownMessage =
+    failure === "error" && failingMethod
+      ? `Codex app-server transport failed: ${transportError.message} Operation: ${failingMethod}.`
+      : expectedErrorMessage;
+  return {
+    manager,
+    child,
+    input,
+    requests,
+    teardownProcessTree,
+    errorMethods,
+    expectedErrorMessage,
+    expectedThrownMessage,
+  };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("Codex session startup failures", () => {
+  it("allows a slow historical resume to outlive the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    const { manager, input, requests } = createStartupHarness("thread/resume", "delayed-response");
+    const result = manager.startSession(input);
+    let settled = false;
+    void result.finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(requests).toContain("thread/resume"));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(result).resolves.toMatchObject({
+      status: "ready",
+      resumeCursor: { threadId: "native-thread" },
+    });
+    await manager.stopAll();
+  });
+
+  it("keeps fresh thread starts on the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    const { manager, input, requests } = createStartupHarness(
+      "thread/start",
+      "delayed-response",
+      false,
+    );
+    const result = manager.startSession(input).catch((error: unknown) => error);
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(requests).toContain("thread/start"));
+    // vi.waitFor advances fake time while the async startup reaches thread/start.
+    // Stay comfortably below the ordinary deadline before crossing it.
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(result).resolves.toMatchObject({ message: "Timed out waiting for thread/start." });
+    expect(settled).toBe(true);
+    expect(manager.listSessions()).toEqual([]);
+  });
+
   it.each([
     ["initialize", "error"],
     ["account/read", "error"],
@@ -91,8 +169,16 @@ describe("Codex session startup failures", () => {
   ] as const)(
     "preserves the cause during %s/%s and requires pre-exit capture for a safe rejection",
     async (method, failure) => {
-      const { manager, child, input, requests, teardownProcessTree, expectedErrorMessage } =
-        createStartupHarness(method, failure);
+      const {
+        manager,
+        child,
+        input,
+        requests,
+        teardownProcessTree,
+        errorMethods,
+        expectedErrorMessage,
+        expectedThrownMessage,
+      } = createStartupHarness(method, failure);
       let proveExit: (() => void) | undefined;
       const exitProof = new Promise<void>((resolve) => {
         proveExit = resolve;
@@ -119,9 +205,16 @@ describe("Codex session startup failures", () => {
       expect(error).toBeInstanceOf(Error);
       expect(error instanceof CodexSessionStartError).toBe(failure === "error");
       expect(error).toMatchObject({
-        message: expectedErrorMessage,
+        message: expectedThrownMessage,
         cause: { message: expectedErrorMessage },
       });
+      expect(errorMethods).toEqual(
+        failure === "error"
+          ? ["protocol/transportError"]
+          : method === "thread/resume"
+            ? ["session/threadResumeFailed", "session/startFailed"]
+            : ["session/startFailed"],
+      );
       expect(requests).not.toContain("turn/start");
       expect(requests).not.toContain("thread/start");
       expect(manager.listSessions()).toEqual([]);
@@ -131,7 +224,7 @@ describe("Codex session startup failures", () => {
   it.each(["error", "exit"] as const)(
     "keeps failed cleanup and failed replacement barriers uncertain after %s",
     async (failure) => {
-      const { manager, child, input, teardownProcessTree } = createStartupHarness(
+      const { manager, child, input, teardownProcessTree, errorMethods } = createStartupHarness(
         "initialize",
         failure,
       );
@@ -148,6 +241,19 @@ describe("Codex session startup failures", () => {
           });
         }
         expect(spawnProcess).toHaveBeenCalledTimes(1);
+        expect(errorMethods.filter((method) => method === "protocol/transportError")).toHaveLength(
+          failure === "error" ? 1 : 0,
+        );
+        if (failure === "error") {
+          const sessions = (
+            manager as unknown as {
+              sessions: Map<ThreadId, { terminalFailure?: { message: string } }>;
+            }
+          ).sessions;
+          expect(sessions.get(input.threadId)?.terminalFailure?.message).toBe(
+            "Codex app-server transport failed: Codex pipe failed during startup: ECONNRESET Operation: initialize.",
+          );
+        }
       } finally {
         teardownProcessTree.mockImplementation(async () => {
           child.exit();

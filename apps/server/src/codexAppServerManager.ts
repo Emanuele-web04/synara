@@ -49,6 +49,7 @@ import {
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
   MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+  MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import {
@@ -76,6 +77,7 @@ import {
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
+  type CodexAppServerTransportErrorReason,
 } from "./codexAppServerTransport.ts";
 import {
   buildCodexTurnInput,
@@ -90,6 +92,18 @@ import {
 } from "./provider/codexDiscoveryCatalog.ts";
 
 const log = createLogger("codex");
+
+const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 20_000;
+// Historical opens may need longer than ordinary requests, but this deadline
+// plus worst-case process-tree teardown must stay materially below the
+// ProviderService whole-start timeout.
+const CODEX_HISTORICAL_THREAD_OPEN_TIMEOUT_MS = 30_000;
+
+export function resolveCodexAppServerRequestTimeoutMs(method: string): number {
+  return method === "thread/resume" || method === "thread/fork"
+    ? CODEX_HISTORICAL_THREAD_OPEN_TIMEOUT_MS
+    : CODEX_APP_SERVER_REQUEST_TIMEOUT_MS;
+}
 
 type PendingRequestKey = string;
 
@@ -131,6 +145,18 @@ interface PendingUserInputRequest {
   itemId?: ProviderItemId;
   providerThreadId?: string;
   providerParentThreadId?: string;
+}
+
+interface SessionTerminalCause {
+  readonly kind: CodexAppServerTransportErrorReason | "transport-error";
+  readonly error: Error;
+  readonly message: string;
+  readonly operation?: string;
+  readonly observedBytes?: number;
+  readonly limitBytes?: number;
+  readonly capturedAt: string;
+  readonly source: "transport";
+  readonly sessionAttemptId: string;
 }
 
 interface ResolvedCollaborationRoute {
@@ -184,10 +210,20 @@ interface CodexSessionContext {
     | undefined;
   nextRequestId: number;
   stopping: boolean;
+  readonly sessionAttemptId: string;
+  terminalFailure?: SessionTerminalCause;
   transportError?: Error;
   stopPromise?: Promise<void>;
+  teardownError?: Error;
   teardownCapturedBeforeExit?: boolean;
   discovery?: boolean;
+}
+
+function historicalOpenTerminalError(context: CodexSessionContext): Error | undefined {
+  const operation = context.terminalFailure?.operation;
+  return operation === "thread/resume" || operation === "thread/fork"
+    ? context.terminalFailure?.error
+    : undefined;
 }
 
 interface CodexSkillListInput {
@@ -629,7 +665,10 @@ type CodexThreadOpenRequest =
     }
   | {
       readonly method: "thread/resume" | "thread/fork";
-      readonly params: CodexThreadSessionOverrides & { readonly threadId: string };
+      readonly params: CodexThreadSessionOverrides & {
+        readonly threadId: string;
+        readonly excludeTurns: true;
+      };
     };
 
 export function buildCodexThreadOpenRequest(input: {
@@ -643,19 +682,40 @@ export function buildCodexThreadOpenRequest(input: {
   if (input.forkSourceThreadId) {
     return {
       method: "thread/fork",
-      params: { ...input.sessionOverrides, threadId: input.forkSourceThreadId },
+      params: {
+        ...input.sessionOverrides,
+        threadId: input.forkSourceThreadId,
+        excludeTurns: true,
+      },
     };
   }
   if (input.resumeThreadId) {
     return {
       method: "thread/resume",
-      params: { ...input.sessionOverrides, threadId: input.resumeThreadId },
+      params: { ...input.sessionOverrides, threadId: input.resumeThreadId, excludeTurns: true },
     };
   }
   return {
     method: "thread/start",
     params: { ...input.sessionOverrides, experimentalRawEvents: false },
   };
+}
+
+export function resolveCodexThreadOpenMinimumVersion(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly threadOpenMethod: CodexThreadOpenRequest["method"];
+}): string | undefined {
+  const capabilityFloors = [
+    ...(input.runtimeMode === "auto" ? [MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION] : []),
+    ...(input.threadOpenMethod === "thread/start" ? [] : [MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION]),
+  ];
+  return capabilityFloors.reduce<string | undefined>(
+    (highest, candidate) =>
+      highest === undefined || compareCodexCliVersions(candidate, highest) > 0
+        ? candidate
+        : highest,
+    undefined,
+  );
 }
 
 export function shouldWarnCodexFreshStartWithoutResume(input: {
@@ -987,6 +1047,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       }
     | undefined;
+  private readonly spawnAppServer: typeof spawnCodexAppServer;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
@@ -998,6 +1059,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         readonly endpointUrl: () => string;
         readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       };
+      readonly spawnAppServer?: typeof spawnCodexAppServer;
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
@@ -1007,6 +1069,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
     this.synaraSkillsDir = options?.synaraSkillsDir;
     this.agentGatewayMcp = options?.agentGatewayMcp;
+    this.spawnAppServer = options?.spawnAppServer ?? spawnCodexAppServer;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
     this.discoverySessionIdleMs = Math.max(
@@ -1081,19 +1144,37 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         updatedAt: now,
       };
 
+      const resumeThreadId = readResumeThreadId(input);
+      const forkSourceThreadId = readResumeCursorThreadId(input.forkSourceResumeCursor);
+      const threadOpenMethodForVersion = forkSourceThreadId
+        ? "thread/fork"
+        : resumeThreadId
+          ? "thread/resume"
+          : "thread/start";
+      const minimumVersion = resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: input.runtimeMode,
+        threadOpenMethod: threadOpenMethodForVersion,
+      });
+
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        ...(input.runtimeMode === "auto"
-          ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
+        ...(minimumVersion
+          ? {
+              minimumVersion,
+              minimumVersionRequirement:
+                threadOpenMethodForVersion === "thread/start"
+                  ? "Auto mode"
+                  : "Codex thread resume and fork",
+            }
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
-      const child = spawnCodexAppServer({
+      const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: await this.buildSessionProcessEnv(
@@ -1124,6 +1205,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        sessionAttemptId: randomUUID(),
       };
 
       this.sessions.set(threadId, context);
@@ -1163,8 +1245,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
-      const resumeThreadId = readResumeThreadId(input);
-      const forkSourceThreadId = readResumeCursorThreadId(input.forkSourceResumeCursor);
       const threadOpenRequest = buildCodexThreadOpenRequest({
         ...(forkSourceThreadId ? { forkSourceThreadId } : {}),
         ...(resumeThreadId ? { resumeThreadId } : {}),
@@ -1220,6 +1300,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           threadOpenRequest.params,
         );
       } catch (error) {
+        if (context.terminalFailure) {
+          throw context.terminalFailure.error;
+        }
         const recoverableResumeFailure =
           threadOpenRequest.method === "thread/resume" && isRecoverableThreadResumeError(error);
         if (!recoverableResumeFailure) {
@@ -1293,15 +1376,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }).pipe(this.runPromise);
       return { ...context.session };
     } catch (error) {
-      const cause = context?.transportError ?? error;
-      const message = cause instanceof Error ? cause.message : "Failed to start Codex session.";
+      const failureError =
+        context?.terminalFailure?.error ??
+        (error instanceof Error
+          ? error
+          : new Error("Failed to start Codex session.", { cause: error }));
+      const cause = context?.transportError ?? failureError;
+      const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/startFailed", message);
-        await (context.stopPromise ?? this.stopSession(threadId));
+        if (!context.terminalFailure) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/startFailed", message);
+        }
+        if (context.stopPromise) {
+          await context.stopPromise;
+        } else if (context.teardownError) {
+          throw context.teardownError;
+        } else {
+          await this.stopSession(threadId);
+        }
       } else {
         gatewaySessionLease?.release();
         this.emitEvent({
@@ -1891,16 +1987,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const minimumVersion = resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: input.runtimeMode,
+        threadOpenMethod: "thread/fork",
+      });
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        ...(input.runtimeMode === "auto"
-          ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
+        ...(minimumVersion
+          ? {
+              minimumVersion,
+              minimumVersionRequirement: "Codex thread resume and fork",
+            }
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
-      const child = spawnCodexAppServer({
+      const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: await this.buildSessionProcessEnv(
@@ -1928,6 +2031,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        sessionAttemptId: randomUUID(),
       };
 
       this.sessions.set(threadId, context);
@@ -1954,6 +2058,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const serviceTier = resolveCodexServiceTier(input.modelSelection);
       const forkParams = {
         threadId: sourceProviderThreadId,
+        excludeTurns: true,
         ...(normalizedModel ? { model: normalizedModel } : {}),
         ...(serviceTier !== undefined ? { serviceTier } : {}),
         cwd: resolvedCwd,
@@ -1980,18 +2085,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
+      const failureError =
+        context?.terminalFailure?.error ??
+        (error instanceof Error
+          ? error
+          : new Error("Failed to fork Codex thread.", { cause: error }));
+      const cause = context?.transportError ?? failureError;
+      const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/threadForkFailed", message);
-        await this.stopSession(threadId);
+        if (!context.terminalFailure) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/threadForkFailed", message);
+        }
+        if (context.stopPromise) {
+          await context.stopPromise;
+        } else if (context.teardownError) {
+          throw context.teardownError;
+        } else {
+          await this.stopSession(threadId);
+        }
       } else {
         gatewaySessionLease?.release();
       }
-      throw new Error(message, { cause: error });
+      throw new Error(message, { cause });
     }
   }
 
@@ -2314,6 +2433,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.stopPromise) {
       return context.stopPromise;
     }
+    delete context.teardownError;
 
     let settleBeforeTeardown: Promise<void> | undefined;
     if (!context.stopping) {
@@ -2321,17 +2441,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.clearTaskCompleteFallback(context);
       context.gatewaySessionLease?.release();
 
-      this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
+      const stopError =
+        historicalOpenTerminalError(context) ??
+        new Error("Session stopped before request completed.");
+      this.rejectPendingRequests(context, stopError);
       if (this.hasPendingHumanRequests(context)) {
         // Answer parked server requests while stdin is still writable, then close.
         // Time-boxed so a child that stopped reading stdin cannot stall teardown.
         settleBeforeTeardown = withCodexPendingSettleDeadline(
           this.settlePendingHumanRequests(context, "session stopped"),
         ).finally(() => {
-          context.stdinWriter?.close(new Error("Codex session stopped"));
+          context.stdinWriter?.close(stopError);
         });
       } else {
-        context.stdinWriter?.close(new Error("Codex session stopped"));
+        context.stdinWriter?.close(stopError);
       }
 
       context.detachStdout?.();
@@ -2359,6 +2482,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
       },
       (error: unknown) => {
+        context.teardownError =
+          error instanceof Error
+            ? error
+            : new Error("Failed to stop Codex app-server process tree.", { cause: error });
         log.error("codex app-server teardown did not prove process-tree exit", {
           threadId,
           error,
@@ -2777,7 +2904,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawnCodexAppServer({
+    const child = this.spawnAppServer({
       binaryPath: "codex",
       cwd: normalizedCwd,
       env: await buildCodexProcessEnv(),
@@ -2809,6 +2936,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
+      sessionAttemptId: randomUUID(),
       discovery: true,
     };
 
@@ -2889,12 +3017,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
-    this.rejectPendingRequests(
-      context,
-      new Error("Discovery session stopped before request completed."),
-    );
+    const stopError = new Error("Discovery session stopped before request completed.");
+    this.rejectPendingRequests(context, stopError);
     context.detachStdout?.();
-    context.stdinWriter?.close(new Error("Codex discovery session stopped"));
+    context.stdinWriter?.close(stopError);
     // Keep a non-routable replacement barrier until exit is proven.
     let stopPromise: Promise<void>;
     stopPromise = this.teardownContextProcess(context).then(
@@ -2994,13 +3120,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private handleTransportFailure(context: CodexSessionContext, cause: unknown): void {
-    if (context.stopping) return;
+    if (context.stopping || context.terminalFailure) return;
     const error =
       cause instanceof Error ? cause : new Error("Codex app-server transport failed", { cause });
-    const message =
+    const baseMessage =
       error instanceof CodexAppServerTransportError
         ? error.message
         : `Codex app-server transport failed: ${error.message}`;
+    const pendingMethods = Array.from(
+      new Set(Array.from(context.pending.values(), (pending) => pending.method)),
+    );
+    const operation =
+      pendingMethods.find((method) => method === "thread/resume" || method === "thread/fork") ??
+      (pendingMethods.length === 1 ? pendingMethods[0] : undefined);
+    const message = operation ? `${baseMessage} Operation: ${operation}.` : baseMessage;
+    const terminalError = message === error.message ? error : new Error(message, { cause: error });
+    context.terminalFailure = {
+      kind: error instanceof CodexAppServerTransportError ? error.reason : "transport-error",
+      error: terminalError,
+      message,
+      ...(operation ? { operation } : {}),
+      ...(error instanceof CodexAppServerTransportError
+        ? { observedBytes: error.observedBytes, limitBytes: error.maxBytes }
+        : {}),
+      capturedAt: new Date().toISOString(),
+      source: "transport",
+      sessionAttemptId: context.sessionAttemptId,
+    };
     // Startup can report the original cause after cleanup. Pending requests
     // keep stopSession's uncertain outcome: this error may belong to a different
     // write, or a frame that reached the provider before the pipe closed.
@@ -3478,7 +3624,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs = resolveCodexAppServerRequestTimeoutMs(method),
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;
@@ -3712,6 +3858,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly cwd: string;
     readonly homePath?: string;
     readonly minimumVersion?: string;
+    readonly minimumVersionRequirement?: string;
   }): Promise<void> {
     await assertSupportedCodexCliVersion(input);
   }
@@ -4221,6 +4368,7 @@ async function runCodexCliVersionGate(input: {
   readonly cwd: string;
   readonly homePath?: string;
   readonly minimumVersion?: string;
+  readonly minimumVersionRequirement?: string;
 }): Promise<CodexCliBinaryFingerprint | null> {
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
@@ -4258,7 +4406,7 @@ async function runCodexCliVersionGate(input: {
   const minimumVersion = input.minimumVersion;
   if (minimumVersion && !parsedVersion) {
     throw new Error(
-      `Could not determine the installed Codex CLI version. Auto mode requires v${minimumVersion} or newer.`,
+      `Could not determine the installed Codex CLI version. ${input.minimumVersionRequirement ?? "Auto mode"} requires v${minimumVersion} or newer.`,
     );
   }
   if (
@@ -4318,6 +4466,7 @@ async function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
   readonly minimumVersion?: string;
+  readonly minimumVersionRequirement?: string;
 }): Promise<void> {
   // Prefer an explicit cwd check before spawning. A missing working directory
   // produces ENOENT that is otherwise misreported as a missing Codex binary. This
