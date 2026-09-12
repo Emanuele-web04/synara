@@ -44,7 +44,12 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
   },
 ];
 
-/** The Computer panel's rows: every grant desktop control can ask for. */
+/**
+ * The Computer panel's rows: the two grants desktop control can ask for. Input
+ * Monitoring is deliberately absent — the release chord it would power is a
+ * compositor-plugin feature that only exists on the Linux backends. The
+ * matching kind list lives in `@synara/shared/computerGrants`.
+ */
 export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
     pane: "accessibility",
@@ -53,23 +58,11 @@ export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
       "Lets Synara move the pointer, click, and type on your behalf. Nothing is driven unless you authorize a Computer task.",
   },
   {
-    pane: "input-monitoring",
-    title: "Input Monitoring",
-    description:
-      "Lets Synara notice the release chord while another app owns the keyboard. Nothing you type is recorded.",
-  },
-  {
     pane: "screen-recording",
     title: "Screen Recording",
     description:
       "Lets Synara capture windows and the desktop so the agent can see what it is driving.",
   },
-];
-
-export const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
-  "accessibility",
-  "inputMonitoring",
-  "screenRecording",
 ];
 
 const PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {

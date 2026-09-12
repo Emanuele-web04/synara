@@ -10,7 +10,11 @@
  *
  * @module computerGrants
  */
-import type { ComputerBuildSignature, ComputerPermission } from "@synara/contracts";
+import type {
+  ComputerBuildSignature,
+  ComputerPermission,
+  DesktopAppSnapPermissionKind,
+} from "@synara/contracts";
 
 /**
  * Fixed order, most consequential first: without Accessibility nothing can be
@@ -20,6 +24,15 @@ export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
   "accessibility",
   "screenRecording",
 ];
+
+/**
+ * The same grant set in the AppSnap helper's vocabulary. One definition keeps
+ * the desktop host, the composer's setup entry, and the settings panel asking
+ * for exactly these grants — Input Monitoring belongs to the AppSnap picker
+ * chord, which computer control never engages.
+ */
+export const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] =
+  COMPUTER_PERMISSIONS;
 
 /**
  * The grants without which the desktop cannot be driven at all.

@@ -13,7 +13,11 @@ import {
   type ComputerCapabilities,
   type ComputerPermission,
 } from "@synara/contracts";
-import { COMPUTER_PERMISSION_LABELS, listComputerPermissions } from "@synara/shared/computerGrants";
+import {
+  COMPUTER_PERMISSION_KINDS,
+  COMPUTER_PERMISSION_LABELS,
+  listComputerPermissions,
+} from "@synara/shared/computerGrants";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
@@ -32,7 +36,6 @@ import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import {
   AppSnapPermissionSection,
-  COMPUTER_PERMISSION_KINDS,
   COMPUTER_PERMISSION_PANES,
   useAppSnapPermissionGuideBridge,
 } from "./AppSnapPermissionSection";

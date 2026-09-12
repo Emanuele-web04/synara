@@ -1,6 +1,7 @@
 import { CuaDriverHost } from "./cuaDriverHost";
 import { ComputerNativePreview } from "./computerNativePreview";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
@@ -45,7 +46,6 @@ import type {
 import * as Effect from "effect/Effect";
 import type {
   DesktopAppIcon,
-  DesktopAppSnapPermissionKind,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -3577,15 +3577,6 @@ function backendNodeArgs(): string[] {
 let cuaDriverHost: CuaDriverHost | undefined;
 let disposeComputerDesktopLifecycle: (() => void) | undefined;
 let cuaHostEndpoint: string | undefined;
-
-// Computer use asks the AppSnap helper about all three grants — Accessibility,
-// Input Monitoring, and Screen Recording — while plain AppSnap stays on the
-// legacy pair.
-const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
-  "accessibility",
-  "inputMonitoring",
-  "screenRecording",
-];
 
 async function startCuaHost(): Promise<void> {
   if (process.platform !== "darwin" || cuaDriverHost) return;

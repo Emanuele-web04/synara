@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { DesktopAppSnapPermissionKind, ThreadId } from "@synara/contracts";
+import type { ThreadId } from "@synara/contracts";
 import type { ComposerComputerControlMode } from "~/computerControlMode";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "~/components/ui/toast";
-
-/** Every grant computer control can need, in coach order. */
-const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
-  "accessibility",
-  "inputMonitoring",
-  "screenRecording",
-];
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 
 /** Explicit chat activation also enters the same native permission guide as AppSnap. */
 export function useComputerControlModeChange({
