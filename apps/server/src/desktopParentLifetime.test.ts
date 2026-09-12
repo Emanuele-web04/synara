@@ -29,22 +29,25 @@ describe("desktop parent lifetime", () => {
     expect(readInput).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["end", "close", "error"] as const)("cleans up the runtime on input %s", async (event) => {
-    const input = new PassThrough();
-    const released = vi.fn();
-    const started = Promise.withResolvers<void>();
-    const result = Effect.runPromise(
-      withDesktopParentLifetime(runningProgram(started.resolve, released), input),
-    );
-    await started.promise;
-    expect(released).not.toHaveBeenCalled();
-    if (event === "end") input.end();
-    else if (event === "close") input.destroy();
-    else input.destroy(new Error("owner pipe failed"));
-    await result;
-    expect(released).toHaveBeenCalledTimes(1);
-    for (const name of ["end", "close", "error"]) expect(input.listenerCount(name)).toBe(0);
-  });
+  it.each(["end", "close", "error"] as const)(
+    "cleans up the runtime on input %s",
+    async (event) => {
+      const input = new PassThrough();
+      const released = vi.fn();
+      const started = Promise.withResolvers<void>();
+      const result = Effect.runPromise(
+        withDesktopParentLifetime(runningProgram(started.resolve, released), input),
+      );
+      await started.promise;
+      expect(released).not.toHaveBeenCalled();
+      if (event === "end") input.end();
+      else if (event === "close") input.destroy();
+      else input.destroy(new Error("owner pipe failed"));
+      await result;
+      expect(released).toHaveBeenCalledTimes(1);
+      for (const name of ["end", "close", "error"]) expect(input.listenerCount(name)).toBe(0);
+    },
+  );
 
   it("does not start when the owner pipe is already closed", async () => {
     const input = new PassThrough();
@@ -108,6 +111,8 @@ describe("desktop parent lifetime", () => {
     ).rejects.toThrow("startup failed");
     expect(input.isPaused()).toBe(true);
     for (const name of ["end", "close", "error"]) expect(input.listenerCount(name)).toBe(0);
-    expect(await Effect.runPromise(withDesktopParentLifetime(Effect.succeed(42), undefined))).toBe(42);
+    expect(await Effect.runPromise(withDesktopParentLifetime(Effect.succeed(42), undefined))).toBe(
+      42,
+    );
   });
 });

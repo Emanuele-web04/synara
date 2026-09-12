@@ -10,7 +10,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { withDatabaseLifecycleLock } from "./persistence/DatabaseLifecycleLock";
 
-const backendFixture = fileURLToPath(new URL("./fixtures/desktopParentLifetime.ts", import.meta.url));
+const backendFixture = fileURLToPath(
+  new URL("./fixtures/desktopParentLifetime.ts", import.meta.url),
+);
 const ownerFixture = fileURLToPath(new URL("./fixtures/desktopParentOwner.mjs", import.meta.url));
 
 async function waitFor<T>(read: () => T | undefined, description: string): Promise<T> {
@@ -61,9 +63,13 @@ describePosix("desktop parent loss subprocess integration", () => {
       const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "synara-parent-lifetime-"));
       const dbPath = path.join(directory, "state.sqlite");
       const statePath = path.join(directory, "ready.json");
-      const owner = spawn(process.execPath, [ownerFixture, bundledFixture, dbPath, statePath, mode], {
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-      });
+      const owner = spawn(
+        process.execPath,
+        [ownerFixture, bundledFixture, dbPath, statePath, mode],
+        {
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        },
+      );
       let backendPid: number | undefined;
       let stderr = "";
       owner.stderr?.on("data", (data) => {
@@ -87,7 +93,7 @@ describePosix("desktop parent loss subprocess integration", () => {
         if (mode === "close") owner.send("close");
         else await killOwner(owner);
 
-        await waitFor(() => isAlive(state.pid) ? undefined : true, "orphan backend exit");
+        await waitFor(() => (isAlive(state.pid) ? undefined : true), "orphan backend exit");
         if (mode === "stubborn") {
           expect(fs.existsSync(`${statePath}.stopped`)).toBe(false);
           // A timed-out finalizer leaves a dead-owner lock for the existing safe
