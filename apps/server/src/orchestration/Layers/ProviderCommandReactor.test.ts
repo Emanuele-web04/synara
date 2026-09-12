@@ -11356,6 +11356,210 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("settles a user-input response rejected for a stale provider generation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const requestId = "user-input-request-stale-generation";
+    const staleGeneration = "generation-old";
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue: `Cannot respond to stale request '${requestId}' from provider generation '${staleGeneration}'.`,
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "opencode",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-stale-generation"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId,
+            lifecycleGeneration: staleGeneration,
+            questions: [
+              {
+                id: "sandbox_mode",
+                header: "Sandbox",
+                question: "Which mode should be used?",
+                options: [
+                  {
+                    label: "workspace-write",
+                    description: "Allow workspace writes only",
+                  },
+                ],
+              },
+            ],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId(requestId),
+        answers: { sandbox_mode: "workspace-write" },
+        lifecycleGeneration: staleGeneration,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) === true,
+    );
+
+    const thread = await readHarnessThread(harness);
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId,
+      responseCommandId: "cmd-user-input-respond-stale-generation",
+      settlementStatus: "uncertain",
+      detail: expect.stringContaining(`Stale pending user-input request: ${requestId}`),
+    });
+    const settledRow = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId(requestId),
+      }),
+    );
+    expect(Option.getOrUndefined(settledRow)).toMatchObject({
+      status: "uncertain",
+      resolvedAt: null,
+    });
+  });
+
+  it("settles an approval response rejected for a stale provider generation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const requestId = "approval-request-stale-generation";
+    const staleGeneration = "generation-old";
+    harness.respondToRequest.mockImplementation(() =>
+      Effect.fail(
+        new ProviderValidationError({
+          operation: "ProviderService.respondToRequest",
+          issue: `Cannot respond to stale request '${requestId}' from provider generation '${staleGeneration}'.`,
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-approval-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-approval-requested-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-approval-requested-stale-generation"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          payload: {
+            requestId,
+            requestKind: "command",
+            lifecycleGeneration: staleGeneration,
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.approval.respond",
+        commandId: CommandId.makeUnsafe("cmd-approval-respond-stale-generation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId(requestId),
+        decision: "accept",
+        lifecycleGeneration: staleGeneration,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.approval.respond.failed",
+        ) === true,
+    );
+
+    const thread = await readHarnessThread(harness);
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.approval.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId,
+      responseCommandId: "cmd-approval-respond-stale-generation",
+      settlementStatus: "uncertain",
+      detail: expect.stringContaining(`Stale pending approval request: ${requestId}`),
+    });
+    const settledRow = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "approval",
+        requestId: asApprovalRequestId(requestId),
+      }),
+    );
+    expect(Option.getOrUndefined(settledRow)).toMatchObject({
+      status: "uncertain",
+      resolvedAt: null,
+    });
+  });
+
   it("keeps full-context AskUserQuestion rejection retryable across session recovery", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

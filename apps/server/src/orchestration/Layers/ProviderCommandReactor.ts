@@ -76,6 +76,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderServiceError,
+  ProviderValidationError,
 } from "../../provider/Errors.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
@@ -530,6 +531,22 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
     return error.detail.toLowerCase().includes("unknown pending user-input request");
   }
   return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
+}
+
+/**
+ * ProviderService refuses a response when the interaction's recorded lifecycle
+ * generation no longer matches the routed provider generation (the provider
+ * session was recovered or replaced while the prompt stayed on screen). The
+ * callback that could consume the answer is gone, so the prompt must settle as
+ * stale: leaving it retryable resurrected it on every click and kept the
+ * composer blocked behind a prompt that could never succeed.
+ */
+function isStaleProviderGenerationResponseError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  const error = Cause.squash(cause);
+  if (Schema.is(ProviderValidationError)(error)) {
+    return error.issue.toLowerCase().includes("cannot respond to stale request");
+  }
+  return Cause.pretty(cause).toLowerCase().includes("cannot respond to stale request");
 }
 
 function isClaudeContextWindowUserInputRejection(error: ProviderServiceError): boolean {
@@ -3886,13 +3903,15 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingApprovalRequestError(cause);
+          const stalePendingRequest =
+            isUnknownPendingApprovalRequestError(cause) ||
+            isStaleProviderGenerationResponseError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "approval",
-            detail: unknownPendingRequest
+            detail: stalePendingRequest
               ? buildStalePendingRequestFailureDetail("approval", event.payload.requestId)
               : Cause.pretty(cause),
-            settlementStatus: interactionFailureSettlementStatus(cause, unknownPendingRequest),
+            settlementStatus: interactionFailureSettlementStatus(cause, stalePendingRequest),
           });
         }),
       );
@@ -3920,13 +3939,15 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingUserInputRequestError(cause);
+          const stalePendingRequest =
+            isUnknownPendingUserInputRequestError(cause) ||
+            isStaleProviderGenerationResponseError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "userInput",
-            detail: unknownPendingRequest
+            detail: stalePendingRequest
               ? buildStalePendingRequestFailureDetail("user-input", event.payload.requestId)
               : Cause.pretty(cause),
-            settlementStatus: interactionFailureSettlementStatus(cause, unknownPendingRequest),
+            settlementStatus: interactionFailureSettlementStatus(cause, stalePendingRequest),
           });
         }),
       );
