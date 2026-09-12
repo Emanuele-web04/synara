@@ -869,7 +869,12 @@ describe("ProviderRuntimeIngestion", () => {
           type: "thread.turn.start",
           commandId: CommandId.makeUnsafe("cmd-cjk-start"),
           threadId,
-          message: { messageId: asMessageId("request-cjk"), role: "user", text: "项目?", attachments: [] },
+          message: {
+            messageId: asMessageId("request-cjk"),
+            role: "user",
+            text: "项目?",
+            attachments: [],
+          },
           assistantDeliveryMode,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",

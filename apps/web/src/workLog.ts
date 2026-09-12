@@ -2355,6 +2355,12 @@ function mergeTimelineEntries(
   return merged;
 }
 
+// Keep one grouping per source message; obsolete snapshots can be collected.
+const coalescedMessageCache = new WeakMap<
+  ChatMessage,
+  { readonly signature: string; readonly displayMessage: ChatMessage }
+>();
+
 /** Old snapshots can contain one segment per token. Only a visible intervening
  * row warrants another Markdown document; keep the persisted text untouched. */
 function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntry[] {
@@ -2396,16 +2402,28 @@ function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntr
   const replacements = new Map<SegmentEntry[], TimelineEntry>();
   for (const [message, groups] of groupsByMessage) {
     if (!groups.some((group) => group.length > 1)) continue;
-    const textSegments = groups.map((group) => {
-      const first = message.textSegments![group[0]!.segmentIndex]!;
-      const last = message.textSegments![group.at(-1)!.segmentIndex]!;
-      return {
-        ...first,
-        endedAt: last.endedAt,
-        text: group.map((entry) => message.textSegments![entry.segmentIndex]!.text).join(""),
-      };
-    });
-    if (groups.length === 1 && textSegments[0]!.text === message.text) {
+    const signature = groups
+      .map((group) => `${group[0]!.segmentIndex}:${group.at(-1)!.segmentIndex}`)
+      .join(",");
+    const cached = coalescedMessageCache.get(message);
+    let displayMessage = cached?.signature === signature ? cached.displayMessage : undefined;
+    if (displayMessage === undefined) {
+      const textSegments = groups.map((group) => {
+        const first = message.textSegments![group[0]!.segmentIndex]!;
+        const last = message.textSegments![group.at(-1)!.segmentIndex]!;
+        return {
+          ...first,
+          endedAt: last.endedAt,
+          text: group.map((entry) => message.textSegments![entry.segmentIndex]!.text).join(""),
+        };
+      });
+      displayMessage =
+        groups.length === 1 && textSegments[0]!.text === message.text
+          ? message
+          : { ...message, textSegments };
+      coalescedMessageCache.set(message, { signature, displayMessage });
+    }
+    if (displayMessage === message) {
       replacements.set(groups[0]!, {
         id: message.id,
         kind: "message",
@@ -2414,9 +2432,9 @@ function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntr
       });
       continue;
     }
-    const displayMessage = { ...message, textSegments };
+    const coalescedMessage = displayMessage;
     groups.forEach((group, segmentIndex) => {
-      replacements.set(group, { ...group[0]!, message: displayMessage, segmentIndex });
+      replacements.set(group, { ...group[0]!, message: coalescedMessage, segmentIndex });
     });
   }
   return runs.map((run) => (Array.isArray(run) ? (replacements.get(run) ?? run[0]!) : run));

@@ -4229,29 +4229,32 @@ describe("deriveTimelineEntries", () => {
     });
   });
 
-  it.each([true, false])("renders tokenized CJK Markdown as one document (streaming=%s)", (streaming) => {
-    const text = "知道。\n\n- 前端 Web 项目：`/project/web`\n- `erp-code` 通常指 C# ERP 项目。";
-    const message: ChatMessage = {
-      id: MessageId.makeUnsafe("assistant-cjk"),
-      role: "assistant",
-      text,
-      createdAt: "2026-02-23T00:00:01.000Z",
-      streaming,
-      textSegments: Array.from(text, (text, index) => ({
-        sequence: index + 1,
-        startedAt: "2026-02-23T00:00:01.000Z",
-        endedAt: "2026-02-23T00:00:01.000Z",
+  it.each([true, false])(
+    "renders tokenized CJK Markdown as one document (streaming=%s)",
+    (streaming) => {
+      const text = "知道。\n\n- 前端 Web 项目：`/project/web`\n- `erp-code` 通常指 C# ERP 项目。";
+      const message: ChatMessage = {
+        id: MessageId.makeUnsafe("assistant-cjk"),
+        role: "assistant",
         text,
-      })),
-    };
-    // The same shape arrives from both a live detail update and a reopened snapshot.
-    for (const incoming of [message, JSON.parse(JSON.stringify(message)) as ChatMessage]) {
-      expect(deriveTimelineEntries([incoming], [], [])).toEqual([
-        { id: message.id, kind: "message", createdAt: message.createdAt, message: incoming },
-      ]);
-    }
-    expect(message.textSegments).toHaveLength(Array.from(text).length);
-  });
+        createdAt: "2026-02-23T00:00:01.000Z",
+        streaming,
+        textSegments: Array.from(text, (text, index) => ({
+          sequence: index + 1,
+          startedAt: "2026-02-23T00:00:01.000Z",
+          endedAt: "2026-02-23T00:00:01.000Z",
+          text,
+        })),
+      };
+      // The same shape arrives from both a live detail update and a reopened snapshot.
+      for (const incoming of [message, JSON.parse(JSON.stringify(message)) as ChatMessage]) {
+        expect(deriveTimelineEntries([incoming], [], [])).toEqual([
+          { id: message.id, kind: "message", createdAt: message.createdAt, message: incoming },
+        ]);
+      }
+      expect(message.textSegments).toHaveLength(Array.from(text).length);
+    },
+  );
 
   it("coalesces token runs while preserving warning boundaries and other messages", () => {
     const message: ChatMessage = {
@@ -4273,15 +4276,19 @@ describe("deriveTimelineEntries", () => {
       createdAt: "2026-02-23T00:00:02.000Z",
       textSegments: undefined,
     };
-    const entries = deriveTimelineEntries([message, other], [], [
-      {
-        id: "warning",
-        createdAt: message.createdAt,
-        sequence: 25,
-        tone: "info",
-        label: "Check workspace",
-      },
-    ]);
+    const entries = deriveTimelineEntries(
+      [message, other],
+      [],
+      [
+        {
+          id: "warning",
+          createdAt: message.createdAt,
+          sequence: 25,
+          tone: "info",
+          label: "Check workspace",
+        },
+      ],
+    );
     expect(entries.map((entry) => entry.kind)).toEqual([
       "message-segment",
       "work",
@@ -4289,10 +4296,65 @@ describe("deriveTimelineEntries", () => {
       "message",
     ]);
     const segments = entries.filter((entry) => entry.kind === "message-segment");
-    expect(
-      segments.map((entry) => entry.message.textSegments?.[entry.segmentIndex]?.text),
-    ).toEqual(["前端`web`", "后端`erp`"]);
+    expect(segments.map((entry) => entry.message.textSegments?.[entry.segmentIndex]?.text)).toEqual(
+      ["前端`web`", "后端`erp`"],
+    );
     expect(message.textSegments).toHaveLength(4);
+  });
+
+  it("reuses coalesced history during live appends and invalidates changed boundaries", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const history: ChatMessage = {
+      id: MessageId.makeUnsafe("assistant-history"),
+      role: "assistant",
+      text: "before tool after tool",
+      createdAt,
+      streaming: false,
+      textSegments: ["before ", "tool", " after ", "tool"].map((text, index) => ({
+        sequence: (index + 1) * 10,
+        startedAt: createdAt,
+        endedAt: createdAt,
+        text,
+      })),
+    };
+    const work = {
+      id: "tool",
+      createdAt,
+      sequence: 25,
+      tone: "tool" as const,
+      label: "Read file",
+    };
+    const originalRows = deriveTimelineEntries([history], [], [work]);
+    const original = originalRows.find((entry) => entry.kind === "message-segment");
+    expect(original?.message.textSegments?.map((segment) => segment.text)).toEqual([
+      "before tool",
+      " after tool",
+    ]);
+    const live: ChatMessage = {
+      id: MessageId.makeUnsafe("assistant-live"),
+      role: "assistant",
+      text: "new output",
+      createdAt: "2026-02-23T00:00:02.000Z",
+      streaming: true,
+    };
+    for (const text of ["new output", "new output continues"]) {
+      const rows = deriveTimelineEntries([history, { ...live, text }], [], [work]);
+      const segments = rows.filter((entry) => entry.kind === "message-segment");
+      expect(segments).toHaveLength(2);
+      for (const segment of segments) expect(segment.message).toBe(original?.message);
+    }
+    const changedRows = deriveTimelineEntries(
+      [history, live],
+      [],
+      [work, { ...work, id: "earlier-warning", sequence: 15, tone: "info", label: "Warning" }],
+    );
+    const changed = changedRows.find((entry) => entry.kind === "message-segment");
+    expect(changed?.message).not.toBe(original?.message);
+    expect(changed?.message.textSegments?.map((segment) => segment.text)).toEqual([
+      "before ",
+      "tool",
+      " after tool",
+    ]);
   });
 
   it("keeps a single live message row while segments are still streaming", () => {
