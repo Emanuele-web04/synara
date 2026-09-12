@@ -1289,6 +1289,7 @@ export default function DiffPanel({
               isLoading={activeReviewIsLoading}
               hasNoChanges={activeReviewHasNoChanges}
               error={activeReviewError}
+              refreshStatus={diffViewKind === "turn" ? checkpointDiffDisplay.refreshStatus : null}
               viewKind={diffViewKind}
               loadingLabel={
                 diffViewKind === "repo"

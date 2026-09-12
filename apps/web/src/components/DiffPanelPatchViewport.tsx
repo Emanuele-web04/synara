@@ -27,12 +27,18 @@ export const DiffPanelPatchViewport = memo(
     isLoading: boolean;
     hasNoChanges: boolean;
     error: string | null;
+    refreshStatus?: string | null;
     loadingLabel: string;
     emptyLabel: string;
     unavailableLabel: string;
     viewKind: "repo" | "turn";
   }) {
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
+    const refreshStatus = props.refreshStatus ? (
+      <p role="status" className="shrink-0 px-3 py-2 text-[11px] text-muted-foreground/75">
+        {props.refreshStatus}
+      </p>
+    ) : null;
 
     if (props.error && !props.renderablePatch) {
       return (
@@ -49,6 +55,15 @@ export const DiffPanelPatchViewport = memo(
     }
 
     if (!props.renderablePatch) {
+      if (refreshStatus) {
+        return (
+          <div className={viewportClassName}>
+            <PanelStateMessage density="compact" fill="flex">
+              {refreshStatus}
+            </PanelStateMessage>
+          </div>
+        );
+      }
       if (props.isLoading) {
         return (
           <div className={viewportClassName}>
@@ -74,6 +89,7 @@ export const DiffPanelPatchViewport = memo(
     if (props.renderablePatch.kind === "files") {
       return (
         <div className={viewportClassName}>
+          {refreshStatus}
           <DiffPanelFileList
             renderableFiles={props.renderableFiles}
             resolvedTheme={props.resolvedTheme}
@@ -90,6 +106,7 @@ export const DiffPanelPatchViewport = memo(
 
     return (
       <div className={cn(viewportClassName, "overflow-auto p-2")}>
+        {refreshStatus}
         <div className="space-y-2">
           <p className="text-[11px] text-muted-foreground/75">{props.renderablePatch.reason}</p>
           <pre
@@ -120,6 +137,7 @@ export const DiffPanelPatchViewport = memo(
       previous.isLoading === next.isLoading &&
       previous.hasNoChanges === next.hasNoChanges &&
       previous.error === next.error &&
+      previous.refreshStatus === next.refreshStatus &&
       previous.loadingLabel === next.loadingLabel &&
       previous.emptyLabel === next.emptyLabel &&
       previous.unavailableLabel === next.unavailableLabel &&
