@@ -168,7 +168,14 @@ describe("AppSnapSettingsPanel", () => {
     expect(onState).toHaveBeenCalledOnce();
     expect(onPermissionGuideState).toHaveBeenCalledOnce();
 
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
+    expect(requestPermissions).not.toHaveBeenCalled();
+
     await mounted.getByRole("button", { name: "Leave AppSnap" }).click();
+    window.dispatchEvent(new Event("focus"));
+    await Promise.resolve();
+    expect(getState).toHaveBeenCalledTimes(2);
     await mounted.getByRole("button", { name: "Return to AppSnap" }).click();
     expect(onState).toHaveBeenCalledOnce();
     expect(unsubscribe).not.toHaveBeenCalled();

@@ -3,6 +3,8 @@
 // Layer: Desktop main-process service
 // Depends on: A signed Swift helper plus narrow filesystem/process adapters.
 
+import { stopNativeHelper } from "./stopNativeHelper";
+
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
@@ -17,6 +19,7 @@ import {
   type DesktopAppSnapErrorEvent,
   type DesktopAppSnapPermission,
   type DesktopAppSnapPermissionGuideState,
+  type DesktopAppSnapPermissionKind,
   type DesktopAppSnapPlatform,
   type DesktopAppSnapSettingsPane,
   type DesktopAppSnapShortcut,
@@ -74,8 +77,9 @@ interface StoredPendingAppSnapCapture {
 type AppSnapHelperMessage =
   | {
       type: "permissions";
-      inputMonitoring: "granted" | "denied";
-      screenRecording: "granted" | "denied";
+      accessibility?: "granted" | "denied";
+      inputMonitoring?: "granted" | "denied";
+      screenRecording?: "granted" | "denied";
     }
   | { type: "ready" }
   | { type: "triggered"; id: string; capturedAt?: string }
@@ -120,6 +124,12 @@ export interface DesktopAppSnapManagerOptions {
   onPermissionGuideState?: (state: DesktopAppSnapPermissionGuideState) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
+  /**
+   * Opens System Settings at a privacy pane. Only used by permission setup
+   * sessions started inside the manager; renderer-driven guides open the pane
+   * through IPC themselves.
+   */
+  openSettingsPane?: (pane: DesktopAppSnapSettingsPane) => void;
   shortcutRegistry?: {
     register: (accelerator: string, callback: () => void) => boolean;
     unregister: (accelerator: string) => void;
@@ -274,16 +284,23 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
   if (!parsed || typeof parsed !== "object") return null;
   const value = parsed as Record<string, unknown>;
 
-  if (
-    value.type === "permissions" &&
-    isPermission(value.inputMonitoring) &&
-    isPermission(value.screenRecording)
-  ) {
-    return {
+  // The helper reports only the permission kinds it was asked about, so every
+  // field is optional; a payload carrying none is not a permissions message.
+  if (value.type === "permissions") {
+    const permissions: Extract<AppSnapHelperMessage, { type: "permissions" }> = {
       type: "permissions",
-      inputMonitoring: value.inputMonitoring,
-      screenRecording: value.screenRecording,
+      ...(isPermission(value.accessibility) ? { accessibility: value.accessibility } : {}),
+      ...(isPermission(value.inputMonitoring) ? { inputMonitoring: value.inputMonitoring } : {}),
+      ...(isPermission(value.screenRecording) ? { screenRecording: value.screenRecording } : {}),
     };
+    if (
+      permissions.accessibility !== undefined ||
+      permissions.inputMonitoring !== undefined ||
+      permissions.screenRecording !== undefined
+    ) {
+      return permissions;
+    }
+    return null;
   }
   if (value.type === "ready") return { type: "ready" };
   if (value.type === "triggered" && typeof value.id === "string" && value.id.length > 0) {
@@ -380,14 +397,41 @@ export function isPathInsideDirectory(directory: string, candidate: string): boo
   return relative.length > 0 && !relative.startsWith(`..${Path.sep}`) && relative !== "..";
 }
 
-function permissionRequiredMessage(
-  inputMonitoring: DesktopAppSnapPermission,
-  screenRecording: DesktopAppSnapPermission,
-): string {
+function permissionRequiredMessage(permissions: {
+  accessibility?: DesktopAppSnapPermission;
+  inputMonitoring: DesktopAppSnapPermission;
+  screenRecording: DesktopAppSnapPermission;
+}): string {
   const missing: string[] = [];
-  if (inputMonitoring !== "granted") missing.push("Input Monitoring");
-  if (screenRecording !== "granted") missing.push("Screen Recording");
+  if (permissions.accessibility !== undefined && permissions.accessibility !== "granted") {
+    missing.push("Accessibility");
+  }
+  if (permissions.inputMonitoring !== "granted") missing.push("Input Monitoring");
+  if (permissions.screenRecording !== "granted") missing.push("Screen Recording");
   return `Allow ${missing.join(" and ")} in macOS System Settings, then try again.`;
+}
+
+const APP_SNAP_PERMISSION_KIND_GUIDE_PANES: Record<
+  DesktopAppSnapPermissionKind,
+  DesktopAppSnapSettingsPane
+> = {
+  accessibility: "accessibility",
+  inputMonitoring: "input-monitoring",
+  screenRecording: "screen-recording",
+};
+
+// The helper defaults to this set when no --permission selectors are passed,
+// so the legacy check can keep running against helpers that predate the flag.
+const APP_SNAP_LEGACY_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
+  "inputMonitoring",
+  "screenRecording",
+];
+
+function isLegacyPermissionSet(permissions: readonly DesktopAppSnapPermissionKind[]): boolean {
+  return (
+    permissions.length === APP_SNAP_LEGACY_PERMISSION_KINDS.length &&
+    APP_SNAP_LEGACY_PERMISSION_KINDS.every((kind) => permissions.includes(kind))
+  );
 }
 
 function isPermissionErrorCode(code: string): boolean {
@@ -414,6 +458,9 @@ export class DesktopAppSnapManager {
     };
   readonly #platform: DesktopAppSnapPlatform;
   #enabled = false;
+  // Accessibility is only tracked once a caller includes it in a check; before
+  // that the AppSnap state must not pretend to know anything about it.
+  #accessibilityPermission: DesktopAppSnapPermission | undefined = undefined;
   #inputMonitoringPermission: DesktopAppSnapPermission = "unknown";
   #screenRecordingPermission: DesktopAppSnapPermission = "unknown";
   #status: DesktopAppSnapState["status"];
@@ -425,6 +472,7 @@ export class DesktopAppSnapManager {
   #permissionProcess: AppSnapHelperProcess | null = null;
   #permissionCommandQueue: Promise<void> = Promise.resolve();
   #disposed = false;
+  #requestedCapture: { id: string; cancel: () => void } | null = null;
   #intentionalWatchStop = false;
   #pendingCaptures: PendingAppSnapCaptureRecord[] = [];
   #pendingCapturesLoadPromise: Promise<void> | null = null;
@@ -437,6 +485,11 @@ export class DesktopAppSnapManager {
   #guideProcess: AppSnapHelperProcess | null = null;
   #guideOutputLines: Readline.Interface | null = null;
   #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
+  // A setup session guides each missing pane in turn. A renderer-driven guide
+  // leaves this queue empty, so its close never spawns a follow-on coach.
+  #guidePaneQueue: DesktopAppSnapSettingsPane[] = [];
+  #guideSessionKinds: readonly DesktopAppSnapPermissionKind[] = [];
+  #guideSessionOpensSettings = false;
 
   constructor(options: DesktopAppSnapManagerOptions) {
     this.#options = {
@@ -462,14 +515,21 @@ export class DesktopAppSnapManager {
       shortcut: this.#platform === "macos" ? this.#shortcut : null,
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
+      ...(this.#accessibilityPermission !== undefined
+        ? { accessibilityPermission: this.#accessibilityPermission }
+        : {}),
       message: this.#message,
       appDisplayName: this.#options.appDisplayName,
     };
   }
 
-  async refreshState(): Promise<DesktopAppSnapState> {
+  async refreshState(
+    permissions?: readonly DesktopAppSnapPermissionKind[],
+  ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
-    if (!(await this.#runPermissionCommand("--check-permissions"))) return this.getState();
+    if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
+      return this.getState();
+    }
     await this.#reconcileWatchProcess();
     return this.getState();
   }
@@ -551,9 +611,38 @@ export class DesktopAppSnapManager {
     return { state: this.getState(), availability };
   }
 
-  async requestPermissions(): Promise<DesktopAppSnapState> {
+  async requestPermissions(
+    permissions?: readonly DesktopAppSnapPermissionKind[],
+  ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
-    if (!(await this.#runPermissionCommand("--request-permissions"))) return this.getState();
+    if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
+      return this.getState();
+    }
+    await this.#reconcileWatchProcess();
+    return this.getState();
+  }
+
+  /**
+   * Backend-driven permission setup: fire the macOS prompts for the requested
+   * kinds, then walk the floating guide through each pane still missing a
+   * grant, opening System Settings at that pane as each step begins. The guide
+   * advances itself — when the helper reports a grant, the next missing pane's
+   * coach and settings page take over without the user returning to Synara.
+   */
+  async startPermissionSetup(
+    permissions: readonly DesktopAppSnapPermissionKind[],
+  ): Promise<DesktopAppSnapState> {
+    if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    if (permissions.length === 0) return this.getState();
+    if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
+      return this.getState();
+    }
+    this.#guidePaneQueue = permissions.map(
+      (kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind],
+    );
+    this.#guideSessionKinds = [...permissions];
+    this.#guideSessionOpensSettings = true;
+    this.#advancePermissionGuide();
     await this.#reconcileWatchProcess();
     return this.getState();
   }
@@ -618,6 +707,15 @@ export class DesktopAppSnapManager {
   }
 
   showPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
+    // A renderer-driven guide covers exactly one pane and never auto-advances:
+    // any in-flight setup session ends when the renderer takes over the coach.
+    this.#guidePaneQueue = [];
+    this.#guideSessionKinds = [];
+    this.#guideSessionOpensSettings = false;
+    this.#spawnPermissionGuide(pane);
+  }
+
+  #spawnPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
     if (this.#platform !== "macos" || this.#disposed) return;
     if (!FS.existsSync(this.#options.helperPath)) return;
     this.#stopGuideProcess();
@@ -647,18 +745,73 @@ export class DesktopAppSnapManager {
         this.#guideProcess = null;
         this.#guideOutputLines?.close();
         this.#guideOutputLines = null;
+        const finalState = this.#lastGuideState;
         // Crash or external kill: report closed so the renderer guide stays honest.
-        if (this.#lastGuideState !== "closed" && this.#lastGuideState !== "granted") {
+        if (finalState !== "closed" && finalState !== "granted") {
           this.#lastGuideState = "closed";
           this.#options.onPermissionGuideState("closed");
         }
+        if (this.#guidePaneQueue.length === 0) return;
+        if (finalState !== "granted") {
+          // A dismissed (or crashed) coach ends the setup session rather than
+          // respawning panes the user just waved away.
+          this.#guidePaneQueue = [];
+          this.#guideSessionKinds = [];
+          this.#guideSessionOpensSettings = false;
+          return;
+        }
+        // Recheck before advancing so a pane the user already flipped while the
+        // last coach was up never shows a stale guide of its own.
+        void this.#runPermissionCommand("--check-permissions", this.#guideSessionKinds)
+          .then(() => this.#advancePermissionGuide())
+          .catch(() => {
+            this.#guidePaneQueue = [];
+          });
       });
     } catch {
       // The guide is best-effort; the inline steps remain usable without it.
     }
   }
 
+  #panePermission(pane: DesktopAppSnapSettingsPane): DesktopAppSnapPermission | undefined {
+    switch (pane) {
+      case "accessibility":
+        return this.#accessibilityPermission;
+      case "input-monitoring":
+        return this.#inputMonitoringPermission;
+      case "screen-recording":
+        return this.#screenRecordingPermission;
+    }
+  }
+
+  // Advances a setup session to the first queued pane still missing its grant.
+  #advancePermissionGuide(): void {
+    while (
+      this.#guidePaneQueue.length > 0 &&
+      this.#panePermission(this.#guidePaneQueue[0]!) === "granted"
+    ) {
+      this.#guidePaneQueue.shift();
+    }
+    const pane = this.#guidePaneQueue[0];
+    if (!pane) {
+      this.#guideSessionKinds = [];
+      this.#guideSessionOpensSettings = false;
+      return;
+    }
+    if (this.#guideSessionOpensSettings) {
+      try {
+        this.#options.openSettingsPane?.(pane);
+      } catch {
+        // The coach still follows System Settings when it opens by itself.
+      }
+    }
+    this.#spawnPermissionGuide(pane);
+  }
+
   hidePermissionGuide(): void {
+    this.#guidePaneQueue = [];
+    this.#guideSessionKinds = [];
+    this.#guideSessionOpensSettings = false;
     this.#stopGuideProcess();
   }
 
@@ -760,10 +913,143 @@ export class DesktopAppSnapManager {
     }
   }
 
+  /** Explicit read-only request. Independent of shortcut enablement and Input Monitoring. */
+  async captureCurrentApp(requestId: string): Promise<DesktopAppSnapCapture> {
+    if (this.#disposed || this.#platform !== "macos") throw new Error("AppSnap is unavailable.");
+    if (this.#requestedCapture) throw new Error("An AppSnap request is already in progress.");
+    let cancelled = false;
+    let cancelChild: (() => void) | undefined;
+    const request = {
+      id: requestId,
+      cancel: () => {
+        cancelled = true;
+        cancelChild?.();
+      },
+    };
+    this.#requestedCapture = request;
+    let directory: string | undefined;
+    let capture: DesktopAppSnapCapture;
+    const processState: { child: AppSnapHelperProcess | undefined; exited: boolean } = {
+      child: undefined,
+      exited: false,
+    };
+    const cleanup = async () => {
+      try {
+        if (directory) await FS.promises.rm(directory, { recursive: true, force: true });
+      } finally {
+        if (this.#requestedCapture === request) this.#requestedCapture = null;
+      }
+    };
+    try {
+      await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
+      directory = await FS.promises.mkdtemp(
+        Path.join(this.#options.captureDirectory, "requested-"),
+      );
+      if (cancelled) throw new Error("AppSnap request cancelled.");
+      const outputDirectory = directory;
+      capture = await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
+        const child = this.#options.spawn(
+          this.#options.helperPath,
+          [
+            "--watch",
+            "--external-trigger",
+            "--output-dir",
+            outputDirectory,
+            "--excluded-bundle-id",
+            this.#options.excludedBundleId,
+          ],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        processState.child = child;
+        child.once("exit", () => {
+          processState.exited = true;
+        });
+        child.once("close", () => {
+          processState.exited = true;
+        });
+        let settled = false;
+        let reading = false;
+        const finish = (error?: Error, capture?: DesktopAppSnapCapture) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          lines.close();
+          if (error) reject(error);
+          else if (capture) resolve(capture);
+        };
+        const timeout = setTimeout(() => finish(new Error("AppSnap capture timed out.")), 10_000);
+        const lines = this.#wireHelperOutput(child, (message) => {
+          if (settled) return;
+          if (message.type === "ready") child.stdin?.write("trigger\n");
+          if (message.type === "error") finish(new Error(message.message));
+          if (message.type !== "captured" || reading) return;
+          reading = true;
+          void (async () => {
+            const capturePath = Path.resolve(message.path);
+            if (!isPathInsideDirectory(outputDirectory, capturePath))
+              throw new Error("Invalid AppSnap capture path.");
+            const bytes = await readValidatedPendingPng(capturePath);
+            finish(undefined, {
+              id: message.id,
+              capturedAt: normalizeDate(message.capturedAt, this.#options.now()),
+              name: message.name,
+              mimeType: "image/png",
+              sizeBytes: bytes.byteLength,
+              bytes,
+              sourceAppName: normalizeOptionalText(message.sourceAppName),
+              sourceBundleIdentifier: normalizeOptionalText(message.sourceBundleIdentifier),
+              sourceAppIconDataUrl: null,
+              sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
+            });
+          })().catch((error: unknown) =>
+            finish(error instanceof Error ? error : new Error(String(error))),
+          );
+        });
+        child.stdin?.on("error", () => finish(new Error("AppSnap helper disconnected.")));
+        child.once("error", (error) => finish(error));
+        child.once("exit", () => {
+          if (!reading) finish(new Error("AppSnap helper stopped before capture."));
+        });
+        cancelChild = () => finish(new Error("AppSnap request cancelled."));
+        if (cancelled) cancelChild();
+      });
+    } finally {
+      try {
+        if (processState.child)
+          await stopNativeHelper(processState.child, () => processState.exited);
+      } finally {
+        if (!processState.child || processState.exited) await cleanup();
+        else {
+          // Do not free the lane or delete files while a helper still owns them.
+          // Even a failed bounded shutdown can recover on its eventual exit.
+          const recover = () => {
+            processState.child?.removeListener("exit", recover);
+            processState.child?.removeListener("close", recover);
+            void cleanup().catch((error: unknown) =>
+              console.warn("[desktop-appsnap] Request cleanup failed", error),
+            );
+          };
+          processState.child.once("exit", recover);
+          processState.child.once("close", recover);
+        }
+      }
+    }
+    if (cancelled) throw new Error("AppSnap request cancelled.");
+    return capture;
+  }
+
+  cancelCapture(requestId: string): void {
+    if (this.#requestedCapture?.id === requestId) this.#requestedCapture.cancel();
+  }
+
   dispose(): void {
     this.#disposed = true;
+    this.#requestedCapture?.cancel();
     this.#stopWatchProcess();
     this.#stopGuideProcess();
+    this.#guidePaneQueue = [];
+    this.#guideSessionKinds = [];
+    this.#guideSessionOpensSettings = false;
     this.#releaseShortcutReservation();
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
@@ -1017,7 +1303,11 @@ export class DesktopAppSnapManager {
       this.#releaseShortcutReservation();
       this.#setState(
         "permission-required",
-        permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
+        permissionRequiredMessage({
+          accessibility: this.#accessibilityPermission,
+          inputMonitoring: this.#inputMonitoringPermission,
+          screenRecording: this.#screenRecordingPermission,
+        }),
       );
       return;
     }
@@ -1177,8 +1467,11 @@ export class DesktopAppSnapManager {
 
   async #runPermissionCommand(
     command: "--check-permissions" | "--request-permissions",
+    permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<boolean> {
-    const run = this.#permissionCommandQueue.then(() => this.#executePermissionCommand(command));
+    const run = this.#permissionCommandQueue.then(() =>
+      this.#executePermissionCommand(command, permissions),
+    );
     this.#permissionCommandQueue = run.then(
       () => undefined,
       () => undefined,
@@ -1186,21 +1479,50 @@ export class DesktopAppSnapManager {
     return await run;
   }
 
+  #applyPermissionReport(
+    message: Extract<AppSnapHelperMessage, { type: "permissions" }>,
+  ): void {
+    // Fields absent from the payload were not part of this request; leaving
+    // them untouched keeps an accessibility-aware check from erasing the
+    // AppSnap set and vice versa.
+    if (message.accessibility !== undefined) {
+      this.#accessibilityPermission = message.accessibility;
+    }
+    if (message.inputMonitoring !== undefined) {
+      this.#inputMonitoringPermission = message.inputMonitoring;
+    }
+    if (message.screenRecording !== undefined) {
+      this.#screenRecordingPermission = message.screenRecording;
+    }
+    this.#emitState();
+  }
+
   async #executePermissionCommand(
     command: "--check-permissions" | "--request-permissions",
+    permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<boolean> {
     if (this.#disposed || this.#platform !== "macos") return false;
     if (!FS.existsSync(this.#options.helperPath)) {
       this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
       return false;
     }
+    // The helper's legacy default is the AppSnap pair, so a legacy request
+    // sends no selectors and keeps working with helpers that predate the flag.
+    const kinds = permissions ?? APP_SNAP_LEGACY_PERMISSION_KINDS;
+    const permissionArguments = isLegacyPermissionSet(kinds)
+      ? []
+      : [...new Set(kinds)].flatMap((kind) => ["--permission", kind]);
 
     return await new Promise<boolean>((resolve) => {
       let child: AppSnapHelperProcess;
       try {
-        child = this.#options.spawn(this.#options.helperPath, [command], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        child = this.#options.spawn(
+          this.#options.helperPath,
+          [command, ...permissionArguments],
+          {
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
       } catch (error) {
         this.#setState(
           "error",
@@ -1216,9 +1538,7 @@ export class DesktopAppSnapManager {
       this.#wireHelperOutput(child, (message) => {
         if (message.type === "permissions") {
           receivedPermissions = true;
-          this.#inputMonitoringPermission = message.inputMonitoring;
-          this.#screenRecordingPermission = message.screenRecording;
-          this.#emitState();
+          this.#applyPermissionReport(message);
         } else if (message.type === "error") {
           reportedError = message.message;
         }
@@ -1256,9 +1576,7 @@ export class DesktopAppSnapManager {
       return;
     }
     if (message.type === "permissions") {
-      this.#inputMonitoringPermission = message.inputMonitoring;
-      this.#screenRecordingPermission = message.screenRecording;
-      this.#emitState();
+      this.#applyPermissionReport(message);
       // A revocation must stop the helper and flip the picker off; a grant
       // must start it. Reconcile so the UI follows the live permission state.
       void this.#reconcileWatchProcess();
@@ -1360,7 +1678,11 @@ export class DesktopAppSnapManager {
       this.#releaseShortcutReservation();
       this.#setState(
         "permission-required",
-        permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
+        permissionRequiredMessage({
+          accessibility: this.#accessibilityPermission,
+          inputMonitoring: this.#inputMonitoringPermission,
+          screenRecording: this.#screenRecordingPermission,
+        }),
       );
     }
     // Benign overlap errors surface as a toast without yanking Synara to the

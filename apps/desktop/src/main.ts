@@ -1,3 +1,8 @@
+import { CuaDriverHost } from "./cuaDriverHost";
+import { ComputerNativePreview } from "./computerNativePreview";
+import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
+import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -24,6 +29,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  powerMonitor,
   screen,
   safeStorage,
   session,
@@ -39,6 +45,7 @@ import type {
 import * as Effect from "effect/Effect";
 import type {
   DesktopAppIcon,
+  DesktopAppSnapPermissionKind,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -56,6 +63,7 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
@@ -1889,6 +1897,10 @@ function initializeDesktopAppSnap(): void {
     appDisplayName: APP_DISPLAY_NAME,
     appBundlePath: resolveAppSnapAppBundlePath(),
     shortcutRegistry: globalShortcut,
+    openSettingsPane: (pane) => {
+      const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
+      if (paneUrl) void shell.openExternal(paneUrl).catch(() => undefined);
+    },
     onState: (state) => {
       sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
     },
@@ -3558,6 +3570,74 @@ function backendNodeArgs(): string[] {
   });
 }
 
+let cuaDriverHost: CuaDriverHost | undefined;
+let disposeComputerDesktopLifecycle: (() => void) | undefined;
+let cuaHostEndpoint: string | undefined;
+
+// Computer use asks the AppSnap helper about all three grants — Accessibility,
+// Input Monitoring, and Screen Recording — while plain AppSnap stays on the
+// legacy pair.
+const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
+  "accessibility",
+  "inputMonitoring",
+  "screenRecording",
+];
+
+async function startCuaHost(): Promise<void> {
+  if (process.platform !== "darwin" || cuaDriverHost) return;
+  const host = new CuaDriverHost({
+    binaryPath: app.isPackaged
+      ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
+      : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
+    bundleId: desktopIdentity.bundleId,
+    capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    preview: new ComputerNativePreview({
+      helperPath: resolveAppSnapHelperPath(),
+      onUserStop: (task) => {
+        void host
+          .stopTaskByUser(task)
+          .catch((error) => safeConsoleError("[desktop] computer preview stop failed", error));
+      },
+      onError: (error) => safeConsoleError("[desktop] computer preview failed", error),
+    }),
+    checkPermissions: async () => {
+      // The AppSnap manager owns the shared native permission helper; lazily
+      // starting it here keeps the CUA host working even when AppSnap itself is
+      // still disabled.
+      initializeDesktopAppSnap();
+      const state = await appSnapManager!.refreshState(COMPUTER_PERMISSION_KINDS);
+      return {
+        accessibility: state.accessibilityPermission === "granted",
+        screenRecording: state.screenRecordingPermission === "granted",
+      };
+    },
+    setup: async () => {
+      initializeDesktopAppSnap();
+      await appSnapManager!.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
+    },
+    normalizeOverview: (result) => {
+      const image = result.content?.find((part) => part.type === "image" && part.data);
+      if (!image?.data) return result;
+      const native = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+      const size = native.getSize();
+      if (Math.max(size.width, size.height) <= MODEL_SCREEN_IMAGE_MAX_DIMENSION) return result;
+      const ratio = MODEL_SCREEN_IMAGE_MAX_DIMENSION / Math.max(size.width, size.height);
+      const scaled = native.resize({
+        width: Math.round(size.width * ratio),
+        height: Math.round(size.height * ratio),
+        quality: "best",
+      });
+      image.data = scaled.toPNG().toString("base64");
+      return result;
+    },
+  });
+  cuaHostEndpoint = await host.listen();
+  cuaDriverHost = host;
+  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
+    safeConsoleError("[desktop] computer input pause failed", error),
+  );
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
@@ -3580,6 +3660,8 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(migrationDivergenceConsent
       ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
+    ...(cuaHostEndpoint ? { [CUA_HOST_SOCKET_ENV]: cuaHostEndpoint } : {}),
+    [SYNARA_DESKTOP_BUNDLE_ID_ENV]: desktopIdentity.bundleId,
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
     SYNARA_PORT: String(backendPort),
@@ -4077,6 +4159,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  cuaDriverHost?.resume();
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4169,6 +4252,7 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
 }
 
 async function stopBackendAndWaitForExit(): Promise<void> {
+  await cuaDriverHost?.suspend();
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
@@ -4207,6 +4291,11 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  disposeComputerDesktopLifecycle?.();
+  disposeComputerDesktopLifecycle = undefined;
+  await cuaDriverHost?.dispose();
+  cuaDriverHost = undefined;
+  cuaHostEndpoint = undefined;
   const pipeServer = browserHostPipeServer;
   browserHostPipeServer = null;
   if (!pipeServer) return;
@@ -5282,6 +5371,7 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
+  await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 

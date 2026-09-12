@@ -15,7 +15,11 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { type DraftThreadEnvMode, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
+import {
+  useComposerDraftStore,
+  type DraftThreadEnvMode,
+  type QueuedComposerPlanFollowUp,
+} from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
@@ -31,7 +35,16 @@ import { useStore } from "../../store";
 import { truncateTitle } from "../../truncateTitle";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
-import { type QueuedSteerGate } from "../ChatView.logic";
+import {
+  editAndResendDispatchFields,
+  queuedChatTurnDispatchFields,
+  planImplementationDispatchSettings,
+  resolveQueuedTurnDispatchSettings,
+  threadSettingsDispatchFields,
+  turnStartDispatchFields,
+  type QueuedSteerGate,
+  type TurnDispatchSettings,
+} from "../ChatView.logic";
 import { buildWorkflowResumePrompt } from "./WorkflowRunCard.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatLocalDispatch } from "./useChatLocalDispatch";
@@ -72,6 +85,14 @@ interface ChatTurnFollowUpsInput {
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
   selectedModelSelection: ModelSelection;
   providerOptionsForDispatch: ProviderStartOptions | undefined;
+  turnDispatchSettings: TurnDispatchSettings;
+  computerControlChangeSequence: RefObject<number>;
+  setComposerDraftComputerControlMode: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControlMode"];
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   setOptimisticUserMessages: ReturnType<
     typeof useChatTimelineMessages
   >["setOptimisticUserMessages"];
@@ -126,6 +147,10 @@ export function useChatTurnFollowUps({
   selectedPromptEffort,
   selectedModelSelection,
   providerOptionsForDispatch,
+  turnDispatchSettings,
+  computerControlChangeSequence,
+  setComposerDraftComputerControlMode,
+  setComposerDraftComputerControl,
   setOptimisticUserMessages,
   armTranscriptAutoFollow,
   tailAnchorScrollInFlightRef,
@@ -202,22 +227,24 @@ export function useChatTurnFollowUps({
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
+    const planDispatchSettings = {
+      ...resolveQueuedTurnDispatchSettings(turnDispatchSettings, queuedTurn),
+      interactionMode: nextInteractionMode,
+    };
+    const modelSelectionForPlanDispatch = planDispatchSettings.modelSelection;
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
+
     const dispatchPlanFollowUpTurn = async () => {
       await persistThreadSettingsForNextTurn({
+        ...threadSettingsDispatchFields(planDispatchSettings),
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        modelSelection: queuedTurn?.modelSelection ?? selectedModelSelection,
-        runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
-        interactionMode: nextInteractionMode,
       });
 
       // Keep the mode toggle and plan-follow-up banner in sync immediately
       // while the same-thread implementation turn is starting.
       setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
-      const providerOptionsForPlanDispatch =
-        queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
       const sourceProposedPlan =
         nextInteractionMode === "default"
           ? buildSourceProposedPlanReference({
@@ -227,8 +254,8 @@ export function useChatTurnFollowUps({
           : undefined;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: modelSelectionForPlanDispatch.provider,
-        providerOptions: providerOptionsForPlanDispatch,
+        provider: planDispatchSettings.modelSelection.provider,
+        providerOptions: planDispatchSettings.providerOptions,
       });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -240,19 +267,18 @@ export function useChatTurnFollowUps({
           text: outgoingMessageText,
           attachments: [],
         },
-        modelSelection: modelSelectionForPlanDispatch,
-        ...(providerOptionsForPlanDispatch
-          ? {
-              providerOptions: providerOptionsForPlanDispatch,
-            }
-          : {}),
-        assistantDeliveryMode,
-        dispatchMode,
-        runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
-        interactionMode: nextInteractionMode,
+        ...turnStartDispatchFields(planDispatchSettings, dispatchMode),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
+      if (!queuedTurn && planDispatchSettings.computerControlMode === "request") {
+        const draft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
+        if (
+          draft?.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend
+        )
+          setComposerDraftComputerControlMode(threadIdForSend, "off");
+      }
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
       // so it can't race the steer. The live session provider decides the
@@ -334,6 +360,7 @@ export function useChatTurnFollowUps({
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
       const messageCreatedAt = new Date().toISOString();
+      const computerControlSequenceForEdit = computerControlChangeSequence.current;
       const editedTextWithOriginalContext = appendOriginalComposerPromptBlocks({
         editedPrompt: text,
         originalPrompt: originalMessage.text,
@@ -347,11 +374,9 @@ export function useChatTurnFollowUps({
       });
       return await (async () => {
         await persistThreadSettingsForNextTurn({
+          ...threadSettingsDispatchFields(turnDispatchSettings),
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
-          modelSelection: selectedModelSelection,
-          runtimeMode,
-          interactionMode,
         });
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
@@ -359,13 +384,15 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           messageId,
           text: outgoingMessageText,
-          modelSelection: selectedModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          assistantDeliveryMode,
-          runtimeMode,
-          interactionMode,
+          ...editAndResendDispatchFields(turnDispatchSettings),
           createdAt: messageCreatedAt,
         });
+        if (
+          turnDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForEdit
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         return true;
       })()
         .catch((err: unknown) => {
@@ -387,16 +414,14 @@ export function useChatTurnFollowUps({
       isRevertingCheckpoint,
       isSendBusy,
       isServerThread,
-      interactionMode,
       persistThreadSettingsForNextTurn,
-      providerOptionsForDispatch,
-      runtimeMode,
       selectedModel,
-      selectedModelSelection,
       selectedPromptEffort,
       selectedProvider,
       setThreadError,
-      assistantDeliveryMode,
+      turnDispatchSettings,
+      editAndResendDispatchFields,
+      threadSettingsDispatchFields,
     ],
   );
   // Resuming a workflow is a normal composer turn instructing the agent to
@@ -429,11 +454,7 @@ export function useChatTurnFollowUps({
       selectedProvider,
       selectedModel,
       selectedPromptEffort,
-      modelSelection: selectedModelSelection,
-      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-      runtimeMode,
-      interactionMode,
-      envMode,
+      ...queuedChatTurnDispatchFields(turnDispatchSettings, undefined),
     });
     if (sent && activeThreadId) {
       markWorkflowRunDismissed(activeThreadId, workflowTaskId);
@@ -441,16 +462,13 @@ export function useChatTurnFollowUps({
   }, [
     lateComposerSendHandlersRef,
     activeThreadId,
-    envMode,
-    interactionMode,
     markWorkflowRunDismissed,
-    providerOptionsForDispatch,
-    runtimeMode,
     selectedModel,
-    selectedModelSelection,
     selectedPromptEffort,
     selectedProvider,
     workflowRunState,
+    turnDispatchSettings,
+    queuedChatTurnDispatchFields,
   ]);
 
   const onImplementPlanInNewThread = useCallback(async () => {
@@ -479,7 +497,8 @@ export function useChatTurnFollowUps({
       text: implementationPrompt,
     });
     const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
-    const nextThreadModelSelection: ModelSelection = selectedModelSelection;
+    const computerControlSequenceForImplementation = computerControlChangeSequence.current;
+    const implementationDispatchSettings = planImplementationDispatchSettings(turnDispatchSettings);
     const sourceProposedPlan = buildSourceProposedPlanReference({
       threadId: activeThread.id,
       proposedPlan: activeProposedPlan,
@@ -499,9 +518,9 @@ export function useChatTurnFollowUps({
         threadId: nextThreadId,
         projectId: activeProject.id,
         title: nextThreadTitle,
-        modelSelection: nextThreadModelSelection,
-        runtimeMode,
-        interactionMode: "default",
+        modelSelection: implementationDispatchSettings.modelSelection,
+        runtimeMode: implementationDispatchSettings.runtimeMode,
+        interactionMode: implementationDispatchSettings.interactionMode,
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
@@ -515,8 +534,8 @@ export function useChatTurnFollowUps({
       .then(() => {
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
-          provider: selectedModelSelection.provider,
-          providerOptions: providerOptionsForDispatch,
+          provider: implementationDispatchSettings.modelSelection.provider,
+          providerOptions: implementationDispatchSettings.providerOptions,
         });
         return api.orchestration.dispatchCommand({
           type: "thread.turn.start",
@@ -528,17 +547,22 @@ export function useChatTurnFollowUps({
             text: outgoingImplementationPrompt,
             attachments: [],
           },
-          modelSelection: selectedModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          assistantDeliveryMode,
-          dispatchMode: "queue",
-          runtimeMode,
-          interactionMode: "default",
+          ...turnStartDispatchFields(implementationDispatchSettings, "queue"),
           ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
           createdAt,
         });
       })
       .then(() => {
+        if (implementationDispatchSettings.computerControlMode === "chat") {
+          setComposerDraftComputerControlMode(nextThreadId, "chat", {
+            generation: implementationDispatchSettings.computerControlGeneration ?? 0,
+          });
+        } else if (
+          implementationDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForImplementation
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         // The turn RPC resolved for a thread this view never made active, so
         // arm the watchdog marker with that exact thread id before navigation.
         markPendingTurnDispatch(nextThreadId);
@@ -591,15 +615,13 @@ export function useChatTurnFollowUps({
     isServerThread,
     navigate,
     resetLocalDispatch,
-    runtimeMode,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
-    rememberCustomBinaryPathForDispatch,
-    selectedProvider,
-    assistantDeliveryMode,
-    syncServerShellSnapshot,
     selectedModel,
+    rememberCustomBinaryPathForDispatch,
+    syncServerShellSnapshot,
+    turnDispatchSettings,
+    planImplementationDispatchSettings,
+    turnStartDispatchFields,
   ]);
   return {
     onSubmitPlanFollowUp,

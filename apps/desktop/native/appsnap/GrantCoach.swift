@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// Copied from the Cue overlay (GrantCoach.swift, AppDragView.swift, Overlay.swift,
 /// CueTokens.swift) and refactored for the Synara helper: only the app name, app
@@ -248,7 +249,11 @@ final class GrantCoach {
     }
 
     private var paneTitle: String {
-        pane == "screen-recording" ? "Screen Recording" : "Input Monitoring"
+        switch pane {
+        case "accessibility": return "Accessibility"
+        case "screen-recording": return "Screen Recording"
+        default: return "Input Monitoring"
+        }
     }
 
     func present(onGranted: @escaping () -> Void, onDismissed: (() -> Void)? = nil) {
@@ -285,9 +290,15 @@ final class GrantCoach {
     }
 
     private func checkGranted() {
-        let granted = pane == "screen-recording"
-            ? CGPreflightScreenCaptureAccess()
-            : CGPreflightListenEventAccess()
+        let granted: Bool
+        switch pane {
+        case "accessibility":
+            granted = AXIsProcessTrusted()
+        case "screen-recording":
+            granted = CGPreflightScreenCaptureAccess()
+        default:
+            granted = CGPreflightListenEventAccess()
+        }
         if granted {
             onGranted?()
             dismiss()

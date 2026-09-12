@@ -175,6 +175,25 @@ import type {
   DeviceTypeTextInput,
   ThreadDeviceState,
 } from "./device";
+import type {
+  ComputerActionResult,
+  ComputerControlEnabledResult,
+  ComputerEvent,
+  ComputerGetStateInput,
+  ComputerGetStatusInput,
+  ComputerInputClickInput,
+  ComputerInputKeyInput,
+  ComputerInputScrollInput,
+  ComputerListWindowsInput,
+  ComputerListWindowsResult,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
+  ComputerSetControlEnabledInput,
+  ComputerState,
+  ComputerStatusResult,
+  ComputerThreadInput,
+  ThreadComputerState,
+} from "./computer";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
@@ -452,7 +471,16 @@ export interface DesktopAppSnapShortcutUpdateResult {
   availability: DesktopAppSnapShortcutAvailability;
 }
 
-export type DesktopAppSnapSettingsPane = "input-monitoring" | "screen-recording";
+export type DesktopAppSnapSettingsPane =
+  | "accessibility"
+  | "input-monitoring"
+  | "screen-recording";
+
+/** A macOS privacy grant the AppSnap helper can check or request. */
+export type DesktopAppSnapPermissionKind =
+  | "accessibility"
+  | "inputMonitoring"
+  | "screenRecording";
 
 export type DesktopAppSnapPermissionGuideState = "shown" | "closed" | "granted";
 
@@ -462,6 +490,11 @@ export interface DesktopAppSnapState {
   enabled: boolean;
   status: DesktopAppSnapStatus;
   shortcut: DesktopAppSnapShortcut | null;
+  /**
+   * Only present once a caller asked about Accessibility; the helper reports
+   * just the grants it was queried for, so an absent field means "not asked".
+   */
+  accessibilityPermission?: DesktopAppSnapPermission;
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
@@ -666,13 +699,26 @@ export interface DesktopBridge {
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
   appSnap: {
-    getState: () => Promise<DesktopAppSnapState>;
+    captureCurrentApp: (requestId: string) => Promise<DesktopAppSnapCapture>;
+    cancelCapture: (requestId: string) => Promise<void>;
+    getState: (
+      permissions?: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
     setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
     checkShortcut: (
       shortcut: DesktopAppSnapShortcut,
     ) => Promise<DesktopAppSnapShortcutAvailability>;
     setShortcut: (shortcut: DesktopAppSnapShortcut) => Promise<DesktopAppSnapShortcutUpdateResult>;
-    requestPermissions: () => Promise<DesktopAppSnapState>;
+    requestPermissions: (
+      permissions?: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
+    /**
+     * Fires the macOS prompts for the requested grants, then walks the floating
+     * permission coach through each pane still missing a grant.
+     */
+    startPermissionSetup: (
+      permissions: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
     listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
     acknowledgeCapture: (captureId: string) => Promise<void>;
     listWindows: () => Promise<DesktopAppSnapWindowEntry[]>;
@@ -995,5 +1041,20 @@ export interface NativeApi {
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
     scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
+  };
+  computer: {
+    /** Thread-independent backend status for surfaces outside any conversation. */
+    getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
+    setControlEnabled: (
+      input: ComputerSetControlEnabledInput,
+    ) => Promise<ComputerControlEnabledResult>;
+    getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
+    getState: (input: ComputerGetStateInput) => Promise<ComputerState>;
+    /** User input from the computer dock pane; needs no agent turn in flight. */
+    inputClick: (input: ComputerInputClickInput) => Promise<ComputerActionResult>;
+    inputScroll: (input: ComputerInputScrollInput) => Promise<ComputerActionResult>;
+    inputKey: (input: ComputerInputKeyInput) => Promise<ComputerActionResult>;
+    onEvent: (callback: (event: ComputerEvent) => void) => () => void;
   };
 }

@@ -43,7 +43,10 @@ import {
 import { stripTerminalControlSequences } from "@synara/shared/text";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -56,7 +59,9 @@ import {
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -97,6 +102,18 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "pi" as const;
+
+export function buildPiTurnPrompt(
+  state: SynaraHarnessPolicyDeliveryState,
+  input: { readonly text: string; readonly gatewayControlAvailable: boolean },
+): string {
+  const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable: input.gatewayControlAvailable,
+  });
+  return [harnessPolicy, input.text].filter(Boolean).join("\n\n");
+}
+
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
 const PI_THINKING_OPTIONS: ReadonlyArray<{
   readonly value: ThinkingLevel;
@@ -354,7 +371,14 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
+  readonly enableComputerControl?: boolean;
   readonly gatewayControlAvailable: boolean;
+  /**
+   * Pi rotates its gateway credential when a turn completes, long after the
+   * start input is gone. Keep the shared capability projection so the re-lease
+   * derives from the same facts as the original lease.
+   */
+  readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
   readonly lifecycleGeneration?: string;
@@ -1799,6 +1823,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           agentGatewayCredentials,
           context.session.threadId,
           PROVIDER,
+          context.gatewayCapabilityInput,
         );
         if (replacementLease) {
           context.gatewaySessionLease = replacementLease;
@@ -1908,15 +1933,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const buildProviderText = (context: PiSessionContext, text: string) =>
-      [
-        takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        }),
+      buildPiTurnPrompt(context, {
         text,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+        gatewayControlAvailable: context.gatewayControlAvailable,
+      });
 
     const sendTurnBusyError = () =>
       new ProviderAdapterValidationError({
@@ -2547,6 +2567,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          input,
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
         const gatewayTools = agentGatewayConnection
@@ -2628,6 +2649,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ...(resumeCursor ? { resumeCursor } : {}),
         };
         const context: PiSessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),

@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
+import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -85,12 +86,13 @@ function appSnapPanePermission(
   state: DesktopAppSnapState,
   pane: DesktopAppSnapSettingsPane,
 ): DesktopAppSnapPermission {
-  return pane === "input-monitoring"
-    ? state.inputMonitoringPermission
-    : state.screenRecordingPermission;
+  if (pane === "input-monitoring") return state.inputMonitoringPermission;
+  if (pane === "accessibility") return state.accessibilityPermission ?? "unknown";
+  return state.screenRecordingPermission;
 }
 
 const APP_SNAP_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
+  accessibility: "Accessibility",
   "input-monitoring": "Input Monitoring",
   "screen-recording": "Screen Recording",
 };
@@ -258,6 +260,10 @@ export function AppSnapSettingsPanel({
   const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: active });
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+
+  // getState publishes through onState below. A passive refresh must not
+  // invalidate an enable request that is waiting for the macOS permission dialog.
+  useRefreshOnWindowReturn(() => window.desktopBridge?.appSnap?.getState(), active);
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;

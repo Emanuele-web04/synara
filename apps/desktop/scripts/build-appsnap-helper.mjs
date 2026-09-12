@@ -32,6 +32,8 @@ export const defaultAppSnapHelperPath = join(
 
 const frameworkArguments = [
   "-framework",
+  "AVFoundation",
+  "-framework",
   "AppKit",
   "-framework",
   "CoreGraphics",
