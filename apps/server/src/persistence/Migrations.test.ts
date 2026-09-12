@@ -301,8 +301,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
-        [101, "Mind"],
-        [102, "MindRuntimeIntegrity"],
+        [104, "Mind"],
+        [105, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -352,8 +352,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
         { migration_id: 98, name: "MigrateKiloToOpenCode" },
         { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
-        { migration_id: 101, name: "Mind" },
-        { migration_id: 102, name: "MindRuntimeIntegrity" },
+        { migration_id: 104, name: "Mind" },
+        { migration_id: 105, name: "MindRuntimeIntegrity" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -445,8 +445,8 @@ agentGatewayRetentionLegacyLayer(
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
-          [101, "Mind"],
-          [102, "MindRuntimeIntegrity"],
+          [104, "Mind"],
+          [105, "MindRuntimeIntegrity"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -541,8 +541,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
-        [101, "Mind"],
-        [102, "MindRuntimeIntegrity"],
+        [104, "Mind"],
+        [105, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -578,8 +578,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
-          [101, "Mind"],
-          [102, "MindRuntimeIntegrity"],
+          [104, "Mind"],
+          [105, "MindRuntimeIntegrity"],
         ],
       );
 
@@ -669,8 +669,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
-        [101, "Mind"],
-        [102, "MindRuntimeIntegrity"],
+        [104, "Mind"],
+        [105, "MindRuntimeIntegrity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -702,8 +702,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
-          [101, "Mind"],
-          [102, "MindRuntimeIntegrity"],
+          [104, "Mind"],
+          [105, "MindRuntimeIntegrity"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -873,8 +873,8 @@ mindMigrationLayer("Mind migration", (it) => {
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
         [99, "InvalidateProjectionThreadsCursor"],
-        [101, "Mind"],
-        [102, "MindRuntimeIntegrity"],
+        [104, "Mind"],
+        [105, "MindRuntimeIntegrity"],
       ]);
 
       yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
