@@ -25,6 +25,7 @@ import { pinActionLabel } from "~/lib/pin";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
+import { dispatchThreadGoal } from "~/threadGoal";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
@@ -130,6 +131,10 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     const deletesOnlyDraft = !isThreadBacked || isDraftOnlyCard;
     const isThreadActionCard = isThreadBacked && !isDraftOnlyCard;
     const isDispatchableDraft = resolveDraftDropAction(card) === "dispatch";
+    // Live/done cards already have a thread: the goal can be written onto it
+    // directly (no new turn). Draft-column cards keep the dispatch-path
+    // "Send as goal" item instead, which starts the turn with the goal.
+    const isSettableGoalCard = card.thread !== null && card.column !== "draft";
     const workspacePath = resolveCardWorkspacePath(card);
 
     void (async () => {
@@ -154,6 +159,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           ...(isDispatchableDraft
             ? [{ id: "send-as-goal", label: "Send as goal", separatorBefore: true }]
             : []),
+          ...(isSettableGoalCard ? [{ id: "set-as-goal", label: "Set as goal" }] : []),
           {
             id: "delete",
             label: deletesOnlyDraft ? "Delete draft" : "Delete",
@@ -230,6 +236,39 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           return;
         }
         toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
+        return;
+      }
+      if (clicked === "set-as-goal") {
+        if (!isSettableGoalCard) return;
+        const goal = card.title.trim();
+        if (goal.length === 0) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: "The thread has no title to save as its goal.",
+          });
+          return;
+        }
+        try {
+          // Mirrors the AsGoal dispatch's metadata write (goal + defer), but
+          // starts no turn — the existing thread picks the goal up next run.
+          // Clamped to the same cap the dispatch path enforces.
+          await dispatchThreadGoal(card.threadId, goal.slice(0, 4096), {
+            startBehavior: "defer",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: error instanceof Error ? error.message : "Unknown error.",
+          });
+          return;
+        }
+        toastManager.add({
+          type: "success",
+          title: "Goal set",
+          description: card.title,
+        });
         return;
       }
       if (clicked !== "delete") return;

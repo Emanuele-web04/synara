@@ -18,6 +18,8 @@ const harness = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   toast: vi.fn(),
   sendAsGoal: vi.fn(),
+  setGoal: vi.fn(),
+  dispatchCommand: vi.fn(),
 }));
 
 vi.mock("react", async (importOriginal) => ({
@@ -50,6 +52,7 @@ vi.mock("~/lib/activeThreadDelete", () => ({
 vi.mock("~/lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
 vi.mock("~/lib/threadArchive", () => ({ archiveThreadFromClient: harness.archiveThread }));
 vi.mock("~/lib/threadRename", () => ({ dispatchThreadRename: vi.fn() }));
+vi.mock("~/threadGoal", () => ({ dispatchThreadGoal: harness.setGoal }));
 vi.mock("~/lib/kanbanDispatch", () => ({
   dispatchKanbanDraftCardAsGoal: harness.sendAsGoal,
   kanbanDispatchFailureToast: vi.fn().mockReturnValue({
@@ -75,7 +78,7 @@ vi.mock("../../nativeApi", () => ({
   readNativeApi: () => ({
     contextMenu: { show: harness.showContextMenu },
     dialogs: { confirm: harness.confirm },
-    orchestration: { dispatchCommand: vi.fn() },
+    orchestration: { dispatchCommand: harness.dispatchCommand },
   }),
 }));
 vi.mock("../../store", () => ({
@@ -145,12 +148,15 @@ beforeEach(() => {
     harness.archiveThread,
     harness.toast,
     harness.sendAsGoal,
+    harness.setGoal,
+    harness.dispatchCommand,
   ]) {
     mock.mockReset();
   }
   harness.showContextMenu.mockImplementation(async () => harness.clicked);
   harness.confirm.mockResolvedValue(true);
   harness.archiveThread.mockResolvedValue(undefined);
+  harness.setGoal.mockResolvedValue(undefined);
   harness.sendAsGoal.mockResolvedValue({ kind: "dispatched" });
   harness.deleteActiveThread.mockImplementation(async (input: unknown) => {
     const action = input as {
@@ -273,6 +279,70 @@ describe("useKanbanCardContextMenu", () => {
 
     expect(harness.toast).toHaveBeenCalledWith(
       expect.objectContaining({ type: "warning", description: "Goal not saved" }),
+    );
+  });
+
+  it("shows 'Set as goal' for a thread-backed non-draft card and writes the goal without starting a turn", async () => {
+    harness.clicked = "set-as-goal";
+
+    useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
+    await vi.waitFor(() => expect(harness.setGoal).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
+    expect(menu.some((item) => item.id === "set-as-goal")).toBe(true);
+    expect(harness.setGoal).toHaveBeenCalledWith(THREAD_ID, "Kanban thread", {
+      startBehavior: "defer",
+    });
+    expect(harness.dispatchCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.turn.start" }),
+    );
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "Goal set" }),
+    );
+  });
+
+  it("does not show 'Set as goal' for draft-column cards", async () => {
+    const draftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      draftPrompt: "Ship the kanban v2 goal flow",
+      draftHasAttachments: false,
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(draftCard, EVENT);
+    await vi.waitFor(() => expect(harness.showContextMenu).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
+    expect(menu.some((item) => item.id === "set-as-goal")).toBe(false);
+    expect(menu.some((item) => item.id === "send-as-goal")).toBe(true);
+  });
+
+  it("does not show 'Set as goal' for thread-less cards", async () => {
+    const localDraftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      thread: null,
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(localDraftCard, EVENT);
+    await vi.waitFor(() => expect(harness.showContextMenu).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
+    expect(menu.some((item) => item.id === "set-as-goal")).toBe(false);
+    expect(harness.setGoal).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an error toast when setting the goal fails", async () => {
+    harness.clicked = "set-as-goal";
+    harness.setGoal.mockRejectedValue(new Error("offline"));
+
+    useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
+    await vi.waitFor(() => expect(harness.setGoal).toHaveBeenCalled());
+
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Could not set goal" }),
     );
   });
 });
