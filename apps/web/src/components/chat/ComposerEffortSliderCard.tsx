@@ -6,7 +6,7 @@
 //   the shared Slider primitive, and menu submenu primitives for the model list.
 
 import type { ProviderKind, ProviderModelDescriptor, ThreadId } from "@synara/contracts";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -33,9 +33,10 @@ type ComposerEffortSliderCardProps = {
   modelOptions: ProviderOptions | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // The model-list submenu popup. Rendered inside this card's MenuSub so the
-  // stacked "effort / model" label is its trigger.
-  modelSubmenuPopup: ReactNode;
+  // Renders the model-list submenu popup inside this card's MenuSub so the stacked
+  // "effort / model" label is its trigger. A committed selection closes only the
+  // model list, keeping the card open so the new model's effort can be set at once.
+  renderModelSubmenuPopup: (onAfterSelection: () => void) => ReactNode;
 };
 
 const CARD_ICON_BUTTON_CLASS_NAME =
@@ -43,10 +44,12 @@ const CARD_ICON_BUTTON_CLASS_NAME =
 
 // Effort ladder as a stepped slider. Every level the model exposes is one stop
 // (including prompt-injected ones such as Ultrathink), so the ladder matches the
-// radio menu exactly; changes commit immediately and keep the menu open so the
-// label and thumb update in place.
+// radio menu exactly; changes (effort and model alike) commit immediately and keep
+// the menu open so the label and thumb update in place.
 export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { provider, threadId, model, modelOptions, prompt, onPromptChange } = props;
+  // Local so it resets whenever the card unmounts with its popup.
+  const [modelListOpen, setModelListOpen] = useState(false);
   const selection = getComposerTraitSelection(
     provider,
     model,
@@ -101,7 +104,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         ) : (
           <span aria-hidden="true" className="size-6" />
         )}
-        <MenuSub>
+        <MenuSub open={modelListOpen} onOpenChange={setModelListOpen}>
           <MenuSubTriggerBase
             openOnHover={false}
             className="flex min-w-0 cursor-default select-none flex-col items-center justify-center rounded-lg px-2 py-0.5 text-center leading-snug outline-none transition-colors data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-popup-open:bg-[var(--color-background-button-secondary-hover)]"
@@ -119,7 +122,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
               {props.modelLabel}
             </span>
           </MenuSubTriggerBase>
-          {props.modelSubmenuPopup}
+          {props.renderModelSubmenuPopup(() => setModelListOpen(false))}
         </MenuSub>
         <Tooltip>
           <TooltipTrigger
