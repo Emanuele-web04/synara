@@ -47,6 +47,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   let result = {};
   switch (request.method) {
     case "initialize":
+      process.stderr.write(
+        `${new Date().toISOString()} ERROR codex_models_manager::manager: failed to refresh available models: timeout waiting for child process to exit\n`,
+      );
       result = { userAgent: "synara-lifecycle-fixture" };
       break;
     case "account/read":
