@@ -137,7 +137,10 @@ function MindRouteView() {
       );
       return { previous };
     },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: mindQueryKey }),
+    onSuccess: (_data, memory) => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      toastManager.add({ type: "success", title: "Memory forgotten" });
+    },
     onError: (error, _memory, context) => {
       if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
       toastManager.add({ type: "error", title: error.message });
@@ -167,7 +170,13 @@ function MindRouteView() {
       );
       return { previous };
     },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: mindQueryKey }),
+    onSuccess: (_data, input) => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      toastManager.add({
+        type: "success",
+        title: input.pinned ? "Memory pinned" : "Memory unpinned",
+      });
+    },
     onError: (error, _input, context) => {
       if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
       toastManager.add({ type: "error", title: error.message });
