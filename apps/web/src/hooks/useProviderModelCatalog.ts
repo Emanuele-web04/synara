@@ -396,6 +396,12 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
+    // Terminal OMP discovery failure: clear options so the picker surfaces a
+    // load-failure message instead of the hint-only static list (OMP has no
+    // built-in catalog to fall back to).
+    if (ompDiscoveryFailed) {
+      result.omp = [];
+    }
     return result;
   }, [
     antigravityModelsQuery.data,

@@ -343,6 +343,30 @@ describe("useProviderModelCatalog", () => {
     ]);
   });
 
+  it("clears OMP loading and options on terminal discovery failure", () => {
+    // OMP has no static model fallback. A terminal discovery failure (retries
+    // exhausted) must NOT park the picker on the skeleton (the documented
+    // isInitialModelDiscoveryPending contract: "a failed provider must not park
+    // the model control on a skeleton") NOR collapse to the hint-only static
+    // list (previously-selected model as the sole OMP entry). Instead loading
+    // clears and the options are emptied so the picker surfaces a load-failure
+    // message.
+    modelQueries.set("omp", {
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp).toEqual([]);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {
