@@ -312,6 +312,55 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
     });
 
+    it.effect("keeps explicit Antigravity updates outside health-probe suppression", () =>
+      Effect.gen(function* () {
+        const inheritedAutoUpdate = process.env.AGY_CLI_DISABLE_AUTO_UPDATE;
+        const executable = "synara-test-antigravity";
+        const commands: string[] = [];
+        const settings = {
+          providers: {
+            ...allProvidersDisabledSettings.providers,
+            antigravity: { enabled: true, binaryPath: executable },
+          },
+        };
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(settings)),
+          Layer.provideMerge(
+            ServerConfig.layerTest(process.cwd(), { prefix: "antigravity-update-env-" }),
+          ),
+          Layer.provideMerge(
+            mockSpawnerLayer((args, command, env) => {
+              assert.strictEqual(command, executable);
+              const subcommand = args.join(" ");
+              commands.push(subcommand);
+              assert.strictEqual(
+                env?.AGY_CLI_DISABLE_AUTO_UPDATE,
+                subcommand === "update" ? inheritedAutoUpdate : "true",
+              );
+              if (subcommand === "--version") {
+                return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+              }
+              assert.ok(subcommand === "models" || subcommand === "update");
+              return { stdout: "Gemini 3.5 Flash\n", stderr: "", code: 0 };
+            }),
+          ),
+        );
+        const result = yield* Effect.gen(function* () {
+          const health = yield* ProviderHealth;
+          return yield* health.updateProvider({ provider: "antigravity" });
+        }).pipe(Effect.provide(layer));
+        assert.strictEqual(
+          result.providers.find((provider) => provider.provider === "antigravity")?.updateState
+            ?.status,
+          "succeeded",
+        );
+        assert.ok(commands.includes("update"));
+        assert.ok(commands.includes("--version"));
+        assert.ok(commands.includes("models"));
+        assert.strictEqual(process.env.AGY_CLI_DISABLE_AUTO_UPDATE, inheritedAutoUpdate);
+      }),
+    );
+
     it("updates npm-managed Codex through its matching package manager and PATH", () => {
       const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.codex;
       assert.ok(definition);
