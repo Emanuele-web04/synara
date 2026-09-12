@@ -16,6 +16,7 @@ import {
   type ProviderListCommandsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type RuntimeMode,
   RuntimeItemId,
   RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
@@ -48,6 +49,7 @@ import {
   SYNARA_HARNESS_POLICY_VERSION,
   takeSynaraHarnessPolicyForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
+import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
 import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -95,6 +97,31 @@ import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "..
 
 export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
 
+export function resolveOpenCodePermissionPolicyReply(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly activeTurn: boolean;
+  readonly computerControlEnabled: boolean;
+  readonly permission: unknown;
+  readonly metadata: unknown;
+}): "once" | "reject" | undefined {
+  if (input.interactionMode === undefined || input.interactionMode === "plan") {
+    return "reject";
+  }
+  if (
+    shouldAllowSynaraComputerProviderTool({
+      computerControlEnabled: input.computerControlEnabled,
+      activeTurn: input.activeTurn,
+      interactionMode: input.interactionMode,
+      runtimeMode: input.runtimeMode,
+      permission: { name: input.permission, metadata: input.metadata },
+    })
+  ) {
+    return "once";
+  }
+  return input.runtimeMode === "full-access" ? "once" : undefined;
+}
+
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode">;
 
 interface OpenCodeCompatibleAdapterConfig {
@@ -141,6 +168,7 @@ interface OpenCodeHarnessPolicyDelivery {
   readonly sessionId: string;
   readonly policyVersion: string;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
 }
 
 interface OpenCodeResumeCursor {
@@ -153,6 +181,7 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   harnessPolicyDelivered?: boolean;
   pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
@@ -341,7 +370,7 @@ function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
 
 function mapPermissionToRequestType(
   permission: string,
-): "command_execution_approval" | "file_read_approval" | "file_change_approval" | "unknown" {
+): "command_execution_approval" | "file_read_approval" | "file_change_approval" | "tool_approval" {
   switch (permission) {
     case "bash":
       return "command_execution_approval";
@@ -350,7 +379,10 @@ function mapPermissionToRequestType(
     case "edit":
       return "file_change_approval";
     default:
-      return "unknown";
+      // Every other permission (MCP servers, provider-specific tools) is still an
+      // approval the user must answer. "unknown" has no request kind, so the card
+      // never renders and the turn hangs — classify it as a generic tool approval.
+      return "tool_approval";
   }
 }
 
@@ -926,6 +958,8 @@ function extractHarnessPolicyDelivery(
         sessionId: delivery.sessionId.trim(),
         policyVersion: delivery.policyVersion.trim(),
         gatewayControlAvailable: delivery.gatewayControlAvailable,
+        enableComputerControl:
+          "enableComputerControl" in delivery && delivery.enableComputerControl === true,
       };
     }
   }
@@ -937,20 +971,23 @@ function isMatchingHarnessPolicyDelivery(
   input: {
     readonly sessionId: string;
     readonly gatewayControlAvailable: boolean;
+    readonly enableComputerControl?: boolean;
   },
 ): boolean {
   return (
     delivery?.sessionId === input.sessionId &&
     delivery.policyVersion === SYNARA_HARNESS_POLICY_VERSION &&
-    delivery.gatewayControlAvailable === input.gatewayControlAvailable
+    delivery.gatewayControlAvailable === input.gatewayControlAvailable &&
+    (delivery.enableComputerControl === true) === (input.enableComputerControl === true)
   );
 }
 
 function buildOpenCodeResumeCursor(input: {
   readonly openCodeSessionId: string;
   readonly cwd: string;
-  readonly harnessPolicyDelivered?: boolean | undefined;
+  readonly harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
 }): OpenCodeResumeCursor {
   return {
     openCodeSessionId: input.openCodeSessionId,
@@ -961,6 +998,7 @@ function buildOpenCodeResumeCursor(input: {
             sessionId: input.openCodeSessionId,
             policyVersion: SYNARA_HARNESS_POLICY_VERSION,
             gatewayControlAvailable: input.gatewayControlAvailable,
+            enableComputerControl: input.enableComputerControl === true,
           },
         }
       : {}),
@@ -979,6 +1017,7 @@ function markOpenCodeHarnessPolicyDelivered(context: OpenCodeSessionContext, tur
       cwd: context.directory,
       harnessPolicyDelivered: true,
       gatewayControlAvailable: context.gatewayControlAvailable,
+      enableComputerControl: context.enableComputerControl === true,
     }),
   });
 }
@@ -2352,13 +2391,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             // A permission recovered without an active turn has no trustworthy interaction
             // mode. Fail closed so a request left by an interrupted Plan turn can never be
             // reinterpreted as Full Access after a process restart or reconnect.
-            const policyReply =
-              context.activeInteractionMode === undefined ||
-              context.activeInteractionMode === "plan"
-                ? "reject"
-                : context.session.runtimeMode === "full-access"
-                  ? "once"
-                  : undefined;
+            const policyReply = resolveOpenCodePermissionPolicyReply({
+              runtimeMode: context.session.runtimeMode,
+              interactionMode: context.activeInteractionMode,
+              activeTurn: turnId !== undefined && context.activeTurnId === turnId,
+              computerControlEnabled: context.enableComputerControl === true,
+              permission: event.properties.permission,
+              metadata: event.properties.metadata,
+            });
             if (policyReply !== undefined) {
               context.policyResolvedPermissionIds.add(event.properties.id);
               const replyExit = yield* Effect.exit(
@@ -2387,7 +2427,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 yield* completeOpenCodeTurn(context, {
                   turnId,
                   raw: event,
-                  errorMessage: `${adapterConfig.displayName} could not apply ${policyReply === "reject" ? "Plan-mode" : "Full-access"} permission policy: ${detail}`,
+                  errorMessage: `${adapterConfig.displayName} could not apply ${policyReply === "reject" ? "Plan-mode" : context.session.runtimeMode === "full-access" ? "Full-access" : "Computer"} permission policy: ${detail}`,
                 });
               } else {
                 yield* emit(context, {
@@ -3379,7 +3419,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           // this exact Synara thread.
           const agentGatewaySessionLease = serverUrl
             ? undefined
-            : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
+            : acquireAgentGatewaySessionLease(
+                agentGatewayCredentials,
+                input.threadId,
+                provider,
+                input,
+              );
           const agentGatewayConnection = agentGatewaySessionLease?.connection;
           const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;
 
@@ -3526,6 +3571,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   isMatchingHarnessPolicyDelivery(persistedHarnessPolicyDelivery, {
                     sessionId: started.openCodeSessionId,
                     gatewayControlAvailable: started.gatewayControlAvailable,
+                    enableComputerControl: input.enableComputerControl === true,
                   });
                 if (options?.beforeSessionInstall) {
                   yield* options.beforeSessionInstall;
@@ -3557,6 +3603,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     cwd: directory,
                     harnessPolicyDelivered,
                     gatewayControlAvailable: started.gatewayControlAvailable,
+                    enableComputerControl: input.enableComputerControl === true,
                   }),
                   createdAt,
                   updatedAt: createdAt,
@@ -3567,6 +3614,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   pendingHarnessPolicyTurnId: undefined,
                   session,
                   gatewayControlAvailable: started.gatewayControlAvailable,
+                  enableComputerControl: input.enableComputerControl === true,
                   ...(started.gatewayControlAvailable && agentGatewaySessionLease
                     ? {
                         gatewaySessionLease: agentGatewaySessionLease,
@@ -3704,6 +3752,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(
           {
             ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+            enableComputerControl: context.enableComputerControl === true,
           },
           {
             provider,
@@ -3756,6 +3805,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               cwd: context.directory,
               ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
               gatewayControlAvailable: context.gatewayControlAvailable,
+              enableComputerControl: context.enableComputerControl === true,
             }),
           },
           { clearLastError: true },
@@ -3800,6 +3850,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             cwd: context.directory,
             ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
             gatewayControlAvailable: context.gatewayControlAvailable,
+            enableComputerControl: context.enableComputerControl === true,
           }),
         };
       });

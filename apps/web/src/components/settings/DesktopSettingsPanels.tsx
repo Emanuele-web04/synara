@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
+import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
+import { DesktopPermissionSetup } from "./DesktopPermissionSetup";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -239,6 +241,10 @@ export function AppSnapSettingsPanel({
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: active });
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
 
+  // getState publishes through onState below. A passive refresh must not
+  // invalidate an enable request that is waiting for the macOS permission dialog.
+  useRefreshOnWindowReturn(() => window.desktopBridge?.appSnap?.getState(), active);
+
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
@@ -431,30 +437,49 @@ export function AppSnapSettingsPanel({
 
       {supported ? (
         <SettingsSection title="macOS permissions">
-          <SettingsRow
-            title="Input Monitoring"
-            description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
-            control={<AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />}
-          />
-          <SettingsRow
-            title="Screen Recording"
-            description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
-            control={<AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />}
-          />
-          <SettingsRow
-            title="Permission status"
-            description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
-            control={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={() => void recheckAppSnapPermissions()}
-              >
-                Recheck permissions
-              </Button>
-            }
-          />
+          {window.desktopBridge?.permissions ? (
+            <DesktopPermissionSetup
+              feature="appsnap"
+              active={active}
+              grants={{
+                inputMonitoring:
+                  appSnapState.inputMonitoringPermission === "granted" ? "granted" : "denied",
+                screenRecording:
+                  appSnapState.screenRecordingPermission === "granted" ? "granted" : "denied",
+              }}
+            />
+          ) : (
+            <>
+              <SettingsRow
+                title="Input Monitoring"
+                description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+                control={
+                  <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
+                }
+              />
+              <SettingsRow
+                title="Screen Recording"
+                description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+                control={
+                  <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
+                }
+              />
+              <SettingsRow
+                title="Permission status"
+                description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+                control={
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void recheckAppSnapPermissions()}
+                  >
+                    Recheck permissions
+                  </Button>
+                }
+              />
+            </>
+          )}
         </SettingsSection>
       ) : null}
     </div>

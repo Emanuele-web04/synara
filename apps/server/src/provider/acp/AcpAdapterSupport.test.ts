@@ -114,6 +114,87 @@ describe("AcpAdapterSupport", () => {
     ).toEqual({ outcome: "cancelled" });
   });
 
+  it("selects only allow-once for active Synara Computer calls in approval-required mode", () => {
+    const options = [
+      { kind: "allow_always", optionId: "allow-session" },
+      { kind: "allow_once", optionId: "allow-this-call" },
+      { kind: "reject_once", optionId: "deny-now" },
+    ] as const;
+    const computer = {
+      computerControlEnabled: true,
+      activeTurn: true,
+      toolCall: { rawInput: { _toolName: "mcp__synara__computer_click" } },
+    } as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+        ...computer,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-this-call" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options: [{ kind: "allow_always", optionId: "allow-session" }],
+        ...computer,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves ACP Plan, Auto, disabled, and namespace boundaries for Computer calls", () => {
+    const options = [
+      { kind: "allow_once", optionId: "allow-this-call" },
+      { kind: "reject_once", optionId: "deny-now" },
+    ] as const;
+    const base = {
+      interactionMode: "default" as const,
+      options,
+      computerControlEnabled: true,
+      activeTurn: true,
+      toolCall: { title: "mcp__synara__computer_click" },
+    };
+
+    expect(resolveAcpPermissionPolicy({ ...base, runtimeMode: "auto" })).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        activeTurn: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        interactionMode: "" as never,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      }),
+    ).toEqual({ outcome: "selected", optionId: "deny-now" });
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        computerControlEnabled: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        toolCall: { title: "mcp__other__computer_click" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("reads failed ACP tool details without treating successful tools as failures", () => {
     expect(
       readAcpFailedToolDetail({

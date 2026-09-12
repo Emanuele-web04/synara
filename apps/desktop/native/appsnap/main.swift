@@ -7,18 +7,24 @@ let emitter = NDJSONEmitter()
 do {
     let options = try AppSnapOptions.parse(Array(CommandLine.arguments.dropFirst()))
     switch options.mode {
-    case .checkPermissions:
-        let permissions = preflightAppSnapPermissions()
-        emitter.emitPermissions(
-            inputMonitoring: permissions.inputMonitoring,
-            screenRecording: permissions.screenRecording
-        )
-    case .requestPermissions:
-        let permissions = requestAppSnapPermissions()
-        emitter.emitPermissions(
-            inputMonitoring: permissions.inputMonitoring,
-            screenRecording: permissions.screenRecording
-        )
+    case .computerPreview:
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+        let preview = ComputerPreview(emitter: emitter)
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+        preview.start()
+        withExtendedLifetime((preview, parentProcessMonitor)) { NSApplication.shared.run() }
+    case let .permissionGuide(appPath, appName):
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+        let guide = DesktopPermissionGuide(appPath: appPath, appName: appName)
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+        guide.start()
+        withExtendedLifetime((guide, parentProcessMonitor)) { NSApplication.shared.run() }
+    case let .checkPermissions(selectedPermissions):
+        emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
+    case let .requestPermissions(selectedPermissions):
+        emitter.emitPermissions(requestAppSnapPermissions(selectedPermissions))
     case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)

@@ -3,6 +3,8 @@
 // Layer: Desktop main-process service
 // Depends on: A signed Swift helper plus narrow filesystem/process adapters.
 
+import { stopNativeHelper } from "./stopNativeHelper";
+
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
@@ -30,6 +32,8 @@ import {
   isAppSnapShortcut,
   sameAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
+
+import { APP_SNAP_PERMISSIONS, DesktopPermissionService } from "./desktopPermissions";
 
 const MAX_PENDING_CAPTURES = PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
 const MAX_HELPER_STDERR_CHARS = 4_096;
@@ -114,6 +118,7 @@ export interface DesktopAppSnapManagerOptions {
   onError: (error: DesktopAppSnapErrorEvent, focusApp: boolean) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
+  permissions?: Pick<DesktopPermissionService, "check" | "request">;
   shortcutRegistry?: {
     register: (accelerator: string, callback: () => void) => boolean;
     unregister: (accelerator: string) => void;
@@ -403,9 +408,10 @@ export class DesktopAppSnapManager {
   #watchOutputLines: Readline.Interface | null = null;
   #watchReconcilePromise: Promise<void> | null = null;
   #watchReconcileRequested = false;
-  #permissionProcess: AppSnapHelperProcess | null = null;
-  #permissionCommandQueue: Promise<void> = Promise.resolve();
+  readonly #permissions: Pick<DesktopPermissionService, "check" | "request">;
+  readonly #ownedPermissions: DesktopPermissionService | undefined;
   #disposed = false;
+  #requestedCapture: { id: string; cancel: () => void } | null = null;
   #intentionalWatchStop = false;
   #pendingCaptures: PendingAppSnapCaptureRecord[] = [];
   #pendingCapturesLoadPromise: Promise<void> | null = null;
@@ -422,6 +428,14 @@ export class DesktopAppSnapManager {
       now: options.now ?? (() => new Date()),
       spawn: options.spawn ?? ChildProcess.spawn,
     };
+    this.#ownedPermissions = options.permissions
+      ? undefined
+      : new DesktopPermissionService({
+          platform: options.platform,
+          helperPath: options.helperPath,
+          spawn: this.#options.spawn,
+        });
+    this.#permissions = options.permissions ?? this.#ownedPermissions!;
     this.#platform = desktopAppSnapPlatform(options.platform);
     this.#status = this.#platform === "macos" ? "disabled" : "unsupported";
     this.#message =
@@ -666,12 +680,143 @@ export class DesktopAppSnapManager {
     }
   }
 
+  /** Explicit read-only request. Independent of shortcut enablement and Input Monitoring. */
+  async captureCurrentApp(requestId: string): Promise<DesktopAppSnapCapture> {
+    if (this.#disposed || this.#platform !== "macos") throw new Error("AppSnap is unavailable.");
+    if (this.#requestedCapture) throw new Error("An AppSnap request is already in progress.");
+    let cancelled = false;
+    let cancelChild: (() => void) | undefined;
+    const request = {
+      id: requestId,
+      cancel: () => {
+        cancelled = true;
+        cancelChild?.();
+      },
+    };
+    this.#requestedCapture = request;
+    let directory: string | undefined;
+    let capture: DesktopAppSnapCapture;
+    const processState: { child: AppSnapHelperProcess | undefined; exited: boolean } = {
+      child: undefined,
+      exited: false,
+    };
+    const cleanup = async () => {
+      try {
+        if (directory) await FS.promises.rm(directory, { recursive: true, force: true });
+      } finally {
+        if (this.#requestedCapture === request) this.#requestedCapture = null;
+      }
+    };
+    try {
+      await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
+      directory = await FS.promises.mkdtemp(
+        Path.join(this.#options.captureDirectory, "requested-"),
+      );
+      if (cancelled) throw new Error("AppSnap request cancelled.");
+      const outputDirectory = directory;
+      capture = await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
+        const child = this.#options.spawn(
+          this.#options.helperPath,
+          [
+            "--watch",
+            "--external-trigger",
+            "--output-dir",
+            outputDirectory,
+            "--excluded-bundle-id",
+            this.#options.excludedBundleId,
+          ],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        processState.child = child;
+        child.once("exit", () => {
+          processState.exited = true;
+        });
+        child.once("close", () => {
+          processState.exited = true;
+        });
+        let settled = false;
+        let reading = false;
+        const finish = (error?: Error, capture?: DesktopAppSnapCapture) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          lines.close();
+          if (error) reject(error);
+          else if (capture) resolve(capture);
+        };
+        const timeout = setTimeout(() => finish(new Error("AppSnap capture timed out.")), 10_000);
+        const lines = this.#wireHelperOutput(child, (message) => {
+          if (settled) return;
+          if (message.type === "ready") child.stdin?.write("trigger\n");
+          if (message.type === "error") finish(new Error(message.message));
+          if (message.type !== "captured" || reading) return;
+          reading = true;
+          void (async () => {
+            const capturePath = Path.resolve(message.path);
+            if (!isPathInsideDirectory(outputDirectory, capturePath))
+              throw new Error("Invalid AppSnap capture path.");
+            const bytes = await readValidatedPendingPng(capturePath);
+            finish(undefined, {
+              id: message.id,
+              capturedAt: normalizeDate(message.capturedAt, this.#options.now()),
+              name: message.name,
+              mimeType: "image/png",
+              sizeBytes: bytes.byteLength,
+              bytes,
+              sourceAppName: normalizeOptionalText(message.sourceAppName),
+              sourceBundleIdentifier: normalizeOptionalText(message.sourceBundleIdentifier),
+              sourceAppIconDataUrl: null,
+              sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
+            });
+          })().catch((error: unknown) =>
+            finish(error instanceof Error ? error : new Error(String(error))),
+          );
+        });
+        child.stdin?.on("error", () => finish(new Error("AppSnap helper disconnected.")));
+        child.once("error", (error) => finish(error));
+        child.once("exit", () => {
+          if (!reading) finish(new Error("AppSnap helper stopped before capture."));
+        });
+        cancelChild = () => finish(new Error("AppSnap request cancelled."));
+        if (cancelled) cancelChild();
+      });
+    } finally {
+      try {
+        if (processState.child)
+          await stopNativeHelper(processState.child, () => processState.exited);
+      } finally {
+        if (!processState.child || processState.exited) await cleanup();
+        else {
+          // Do not free the lane or delete files while a helper still owns them.
+          // Even a failed bounded shutdown can recover on its eventual exit.
+          const recover = () => {
+            processState.child?.removeListener("exit", recover);
+            processState.child?.removeListener("close", recover);
+            void cleanup().catch((error: unknown) =>
+              console.warn("[desktop-appsnap] Request cleanup failed", error),
+            );
+          };
+          processState.child.once("exit", recover);
+          processState.child.once("close", recover);
+        }
+      }
+    }
+    if (cancelled) throw new Error("AppSnap request cancelled.");
+    return capture;
+  }
+
+  cancelCapture(requestId: string): void {
+    if (this.#requestedCapture?.id === requestId) this.#requestedCapture.cancel();
+  }
+
   dispose(): void {
     this.#disposed = true;
+    this.#requestedCapture?.cancel();
     this.#stopWatchProcess();
     this.#releaseShortcutReservation();
-    this.#permissionProcess?.kill("SIGTERM");
-    this.#permissionProcess = null;
+    void this.#ownedPermissions?.dispose().catch((error) => {
+      console.warn("[desktop-appsnap] Could not stop the permission helper", error);
+    });
     this.#pendingCaptures = [];
     this.#timedOutCaptureRequestIds.clear();
   }
@@ -1083,72 +1228,22 @@ export class DesktopAppSnapManager {
   async #runPermissionCommand(
     command: "--check-permissions" | "--request-permissions",
   ): Promise<boolean> {
-    const run = this.#permissionCommandQueue.then(() => this.#executePermissionCommand(command));
-    this.#permissionCommandQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await run;
-  }
-
-  async #executePermissionCommand(
-    command: "--check-permissions" | "--request-permissions",
-  ): Promise<boolean> {
     if (this.#disposed || this.#platform !== "macos") return false;
-    if (!FS.existsSync(this.#options.helperPath)) {
-      this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
+    try {
+      const state = await (command === "--check-permissions"
+        ? this.#permissions.check(APP_SNAP_PERMISSIONS)
+        : this.#permissions.request(APP_SNAP_PERMISSIONS));
+      if (this.#disposed) return false;
+      this.#inputMonitoringPermission = state.inputMonitoring;
+      this.#screenRecordingPermission = state.screenRecording;
+      this.#emitState();
+      return true;
+    } catch (error) {
+      if (!this.#disposed) {
+        this.#setState("error", error instanceof Error ? error.message : String(error));
+      }
       return false;
     }
-
-    return await new Promise<boolean>((resolve) => {
-      let child: AppSnapHelperProcess;
-      try {
-        child = this.#options.spawn(this.#options.helperPath, [command], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (error) {
-        this.#setState(
-          "error",
-          `Could not inspect AppSnap permissions: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        resolve(false);
-        return;
-      }
-      this.#permissionProcess = child;
-      let receivedPermissions = false;
-      let reportedError: string | null = null;
-      let spawnFailed = false;
-      this.#wireHelperOutput(child, (message) => {
-        if (message.type === "permissions") {
-          receivedPermissions = true;
-          this.#inputMonitoringPermission = message.inputMonitoring;
-          this.#screenRecordingPermission = message.screenRecording;
-          this.#emitState();
-        } else if (message.type === "error") {
-          reportedError = message.message;
-        }
-      });
-      child.once("error", (error) => {
-        spawnFailed = true;
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        this.#setState("error", `Could not inspect AppSnap permissions: ${error.message}`);
-        resolve(false);
-      });
-      child.once("close", () => {
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        if (this.#disposed) {
-          resolve(false);
-          return;
-        }
-        if (!receivedPermissions && !spawnFailed) {
-          this.#setState(
-            "error",
-            reportedError ?? "The AppSnap helper did not report its permission state.",
-          );
-        }
-        resolve(receivedPermissions);
-      });
-    });
   }
 
   #handleWatchMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {

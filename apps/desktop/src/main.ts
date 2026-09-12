@@ -1,3 +1,8 @@
+import { CuaDriverHost } from "./cuaDriverHost";
+import { ComputerNativePreview } from "./computerNativePreview";
+import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
+import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -24,6 +29,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  powerMonitor,
   screen,
   safeStorage,
   session,
@@ -56,6 +62,7 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
@@ -275,6 +282,11 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
+import { COMPUTER_PERMISSIONS } from "@synara/shared/computerPermissions";
+import { DesktopPermissionService, desktopPermissionSettingsUrl } from "./desktopPermissions";
+import { DesktopPermissionSetup } from "./desktopPermissionSetup";
+import { NativePermissionGuide } from "./nativePermissionGuide";
+import { registerDesktopPermissionIpc } from "./desktopPermissionIpc";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -472,6 +484,8 @@ const browserManager = new DesktopBrowserManager({
 });
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
+let desktopPermissions: DesktopPermissionService | undefined;
+let desktopPermissionSetup: DesktopPermissionSetup | undefined;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
@@ -1836,6 +1850,77 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
+function getDesktopPermissions(): DesktopPermissionService {
+  desktopPermissions ??= new DesktopPermissionService({
+    platform: process.platform,
+    helperPath: resolveAppSnapHelperPath(),
+    openSettings: (permission) => shell.openExternal(desktopPermissionSettingsUrl(permission)),
+  });
+  return desktopPermissions;
+}
+
+function permissionAppBundlePath(): string | null {
+  if (process.platform !== "darwin") return null;
+  const bundle = Path.dirname(Path.dirname(Path.dirname(process.execPath)));
+  return bundle.endsWith(".app") && FS.existsSync(Path.join(bundle, "Contents", "Info.plist"))
+    ? bundle
+    : null;
+}
+
+function getDesktopPermissionSetup(): DesktopPermissionSetup {
+  if (desktopPermissionSetup) return desktopPermissionSetup;
+  const appPath = permissionAppBundlePath();
+  const appName = appPath ? Path.basename(appPath, ".app") : APP_DISPLAY_NAME;
+  const revealApp = () => {
+    if (appPath) shell.showItemInFolder(appPath);
+  };
+  const fail = (message: string) => {
+    void desktopPermissionSetup
+      ?.stop(message)
+      .catch((error) => safeConsoleError("[desktop] permission guide cleanup failed", error));
+  };
+  const guide = appPath
+    ? new NativePermissionGuide({
+        helperPath: resolveAppSnapHelperPath(),
+        appPath,
+        appName,
+        onAction: (action) => {
+          if (action === "reveal") revealApp();
+          else
+            void (
+              action === "retry"
+                ? getDesktopPermissionSetup().retry()
+                : getDesktopPermissionSetup().stop()
+            ).catch((error) => fail(String(error)));
+        },
+        onError: fail,
+      })
+    : { show: () => {}, close: async () => {} };
+  let lastGrants = "";
+  desktopPermissionSetup = new DesktopPermissionSetup({
+    appName,
+    appPath,
+    permissions: getDesktopPermissions(),
+    guide,
+    beforeStart: async () => {
+      if (!appPath) throw new Error("Open the Synara macOS app to set up desktop permissions.");
+      await cuaDriverHost?.stop();
+    },
+    onState: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send(IPC.permissions.state, state);
+      const grants = JSON.stringify(state.grants);
+      if (grants !== lastGrants && Object.keys(state.grants).length > 0) {
+        lastGrants = grants;
+        void appSnapManager
+          ?.refreshState()
+          .catch((error) => safeConsoleError("[desktop] AppSnap permission refresh failed", error));
+      }
+    },
+  });
+  return desktopPermissionSetup;
+}
+
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
   if (mainWindow?.isDestroyed()) {
     mainWindow = null;
@@ -1871,6 +1956,13 @@ function initializeDesktopAppSnap(): void {
   appSnapManager = new DesktopAppSnapManager({
     platform: process.platform,
     helperPath: resolveAppSnapHelperPath(),
+    permissions: {
+      check: (permissions) => getDesktopPermissions().check(permissions),
+      request: async (permissions) => {
+        await getDesktopPermissionSetup().start("appsnap");
+        return getDesktopPermissions().check(permissions);
+      },
+    },
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
     shortcutRegistry: globalShortcut,
@@ -3538,6 +3630,60 @@ function backendNodeArgs(): string[] {
   });
 }
 
+let cuaDriverHost: CuaDriverHost | undefined;
+let disposeComputerDesktopLifecycle: (() => void) | undefined;
+let cuaHostEndpoint: string | undefined;
+
+async function startCuaHost(): Promise<void> {
+  if (process.platform !== "darwin" || cuaDriverHost) return;
+  const host = new CuaDriverHost({
+    binaryPath: app.isPackaged
+      ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
+      : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
+    bundleId: desktopIdentity.bundleId,
+    capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    preview: new ComputerNativePreview({
+      helperPath: resolveAppSnapHelperPath(),
+      onUserStop: (task) => {
+        void host
+          .stopTaskByUser(task)
+          .catch((error) => safeConsoleError("[desktop] computer preview stop failed", error));
+      },
+      onError: (error) => safeConsoleError("[desktop] computer preview failed", error),
+    }),
+    checkPermissions: async () => {
+      const state = await getDesktopPermissions().check(COMPUTER_PERMISSIONS);
+      return {
+        accessibility: state.accessibility === "granted",
+        screenRecording: state.screenRecording === "granted",
+      };
+    },
+    setup: async () => {
+      await getDesktopPermissionSetup().start("computer");
+    },
+    normalizeOverview: (result) => {
+      const image = result.content?.find((part) => part.type === "image" && part.data);
+      if (!image?.data) return result;
+      const native = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+      const size = native.getSize();
+      if (Math.max(size.width, size.height) <= MODEL_SCREEN_IMAGE_MAX_DIMENSION) return result;
+      const ratio = MODEL_SCREEN_IMAGE_MAX_DIMENSION / Math.max(size.width, size.height);
+      const scaled = native.resize({
+        width: Math.round(size.width * ratio),
+        height: Math.round(size.height * ratio),
+        quality: "best",
+      });
+      image.data = scaled.toPNG().toString("base64");
+      return result;
+    },
+  });
+  cuaHostEndpoint = await host.listen();
+  cuaDriverHost = host;
+  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
+    safeConsoleError("[desktop] computer input pause failed", error),
+  );
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
@@ -3560,6 +3706,8 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(migrationDivergenceConsent
       ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
+    ...(cuaHostEndpoint ? { [CUA_HOST_SOCKET_ENV]: cuaHostEndpoint } : {}),
+    [SYNARA_DESKTOP_BUNDLE_ID_ENV]: desktopIdentity.bundleId,
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
     SYNARA_PORT: String(backendPort),
@@ -4057,6 +4205,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  cuaDriverHost?.resume();
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4149,6 +4298,7 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
 }
 
 async function stopBackendAndWaitForExit(): Promise<void> {
+  await cuaDriverHost?.suspend();
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
@@ -4187,6 +4337,11 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  disposeComputerDesktopLifecycle?.();
+  disposeComputerDesktopLifecycle = undefined;
+  await cuaDriverHost?.dispose();
+  cuaDriverHost = undefined;
+  cuaHostEndpoint = undefined;
   const pipeServer = browserHostPipeServer;
   browserHostPipeServer = null;
   if (!pipeServer) return;
@@ -4233,6 +4388,18 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
+      try {
+        await desktopPermissionSetup?.dispose();
+      } catch (error) {
+        safeConsoleError("[desktop] permission guide cleanup failed", error);
+      }
+      desktopPermissionSetup = undefined;
+      try {
+        await desktopPermissions?.dispose();
+      } catch (error) {
+        safeConsoleError("[desktop] permission helper cleanup failed", error);
+      }
+      desktopPermissions = undefined;
       await shutdownBrowserServices({
         revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
         closePages: () => browserManager.dispose(),
@@ -4692,6 +4859,23 @@ function registerIpcHandlers(): void {
   if (appSnapManager) {
     registerAppSnapIpcHandlers(ipcMain, appSnapManager);
   }
+  registerDesktopPermissionIpc(ipcMain, {
+    setup: getDesktopPermissionSetup,
+    mainWebContents: () => mainWindow?.webContents,
+    revealApp: () => {
+      const path = permissionAppBundlePath();
+      if (path) shell.showItemInFolder(path);
+    },
+    startDrag: (sender) => {
+      const file = permissionAppBundlePath();
+      const iconPath = resolveIconPath("png") ?? resolveResourcePath("synara.png");
+      if (file && iconPath)
+        sender.startDrag({
+          file,
+          icon: nativeImage.createFromPath(iconPath).resize({ width: 32, height: 32 }),
+        });
+    },
+  });
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
@@ -5249,6 +5433,7 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
+  await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 

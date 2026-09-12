@@ -32,7 +32,52 @@ import {
   appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapterLive,
   normalizeOpenCodeTokenUsage,
+  resolveOpenCodePermissionPolicyReply,
 } from "./OpenCodeAdapter.ts";
+
+describe("OpenCode permission policy", () => {
+  const computerPermission = {
+    permission: "mcp__synara__computer_click",
+    metadata: {},
+  } as const;
+
+  it("lets active approval-required Computer calls reach the gateway once", () => {
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        activeTurn: true,
+        computerControlEnabled: true,
+        ...computerPermission,
+      }),
+    ).toBe("once");
+  });
+
+  it("preserves Plan, Auto, inactive-turn, disabled, and namespace boundaries", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: true,
+      ...computerPermission,
+    };
+
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, interactionMode: "plan" })).toBe(
+      "reject",
+    );
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, runtimeMode: "auto" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, activeTurn: false })).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({ ...base, computerControlEnabled: false }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__other__computer_click",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const OPEN_CODE_PLAN_PERMISSION_RULES = [
@@ -293,6 +338,7 @@ function makeGatewayCredentials(options?: {
 }) {
   let nextToken = 0;
   const revoked: string[] = [];
+  const leasedCapabilities: Array<readonly string[]> = [];
   const cancelledTurns: Array<{ readonly token: string; readonly turnId: string }> = [];
   const ownerByToken = new Map<string, string>();
   const credentials: AgentGatewayCredentialsShape = {
@@ -323,13 +369,14 @@ function makeGatewayCredentials(options?: {
       revoked.push(token);
       ownerByToken.delete(token);
     },
-    connectionForThread: (threadId) => {
+    connectionForThread: (threadId, _provider, leaseOptions) => {
+      leasedCapabilities.push(leaseOptions?.additionalCapabilities ?? []);
       const token = credentials.issueSessionToken(threadId, "opencode");
       return { url: credentials.mcpEndpointUrl, bearerToken: token };
     },
     stdioProxy: { command: process.execPath, args: [] },
   };
-  return { cancelledTurns, credentials, ownerByToken, revoked };
+  return { cancelledTurns, credentials, leasedCapabilities, ownerByToken, revoked };
 }
 
 function createSubscribedEventQueue() {
@@ -585,6 +632,51 @@ describe("OpenCode host policy delivery", () => {
         },
       });
     }
+  });
+
+  it("refreshes Computer context on activation profile changes while preserving unchanged resume delivery", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const gateway = makeGatewayCredentials();
+    const threadId = asThreadId("thread-computer-profile-resume");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        let resumeCursor: unknown = undefined;
+        for (const enableComputerControl of [false, true, true, false]) {
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            enableComputerControl,
+            ...(resumeCursor ? { resumeCursor } : {}),
+          });
+          const result = yield* adapter.sendTurn({
+            threadId,
+            input: "next",
+            attachments: [],
+            modelSelection,
+          });
+          resumeCursor = result.resumeCursor;
+        }
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-context-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true, false, true]);
+    expect(
+      runtime.promptCalls.map((prompt) =>
+        JSON.stringify(prompt).includes("## Synara computer use"),
+      ),
+    ).toEqual([false, true, false, false]);
   });
 
   it("does not re-inject the host policy when the same native session is restarted", async () => {
@@ -1109,6 +1201,59 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd });
   });
+
+  it.each([true, false])(
+    "leases a managed session's computer control when enableComputerControl is %s",
+    async (enableComputerControl) => {
+      const runtime = createMockOpenCodeRuntime();
+      const gateway = makeGatewayCredentials();
+      const threadId = asThreadId("thread-opencode-computer-control");
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: "/computer/repo",
+            enableComputerControl,
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "inspect",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "continue",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(JSON.stringify(runtime.promptCalls[0]).includes("## Synara computer use")).toBe(
+        enableComputerControl,
+      );
+      expect(JSON.stringify(runtime.promptCalls[1])).not.toContain("## Synara computer use");
+      expect(gateway.leasedCapabilities).toEqual([
+        enableComputerControl ? ["computer:control"] : [],
+      ]);
+    },
+  );
 
   it("isolates same-cwd managed sessions, injects distinct gateway tokens, and revokes them", async () => {
     const runtime = createMockOpenCodeRuntime();
@@ -4099,6 +4244,78 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       },
     });
     expect(runtime.permissionReplyCalls).toEqual([]);
+  });
+
+  // Permissions outside bash/read/edit used to be classified as "unknown", which
+  // maps to no approval kind: the card never rendered and the turn hung forever.
+  it("classifies non-file, non-command OpenCode permissions as tool approvals", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-tool-permission"),
+          runtimeMode: "approval-required",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tool-permission"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-permission-asked-tool",
+          type: "permission.asked",
+          properties: {
+            id: "permission-tool-1",
+            sessionID: "opencode-session-1",
+            permission: "webfetch",
+            patterns: ["https://example.com"],
+            metadata: {},
+            always: [],
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result[3]).toMatchObject({
+      type: "request.opened",
+      payload: { requestType: "tool_approval" },
+    });
   });
 
   it("confirms a human permission reply from permission.list and continues the same turn", async () => {

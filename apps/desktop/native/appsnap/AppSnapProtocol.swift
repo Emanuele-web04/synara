@@ -6,8 +6,10 @@ struct AppSnapFailure: Error {
 }
 
 enum AppSnapMode {
-    case checkPermissions
-    case requestPermissions
+    case computerPreview
+    case checkPermissions(Set<AppSnapPermission>)
+    case requestPermissions(Set<AppSnapPermission>)
+    case permissionGuide(appPath: String, appName: String)
     case watch(
         outputDirectory: URL,
         excludedBundleIdentifier: String,
@@ -23,6 +25,9 @@ struct AppSnapOptions {
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
         var externalTrigger = false
+        var permissions = Set<AppSnapPermission>()
+        var guideAppPath: String?
+        var guideAppName: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -51,7 +56,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch":
+            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide", "--computer-preview":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -65,6 +70,24 @@ struct AppSnapOptions {
                 excludedBundleIdentifier = try readValue("--excluded-bundle-id", "a bundle identifier")
             case "--external-trigger":
                 externalTrigger = true
+            case "--permission":
+                index += 1
+                guard index < arguments.count,
+                      let permission = AppSnapPermission(rawValue: arguments[index])
+                else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--permission requires accessibility, screenRecording, or inputMonitoring."
+                    )
+                }
+                permissions.insert(permission)
+            case "--app-path", "--app-name":
+                index += 1
+                guard index < arguments.count else {
+                    throw AppSnapFailure(code: "invalid_arguments", message: "\(argument) requires a value.")
+                }
+                if argument == "--app-path" { guideAppPath = arguments[index] }
+                else { guideAppName = arguments[index] }
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -74,14 +97,51 @@ struct AppSnapOptions {
             index += 1
         }
 
+        if requestedMode != "--permission-guide", guideAppPath != nil || guideAppName != nil {
+            throw AppSnapFailure(code: "invalid_arguments", message: "App metadata is only used by the permission guide.")
+        }
         switch requestedMode {
+        case "--computer-preview":
+            try rejectWatchArguments("Computer preview does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(code: "invalid_arguments", message: "Computer preview cannot request permissions.")
+            }
+            return AppSnapOptions(mode: .computerPreview)
+        case "--permission-guide":
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger,
+                  permissions.isEmpty, let appPath = guideAppPath, appPath.hasPrefix("/"),
+                  appPath.hasSuffix(".app"), FileManager.default.fileExists(atPath: appPath),
+                  let appName = guideAppName, !appName.isEmpty, appName.count <= 256 else {
+                throw AppSnapFailure(code: "invalid_arguments", message: "The permission guide requires the running app bundle and its name.")
+            }
+            return AppSnapOptions(mode: .permissionGuide(appPath: appPath, appName: appName))
         case "--check-permissions":
-            try rejectWatchArguments("Permission checks do not accept watch arguments.")
-            return AppSnapOptions(mode: .checkPermissions)
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "Permission checks do not accept watch arguments."
+                )
+            }
+            return AppSnapOptions(mode: .checkPermissions(
+                permissions.isEmpty ? AppSnapPermission.legacyDefaults : permissions
+            ))
         case "--request-permissions":
-            try rejectWatchArguments("Permission requests do not accept watch arguments.")
-            return AppSnapOptions(mode: .requestPermissions)
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "Permission requests do not accept watch arguments."
+                )
+            }
+            return AppSnapOptions(mode: .requestPermissions(
+                permissions.isEmpty ? AppSnapPermission.legacyDefaults : permissions
+            ))
         case "--watch":
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--watch does not accept permission selectors."
+                )
+            }
             guard let outputDirectory, !outputDirectory.isEmpty else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -206,12 +266,18 @@ final class NDJSONEmitter {
         ])
     }
 
-    func emitPermissions(inputMonitoring: Bool, screenRecording: Bool) {
-        emit([
-            "type": "permissions",
-            "inputMonitoring": inputMonitoring ? "granted" : "denied",
-            "screenRecording": screenRecording ? "granted" : "denied",
-        ])
+    func emitPermissions(_ permissions: AppSnapPermissionState) {
+        var payload: [String: Any] = ["type": "permissions"]
+        if let accessibility = permissions.accessibility {
+            payload["accessibility"] = accessibility ? "granted" : "denied"
+        }
+        if let inputMonitoring = permissions.inputMonitoring {
+            payload["inputMonitoring"] = inputMonitoring ? "granted" : "denied"
+        }
+        if let screenRecording = permissions.screenRecording {
+            payload["screenRecording"] = screenRecording ? "granted" : "denied"
+        }
+        emit(payload)
     }
 
     private func writeDiagnostic(_ message: String) {

@@ -39,6 +39,47 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("desktop AppSnap platform state", () => {
+  it("uses the shared permission service while retaining only AppSnap's permission scopes", async () => {
+    const permissions = {
+      check: vi.fn().mockResolvedValue({ inputMonitoring: "denied", screenRecording: "granted" }),
+      request: vi
+        .fn()
+        .mockResolvedValue({ inputMonitoring: "granted", screenRecording: "granted" }),
+      dispose: vi.fn(),
+    };
+    const spawn = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: "/tmp/missing-helper-unused-by-shared-permissions",
+      captureDirectory: "/tmp/synara-appsnap-test",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      permissions,
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+    });
+    expect(await manager.refreshState()).toMatchObject({
+      inputMonitoringPermission: "denied",
+      screenRecordingPermission: "granted",
+    });
+    expect(await manager.requestPermissions()).toMatchObject({
+      inputMonitoringPermission: "granted",
+      screenRecordingPermission: "granted",
+    });
+    expect(permissions.check).toHaveBeenCalledExactlyOnceWith([
+      "inputMonitoring",
+      "screenRecording",
+    ]);
+    expect(permissions.request).toHaveBeenCalledExactlyOnceWith([
+      "inputMonitoring",
+      "screenRecording",
+    ]);
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+    expect(permissions.dispose).not.toHaveBeenCalled();
+  });
+
   it("exposes an explicit unsupported state outside macOS", async () => {
     const onState = vi.fn();
     const manager = new DesktopAppSnapManager({
@@ -243,10 +284,12 @@ describe("AppSnap helper protocol", () => {
   it("serializes permission commands and waits for stdout to drain", async () => {
     const checkChild = createFakeChildProcess();
     const requestChild = createFakeChildProcess();
+    const freshCheckChild = createFakeChildProcess();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(checkChild)
-      .mockReturnValueOnce(requestChild) as unknown as typeof ChildProcess.spawn;
+      .mockReturnValueOnce(requestChild)
+      .mockReturnValueOnce(freshCheckChild) as unknown as typeof ChildProcess.spawn;
     const manager = new DesktopAppSnapManager({
       platform: "darwin",
       helperPath: process.execPath,
@@ -299,6 +342,16 @@ describe("AppSnap helper protocol", () => {
     );
     requestChild.stderr.end();
     requestChild.emit("close", 0, null);
+    await flushPromises();
+    freshCheckChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    freshCheckChild.stderr.end();
+    freshCheckChild.emit("close", 0, null);
 
     await Promise.all([check, request]);
     expect(manager.getState()).toMatchObject({
@@ -311,12 +364,14 @@ describe("AppSnap helper protocol", () => {
     const checkChild = createFakeChildProcess();
     const watchChild = createFakeChildProcess();
     const requestChild = createFakeChildProcess();
+    const freshCheckChild = createFakeChildProcess();
     const restartedWatchChild = createFakeChildProcess();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(checkChild)
       .mockReturnValueOnce(watchChild)
       .mockReturnValueOnce(requestChild)
+      .mockReturnValueOnce(freshCheckChild)
       .mockReturnValueOnce(restartedWatchChild) as unknown as typeof ChildProcess.spawn;
     const register = vi.fn(() => true);
     const unregister = vi.fn();
@@ -375,10 +430,20 @@ describe("AppSnap helper protocol", () => {
     );
     requestChild.stderr.end();
     requestChild.emit("close", 0, null);
+    await flushPromises();
+    freshCheckChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    freshCheckChild.stderr.end();
+    freshCheckChild.emit("close", 0, null);
     await request;
     restartedWatchChild.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 
-    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn).toHaveBeenCalledTimes(5);
     expect(manager.getState().status).toBe("ready");
     expect(register).toHaveBeenCalledTimes(2);
     manager.dispose();
@@ -1292,6 +1357,124 @@ describe("AppSnap window picker requests", () => {
     } finally {
       firstManager.dispose();
       rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("explicit AppSnap observation", () => {
+  it("captures while disabled without permission or manual callback side effects", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synara-appsnap-request-"));
+    const child = createFakeChildProcess();
+    let outputDirectory = "";
+    const spawn = vi.fn((_file: string, args: readonly string[]) => {
+      outputDirectory = args[args.indexOf("--output-dir") + 1]!;
+      return child;
+    });
+    const onCaptured = vi.fn();
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: "/fake/helper",
+      captureDirectory: directory,
+      excludedBundleId: "synara",
+      onState: vi.fn(),
+      onCaptured,
+      onError,
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+    });
+    try {
+      const capture = manager.captureCurrentApp("requested");
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      expect(spawn.mock.calls[0]?.[1]).toContain("--external-trigger");
+      child.stdout.write('{"type":"ready"}\n');
+      expect(child.stdin.read()?.toString()).toBe("trigger\n");
+      const imagePath = join(outputDirectory, "capture.png");
+      writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]));
+      child.stdout.write(
+        `${JSON.stringify({ type: "captured", id: "frame", path: imagePath, name: "capture.png", capturedAt: "2026-09-08T12:00:00Z", sourceAppName: "Preview" })}\n`,
+      );
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+      expect(FS.existsSync(outputDirectory)).toBe(true);
+      await expect(manager.captureCurrentApp("while-exiting")).rejects.toThrow("in progress");
+      child.emit("exit", 0, null);
+      await expect(capture).resolves.toMatchObject({ id: "frame", sourceAppName: "Preview" });
+      expect(manager.getState().enabled).toBe(false);
+      expect(onCaptured).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(FS.existsSync(outputDirectory)).toBe(false);
+    } finally {
+      manager.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it("cancels only the matching request and rejects concurrent requests", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synara-appsnap-cancel-"));
+    const child = createFakeChildProcess();
+    const spawn = vi.fn(() => child);
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: "/fake/helper",
+      captureDirectory: directory,
+      excludedBundleId: "synara",
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+    });
+    try {
+      const capture = manager.captureCurrentApp("cancel-me");
+      const rejected = expect(capture).rejects.toThrow("cancelled");
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      await expect(manager.captureCurrentApp("second")).rejects.toThrow("in progress");
+      manager.cancelCapture("unrelated");
+      expect(child.kill).not.toHaveBeenCalled();
+      manager.cancelCapture("cancel-me");
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+      await expect(manager.captureCurrentApp("still-exiting")).rejects.toThrow("in progress");
+      child.emit("exit", null, "SIGTERM");
+      await rejected;
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      manager.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AppSnap bounded helper shutdown", () => {
+  it("escalates only its owned helper and holds the request until exit", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synara-appsnap-shutdown-"));
+    const child = createFakeChildProcess();
+    const spawn = vi.fn(() => child);
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: "/fake/helper",
+      captureDirectory: directory,
+      excludedBundleId: "synara",
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+    });
+    try {
+      const capture = manager.captureCurrentApp("shutdown");
+      const rejected = expect(capture).rejects.toThrow("cancelled");
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      vi.useFakeTimers();
+      manager.cancelCapture("shutdown");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+      await expect(manager.captureCurrentApp("blocked")).rejects.toThrow("in progress");
+      child.emit("exit", null, "SIGKILL");
+      await rejected;
+      expect(FS.readdirSync(directory)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      manager.dispose();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });
