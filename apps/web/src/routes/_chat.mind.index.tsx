@@ -1,4 +1,9 @@
-import { type MindListResult, type MindMemory, type MindMemoryType } from "@synara/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type MindListResult,
+  type MindMemory,
+  type MindMemoryType,
+} from "@synara/contracts";
 import { type VariantProps } from "class-variance-authority";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
@@ -47,12 +52,12 @@ const MIND_TYPE_BADGE_VARIANT: Record<MindMemoryType, MindBadgeVariant> = {
 };
 
 /**
- * Provenance in one short segment: who saved the memory and, for agents,
- * which provider and thread. The domain kinds stay verbatim.
+ * Provenance in human words: who saved the memory. Provider names reuse the
+ * shared display map; internal thread ids stay out of the UI.
  */
 function provenanceLabel(provenance: MindMemory["provenance"]): string {
-  if (provenance.kind === "user") return "user";
-  return `agent · ${provenance.provider} · ${provenance.threadId}`;
+  if (provenance.kind === "user") return "Saved by you";
+  return `Saved by ${PROVIDER_DISPLAY_NAMES[provenance.provider]}`;
 }
 
 /**
