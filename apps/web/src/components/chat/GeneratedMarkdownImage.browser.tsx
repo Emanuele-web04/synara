@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { render } from "vitest-browser-react";
 
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
+import { projectLocalPreviewGrantQueryOptions } from "~/lib/projectReactQuery";
 import { GeneratedMarkdownImage } from "./GeneratedMarkdownImage";
 
 vi.mock("~/lib/browserDownload", () => ({
@@ -82,15 +83,61 @@ function image(src: string, onImageExpand = vi.fn()) {
 }
 
 async function expectReady() {
-  await vi.waitFor(() => {
-    expect(document.querySelector(".chat-generated-image")?.getAttribute("data-status")).toBe(
-      "ready",
-    );
-    expect(
-      document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.naturalWidth,
-    ).toBe(1);
-  });
+  await vi.waitFor(
+    () => {
+      expect(document.querySelector(".chat-generated-image")?.getAttribute("data-status")).toBe(
+        "ready",
+      );
+      expect(
+        document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.naturalWidth,
+      ).toBe(1);
+    },
+    { timeout: 5_000 },
+  );
 }
+
+it("does not poll or reload a loaded image when another consumer renews its grant", async () => {
+  await render(image(desktopPath));
+  await expectReady();
+  const src = document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src;
+  const requestCount = requests.length;
+  vi.useFakeTimers();
+  try {
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(createLocalFilePreviewGrant).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(requestCount);
+    client.setQueryData(projectLocalPreviewGrantQueryOptions({ path: desktopPath }).queryKey, {
+      grant: "renewed-in-file-pane",
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toBe(src);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("requests a fresh grant after HTTP denial even with an unexpired cached token", async () => {
+  client.setQueryData(projectLocalPreviewGrantQueryOptions({ path: desktopPath }).queryKey, {
+    grant: "from-before-server-restart",
+    expiresAt: new Date(Date.now() + 120_000).toISOString(),
+  });
+  await render(image(desktopPath));
+  await expectReady();
+  expect(createLocalFilePreviewGrant).toHaveBeenCalledExactlyOnceWith({ path: desktopPath });
+  expect(
+    requests.some((url) => url.searchParams.get("grant") === "from-before-server-restart"),
+  ).toBe(false);
+});
+
+it("retries an interrupted grant request without retrying permanent missing-file errors", async () => {
+  createLocalFilePreviewGrant.mockRejectedValueOnce(
+    Object.assign(new Error("Transport interrupted"), { retryable: true }),
+  );
+  await render(image(desktopPath));
+  await expectReady();
+  expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2);
+});
 
 it("recovers a Desktop screenshot after HTTP denial using the exact decoded file grant", async () => {
   await render(image("file:///Users/tester/Desktop/simulator%20shot.png"));

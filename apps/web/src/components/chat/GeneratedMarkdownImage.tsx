@@ -54,13 +54,39 @@ function GeneratedMarkdownImageContent(props: GeneratedMarkdownImageProps) {
   }, []);
   const absolutePath = localImageAbsolutePath(src);
   const [needsGrant, setNeedsGrant] = useState(false);
+  const [previewGrant, setPreviewGrant] = useState<string>();
   const grantOptions = projectLocalPreviewGrantQueryOptions({
     path: absolutePath,
-    enabled: needsGrant && absolutePath !== null,
+    enabled: needsGrant && absolutePath !== null && previewGrant === undefined,
+    // An HTTP denial must not reuse a token invalidated by a server restart.
+    staleTime: 0,
   });
-  const grantQuery = useQuery({ ...grantOptions, retry: false });
-  const previewGrant =
-    needsGrant && isLocalPreviewGrantUsable(grantQuery.data) ? grantQuery.data?.grant : undefined;
+  const retryGrant = (failureCount: number, error: unknown) =>
+    failureCount < 2 &&
+    typeof error === "object" &&
+    error !== null &&
+    "retryable" in error &&
+    error.retryable === true;
+  const grantQuery = useQuery({
+    ...grantOptions,
+    retry: retryGrant,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  useEffect(() => {
+    if (
+      needsGrant &&
+      previewGrant === undefined &&
+      !grantQuery.isFetching &&
+      grantQuery.isSuccess &&
+      isLocalPreviewGrantUsable(grantQuery.data)
+    ) {
+      // Freeze the loaded preview. Another file pane may renew the same cache
+      // entry; that must not make historical chat images download again.
+      setPreviewGrant(grantQuery.data.grant);
+    }
+  }, [needsGrant, previewGrant, grantQuery.data, grantQuery.isFetching, grantQuery.isSuccess]);
   const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
     useLocalImagePreview({
       src,
@@ -72,11 +98,14 @@ function GeneratedMarkdownImageContent(props: GeneratedMarkdownImageProps) {
         if (absolutePath !== null) setNeedsGrant(true);
       },
     });
-  const resolvingGrant = needsGrant && grantQuery.isFetching && !previewGrant;
+  const resolvingGrant =
+    needsGrant &&
+    !previewGrant &&
+    (grantQuery.isFetching || (grantQuery.isSuccess && isLocalPreviewGrantUsable(grantQuery.data)));
   const resolveGrantedUrl = async (download: boolean) => {
     if (!needsGrant || absolutePath === null) return download ? downloadUrl : previewUrl;
     // A backgrounded chat can outlive the grant TTL. Renew at the point of use.
-    const grant = await queryClient.fetchQuery({ ...grantOptions, staleTime: 0, retry: false });
+    const grant = await queryClient.fetchQuery({ ...grantOptions, retry: retryGrant });
     return buildLocalImageUrl({ src, cwd, download, grant: grant.grant });
   };
   const accessibleName = alt?.trim() || "Generated image";
