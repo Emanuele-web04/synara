@@ -35,6 +35,8 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
+  | "ompBinaryPath"
+  | "ompAgentDir"
 >;
 
 /**
@@ -179,6 +181,13 @@ export function providerModelsPrefetchQueryOptions(input: {
         agentDir: settings.piAgentDir || null,
         cwd,
         priority,
+      });
+    case "omp":
+      return providerModelsQueryOptions({
+        provider: "omp",
+        binaryPath: settings.ompBinaryPath || null,
+        agentDir: settings.ompAgentDir || null,
+        cwd,
       });
   }
 }

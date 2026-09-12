@@ -400,12 +400,18 @@ export function providerModelsQueryOptions(input: {
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
+  // OMP's catalog is global (`omp models --json` is not project-scoped — the
+  // server caches it by binary path only), so cwd is intentionally excluded
+  // from its query key and request. This keeps a single cache entry shared
+  // across threads/projects and lets an app-startup warm land on the exact key
+  // the composer reads.
+  const cwd = input.provider === "omp" ? null : (input.cwd ?? null);
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,
     input.apiEndpoint ?? null,
     input.agentDir ?? null,
-    input.cwd ?? null,
+    cwd,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -421,7 +427,7 @@ export function providerModelsQueryOptions(input: {
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(cwd ? { cwd } : {}),
           });
           const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
           return requireDiscoveredModels(input.provider, result, previous);
@@ -435,7 +441,7 @@ export function providerModelsQueryOptions(input: {
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 30_000)
-        : input.provider === "droid"
+        : input.provider === "droid" || input.provider === "omp"
           ? 5 * 60_000
           : 30_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
@@ -448,11 +454,21 @@ export function providerModelsQueryOptions(input: {
             query.state.data?.error || query.state.error ? 30_000 : false,
         }
       : {}),
-    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    ...(input.provider === "droid" || input.provider === "omp"
+      ? { refetchOnWindowFocus: false }
+      : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+    // OMP has no static model fallback, so masking its first `omp models` fetch
+    // with an empty placeholder would surface a false "No matches" during the
+    // ~3s discovery. Omit placeholderData for OMP so React Query reports a
+    // genuine `isLoading` pending state and the catalog renders the loading
+    // skeleton instead. Other providers keep the placeholder to suppress
+    // refetch flicker against their static catalogs.
+    ...(input.provider !== "omp"
+      ? { placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT }
+      : {}),
   });
 }
 

@@ -223,6 +223,7 @@ export function resolvePromptEffortFromModelSelection(
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
+    case "omp":
       return modelSelection.options?.thinkingLevel ?? null;
     case "devin":
       return (

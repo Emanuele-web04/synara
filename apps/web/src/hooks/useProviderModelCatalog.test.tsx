@@ -52,12 +52,14 @@ interface QueryResultLike {
   readonly isFetching: boolean;
   readonly isLoading: boolean;
   readonly isPlaceholderData: boolean;
+  readonly isError: boolean;
 }
 
 const EMPTY_QUERY: QueryResultLike = {
   isFetching: false,
   isLoading: false,
   isPlaceholderData: false,
+  isError: false,
 };
 const modelQueries = new Map<ProviderKind, QueryResultLike>();
 const agentQueries = new Map<ProviderKind, QueryResultLike>();
@@ -296,6 +298,51 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("droid")).toBe(false);
   });
 
+  it("reports OMP as loading during its initial model discovery", () => {
+    // OMP has no static model fallback and (unlike other providers) opts out of
+    // placeholderData, so its first `omp models` fetch reports a genuine
+    // `isLoading` pending state. The catalog must flag OMP as loading in that
+    // window so the picker renders the "Loading models" skeleton — not a false
+    // "No matches" — during the ~3s discovery.
+    modelQueries.set("omp", {
+      isFetching: true,
+      isLoading: true,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(true);
+  });
+
+  it("clears OMP loading once discovery resolves with models", () => {
+    modelQueries.set("omp", {
+      data: {
+        models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+        source: "omp-cli",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {
@@ -306,6 +353,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: true,
       isLoading: false,
       isPlaceholderData: true,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({
@@ -336,6 +384,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({
@@ -352,6 +401,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({

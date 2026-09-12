@@ -135,7 +135,10 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" || provider === "antigravity" || provider === "pi"
+  return provider === "claudeAgent" ||
+    provider === "antigravity" ||
+    provider === "pi" ||
+    provider === "omp"
     ? "text-foreground"
     : fallbackClassName;
 }
@@ -294,7 +297,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
-        provider === "pi") &&
+        provider === "pi" ||
+        provider === "omp") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
     const filteredOptions =

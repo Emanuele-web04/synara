@@ -64,6 +64,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "Anthropic",
     },
   ],
+  omp: [],
   antigravity: [
     {
       slug: "Gemini 3.5 Flash",
@@ -283,6 +284,43 @@ describe("ProviderModelPicker", () => {
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
         "claudeAgent",
         "claude-sonnet-4-6",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("commits a plain OMP model via onProviderModelChange", async () => {
+    const mounted = await mountPicker({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      lockedProvider: "omp",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        omp: [
+          {
+            slug: "anthropic/claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            upstreamProviderId: "anthropic",
+            upstreamProviderName: "Anthropic",
+          },
+          {
+            slug: "deepseek/deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            upstreamProviderId: "deepseek",
+            upstreamProviderName: "DeepSeek",
+          },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Claude Opus 4.6" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "omp",
+        "anthropic/claude-opus-4-6",
       );
     } finally {
       await mounted.cleanup();

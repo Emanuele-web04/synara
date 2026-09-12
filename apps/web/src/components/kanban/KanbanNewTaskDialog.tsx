@@ -75,7 +75,7 @@ import {
   type DraftThreadEnvMode,
   useComposerDraftStore,
 } from "../../composerDraftStore";
-import { buildModelSelection } from "../../providerModelOptions";
+import { buildModelSelection, type ProviderOptions } from "../../providerModelOptions";
 import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { ExpandedImageOverlay } from "../chat/ExpandedImageOverlay";
 import { useStore } from "../../store";
@@ -224,14 +224,18 @@ export function KanbanNewTaskDialog({
     [selectedModel, selectedModelSupportsAutoMode, selectedProvider, selectedRuntimeModel],
   );
   const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: Parameters<typeof setScratchProviderModel>[1]) => {
+    (
+      provider: ProviderKind,
+      model: Parameters<typeof setScratchProviderModel>[1],
+      options?: ProviderOptions,
+    ) => {
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model,
         runtimeModels: runtimeModelsByProvider[provider],
       });
       setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider));
-      setScratchProviderModel(provider, model, runtimeModel?.supportsAutoMode);
+      setScratchProviderModel(provider, model, runtimeModel?.supportsAutoMode, options);
     },
     [runtimeModelsByProvider, setScratchProviderModel],
   );

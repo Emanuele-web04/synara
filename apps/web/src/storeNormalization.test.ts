@@ -1,8 +1,11 @@
 // FILE: storeNormalization.test.ts
-// Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
+// Purpose: pins the incremental activity accumulator to the `normalizeActivities` fold it
+// replaces, and locks the legacy session provider-name → ProviderKind mapping.
 
 import { MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
+
+import type { ProviderKind } from "@synara/contracts";
 
 import {
   createThreadActivityAccumulator,
@@ -14,6 +17,7 @@ import {
   normalizeThreadFromReadModel,
   normalizeThreadShellSnapshot,
   threadShellsEqual,
+  toLegacyProvider,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
@@ -142,6 +146,19 @@ const richPayload = {
   detail: "echo hello",
   data: { item: { type: "commandExecution", command: "echo hello" } },
 };
+
+const KNOWN_PROVIDERS: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "devin",
+  "opencode",
+  "pi",
+  "omp",
+];
 
 describe("createThreadActivityAccumulator", () => {
   it("matches the normalizeActivities fold for appends, in-place merges and exact duplicates", () => {
@@ -471,6 +488,7 @@ describe("accounting activity retention", () => {
   });
 });
 
+<<<<<<< HEAD
 it("keeps the source-message signal stable for equivalent snapshots and work-only changes", () => {
   const incoming = makeReadModelThread({
     messages: [
@@ -532,5 +550,28 @@ describe("asynchronous question hydration", () => {
     const restored = normalizeChatMessage(pending, answered);
     expect(restored.asyncUserInput?.response).toEqual(response);
     expect(restored.completedAt).toBe(createdAt);
+  });
+});
+
+describe("toLegacyProvider", () => {
+  it("maps each known provider name to itself", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      expect(toLegacyProvider(provider)).toBe(provider);
+    }
+  });
+
+  it("maps omp to omp (regression: omp threads were coerced to codex)", () => {
+    // The server stamps providerName "omp" for OMP threads; before the fix this
+    // fell through to "codex", mislabeling every OMP thread across the UI
+    // (ChatHeader, Sidebar, ChatView activeProvider, kanban, threadDisplay).
+    expect(toLegacyProvider("omp")).toBe("omp");
+  });
+
+  it("falls back to codex for an unknown provider name", () => {
+    expect(toLegacyProvider("unknown-provider")).toBe("codex");
+  });
+
+  it("falls back to codex for null", () => {
+    expect(toLegacyProvider(null)).toBe("codex");
   });
 });
