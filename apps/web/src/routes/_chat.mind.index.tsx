@@ -47,6 +47,15 @@ const MIND_TYPE_BADGE_VARIANT: Record<MindMemoryType, MindBadgeVariant> = {
 };
 
 /**
+ * Provenance in one short segment: who saved the memory and, for agents,
+ * which provider and thread. The domain kinds stay verbatim.
+ */
+function provenanceLabel(provenance: MindMemory["provenance"]): string {
+  if (provenance.kind === "user") return "user";
+  return `agent · ${provenance.provider} · ${provenance.threadId}`;
+}
+
+/**
  * Mind list row: a leading type badge, a two-line text/detail stack, and trailing
  * pin toggle plus hover-reveal delete. Not clickable — there is no memory detail
  * surface; the row is the whole interaction (pin, delete).
@@ -78,7 +87,8 @@ function MindListRow({
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[0.8125rem] text-foreground">{memory.text}</span>
         <span className="truncate text-xs text-muted-foreground">
-          {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}
+          {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}{" "}
+          · {provenanceLabel(memory.provenance)}
           {memory.pinned ? " · pinned" : ""}
         </span>
       </span>
