@@ -248,6 +248,8 @@ export function KanbanProjectBoardView({
     }
   };
 
+  const nowMsProps = nowMs !== undefined ? { nowMs } : {};
+
   return (
     <DndContext
       sensors={sensors}
@@ -285,7 +287,7 @@ export function KanbanProjectBoardView({
             activeCard={activeCard}
             onNewCard={onNewTask}
             prByThreadId={prByThreadId}
-            {...(nowMs !== undefined ? { nowMs } : {})}
+            {...nowMsProps}
           />
           <KanbanColumn
             projectId={board.projectId}
@@ -296,7 +298,7 @@ export function KanbanProjectBoardView({
             droppable
             activeCard={activeCard}
             prByThreadId={prByThreadId}
-            {...(nowMs !== undefined ? { nowMs } : {})}
+            {...nowMsProps}
           />
           {viewMode === "v2" ? (
             <KanbanColumn
@@ -310,7 +312,7 @@ export function KanbanProjectBoardView({
               droppable
               activeCard={activeCard}
               prByThreadId={prByThreadId}
-              {...(nowMs !== undefined ? { nowMs } : {})}
+              {...nowMsProps}
             />
           ) : null}
           <KanbanColumn
@@ -322,7 +324,7 @@ export function KanbanProjectBoardView({
             droppable
             activeCard={activeCard}
             prByThreadId={prByThreadId}
-            {...(nowMs !== undefined ? { nowMs } : {})}
+            {...nowMsProps}
           />
         </div>
       </div>
@@ -332,7 +334,7 @@ export function KanbanProjectBoardView({
             card={activeCard}
             isOverlay
             prByThreadId={prByThreadId}
-            {...(nowMs !== undefined ? { nowMs } : {})}
+            {...nowMsProps}
           />
         ) : null}
       </DragOverlay>

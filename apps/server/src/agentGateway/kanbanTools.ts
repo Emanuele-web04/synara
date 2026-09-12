@@ -702,23 +702,29 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               const createdThreadId = batch.threads[0]?.threadId ?? batch.threadIds[0];
               if (!createdThreadId) return result;
               const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
-              const createdCard = Option.isSome(threadShell)
-                ? (() => {
-                    const thread = threadShell.value;
-                    const cardView = deriveCard(thread, now(), context.callerThreadId);
-                    return {
-                      threadId: thread.id,
-                      title: thread.title,
-                      column: cardView.column,
-                      attention: cardView.attention,
-                    };
-                  })()
-                : {
-                    threadId: createdThreadId,
-                    title,
-                    column: "inProgress" as const,
-                    attention: [],
-                  };
+              let createdCard: {
+                threadId: string;
+                title: string;
+                column: KanbanColumnV2Key;
+                attention: KanbanAttentionFlag[];
+              };
+              if (Option.isSome(threadShell)) {
+                const thread = threadShell.value;
+                const cardView = deriveCard(thread, now(), context.callerThreadId);
+                createdCard = {
+                  threadId: thread.id,
+                  title: thread.title,
+                  column: cardView.column,
+                  attention: cardView.attention,
+                };
+              } else {
+                createdCard = {
+                  threadId: createdThreadId,
+                  title,
+                  column: "inProgress" as const,
+                  attention: [],
+                };
+              }
               return mcpToolResultJson({
                 operationId: batch.operationId,
                 threadId: createdThreadId,
@@ -1014,23 +1020,29 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               // The card view is decoration: a projection that has not caught up
               // yet must not turn an already-successful creation into a tool error.
               const threadShell = yield* requireThreadShell(createdThreadId).pipe(Effect.option);
-              const createdCard = Option.isSome(threadShell)
-                ? (() => {
-                    const thread = threadShell.value;
-                    const cardView = deriveCard(thread, now(), context.callerThreadId);
-                    return {
-                      threadId: thread.id,
-                      title: thread.title,
-                      column: cardView.column,
-                      attention: cardView.attention,
-                    };
-                  })()
-                : {
-                    threadId: createdThreadId,
-                    title,
-                    column: "draft" as const,
-                    attention: [],
-                  };
+              let createdCard: {
+                threadId: string;
+                title: string;
+                column: KanbanColumnV2Key;
+                attention: KanbanAttentionFlag[];
+              };
+              if (Option.isSome(threadShell)) {
+                const thread = threadShell.value;
+                const cardView = deriveCard(thread, now(), context.callerThreadId);
+                createdCard = {
+                  threadId: thread.id,
+                  title: thread.title,
+                  column: cardView.column,
+                  attention: cardView.attention,
+                };
+              } else {
+                createdCard = {
+                  threadId: createdThreadId,
+                  title,
+                  column: "draft" as const,
+                  attention: [],
+                };
+              }
               return mcpToolResultJson({
                 threadId: createdThreadId,
                 title: createdCard.title,
