@@ -67,7 +67,8 @@ export function AppSnapPermissionGuide(props: {
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Enabled it but it still shows Denied? macOS applies the change after a restart.
+        Still showing Denied after enabling it? Restarting the app clears stale macOS grant
+        state.
       </p>
       <Button type="button" size="xs" variant="outline" onClick={props.onRestart}>
         {`Restart ${app}`}
