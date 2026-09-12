@@ -1,4 +1,5 @@
 import type {
+  MindHistoryResult,
   MindJournalEntry,
   MindListResult,
   MindMemory,
@@ -16,6 +17,7 @@ import type {
   MindMemoryNotFoundError,
   MindProjectCapReachedError,
   MindSecretRejectedError,
+  MindTextExistsError,
 } from "../Errors.ts";
 import type { MindRepositoryError } from "../../persistence/Services/MindRepository.ts";
 
@@ -25,7 +27,8 @@ export type MindServiceError =
   | MindInvalidTextError
   | MindSecretRejectedError
   | MindProjectCapReachedError
-  | MindMemoryNotFoundError;
+  | MindMemoryNotFoundError
+  | MindTextExistsError;
 
 /** Journal actor shared by every mutating request (`agent:<provider>` | user). */
 export type MindActor = MindJournalEntry["actor"];
@@ -119,6 +122,27 @@ export interface MindAffirmRequest {
   readonly memoryId: MindMemoryId;
 }
 
+/**
+ * Inline edit from the Mind UI: new text plus an optional type change. The
+ * edit touches the decay anchor but never the peak weight or access count.
+ * `turnId` is the retry idempotency key; the UI passes null (no thread
+ * context), so every save applies.
+ */
+export interface MindUpdateRequest {
+  readonly projectId: ProjectId;
+  readonly memoryId: MindMemoryId;
+  readonly text: string;
+  readonly type?: MindMemoryType | undefined;
+  readonly actor: MindActor;
+  readonly threadId: ThreadId | null;
+  readonly turnId: string | null;
+}
+
+export interface MindHistoryRequest {
+  readonly projectId: ProjectId;
+  readonly memoryId: MindMemoryId;
+}
+
 export interface MindServiceShape {
   /**
    * Validates (≤ 500 chars non-empty after trim), rejects secret-shaped text,
@@ -157,6 +181,21 @@ export interface MindServiceShape {
    * anchor reset, access +1) with actor user, journaled as `confirm`.
    */
   readonly affirm: (input: MindAffirmRequest) => Effect.Effect<MindMemory, MindServiceError>;
+  /**
+   * Inline edit: validates (≤ 500 chars non-empty after trim), rejects
+   * secret-shaped text, rejects hash collisions with another row in the same
+   * project, then updates text/type plus the decay anchor (peak weight and
+   * access count untouched) and records hash-only revision evidence.
+   * Retries with the same turn replay the prior result.
+   */
+  readonly update: (input: MindUpdateRequest) => Effect.Effect<MindMemory, MindServiceError>;
+  /**
+   * Op timeline for one memory: journal rows plus revision rows mapped as op
+   * `edit`, oldest first, capped at 100. Carries who/when only — never text.
+   */
+  readonly history: (
+    input: MindHistoryRequest,
+  ) => Effect.Effect<MindHistoryResult, MindServiceError>;
 }
 
 export class MindService extends ServiceMap.Service<MindService, MindServiceShape>()(

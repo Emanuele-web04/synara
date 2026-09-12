@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { MindMemoryId, ProjectId, type MindMemory } from "@synara/contracts";
 
 import {
+  MIND_HISTORY_NOTE,
   countStaleMindMemories,
   formatMindCountLabel,
   formatMindDayLabel,
   formatMindDigestSuffix,
+  formatMindHistoryActorLabel,
+  formatMindHistoryOpLabel,
   groupMindMemoriesByDay,
   isMindListTruncated,
   mindCapPercent,
@@ -176,5 +179,26 @@ describe("optimisticAffirmWeight", () => {
     expect(optimisticAffirmWeight(0.6)).toBe(0.75);
     expect(optimisticAffirmWeight(0.95)).toBe(1);
     expect(optimisticAffirmWeight(1)).toBe(1);
+  });
+});
+
+describe("mind history render helpers", () => {
+  it("labels every timeline op in the past tense", () => {
+    expect(formatMindHistoryOpLabel("remember")).toBe("Saved");
+    expect(formatMindHistoryOpLabel("confirm")).toBe("Confirmed");
+    expect(formatMindHistoryOpLabel("edit")).toBe("Edited");
+    expect(formatMindHistoryOpLabel("pin")).toBe("Pinned");
+    expect(formatMindHistoryOpLabel("unpin")).toBe("Unpinned");
+    expect(formatMindHistoryOpLabel("forget")).toBe("Forgotten");
+    expect(formatMindHistoryOpLabel("prune")).toBe("Pruned");
+  });
+
+  it("labels user rows as you and agent rows with their provider", () => {
+    expect(formatMindHistoryActorLabel({ kind: "user" })).toBe("you");
+    expect(formatMindHistoryActorLabel({ kind: "agent", provider: "codex" })).toContain("agent");
+  });
+
+  it("frames history honestly: when, never what", () => {
+    expect(MIND_HISTORY_NOTE).toContain("not what changed");
   });
 });

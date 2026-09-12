@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
+  MIND_HISTORY_MAX_ENTRIES,
   MIND_MEMORY_PROJECT_CAP,
   MIND_MEMORY_TEXT_MAX_CHARS,
   MIND_RECALL_MAX_DIGEST_CHARS,
@@ -9,6 +10,8 @@ import {
   MIND_RECALL_REQUEST_MAX_ITEMS,
   MindAffirmInput,
   MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
   MindListInput,
   MindListResult,
   MindMemory,
@@ -16,6 +19,7 @@ import {
   MindRecallResult,
   MindRememberInput,
   MindSetPinnedInput,
+  MindUpdateInput,
 } from "./mind";
 import { WebSocketRequest, WS_METHODS } from "./ws";
 
@@ -167,18 +171,75 @@ describe("Mind contracts", () => {
     expect(decodes(MindAffirmInput, { projectId: "project-1", memoryId: "  " })).toBe(false);
   });
 
-  it("routes the affirm method over the WebSocket request body", () => {
-    expect(WS_METHODS.mindAffirm).toBe("mind.affirm");
+  it("routes the update and history methods over the WebSocket request body", () => {
+    expect(WS_METHODS.mindUpdate).toBe("mind.update");
+    expect(WS_METHODS.mindHistory).toBe("mind.history");
     expect(
       decodes(WebSocketRequest, {
         id: "request-1",
-        body: { _tag: "mind.affirm", projectId: "project-1", memoryId: "memory-1" },
+        body: { _tag: "mind.update", projectId: "project-1", memoryId: "memory-1", text: "fact" },
       }),
     ).toBe(true);
     expect(
       decodes(WebSocketRequest, {
         id: "request-1",
-        body: { _tag: "mind.affirm", memoryId: "memory-1" },
+        body: { _tag: "mind.update", projectId: "project-1", memoryId: "memory-1" },
+      }),
+    ).toBe(false);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.history", projectId: "project-1", memoryId: "memory-1" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.history", memoryId: "memory-1" },
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds update text and history entries, with an optional type change", () => {
+    expect(
+      decodes(MindUpdateInput, { projectId: "project-1", memoryId: "memory-1", text: "fact" }),
+    ).toBe(true);
+    expect(
+      decodes(MindUpdateInput, {
+        projectId: "project-1",
+        memoryId: "memory-1",
+        text: "fact",
+        type: "decision",
+      }),
+    ).toBe(true);
+    expect(
+      decodes(MindUpdateInput, {
+        projectId: "project-1",
+        memoryId: "memory-1",
+        text: "x".repeat(MIND_MEMORY_TEXT_MAX_CHARS + 1),
+      }),
+    ).toBe(false);
+    expect(
+      decodes(MindUpdateInput, {
+        projectId: "project-1",
+        memoryId: "memory-1",
+        text: "fact",
+        type: "note",
+      }),
+    ).toBe(false);
+    expect(decodes(MindHistoryInput, { projectId: "project-1", memoryId: "memory-1" })).toBe(true);
+    expect(decodes(MindHistoryInput, { memoryId: "memory-1" })).toBe(false);
+    expect(MIND_HISTORY_MAX_ENTRIES).toBe(100);
+    const entry = { op: "edit", actor: { kind: "user" }, createdAt: "2026-09-01T00:00:00.000Z" };
+    expect(decodes(MindHistoryResult, { entries: [entry] })).toBe(true);
+    expect(
+      decodes(MindHistoryResult, {
+        entries: Array.from({ length: MIND_HISTORY_MAX_ENTRIES + 1 }, () => entry),
+      }),
+    ).toBe(false);
+    expect(
+      decodes(MindHistoryResult, {
+        entries: [{ ...entry, op: "rewrite" }],
       }),
     ).toBe(false);
   });

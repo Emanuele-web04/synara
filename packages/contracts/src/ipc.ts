@@ -44,10 +44,13 @@ import type {
 import type {
   MindAffirmInput,
   MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
   MindListInput,
   MindListResult,
   MindMemory,
   MindSetPinnedInput,
+  MindUpdateInput,
 } from "./mind";
 import type {
   GitCheckoutInput,
@@ -967,6 +970,8 @@ export interface NativeApi {
     forget: (input: MindForgetInput) => Promise<void>;
     setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
     affirm: (input: MindAffirmInput) => Promise<MindMemory>;
+    update: (input: MindUpdateInput) => Promise<MindMemory>;
+    history: (input: MindHistoryInput) => Promise<MindHistoryResult>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

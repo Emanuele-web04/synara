@@ -125,6 +125,22 @@ export const MindSetPinnedInput = Schema.Struct({
 });
 export type MindSetPinnedInput = typeof MindSetPinnedInput.Type;
 
+/**
+ * Inline edit from the Mind UI: trimmed 1–500 chars, optional type change.
+ * The service rejects secret-shaped text and hash collisions with another
+ * row in the same project; the edit touches the decay anchor but never the
+ * peak weight or access count.
+ */
+export const MindUpdateInput = Schema.Struct({
+  projectId: ProjectId,
+  memoryId: MindMemoryId,
+  text: Schema.String.check(Schema.isNonEmpty()).check(
+    Schema.isMaxLength(MIND_MEMORY_TEXT_MAX_CHARS),
+  ),
+  type: Schema.optional(MindMemoryType),
+});
+export type MindUpdateInput = typeof MindUpdateInput.Type;
+
 export const MindJournalOp = Schema.Literals([
   "remember",
   "confirm",
@@ -148,3 +164,29 @@ export const MindJournalEntry = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type MindJournalEntry = typeof MindJournalEntry.Type;
+
+export const MindHistoryInput = Schema.Struct({
+  projectId: ProjectId,
+  memoryId: MindMemoryId,
+});
+export type MindHistoryInput = typeof MindHistoryInput.Type;
+
+/**
+ * One history timeline entry: the op plus who/when — never memory text.
+ * `edit` comes from the revision table; every other op from the journal.
+ * The op set is spelled out (not a union of MindJournalOp) so the schema
+ * stays a flat literals union.
+ */
+export const MindHistoryEntry = Schema.Struct({
+  op: Schema.Literals(["remember", "confirm", "forget", "pin", "unpin", "prune", "edit"]),
+  actor: MindJournalEntry.fields.actor,
+  createdAt: IsoDateTime,
+});
+export type MindHistoryEntry = typeof MindHistoryEntry.Type;
+
+export const MIND_HISTORY_MAX_ENTRIES = 100;
+
+export const MindHistoryResult = Schema.Struct({
+  entries: Schema.Array(MindHistoryEntry).check(Schema.isMaxLength(MIND_HISTORY_MAX_ENTRIES)),
+});
+export type MindHistoryResult = typeof MindHistoryResult.Type;

@@ -307,6 +307,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [103, "ClaudeTokenAccounting"],
         [104, "Mind"],
         [105, "MindRuntimeIntegrity"],
+        [106, "MindTextRevisions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -364,6 +365,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 103, name: "ClaudeTokenAccounting" },
           { migration_id: 104, name: "Mind" },
           { migration_id: 105, name: "MindRuntimeIntegrity" },
+          { migration_id: 106, name: "MindTextRevisions" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -462,6 +464,7 @@ agentGatewayRetentionLegacyLayer(
           [103, "ClaudeTokenAccounting"],
           [104, "Mind"],
           [105, "MindRuntimeIntegrity"],
+          [106, "MindTextRevisions"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -562,6 +565,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [103, "ClaudeTokenAccounting"],
         [104, "Mind"],
         [105, "MindRuntimeIntegrity"],
+        [106, "MindTextRevisions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -603,6 +607,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [103, "ClaudeTokenAccounting"],
           [104, "Mind"],
           [105, "MindRuntimeIntegrity"],
+          [106, "MindTextRevisions"],
         ],
       );
 
@@ -698,6 +703,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [103, "ClaudeTokenAccounting"],
         [104, "Mind"],
         [105, "MindRuntimeIntegrity"],
+        [106, "MindTextRevisions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -735,6 +741,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [103, "ClaudeTokenAccounting"],
           [104, "Mind"],
           [105, "MindRuntimeIntegrity"],
+          [106, "MindTextRevisions"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -910,6 +917,7 @@ mindMigrationLayer("Mind migration", (it) => {
         [103, "ClaudeTokenAccounting"],
         [104, "Mind"],
         [105, "MindRuntimeIntegrity"],
+        [106, "MindTextRevisions"],
       ]);
 
       yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
@@ -946,7 +954,10 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('user', 'p1', 'user memory', 'semantic', 'user-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
 
         const executed = yield* runMigrations();
-        assert.deepStrictEqual(executed, [[105, "MindRuntimeIntegrity"]]);
+        assert.deepStrictEqual(executed, [
+          [105, "MindRuntimeIntegrity"],
+          [106, "MindTextRevisions"],
+        ]);
         const rows = yield* sql<{
           readonly id: string;
           readonly provenanceKind: string;
@@ -1006,6 +1017,45 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
         readonly count: number;
       }>`SELECT COUNT(*) AS count FROM mind_memories_fts WHERE mind_memories_fts MATCH 'beta'`;
       assert.strictEqual(deleted[0]?.count, 0);
+    }),
+  );
+});
+
+const mindTextRevisionsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+mindTextRevisionsLayer("Mind text revisions migration", (it) => {
+  it.effect("applies 106 on a fresh database and reruns idempotently", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 105 });
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [[106, "MindTextRevisions"]]);
+
+      const columns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('mind_text_revisions')
+      `;
+      assert.deepStrictEqual(
+        columns.map(({ name }) => name),
+        ["id", "memory_id", "old_hash", "new_hash", "actor", "created_at"],
+      );
+      const indexes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_index_list('mind_text_revisions')
+      `;
+      assert.include(
+        indexes.map((row) => row.name),
+        "idx_mind_text_revisions_memory",
+      );
+      // Revision rows carry hashes only, and the journal op enum is untouched.
+      yield* sql`INSERT INTO mind_text_revisions (memory_id, old_hash, new_hash, actor, created_at) VALUES ('m1', 'old', 'new', 'user:ui', '2026-09-01T00:00:00.000Z')`;
+      const journalSql = yield* sql<{ readonly sql: string | null }>`
+        SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mind_journal'
+      `;
+      assert.isTrue(
+        journalSql[0]?.sql?.includes("'remember','confirm','forget','pin','unpin','prune'"),
+      );
+
+      const rerun = yield* runMigrations();
+      assert.lengthOf(rerun, 0);
     }),
   );
 });

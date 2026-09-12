@@ -21,6 +21,7 @@ import {
 import {
   ApplyMindConfirmInput,
   AppendMindJournalInput,
+  ApplyMindUpdateInput,
   CountMindMemoriesInput,
   DeleteMindMemoryInput,
   FindMindJournalOpInput,
@@ -28,10 +29,14 @@ import {
   GetMindMemoryInput,
   GetMindReceiptInput,
   InsertMindMemoryInput,
+  InsertMindRevisionInput,
   ListAllMindMemoriesInput,
+  ListMindJournalForMemoryInput,
   ListMindMemoriesInput,
+  ListMindRevisionsInput,
   MindRepository,
   MindMemoryRow,
+  MindTextRevisionRow,
   type MindMemoryCandidate,
   type MindRepositoryError,
   type MindRepositoryShape,
@@ -77,6 +82,15 @@ const MindJournalDbRow = Schema.Struct({
   createdAt: IsoDateTime,
 });
 type MindJournalDbRow = typeof MindJournalDbRow.Type;
+
+const MindRevisionDbRow = Schema.Struct({
+  memoryId: MindMemoryId,
+  oldHash: Schema.String,
+  newHash: Schema.String,
+  actor: Schema.String,
+  createdAt: IsoDateTime,
+});
+type MindRevisionDbRow = typeof MindRevisionDbRow.Type;
 
 const MindReceiptDbRow = Schema.Struct({
   projectId: ProjectId,
@@ -163,6 +177,8 @@ const decodeJournalActor = (actor: string): unknown => {
   return actor;
 };
 
+const decodeRevisionRow = Schema.decodeUnknownEffect(MindTextRevisionRow);
+
 const toJournalEntry = (row: MindJournalDbRow) =>
   decodeJournalEntry({
     projectId: row.projectId,
@@ -173,6 +189,25 @@ const toJournalEntry = (row: MindJournalDbRow) =>
     turnId: row.turnId,
     createdAt: row.createdAt,
   }).pipe(Effect.mapError(toPersistenceDecodeError("MindRepository.journalRowToDomain")));
+
+// Revision rows fall back to the user actor on undecodable actor text: one
+// hand-edited row must not fail a whole history read.
+const decodeRevisionActor = Schema.decodeUnknownSync(MindJournalEntry.fields.actor);
+const toRevisionSafe = (row: MindRevisionDbRow): MindTextRevisionRow => {
+  let actor: MindTextRevisionRow["actor"] = { kind: "user" };
+  try {
+    actor = decodeRevisionActor(decodeJournalActor(row.actor));
+  } catch {
+    // Keep the user fallback.
+  }
+  return {
+    memoryId: row.memoryId,
+    oldHash: row.oldHash,
+    newHash: row.newHash,
+    actor,
+    createdAt: row.createdAt,
+  };
+};
 
 const makeMindRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -397,6 +432,91 @@ const makeMindRepository = Effect.gen(function* () {
       `,
   });
 
+  const applyUpdateRow = SqlSchema.findOneOption({
+    Request: ApplyMindUpdateInput,
+    Result: MindMemoryDbRow,
+    execute: ({ memoryId, text, type, textHash, lastAccessedAt }) =>
+      sql`
+        UPDATE mind_memories
+        SET text = ${text},
+            type = ${type},
+            text_hash = ${textHash},
+            last_accessed_at = ${lastAccessedAt}
+        WHERE id = ${memoryId}
+        RETURNING
+          id AS "memoryId",
+          project_id AS "projectId",
+          text,
+          type,
+          text_hash AS "textHash",
+          peak_weight AS "peakWeight",
+          access_count AS "accessCount",
+          pinned,
+          created_at AS "createdAt",
+          last_accessed_at AS "lastAccessedAt",
+          provenance_kind AS "provenanceKind",
+          source_thread_id AS "sourceThreadId",
+          source_provider AS "sourceProvider"
+      `,
+  });
+
+  const insertRevisionRow = SqlSchema.void({
+    Request: InsertMindRevisionInput,
+    execute: ({ memoryId, oldHash, newHash, actor, createdAt }) =>
+      sql`
+        INSERT INTO mind_text_revisions (
+          memory_id,
+          old_hash,
+          new_hash,
+          actor,
+          created_at
+        )
+        VALUES (
+          ${memoryId},
+          ${oldHash},
+          ${newHash},
+          ${encodeJournalActor(actor)},
+          ${createdAt}
+        )
+      `,
+  });
+
+  const listJournalForMemoryRows = SqlSchema.findAll({
+    Request: ListMindJournalForMemoryInput,
+    Result: MindJournalDbRow,
+    execute: ({ memoryId }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          memory_id AS "memoryId",
+          op,
+          actor,
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          created_at AS "createdAt"
+        FROM mind_journal
+        WHERE memory_id = ${memoryId}
+        ORDER BY created_at ASC, id ASC
+      `,
+  });
+
+  const listRevisionRows = SqlSchema.findAll({
+    Request: ListMindRevisionsInput,
+    Result: MindRevisionDbRow,
+    execute: ({ memoryId }) =>
+      sql`
+        SELECT
+          memory_id AS "memoryId",
+          old_hash AS "oldHash",
+          new_hash AS "newHash",
+          actor,
+          created_at AS "createdAt"
+        FROM mind_text_revisions
+        WHERE memory_id = ${memoryId}
+        ORDER BY created_at ASC, id ASC
+      `,
+  });
+
   const deleteMemoryRow = SqlSchema.findAll({
     Request: DeleteMindMemoryInput,
     Result: Schema.Struct({ memoryId: MindMemoryId }),
@@ -614,6 +734,39 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.flatMap(toMemoryOption),
     );
 
+  const applyUpdate: MindRepositoryShape["applyUpdate"] = (input) =>
+    applyUpdateRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.applyUpdate:update")),
+      Effect.flatMap(toMemoryOption),
+    );
+
+  const insertRevision: MindRepositoryShape["insertRevision"] = (input) =>
+    insertRevisionRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.insertRevision:insert")),
+    );
+
+  // One corrupt journal row must not fail a whole history read: decode each
+  // row independently and drop the failures, mirroring the list poison-row rule.
+  const listJournalForMemory: MindRepositoryShape["listJournalForMemory"] = (input) =>
+    listJournalForMemoryRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.listJournalForMemory:query")),
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) => Effect.option(toJournalEntry(row)), {
+          concurrency: "unbounded",
+        }).pipe(
+          Effect.map((decoded) =>
+            decoded.flatMap((option) => (Option.isSome(option) ? [option.value] : [])),
+          ),
+        ),
+      ),
+    );
+
+  const listRevisions: MindRepositoryShape["listRevisions"] = (input) =>
+    listRevisionRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.listRevisions:query")),
+      Effect.map((rows) => rows.map(toRevisionSafe)),
+    );
+
   const setPinned: MindRepositoryShape["setPinned"] = (input) =>
     setPinnedRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.setPinned:update")),
@@ -694,6 +847,10 @@ const makeMindRepository = Effect.gen(function* () {
     countAll,
     searchCandidates,
     applyConfirm,
+    applyUpdate,
+    insertRevision,
+    listJournalForMemory,
+    listRevisions,
     setPinned,
     deleteById,
     appendJournal,

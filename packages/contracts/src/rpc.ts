@@ -245,10 +245,13 @@ import {
 import {
   MindAffirmInput,
   MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
   MindListInput,
   MindListResult,
   MindMemory,
   MindSetPinnedInput,
+  MindUpdateInput,
 } from "./mind";
 import { WS_METHODS } from "./ws";
 import {
@@ -1301,6 +1304,18 @@ export const WsMindAffirmRpc = Rpc.make(WS_METHODS.mindAffirm, {
   error: WsRpcError,
 });
 
+export const WsMindUpdateRpc = Rpc.make(WS_METHODS.mindUpdate, {
+  payload: MindUpdateInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
+export const WsMindHistoryRpc = Rpc.make(WS_METHODS.mindHistory, {
+  payload: MindHistoryInput,
+  success: MindHistoryResult,
+  error: WsRpcError,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -1435,4 +1450,6 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsMindForgetRpc,
   WsMindSetPinnedRpc,
   WsMindAffirmRpc,
+  WsMindUpdateRpc,
+  WsMindHistoryRpc,
 );

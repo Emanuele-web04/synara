@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  MIND_HISTORY_MAX_ENTRIES,
   MIND_MEMORY_PROJECT_CAP,
   MIND_MEMORY_TEXT_MAX_CHARS,
   MIND_RECALL_CANDIDATE_MAX_ITEMS,
@@ -9,6 +10,7 @@ import {
   MIND_RECALL_MAX_ITEMS,
   MIND_RECALL_QUERY_MAX_CHARS,
   MindMemoryId,
+  type MindHistoryResult,
   type MindListResult,
   type MindMemory,
   type MindRecallItem,
@@ -32,6 +34,7 @@ import {
   MindMemoryNotFoundError,
   MindProjectCapReachedError,
   MindSecretRejectedError,
+  MindTextExistsError,
 } from "../Errors.ts";
 import { isMindSecret } from "../secretPatterns.ts";
 import {
@@ -47,6 +50,7 @@ import {
   type MindConfirmRequest,
   type MindForgetRequest,
   type MindForgetResult,
+  type MindHistoryRequest,
   type MindListRequest,
   type MindRememberRequest,
   type MindRememberResult,
@@ -56,6 +60,7 @@ import {
   type MindSetPinnedRequest,
   type MindStatusRequest,
   type MindStatusResult,
+  type MindUpdateRequest,
 } from "../Services/MindService.ts";
 
 const DAY_MS = 86_400_000;
@@ -713,6 +718,197 @@ const makeMindService = Effect.gen(function* () {
       return toMindMemory(updated.value, nowIso);
     });
 
+  // The edit mutation serialized in its own transaction (check-then-act:
+  // receipt lookup, collision check, row update, revision insert) so
+  // concurrent saves stay race-free: one row update, one revision, one
+  // receipt. Only text/type move, plus the decay anchor — peak weight and
+  // access count are never touched by an edit.
+  const updateInTransaction = (
+    input: MindUpdateRequest,
+  ): Effect.Effect<MindMemory, MindServiceError> =>
+    sqlClient
+      .withTransaction(
+        Effect.gen(function* () {
+          const normalized = normalizeMindText(input.text);
+          if (normalized.length === 0) {
+            return yield* Effect.fail(
+              new MindInvalidTextError({
+                reason: "empty",
+                message: "Memory text is empty after trimming; save a non-empty declarative fact.",
+              }),
+            );
+          }
+          if (normalized.length > MIND_MEMORY_TEXT_MAX_CHARS) {
+            return yield* Effect.fail(
+              new MindInvalidTextError({
+                reason: "tooLong",
+                message: `Memory text is ${normalized.length} characters after trimming; keep it at ${MIND_MEMORY_TEXT_MAX_CHARS} or fewer.`,
+              }),
+            );
+          }
+          if (isMindSecret(normalized)) {
+            return yield* Effect.fail(
+              new MindSecretRejectedError({
+                message:
+                  "Memory text matches a credential or secret pattern and was rejected; keep secrets in a secret store, never in project memory.",
+              }),
+            );
+          }
+          const existing = yield* repository.getById({ memoryId: input.memoryId });
+          if (Option.isNone(existing) || existing.value.projectId !== input.projectId) {
+            return yield* Effect.fail(
+              new MindMemoryNotFoundError({
+                memoryId: input.memoryId,
+                message: "No memory with this id; recall or list memories to get a valid id.",
+              }),
+            );
+          }
+          const row = existing.value;
+          const textHash = hashMindText(normalized);
+          const operationId =
+            input.turnId === null ? null : `update:${input.turnId}:${input.memoryId}:${textHash}`;
+          if (operationId !== null) {
+            const receipt = yield* repository.getReceipt({
+              projectId: row.projectId,
+              operationId,
+            });
+            if (Option.isSome(receipt)) {
+              // Durable no-op: re-read the row the first update wrote.
+              const current = yield* repository.getById({ memoryId: input.memoryId });
+              if (Option.isSome(current)) {
+                const nowIso = yield* nowIsoNow;
+                return toMindMemory(current.value, nowIso);
+              }
+            }
+          }
+          const clash = yield* repository.findByTextHash({
+            projectId: row.projectId,
+            textHash,
+          });
+          if (Option.isSome(clash) && clash.value.memoryId !== input.memoryId) {
+            return yield* Effect.fail(
+              new MindTextExistsError({
+                memoryId: clash.value.memoryId,
+                message:
+                  "Another memory in this project already holds this text; forget or edit that memory instead of duplicating it.",
+              }),
+            );
+          }
+          const nowMillis = yield* Clock.currentTimeMillis;
+          const nowIso = new Date(nowMillis).toISOString();
+          const nextType = input.type ?? row.type;
+          if (normalized === row.text && nextType === row.type) {
+            if (operationId !== null) {
+              // Crash-recovery replay: the receipt is missing but the row
+              // already holds the target content, so this turn already applied.
+              return toMindMemory(row, nowIso);
+            }
+            // The UI passes no turn, so every save applies: touch the decay
+            // anchor even when the content is unchanged (no revision noise).
+            const touched = yield* repository.applyUpdate({
+              memoryId: input.memoryId,
+              text: row.text,
+              type: row.type,
+              textHash: row.textHash,
+              lastAccessedAt: nowIso,
+            });
+            if (Option.isNone(touched)) {
+              return yield* Effect.fail(
+                new MindMemoryNotFoundError({
+                  memoryId: input.memoryId,
+                  message: "The memory was deleted while editing; recall to get a valid id.",
+                }),
+              );
+            }
+            return toMindMemory(touched.value, nowIso);
+          }
+          const updated = yield* repository.applyUpdate({
+            memoryId: input.memoryId,
+            text: normalized,
+            type: nextType,
+            textHash,
+            lastAccessedAt: nowIso,
+          });
+          if (Option.isNone(updated)) {
+            return yield* Effect.fail(
+              new MindMemoryNotFoundError({
+                memoryId: input.memoryId,
+                message: "The memory was deleted while editing; recall to get a valid id.",
+              }),
+            );
+          }
+          yield* repository.insertRevision({
+            memoryId: input.memoryId,
+            oldHash: row.textHash,
+            newHash: textHash,
+            actor: input.actor,
+            createdAt: nowIso,
+          });
+          if (operationId !== null) {
+            yield* repository.putReceipt({
+              projectId: row.projectId,
+              operationId,
+              op: "update",
+              resultJson: JSON.stringify({ memoryId: input.memoryId, textHash }),
+              createdAt: nowIso,
+            });
+          }
+          return toMindMemory(updated.value, nowIso);
+        }),
+      )
+      .pipe(
+        Effect.catchIf(
+          (error): error is SqlError => error._tag === "SqlError",
+          (error) => Effect.fail(toPersistenceSqlError("MindService.update:transaction")(error)),
+        ),
+      );
+
+  // Sweep after the mutation: the just-edited row is fresh and exempt, so an
+  // explicit edit can never be pre-empted by the prune sweep. Mirrors confirm.
+  const update = (input: MindUpdateRequest): Effect.Effect<MindMemory, MindServiceError> =>
+    Effect.gen(function* () {
+      const result = yield* updateInTransaction(input);
+      yield* maybeSweep(result.projectId);
+      return result;
+    });
+
+  const history = (input: MindHistoryRequest): Effect.Effect<MindHistoryResult, MindServiceError> =>
+    Effect.gen(function* () {
+      const existing = yield* repository.getById({ memoryId: input.memoryId });
+      if (Option.isNone(existing) || existing.value.projectId !== input.projectId) {
+        return yield* Effect.fail(
+          new MindMemoryNotFoundError({
+            memoryId: input.memoryId,
+            message: "No memory with this id; recall or list memories to get a valid id.",
+          }),
+        );
+      }
+      const row = existing.value;
+      const journal = yield* repository.listJournalForMemory({ memoryId: input.memoryId });
+      const revisions = yield* repository.listRevisions({ memoryId: input.memoryId });
+      // Op timeline only — journal and revision rows never carry memory text.
+      const entries: MindHistoryResult["entries"] = [
+        ...journal.map((entry) => ({
+          op: entry.op as MindHistoryResult["entries"][number]["op"],
+          actor: entry.actor,
+          createdAt: entry.createdAt,
+        })),
+        ...revisions.map((revision) => ({
+          op: "edit" as const,
+          actor: revision.actor,
+          createdAt: revision.createdAt,
+        })),
+      ]
+        .toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+        .slice(0, MIND_HISTORY_MAX_ENTRIES);
+      if (entries.length === 0) {
+        // The memory exists, so it was remembered — the journal row may
+        // predate journaling. Anchor the empty timeline honestly on creation.
+        return { entries: [{ op: "remember", actor: { kind: "user" }, createdAt: row.createdAt }] };
+      }
+      return { entries };
+    });
+
   const shape: MindServiceShape = {
     remember,
     recall,
@@ -730,6 +926,8 @@ const makeMindService = Effect.gen(function* () {
         threadId: null,
         turnId: null,
       }),
+    update,
+    history,
   };
   return shape;
 });

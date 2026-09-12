@@ -25,14 +25,18 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
 import {
+  MIND_HISTORY_NOTE,
   countStaleMindMemories,
   formatMindCountLabel,
   formatMindDigestSuffix,
+  formatMindHistoryActorLabel,
+  formatMindHistoryOpLabel,
   groupMindMemoriesByDay,
   optimisticAffirmWeight,
   optimisticForgetCount,
   sortMindMemories,
 } from "~/lib/mindList";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
 import { cn } from "~/lib/utils";
@@ -69,9 +73,10 @@ function provenanceLabel(provenance: MindMemory["provenance"]): string | null {
 
 /**
  * Mind list row: a leading type badge, a two-line text/detail stack, and trailing
- * still-true affirm plus pin toggle plus hover-reveal delete. Not clickable —
+ * still-true affirm plus edit plus pin toggle plus hover-reveal delete, with an
+ * inline editor and a per-row history timeline below. Not clickable —
  * there is no memory detail surface; the row is the whole interaction
- * (affirm, pin, delete).
+ * (affirm, edit, pin, delete, history).
  */
 function MindListRow({
   memory,
@@ -79,15 +84,36 @@ function MindListRow({
   onAffirm,
   onTogglePinned,
   onDelete,
+  onSaveEdit,
 }: {
   readonly memory: MindMemory;
   readonly projectName: string;
   readonly onAffirm: () => void;
   readonly onTogglePinned: () => void;
   readonly onDelete: () => void;
+  readonly onSaveEdit: (input: { readonly text: string; readonly type: MindMemoryType }) => void;
 }) {
   const pinLabel = pinActionLabel("memory", memory.pinned);
   const provenance = provenanceLabel(memory.provenance);
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftText, setDraftText] = useState(memory.text);
+  const [draftType, setDraftType] = useState<MindMemoryType>(memory.type);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyQuery = useQuery({
+    queryKey: ["mind", "history", memory.memoryId] as const,
+    queryFn: () =>
+      ensureNativeApi().mind.history({
+        projectId: memory.projectId,
+        memoryId: memory.memoryId,
+      }),
+    enabled: historyOpen,
+    staleTime: 30_000,
+  });
+  const openEditor = () => {
+    setDraftText(memory.text);
+    setDraftType(memory.type);
+    setIsEditing(true);
+  };
   return (
     <div
       className={cn(
@@ -101,15 +127,97 @@ function MindListRow({
         </Badge>
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-[0.8125rem] text-foreground">{memory.text}</span>
-        <span className="truncate text-xs text-muted-foreground">
-          {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}
-          {provenance ? ` · ${provenance}` : ""}
-          {memory.accessCount > 0
-            ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
-            : ""}
-          {memory.pinned ? " · pinned" : ""}
-        </span>
+        {isEditing ? (
+          <span className="flex flex-col gap-1.5 py-0.5">
+            <textarea
+              aria-label="Edit memory text"
+              value={draftText}
+              onChange={(event) => setDraftText(event.target.value)}
+              rows={3}
+              maxLength={500}
+              className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-[0.8125rem] text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <span className="flex items-center gap-1.5">
+              <select
+                aria-label="Edit memory type"
+                value={draftType}
+                onChange={(event) => setDraftType(event.target.value as MindMemoryType)}
+                className="rounded-md border border-input bg-background px-1.5 py-1 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="semantic">semantic</option>
+                <option value="episodic">episodic</option>
+                <option value="procedural">procedural</option>
+                <option value="decision">decision</option>
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  onSaveEdit({ text: draftText, type: draftType });
+                  setIsEditing(false);
+                }}
+              >
+                Save
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setIsEditing(false)}>
+                Cancel
+              </Button>
+            </span>
+          </span>
+        ) : (
+          <>
+            <span className="truncate text-[0.8125rem] text-foreground">{memory.text}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {projectName} · {formatRelativeTime(memory.createdAt)} · weight{" "}
+              {memory.weight.toFixed(2)}
+              {provenance ? ` · ${provenance}` : ""}
+              {memory.accessCount > 0
+                ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
+                : ""}
+              {memory.pinned ? " · pinned" : ""}
+            </span>
+            <span className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={historyOpen ? "Hide history" : "Show history"}
+                aria-expanded={historyOpen}
+                onClick={() => setHistoryOpen((open) => !open)}
+                className="w-fit rounded text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+              >
+                History
+              </button>
+            </span>
+            <DisclosureRegion open={historyOpen}>
+              <span className="flex flex-col gap-0.5 py-1 text-xs text-muted-foreground">
+                <span>{MIND_HISTORY_NOTE}</span>
+                {historyQuery.isLoading ? (
+                  <span>Loading history…</span>
+                ) : historyQuery.isError ? (
+                  <span>
+                    {historyQuery.error instanceof Error
+                      ? historyQuery.error.message
+                      : "Failed to load history."}{" "}
+                    <button
+                      type="button"
+                      onClick={() => void historyQuery.refetch()}
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      Retry
+                    </button>
+                  </span>
+                ) : (
+                  (historyQuery.data?.entries ?? []).map((entry, index) => (
+                    <span key={`${entry.createdAt}-${entry.op}-${index}`}>
+                      {formatMindHistoryOpLabel(entry.op)} ·{" "}
+                      {formatMindHistoryActorLabel(entry.actor)} ·{" "}
+                      {formatRelativeTime(entry.createdAt)}
+                    </span>
+                  ))
+                )}
+              </span>
+            </DisclosureRegion>
+          </>
+        )}
       </span>
       <button
         type="button"
@@ -119,6 +227,15 @@ function MindListRow({
         className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
       >
         <CentralIcon name="checkmark-1-small" className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Edit memory"
+        title="Edit"
+        onClick={openEditor}
+        className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <CentralIcon name="pencil" className="size-3.5" />
       </button>
       <button
         type="button"
@@ -222,6 +339,48 @@ function MindRouteView() {
       toastManager.add({ type: "success", title: "Memory affirmed" });
     },
     onError: (error, _memory, context) => {
+      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      toastManager.add({ type: "error", title: error.message });
+    },
+  });
+  // Optimistic edit: the text swaps eagerly and the invalidate-on-settle
+  // refetch converges it (the server trims, so the refetch also converges
+  // whitespace). Server rejections — duplicates, secrets — roll back and
+  // surface the server's message.
+  const updateMutation = useMutation({
+    mutationFn: (input: {
+      readonly memory: MindMemory;
+      readonly text: string;
+      readonly type: MindMemoryType;
+    }) =>
+      ensureNativeApi().mind.update({
+        projectId: input.memory.projectId,
+        memoryId: input.memory.memoryId,
+        text: input.text,
+        type: input.type,
+      }),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
+      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
+      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+        prev
+          ? {
+              ...prev,
+              memories: prev.memories.map((item) =>
+                item.memoryId === input.memory.memoryId
+                  ? { ...item, text: input.text, type: input.type }
+                  : item,
+              ),
+            }
+          : prev,
+      );
+      return { previous };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      toastManager.add({ type: "success", title: "Saved" });
+    },
+    onError: (error, _input, context) => {
       if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
       toastManager.add({ type: "error", title: error.message });
     },
@@ -343,6 +502,9 @@ function MindRouteView() {
                     setPinnedMutation.mutate({ memory, pinned: !memory.pinned })
                   }
                   onDelete={() => forgetMutation.mutate(memory)}
+                  onSaveEdit={(input) =>
+                    updateMutation.mutate({ memory, text: input.text, type: input.type })
+                  }
                 />
               ))}
             </div>

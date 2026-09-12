@@ -37,3 +37,15 @@ export class MindMemoryNotFoundError extends Schema.TaggedErrorClass<MindMemoryN
     message: Schema.String,
   },
 ) {}
+
+/**
+ * Edit collision: another memory in the same project already holds the new
+ * text hash. Carries the other memory's id so the UI can point at it.
+ */
+export class MindTextExistsError extends Schema.TaggedErrorClass<MindTextExistsError>()(
+  "MindTextExistsError",
+  {
+    memoryId: Schema.String,
+    message: Schema.String,
+  },
+) {}

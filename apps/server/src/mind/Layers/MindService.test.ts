@@ -78,6 +78,12 @@ const PROJECTS = {
   sweepBound: "project-mind-service-sweep-bound",
   ftsEdge: "project-mind-service-fts-edge",
   queryLimit: "project-mind-service-query-limit",
+  update: "project-mind-service-update",
+  updateDupe: "project-mind-service-update-dupe",
+  updateSecret: "project-mind-service-update-secret",
+  updateRetry: "project-mind-service-update-retry",
+  history: "project-mind-service-history",
+  historyEmpty: "project-mind-service-history-empty",
 } as const;
 
 let memoryCounter = 0;
@@ -1021,6 +1027,276 @@ layer("MindService", (it) => {
       assert.isTrue(all.memories.length <= all.count);
       assert.isTrue(all.memories.length <= MIND_MEMORY_PROJECT_CAP);
       assert.isTrue(all.skipped === undefined || all.skipped >= 0);
+    }),
+  );
+
+  it.effect("update edits text and type, touches the decay anchor, and records a revision", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.update);
+      yield* ensureProjectRow(PROJECTS.update);
+      const remembered = yield* service.remember(
+        rememberRequest(projectId, "Original update fact", { turnId: "turn-update-create" }),
+      );
+      const before = Option.getOrThrow(
+        yield* repository.getById({ memoryId: remembered.memoryId }),
+      );
+
+      yield* TestClock.adjust(Duration.hours(1));
+      const updated = yield* service.update({
+        projectId,
+        memoryId: remembered.memoryId,
+        text: "  Revised update fact  ",
+        type: "decision",
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: null,
+      });
+      // Trimmed, retyped, and retrievable by the new text.
+      assert.strictEqual(updated.text, "Revised update fact");
+      assert.strictEqual(updated.type, "decision");
+      const after = Option.getOrThrow(yield* repository.getById({ memoryId: remembered.memoryId }));
+      assert.strictEqual(after.text, "Revised update fact");
+      assert.strictEqual(after.type, "decision");
+      // Touch only: the anchor moves, peak weight and access count never do.
+      assert.notStrictEqual(after.lastAccessedAt, before.lastAccessedAt);
+      assert.strictEqual(after.peakWeight, before.peakWeight);
+      assert.strictEqual(after.accessCount, before.accessCount);
+      const recalled = yield* service.recall({ projectId, query: "Revised" });
+      assert.deepStrictEqual(
+        recalled.items.map((item) => item.memoryId),
+        [remembered.memoryId],
+      );
+      // Hash-only revision evidence, never text.
+      const revisions = yield* sql<{
+        readonly oldHash: string;
+        readonly newHash: string;
+        readonly actor: string;
+      }>`SELECT old_hash AS "oldHash", new_hash AS "newHash", actor FROM mind_text_revisions WHERE memory_id = ${remembered.memoryId}`;
+      assert.lengthOf(revisions, 1);
+      assert.notStrictEqual(revisions[0]?.oldHash, revisions[0]?.newHash);
+      assert.strictEqual(revisions[0]?.actor, "user:ui");
+    }),
+  );
+
+  it.effect("update rejects a collision with another memory's text", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.updateDupe);
+      yield* ensureProjectRow(PROJECTS.updateDupe);
+      const first = yield* service.remember(
+        rememberRequest(projectId, "Alpha dupe fact", { turnId: "turn-dupe-a" }),
+      );
+      const second = yield* service.remember(
+        rememberRequest(projectId, "Beta dupe fact", { turnId: "turn-dupe-b" }),
+      );
+
+      const rejected = yield* Effect.flip(
+        service.update({
+          projectId,
+          memoryId: second.memoryId,
+          text: "Alpha dupe fact",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        }),
+      );
+      assert.strictEqual(rejected._tag, "MindTextExistsError");
+      if (rejected._tag === "MindTextExistsError") {
+        assert.strictEqual(rejected.memoryId, first.memoryId);
+      }
+      // The loser is untouched.
+      const untouched = Option.getOrThrow(yield* repository.getById({ memoryId: second.memoryId }));
+      assert.strictEqual(untouched.text, "Beta dupe fact");
+    }),
+  );
+
+  it.effect("update rejects secret-shaped, empty, and oversized text before any write", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.updateSecret);
+      yield* ensureProjectRow(PROJECTS.updateSecret);
+      const remembered = yield* service.remember(
+        rememberRequest(projectId, "Clean update fact", { turnId: "turn-update-secret-create" }),
+      );
+
+      const secret = yield* Effect.flip(
+        service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "my key ghp_1234567890abcdef",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        }),
+      );
+      assert.strictEqual(secret._tag, "MindSecretRejectedError");
+
+      const empty = yield* Effect.flip(
+        service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "   ",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        }),
+      );
+      assert.strictEqual(empty._tag, "MindInvalidTextError");
+
+      const long = yield* Effect.flip(
+        service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "x".repeat(501),
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        }),
+      );
+      assert.strictEqual(long._tag, "MindInvalidTextError");
+
+      const missing = yield* Effect.flip(
+        service.update({
+          projectId,
+          memoryId: MindMemoryId.makeUnsafe("memory-missing-update"),
+          text: "No such memory",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        }),
+      );
+      assert.strictEqual(missing._tag, "MindMemoryNotFoundError");
+
+      // Nothing was written: same text, no revisions.
+      const untouched = Option.getOrThrow(
+        yield* repository.getById({ memoryId: remembered.memoryId }),
+      );
+      assert.strictEqual(untouched.text, "Clean update fact");
+      const revisions = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM mind_text_revisions WHERE memory_id = ${remembered.memoryId}
+      `;
+      assert.strictEqual(revisions[0]?.count, 0);
+    }),
+  );
+
+  it.effect("update retries with the same turn replay without a second revision", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.updateRetry);
+      yield* ensureProjectRow(PROJECTS.updateRetry);
+      const remembered = yield* service.remember(
+        rememberRequest(projectId, "Retry update fact", { turnId: "turn-update-retry-create" }),
+      );
+      const updateInput = {
+        projectId,
+        memoryId: remembered.memoryId,
+        text: "Retried update fact",
+        actor: { kind: "user" } as const,
+        threadId: null,
+        turnId: "turn-update-retry",
+      } as const;
+
+      const first = yield* service.update(updateInput);
+      assert.strictEqual(first.text, "Retried update fact");
+      yield* TestClock.adjust(Duration.hours(1));
+      const retry = yield* service.update(updateInput);
+      assert.strictEqual(retry.text, "Retried update fact");
+      assert.strictEqual(retry.memoryId, first.memoryId);
+      const revisions = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM mind_text_revisions WHERE memory_id = ${remembered.memoryId}
+      `;
+      assert.strictEqual(revisions[0]?.count, 1);
+      // Pure no-op: the decay anchor still points at the first apply.
+      const row = Option.getOrThrow(yield* repository.getById({ memoryId: remembered.memoryId }));
+      assert.strictEqual(row.lastAccessedAt, first.lastAccessedAt);
+    }),
+  );
+
+  it.effect("history merges journal and revision rows oldest-first, without text", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.history);
+      yield* ensureProjectRow(PROJECTS.history);
+      const remembered = yield* service.remember(
+        rememberRequest(projectId, "History merge fact", { turnId: "turn-history-create" }),
+      );
+      yield* TestClock.adjust(Duration.hours(1));
+      yield* service.confirm({
+        memoryId: remembered.memoryId,
+        projectId,
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: "turn-history-confirm",
+      });
+      yield* TestClock.adjust(Duration.hours(1));
+      yield* service.update({
+        projectId,
+        memoryId: remembered.memoryId,
+        text: "History merge fact, revised",
+        actor: { kind: "user" },
+        threadId: null,
+        turnId: null,
+      });
+
+      const timeline = yield* service.history({ projectId, memoryId: remembered.memoryId });
+      assert.deepStrictEqual(
+        timeline.entries.map((entry) => entry.op),
+        ["remember", "confirm", "edit"],
+      );
+      for (let index = 1; index < timeline.entries.length; index++) {
+        assert.isTrue(timeline.entries[index - 1]!.createdAt <= timeline.entries[index]!.createdAt);
+      }
+      // Op timeline only: entries carry who/when, never text.
+      for (const entry of timeline.entries) {
+        assert.notInclude(Object.keys(entry), "text");
+      }
+      assert.deepStrictEqual(timeline.entries[0]?.actor, {
+        kind: "agent",
+        provider: "codex",
+      });
+
+      const missing = yield* Effect.flip(
+        service.history({
+          projectId,
+          memoryId: MindMemoryId.makeUnsafe("memory-missing-history"),
+        }),
+      );
+      assert.strictEqual(missing._tag, "MindMemoryNotFoundError");
+      const foreign = yield* Effect.flip(
+        service.history({
+          projectId: ProjectId.makeUnsafe(PROJECTS.update),
+          memoryId: remembered.memoryId,
+        }),
+      );
+      assert.strictEqual(foreign._tag, "MindMemoryNotFoundError");
+    }),
+  );
+
+  it.effect("history anchors a journal-less memory on its creation", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.historyEmpty);
+      yield* ensureProjectRow(PROJECTS.historyEmpty);
+      const seeded = yield* seedMemory({ projectId, textHash: "history-empty-stub" });
+
+      const timeline = yield* service.history({ projectId, memoryId: seeded.memoryId });
+      assert.lengthOf(timeline.entries, 1);
+      assert.strictEqual(timeline.entries[0]?.op, "remember");
+      assert.strictEqual(timeline.entries[0]?.createdAt, seeded.createdAt);
     }),
   );
 });

@@ -122,6 +122,43 @@ export const SetMindMemoryPinnedInput = Schema.Struct({
 });
 export type SetMindMemoryPinnedInput = typeof SetMindMemoryPinnedInput.Type;
 
+/**
+ * Inline edit: new text/hash plus the resolved type (callers keep the old
+ * type when no change was requested), and the fresh decay anchor. Peak
+ * weight and access count are never touched by an edit.
+ */
+export const ApplyMindUpdateInput = Schema.Struct({
+  memoryId: MindMemoryId,
+  text: MindMemory.fields.text,
+  type: MindMemoryType,
+  textHash: Schema.String,
+  lastAccessedAt: IsoDateTime,
+});
+export type ApplyMindUpdateInput = typeof ApplyMindUpdateInput.Type;
+
+/** One text-revision row: hash evidence of an edit, never memory text. */
+export const MindTextRevisionRow = Schema.Struct({
+  memoryId: MindMemoryId,
+  oldHash: Schema.String,
+  newHash: Schema.String,
+  actor: MindJournalEntry.fields.actor,
+  createdAt: IsoDateTime,
+});
+export type MindTextRevisionRow = typeof MindTextRevisionRow.Type;
+
+export const InsertMindRevisionInput = MindTextRevisionRow;
+export type InsertMindRevisionInput = typeof InsertMindRevisionInput.Type;
+
+export const ListMindJournalForMemoryInput = Schema.Struct({
+  memoryId: MindMemoryId,
+});
+export type ListMindJournalForMemoryInput = typeof ListMindJournalForMemoryInput.Type;
+
+export const ListMindRevisionsInput = Schema.Struct({
+  memoryId: MindMemoryId,
+});
+export type ListMindRevisionsInput = typeof ListMindRevisionsInput.Type;
+
 export const DeleteMindMemoryInput = Schema.Struct({
   memoryId: MindMemoryId,
 });
@@ -237,6 +274,25 @@ export interface MindRepositoryShape {
   readonly setPinned: (
     input: SetMindMemoryPinnedInput,
   ) => Effect.Effect<Option.Option<MindMemoryRow>, MindRepositoryError>;
+  /**
+   * Inline edit: sets text/type/hash, resets the decay anchor, leaves peak
+   * weight and access count alone. Returns none if the memory is gone.
+   */
+  readonly applyUpdate: (
+    input: ApplyMindUpdateInput,
+  ) => Effect.Effect<Option.Option<MindMemoryRow>, MindRepositoryError>;
+  /** Records hash-only revision evidence for an edit (never memory text). */
+  readonly insertRevision: (
+    input: InsertMindRevisionInput,
+  ) => Effect.Effect<void, MindRepositoryError>;
+  /** Every journal row for one memory, oldest first (op timeline, no text). */
+  readonly listJournalForMemory: (
+    input: ListMindJournalForMemoryInput,
+  ) => Effect.Effect<ReadonlyArray<MindJournalEntry>, MindRepositoryError>;
+  /** Every revision row for one memory, oldest first. */
+  readonly listRevisions: (
+    input: ListMindRevisionsInput,
+  ) => Effect.Effect<ReadonlyArray<MindTextRevisionRow>, MindRepositoryError>;
   /** Deletes a memory row (FTS sync trigger keeps the index in step). True when a row was deleted. */
   readonly deleteById: (
     input: DeleteMindMemoryInput,

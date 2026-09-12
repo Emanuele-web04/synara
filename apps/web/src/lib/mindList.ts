@@ -1,5 +1,6 @@
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
-import type { MindMemory } from "@synara/contracts";
+import type { MindHistoryEntry, MindMemory } from "@synara/contracts";
 
 /** True while the loaded page is truncated: fewer rows shown than the true total. */
 export function isMindListTruncated(input: {
@@ -157,4 +158,36 @@ export function formatMindDigestSuffix(input: {
  */
 export function optimisticAffirmWeight(weight: number): number {
   return Math.min(1, Number((weight + 0.15).toFixed(4)));
+}
+
+/**
+ * Honest history framing: the timeline carries who/when only — revision and
+ * journal rows never store memory text, so there are no diffs to show.
+ */
+export const MIND_HISTORY_NOTE = "History shows when each change happened, not what changed.";
+
+/** Past-tense verb for each timeline op (`edit` comes from the revision table). */
+export function formatMindHistoryOpLabel(op: MindHistoryEntry["op"]): string {
+  switch (op) {
+    case "remember":
+      return "Saved";
+    case "confirm":
+      return "Confirmed";
+    case "edit":
+      return "Edited";
+    case "pin":
+      return "Pinned";
+    case "unpin":
+      return "Unpinned";
+    case "forget":
+      return "Forgotten";
+    case "prune":
+      return "Pruned";
+  }
+}
+
+/** Who acted: the viewer for user rows, the provider for agent rows. */
+export function formatMindHistoryActorLabel(actor: MindHistoryEntry["actor"]): string {
+  if (actor.kind === "user") return "you";
+  return `agent · ${PROVIDER_DISPLAY_NAMES[actor.provider]}`;
 }

@@ -2109,6 +2109,25 @@ const makeWsRpcHandlersLayer = () =>
             mindService.affirm({ projectId: input.projectId, memoryId: input.memoryId }),
             "Failed to affirm memory",
           ),
+        [WS_METHODS.mindUpdate]: (input) =>
+          rpcEffect(
+            mindService.update({
+              projectId: input.projectId,
+              memoryId: input.memoryId,
+              text: input.text,
+              ...(input.type === undefined ? {} : { type: input.type }),
+              // The UI has no thread context; journal actor is the plain user.
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory",
+          ),
+        [WS_METHODS.mindHistory]: (input) =>
+          rpcEffect(
+            mindService.history({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to load memory history",
+          ),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
