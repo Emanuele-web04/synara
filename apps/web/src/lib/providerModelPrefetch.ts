@@ -54,6 +54,9 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "opencode",
   "pi",
   "devin",
+  // One global `omp models` spawn, not per-model sessions like Droid — safe to
+  // keep warm across hover/mount prefetches.
+  "omp",
 ];
 
 /** Warm results stay fresh for 30 minutes instead of the interactive 60s. */

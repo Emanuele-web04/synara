@@ -315,7 +315,9 @@ export function useProviderModelCatalog(input: {
   // outstanding or retrying; transient cold-start failures retry under the
   // skeleton before this flag ever flips.
   const ompDiscoveryFailed =
-    ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && ompDynamicModelsQuery.isError;
+    ompModelDiscoveryEnabled &&
+    !hasResolvedOmpModelDiscovery &&
+    !isInitialModelDiscoveryPending(ompDynamicModelsQuery);
   const ompModelDiscoveryPending =
     ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && !ompDiscoveryFailed;
   const antigravityModelDiscoveryPending =
@@ -395,11 +397,11 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
-    // Terminal OMP discovery failure: clear options so the picker surfaces a
-    // load-failure message instead of the hint-only static list (OMP has no
-    // built-in catalog to fall back to).
+    // Terminal OMP discovery failure: drop the hint placeholder but keep
+    // user-configured custom models — the picker still renders the
+    // discovery error line above whatever options remain.
     if (ompDiscoveryFailed) {
-      result.omp = [];
+      result.omp = staticOptions.omp.filter((option) => option.isCustom === true);
     }
     return result;
   }, [
@@ -523,6 +525,7 @@ export function useProviderModelCatalog(input: {
         openCodeDynamicModelsQuery.error,
       ),
       pi: modelDiscoveryError(piDynamicModelsQuery.data?.error, piDynamicModelsQuery.error),
+      omp: modelDiscoveryError(ompDynamicModelsQuery.data?.error, ompDynamicModelsQuery.error),
     }),
     [
       antigravityModelsQuery.data?.error,
@@ -541,6 +544,8 @@ export function useProviderModelCatalog(input: {
       openCodeDynamicModelsQuery.error,
       piDynamicModelsQuery.data?.error,
       piDynamicModelsQuery.error,
+      ompDynamicModelsQuery.data?.error,
+      ompDynamicModelsQuery.error,
     ],
   );
 

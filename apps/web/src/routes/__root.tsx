@@ -150,10 +150,12 @@ import { useRightDockStore } from "../rightDockStore";
 import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
-import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import {
+  providerDiscoveryQueryKeys,
+  providerModelsQueryOptions,
+} from "../lib/providerDiscoveryReactQuery";
 import { didProviderEnablementChange, useAppSettings } from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
-import { providerModelsPrefetchQueryOptions } from "../lib/providerModelPrefetch";
 import {
   getNotifiableProviderUpdateStatuses,
   isProviderUpdateActive,
@@ -457,12 +459,22 @@ function ProviderModelDiscoveryWarmer() {
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = settings.hiddenProviders.includes("omp");
+  const ompBinaryPath = settings.ompBinaryPath;
+  const ompAgentDir = settings.ompAgentDir;
   useEffect(() => {
     if (ompHidden) return;
+    // Build options from the two primitive fields the omp query reads:
+    // `settings` is rebuilt every render, so depending on it would re-fire the
+    // query (and its retry chain against a failing binary) on every render.
     void queryClient.prefetchQuery(
-      providerModelsPrefetchQueryOptions({ provider: "omp", settings, cwd: null }),
+      providerModelsQueryOptions({
+        provider: "omp",
+        binaryPath: ompBinaryPath || null,
+        agentDir: ompAgentDir || null,
+        priority: "background",
+      }),
     );
-  }, [queryClient, settings, ompHidden]);
+  }, [queryClient, ompHidden, ompBinaryPath, ompAgentDir]);
   return null;
 }
 

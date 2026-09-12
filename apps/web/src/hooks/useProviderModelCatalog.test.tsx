@@ -367,6 +367,55 @@ describe("useProviderModelCatalog", () => {
     expect(catalog?.modelOptionsByProvider.omp).toEqual([]);
   });
 
+  it("keeps user-configured OMP custom models on terminal discovery failure", () => {
+    // The picker renders the discovery error line above whatever options
+    // remain, so a failed `omp models` must not hide the user's own
+    // configured models — only the hint placeholder is dropped.
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, customOmpModels: ["acme/my-omp-model"] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    modelQueries.set("omp", {
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual(["acme/my-omp-model"]);
+  });
+
+  it("clears OMP loading on a settled non-catalog result", () => {
+    // A settled {source:"disabled"} answer is not an error and not a real
+    // catalog — it must still end pending or the picker parks on the skeleton
+    // forever (the query never refetches once settled).
+    modelQueries.set("omp", {
+      data: {
+        models: [],
+        source: "disabled",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp).toEqual([]);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {

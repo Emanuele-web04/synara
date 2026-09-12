@@ -751,6 +751,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
     hasOwn(patch, "piAgentDir") ||
+    hasOwn(patch, "ompBinaryPath") ||
     hasOwn(patch, "ompAgentDir") ||
     hasOwn(patch, "disabledProviders")
   );

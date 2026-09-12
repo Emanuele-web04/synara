@@ -371,6 +371,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as OpenCodeModelOptions;
   }
+  if (provider === "omp") {
+    return {
+      ...(modelOptions as OmpModelOptions | undefined),
+      ...patch,
+    } as OmpModelOptions;
+  }
   return {
     ...(modelOptions as PiModelOptions | undefined),
     ...patch,
