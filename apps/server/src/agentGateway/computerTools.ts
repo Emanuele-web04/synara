@@ -55,6 +55,7 @@ import {
 import { withDesktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
+import { withComputerTask } from "../computer/computerTaskContext.ts";
 import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 export { computerToolInstructions } from "./computerGuidance.ts";
 import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
@@ -855,11 +856,19 @@ export function makeAgentGatewayComputerTools(
           // Action targeting and automatic previews do not replace a model's
           // explicit observation after a desktop interruption.
           const invoke = () =>
-            name === "computer_get_state" ||
-            name === "computer_screenshot" ||
-            name === "computer_wait"
-              ? withModelDesktopObservation(() => run(args, context))
-              : run(args, context);
+            withComputerTask(
+              {
+                threadId: context.callerThreadId,
+                ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+                ...(context.callerThreadLabel ? { label: context.callerThreadLabel } : {}),
+              },
+              () =>
+                name === "computer_get_state" ||
+                name === "computer_screenshot" ||
+                name === "computer_wait"
+                  ? withModelDesktopObservation(() => run(args, context))
+                  : run(args, context),
+            );
           const value =
             name === "computer_wait"
               ? await (async () => {

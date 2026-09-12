@@ -463,6 +463,8 @@ export interface ComputerBackend {
   detachStream(): Promise<void>;
   requestKeyframe?(): Promise<void>;
   stopInput?(): Promise<void>;
+  /** Release task-owned observation resources, including read-only turns. */
+  endTask?(threadId: string, turnId?: string): Promise<void>;
   dispose(): Promise<void> | void;
 }
 

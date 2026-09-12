@@ -789,6 +789,32 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("releases desktop control even when preview cleanup is delayed or fails", async () => {
+    const pending = deferred();
+    const backend = Object.assign(new FakeComputerBackend(), {
+      endTask: vi.fn(async () => {
+        await pending.promise;
+        throw new Error("Preview cleanup failed");
+      }),
+    });
+    const manager = new ComputerManager({ backend });
+    await manager.launchApp("thread-a", "kcalc");
+    const cleared = backend.callsFor("clearFocusWindow").length;
+    const release = manager.releaseDesktopControl("thread-a", "turn-one");
+    const failed = expect(release).rejects.toThrow("Preview cleanup failed");
+    await vi.waitFor(() => expect(backend.callsFor("clearFocusWindow")).toHaveLength(cleared + 1));
+    await vi.waitFor(async () =>
+      expect((await manager.getThreadState("thread-b")).controlledByOtherThread).toBe(false),
+    );
+    await expect(manager.typeText("thread-b", "hi")).resolves.toMatchObject({
+      action: "computer_type_text",
+    });
+    pending.resolve();
+    await failed;
+    expect(backend.endTask).toHaveBeenCalledWith("thread-a", "turn-one");
+    await manager.dispose();
+  });
+
   /**
    * The release the lease reactor sends on session.exited can land while the
    * dead session's last call is still executing — a gateway call cannot be

@@ -14,7 +14,12 @@ import {
   CUA_ACTION_TOOLS,
   type CuaReply,
   type CuaToolResult,
+  type CuaComputerTask,
+  type CuaPreviewTarget,
+  parseCuaComputerTask,
+  cuaComputerTaskKey,
 } from "@synara/shared/cuaDriverProtocol";
+import type { ComputerNativePreviewHost } from "./computerNativePreview";
 
 interface Generation {
   child: ChildProcess;
@@ -52,6 +57,9 @@ export class CuaDriverHost {
   private readonly connections = new Set<Socket>();
   private permissions: HostPermissions | undefined;
   private readonly pendingPermissionChecks = new Set<() => void>();
+  private readonly endedPreviewTasks = new Set<string>();
+  private readonly userStoppedTasks = new Set<string>();
+  private previewTask: CuaComputerTask | undefined;
   constructor(
     private readonly options: {
       binaryPath: string;
@@ -60,6 +68,7 @@ export class CuaDriverHost {
       setup: () => Promise<void>;
       checkPermissions?: () => Promise<HostPermissions>;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
+      preview?: ComputerNativePreviewHost;
     },
   ) {}
 
@@ -133,6 +142,21 @@ export class CuaDriverHost {
       await this.stop();
       return { ok: true };
     }
+    const task = parseCuaComputerTask(request.task);
+    if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
+    if (request.method === "end_task") {
+      if (!task) throw new Error("Computer task attribution is required.");
+      this.rememberTask(this.endedPreviewTasks, task);
+      if (
+        this.previewTask?.threadId === task.threadId &&
+        (task.turnId === undefined || task.turnId === this.previewTask.turnId)
+      ) {
+        this.rememberTask(this.endedPreviewTasks, this.previewTask);
+        this.previewTask = undefined;
+      }
+      await this.options.preview?.endTask(task);
+      return { ok: true };
+    }
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
@@ -179,6 +203,13 @@ export class CuaDriverHost {
           effect: "not-dispatched",
         } as const;
       if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+      if (task && this.userStoppedTasks.has(cuaComputerTaskKey(task))) {
+        return {
+          ok: false,
+          error: "The user stopped computer use for this turn. Do not retry actions.",
+          effect: "not-dispatched" as const,
+        };
+      }
       if (name === "check_permissions" && this.options.checkPermissions) {
         // AppSnap's short-lived helper avoids the embedded daemon's TCC cache.
         // This remains an authenticated, read-only host operation: prompt args
@@ -229,7 +260,34 @@ export class CuaDriverHost {
         (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")
       )
         return this.desktopPauseReply();
-      return this.call(name, request.args, connection, request.modelObservation === true);
+      if (task && (request.modelObservation === true || CUA_ACTION_TOOLS.has(name)))
+        this.previewTask = task;
+      const reply = await this.call(
+        name,
+        request.args,
+        connection,
+        request.modelObservation === true,
+      );
+      if (
+        task &&
+        !this.endedPreviewTasks.has(cuaComputerTaskKey(task)) &&
+        !this.userStoppedTasks.has(cuaComputerTaskKey(task)) &&
+        epoch === this.epoch &&
+        !connection.destroyed &&
+        reply.ok &&
+        !reply.result?.isError &&
+        (request.modelObservation === true || CUA_ACTION_TOOLS.has(name))
+      ) {
+        const target = this.previewTarget(task, request.args);
+        if (target) {
+          try {
+            this.options.preview?.update(target);
+          } catch (error) {
+            console.warn("[computer-preview] Could not update preview", error);
+          }
+        }
+      }
+      return reply;
     })();
     this.operations = operation.then(
       () => undefined,
@@ -460,6 +518,9 @@ export class CuaDriverHost {
   private retire(generation: Generation): Promise<void> {
     if (generation.retirement) return generation.retirement;
     generation.retired = true;
+    const previewStopped = this.options.preview?.stop();
+    // Retain the failure for the cleanup barrier without an unhandled rejection.
+    void previewStopped?.catch(() => undefined);
     this.retiring = this.retiring.then(async () => {
       if (generation.didExit && generation.inputInFlight)
         throw new Error(
@@ -488,6 +549,7 @@ export class CuaDriverHost {
         }
         generation.inputInFlight = false;
       }
+      await previewStopped;
       // Before the validated handshake no action can have been dispatched.
       // Otherwise the authenticated acknowledgement above covers all matching
       // releases and native context restoration before termination is allowed.
@@ -515,14 +577,64 @@ export class CuaDriverHost {
     this.epoch += 1;
     for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
+    const previewStopped = this.options.preview?.stop();
+    void previewStopped?.catch(() => undefined);
     this.stopping = this.stopping.then(async () => {
       if (this.generation) await this.retire(this.generation);
       await this.starting?.catch(() => undefined);
       if (this.generation) await this.retire(this.generation);
       await admitted;
       await this.retiring;
+      await previewStopped;
     });
     return this.stopping;
+  }
+
+  /** Native preview Stop revokes the active turn without changing OS grants. */
+  stopTaskByUser(task: CuaComputerTask): Promise<void> {
+    this.rememberTask(this.userStoppedTasks, task);
+    if (this.previewTask && cuaComputerTaskKey(this.previewTask) !== cuaComputerTaskKey(task))
+      return Promise.resolve();
+    return this.stop();
+  }
+
+  private rememberTask(set: Set<string>, task: CuaComputerTask): void {
+    set.add(cuaComputerTaskKey(task));
+    while (set.size > 256) set.delete(set.values().next().value!);
+  }
+
+  private previewTarget(task: CuaComputerTask, input: unknown): CuaPreviewTarget | undefined {
+    if (!input || typeof input !== "object") return undefined;
+    const args = input as Record<string, unknown>;
+    if (
+      typeof args.pid !== "number" ||
+      !Number.isSafeInteger(args.pid) ||
+      args.pid <= 0 ||
+      args.pid > 0x7fffffff ||
+      typeof args.window_id !== "number" ||
+      !Number.isSafeInteger(args.window_id) ||
+      args.window_id <= 0 ||
+      args.window_id > 0xffffffff
+    )
+      return undefined;
+    let cursor: CuaPreviewTarget["cursor"];
+    const bounds = args.expected_window_bounds as { width?: unknown; height?: unknown } | undefined;
+    if (
+      args.coordinate_space === "window_points" &&
+      typeof args.x === "number" &&
+      Number.isFinite(args.x) &&
+      typeof args.y === "number" &&
+      Number.isFinite(args.y) &&
+      typeof bounds?.width === "number" &&
+      bounds.width > 0 &&
+      typeof bounds.height === "number" &&
+      bounds.height > 0
+    ) {
+      const x = args.x / bounds.width,
+        y = args.y / bounds.height;
+      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) cursor = { x, y };
+    }
+    return { task, pid: args.pid, windowId: args.window_id, ...(cursor ? { cursor } : {}) };
   }
 
   /** Backend shutdown must reject later requests as well as cancel admitted

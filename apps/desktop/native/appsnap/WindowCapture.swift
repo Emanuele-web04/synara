@@ -7,7 +7,6 @@ import Foundation
 import ScreenCaptureKit
 
 private let maximumPNGByteCount = 10 * 1024 * 1024
-private let maximumCaptureDimension = 8_192
 private let captureTimeoutSeconds = 6.0
 
 struct SelectedWindow {
@@ -280,31 +279,12 @@ private func backingScale(for windowBounds: CGRect) -> CGFloat {
     return max(1, bestScale)
 }
 
-private func captureDimensions(for window: SCWindow, selectedBounds: CGRect) -> (width: Int, height: Int)? {
-    let scale = backingScale(for: selectedBounds)
-    var width = max(1, Int(ceil(window.frame.width * scale)))
-    var height = max(1, Int(ceil(window.frame.height * scale)))
-    guard width > 1, height > 1 else {
-        return nil
-    }
-
-    let largestDimension = max(width, height)
-    if largestDimension > maximumCaptureDimension {
-        let reduction = Double(maximumCaptureDimension) / Double(largestDimension)
-        width = max(1, Int((Double(width) * reduction).rounded(.down)))
-        height = max(1, Int((Double(height) * reduction).rounded(.down)))
-    }
-    return (width, height)
-}
-
-final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
+final class OneFrameWindowCapture {
     typealias Completion = (Result<CGImage, AppSnapFailure>) -> Void
-
     private let selectedWindow: SelectedWindow
     private let completion: Completion
-    private let outputQueue = DispatchQueue(label: "dev.synara.appsnap.stream-output")
     private let completionLock = NSLock()
-    private var stream: SCStream?
+    private var stream: WindowFrameStream?
     private var completed = false
 
     init(selectedWindow: SelectedWindow, completion: @escaping Completion) {
@@ -313,191 +293,35 @@ final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func start() {
-        outputQueue.asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
-            self?.finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "capture_timed_out",
-                        message: "Timed out while preparing or capturing the window."
-                    )
-                )
-            )
-        }
-
-        SCShareableContent.getExcludingDesktopWindows(
-            true,
-            onScreenWindowsOnly: true
-        ) { [weak self] content, error in
-            guard let self else { return }
-            self.outputQueue.async {
-                self.handleShareableContent(content, error: error)
+        let stream = WindowFrameStream(windowID: selectedWindow.windowID, scaleFactor: backingScale(for: selectedWindow.bounds)) { [weak self] sample in
+            guard let self, let pixels = sample.imageBuffer else { return }
+            let image = CIImage(cvPixelBuffer: pixels)
+            let context = CIContext(options: [.cacheIntermediates: false])
+            guard let cgImage = context.createCGImage(image, from: image.extent) else {
+                self.finish(.failure(AppSnapFailure(code: "frame_conversion_failed", message: "Could not convert the captured frame.")))
+                return
             }
+            self.finish(.success(cgImage))
+        } onFailure: { [weak self] failure in
+            self?.finish(.failure(failure))
         }
-    }
-
-    private func handleShareableContent(_ content: SCShareableContent?, error: Error?) {
         completionLock.lock()
-        let shouldContinue = !completed
-        completionLock.unlock()
-        guard shouldContinue else { return }
-
-        if let error {
-            finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "shareable_content_unavailable",
-                        message: "Could not read shareable windows: \(error.localizedDescription)"
-                    )
-                )
-            )
-            return
-        }
-        guard let window = content?.windows.first(where: {
-            $0.windowID == selectedWindow.windowID
-        }) else {
-            finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "window_unavailable",
-                        message: "The selected window disappeared before it could be captured."
-                    )
-                )
-            )
-            return
-        }
-        startStream(for: window)
-    }
-
-    private func startStream(for window: SCWindow) {
-        guard let dimensions = captureDimensions(for: window, selectedBounds: selectedWindow.bounds) else {
-            finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "invalid_window_dimensions",
-                        message: "The selected window has invalid capture dimensions."
-                    )
-                )
-            )
-            return
-        }
-
-        let configuration = SCStreamConfiguration()
-        configuration.width = dimensions.width
-        configuration.height = dimensions.height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
-        configuration.pixelFormat = kCVPixelFormatType_32BGRA
-        configuration.queueDepth = 1
-        configuration.scalesToFit = true
-        configuration.showsCursor = false
-        configuration.colorSpaceName = CGColorSpace.sRGB as CFString
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-
-        completionLock.lock()
-        guard !completed else {
-            completionLock.unlock()
-            return
-        }
         self.stream = stream
         completionLock.unlock()
-
-        do {
-            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
-        } catch {
-            finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "capture_setup_failed",
-                        message: "Could not configure window capture: \(error.localizedDescription)"
-                    )
-                )
-            )
-            return
+        stream.start()
+        DispatchQueue.global().asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
+            self?.finish(.failure(AppSnapFailure(code: "capture_timed_out", message: "Timed out while capturing the window.")))
         }
-
-        stream.startCapture { [weak self] error in
-            guard let self, let error else { return }
-            self.finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "capture_start_failed",
-                        message: "Could not start window capture: \(error.localizedDescription)"
-                    )
-                )
-            )
-        }
-
-    }
-
-    func stream(
-        _ stream: SCStream,
-        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-        of outputType: SCStreamOutputType
-    ) {
-        guard outputType == .screen,
-              sampleBuffer.isValid,
-              sampleBuffer.dataReadiness == .ready,
-              isCompleteFrame(sampleBuffer),
-              let imageBuffer = sampleBuffer.imageBuffer
-        else {
-            return
-        }
-
-        let image = CIImage(cvPixelBuffer: imageBuffer)
-        let context = CIContext(options: [.cacheIntermediates: false])
-        guard let cgImage = context.createCGImage(image, from: image.extent) else {
-            finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "frame_conversion_failed",
-                        message: "Could not convert the captured frame into an image."
-                    )
-                )
-            )
-            return
-        }
-        finish(.success(cgImage))
-    }
-
-    func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        finish(
-            .failure(
-                AppSnapFailure(
-                    code: "capture_stopped",
-                    message: "Window capture stopped unexpectedly: \(error.localizedDescription)"
-                )
-            )
-        )
-    }
-
-    private func isCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
-            sampleBuffer,
-            createIfNecessary: false
-        ) as? [[SCStreamFrameInfo: Any]],
-            let frame = attachments.first,
-            let status = frame[.status] as? NSNumber
-        else {
-            return false
-        }
-        return status.intValue == SCFrameStatus.complete.rawValue
     }
 
     private func finish(_ result: Result<CGImage, AppSnapFailure>) {
         completionLock.lock()
-        guard !completed else {
-            completionLock.unlock()
-            return
-        }
+        guard !completed else { completionLock.unlock(); return }
         completed = true
-        let activeStream = stream
+        let active = stream
         stream = nil
         completionLock.unlock()
-
-        if let activeStream {
-            activeStream.stopCapture { _ in }
-        }
+        active?.stop()
         completion(result)
     }
 }

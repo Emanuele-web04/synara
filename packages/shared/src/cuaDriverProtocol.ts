@@ -9,6 +9,36 @@ export const CUA_HOST_SOCKET_ENV = "SYNARA_CUA_HOST_SOCKET";
 // Setup includes native input retirement and a bounded, user-facing permission request.
 export const CUA_SETUP_TIMEOUT_MS = 120_000;
 export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
+export interface CuaComputerTask {
+  threadId: string;
+  turnId?: string;
+  label?: string;
+}
+
+export interface CuaPreviewTarget {
+  task: CuaComputerTask;
+  pid: number;
+  windowId: number;
+  cursor?: { x: number; y: number };
+}
+
+export function cuaComputerTaskKey(task: CuaComputerTask): string {
+  return JSON.stringify([task.threadId, task.turnId ?? null]);
+}
+
+export function parseCuaComputerTask(value: unknown): CuaComputerTask | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const task = value as Record<string, unknown>;
+  const identifier = (v: unknown): v is string =>
+    typeof v === "string" && v.length > 0 && v.length <= 256;
+  if (!identifier(task.threadId) || (task.turnId !== undefined && !identifier(task.turnId)))
+    return undefined;
+  return {
+    threadId: task.threadId,
+    ...(task.turnId === undefined ? {} : { turnId: task.turnId }),
+    ...(typeof task.label === "string" ? { label: task.label.slice(0, 160) } : {}),
+  };
+}
 export type CuaEffect = "not-dispatched" | "dispatched-unknown" | "verified";
 export class CuaTransportError extends Error {
   constructor(
