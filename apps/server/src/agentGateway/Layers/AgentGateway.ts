@@ -19,8 +19,10 @@ import {
   CommandId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
+  ProjectId,
   THREAD_GOAL_MAX_CHARS,
   ThreadId,
+  TurnId,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderStatus,
@@ -77,6 +79,7 @@ import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserA
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
+import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -783,6 +786,118 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.orElseSucceed(() => null)),
   });
 
+  const kanbanTools = makeAgentGatewayKanbanTools({
+    snapshotQuery,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
+    helpers: {
+      // Move-card re-reads and live-checks the target shell itself, so the
+      // plain loader is correct for every column.
+      requireThreadShell,
+      assertCallerMayDriveThread,
+      runCreateThreads,
+      startTurn: ({ threadId, message, dispatchMode, runtimeMode, interactionMode }) => {
+        const suffix = randomUUID();
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`agent:${suffix}:kanban-move`),
+            threadId: ThreadId.makeUnsafe(threadId),
+            message: {
+              messageId: MessageId.makeUnsafe(`agent:${suffix}:message`),
+              role: "user",
+              text: message,
+              attachments: [],
+            },
+            dispatchMode,
+            dispatchOrigin: "agent",
+            runtimeMode,
+            interactionMode,
+            createdAt: isoNow(),
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      },
+      interruptTurn: ({ threadId }) => {
+        const suffix = randomUUID();
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe(`agent:${suffix}:kanban-interrupt`),
+            threadId: ThreadId.makeUnsafe(threadId),
+            createdAt: isoNow(),
+          })
+          .pipe(
+            Effect.map((eventSequence) => ({ sequence: eventSequence.sequence })),
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          );
+      },
+      // Draft creation mirrors the creation saga's thread.create dispatch but
+      // starts no turn, so the thread lands in the Draft column. No worktree
+      // setup runs: drafts are local threads until a move dispatches them.
+      createDraftThread: ({
+        title,
+        projectId,
+        modelSelection,
+        runtimeMode,
+        interactionMode,
+        sourceThreadId,
+        sourceTurnId,
+      }) => {
+        const threadId = ThreadId.makeUnsafe(randomUUID());
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:kanban-draft`),
+            threadId,
+            projectId: ProjectId.makeUnsafe(projectId),
+            title,
+            modelSelection,
+            runtimeMode,
+            interactionMode,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            creationSource: "synara_mcp",
+            sourceThreadId: ThreadId.makeUnsafe(sourceThreadId),
+            ...(sourceTurnId !== null ? { sourceTurnId: TurnId.makeUnsafe(sourceTurnId) } : {}),
+            createdAt: isoNow(),
+          })
+          .pipe(
+            Effect.map(() => ({ threadId: String(threadId) })),
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          );
+      },
+      // Card metadata patch for the update/goal tools — mirrors setThreadTitle.
+      updateThreadMeta: ({ threadId, title, notes, goal }) =>
+        orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:kanban-update`),
+            threadId: ThreadId.makeUnsafe(threadId),
+            ...(title !== undefined ? { title } : {}),
+            ...(notes !== undefined ? { notes } : {}),
+            ...(goal !== undefined ? { goal } : {}),
+          })
+          .pipe(
+            Effect.asVoid,
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          ),
+      deleteThread: ({ threadId }) =>
+        orchestrationEngine
+          .dispatch({
+            type: "thread.delete",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:kanban-delete`),
+            threadId: ThreadId.makeUnsafe(threadId),
+          })
+          .pipe(
+            Effect.asVoid,
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          ),
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -796,6 +911,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadGoal,
     ...automationTools,
     ...browserTools,
+    ...kanbanTools,
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
       : []),

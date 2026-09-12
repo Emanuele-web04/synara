@@ -5,6 +5,7 @@ import { Deferred, Effect, Fiber, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeAgentGatewayBrowserTools } from "./browserTools.ts";
 import { BrowserHostRpcError } from "../browserAutomation/browserHostRpcClient.ts";
+import { makeAgentGatewayKanbanTools } from "./kanbanTools.ts";
 import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionRegistry.ts";
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
@@ -15,6 +16,44 @@ import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "
 import type { ToolEntry } from "./toolRuntime.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
+
+const WORKSPACE_PATHS = { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" };
+
+/** Minimal ordinary-project row for the board snapshot fixtures. */
+const projectRow = (projectId: string) => ({
+  id: ProjectId.makeUnsafe(projectId),
+  title: "Project A",
+  kind: "project" as const,
+  workspaceRoot: "/repos/Project A",
+});
+
+/**
+ * Wire a kanban tool against the transport harness with the standard test
+ * helpers; `helpers` overrides only what a scenario needs to observe.
+ */
+function makeKanbanTool(
+  name: string,
+  threads: ReadonlyArray<OrchestrationThreadShell>,
+  helpers: Partial<Parameters<typeof makeAgentGatewayKanbanTools>[0]["helpers"]> = {},
+): ToolEntry {
+  return makeAgentGatewayKanbanTools({
+    snapshotQuery: {
+      getShellSnapshot: () =>
+        Effect.succeed({ projects: [projectRow("project-a")], threads: [...threads] }),
+    } as unknown as ProjectionSnapshotQueryShape,
+    workspacePaths: WORKSPACE_PATHS,
+    now: () => Date.parse(NOW),
+    helpers: {
+      requireThreadShell: (threadId) =>
+        Effect.succeed(threads.find((thread) => String(thread.id) === threadId) ?? threads[0]!),
+      assertCallerMayDriveThread: () => Effect.void,
+      runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
+      startTurn: (() => Effect.succeed({})) as never,
+      interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
+      ...helpers,
+    },
+  }).find((entry) => entry.definition.name === name)!;
+}
 
 function makeThread(threadId: string): OrchestrationThreadShell {
   return {

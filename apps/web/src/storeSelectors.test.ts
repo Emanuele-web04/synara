@@ -8,6 +8,7 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForSourceSelector,
@@ -566,5 +567,31 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createLastActivityTimestampSelector", () => {
+  const stamped = "2026-03-09T11:00:00.000Z";
+
+  it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      threadShellById: {
+        // Shell A has a durable stamp; shell B is present but stale/pruned.
+        [threadIdA]: { ...shellA, updatedAt: stamped },
+        [threadIdB]: { ...shellB },
+      },
+    });
+    const result = selectTimestamps(state);
+    expect(Object.keys(result)).toEqual([threadIdA]);
+    expect(result[threadIdA]).toBe(Date.parse(stamped));
+    // Absent shells must not be conflated with an explicit null.
+    expect(threadIdB in result).toBe(false);
+    expect(
+      selectTimestamps(
+        makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
+      ),
+    ).toEqual({});
   });
 });

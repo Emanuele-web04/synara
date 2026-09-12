@@ -27,6 +27,11 @@ import {
 } from "../composerDraftStore";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { readNativeApi } from "../nativeApi";
+import {
+  clearPendingTurnDispatch,
+  hasPendingTurnDispatch,
+  markPendingTurnDispatch,
+} from "../pendingTurnDispatch";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SidebarThreadSummary } from "../types";
@@ -57,11 +62,37 @@ import { newCommandId, newMessageId } from "./utils";
 
 export type KanbanDraftDispatchResult =
   /** The drafted prompt is on its way; runtime events move the card to In Progress. */
-  | { kind: "dispatched" }
+  | { kind: "dispatched"; warning?: string | undefined; deferred?: true | undefined }
   /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
+
+export function kanbanDispatchFailureToast(
+  result: Exclude<KanbanDraftDispatchResult, { kind: "dispatched" }>,
+  errorTitle: string,
+): { type: "info" | "error"; title: string; description: string } {
+  if (result.kind === "open-thread") {
+    return {
+      type: "info",
+      title: "Finish this draft in the chat",
+      description:
+        result.reason === "empty"
+          ? "Nothing to send yet. Write the prompt in the composer."
+          : result.reason === "worktree-pending"
+            ? "Open the chat to create the worktree with the normal send flow."
+            : "Open the chat to continue this task.",
+    };
+  }
+  if (result.kind === "unavailable") {
+    return {
+      type: "error",
+      title: "Not connected",
+      description: "Reconnect to the server before sending drafts.",
+    };
+  }
+  return { type: "error", title: errorTitle, description: result.message };
+}
 
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
@@ -86,6 +117,30 @@ export async function dispatchKanbanDraftCard(input: {
   });
 }
 
+/** Right-click "Send as goal" for a dispatchable draft card. */
+export async function dispatchKanbanDraftCardAsGoal(input: {
+  card: KanbanCard;
+  defaultProvider: ProviderKind;
+  assistantDeliveryMode: AssistantDeliveryMode;
+  providerOptions?: ProviderStartOptions | undefined;
+}): Promise<KanbanDraftDispatchResult> {
+  const { card } = input;
+  if (resolveDraftDropAction(card) !== "dispatch") {
+    return {
+      kind: "open-thread",
+      reason: resolveKanbanDraftOpenThreadReason(card) ?? "not-draft",
+    };
+  }
+  return dispatchKanbanDraftThreadAsGoal({
+    threadId: card.threadId,
+    projectId: card.projectId,
+    thread: card.thread,
+    defaultProvider: input.defaultProvider,
+    assistantDeliveryMode: input.assistantDeliveryMode,
+    providerOptions: input.providerOptions,
+  });
+}
+
 interface KanbanDraftDispatchInput {
   threadId: ThreadId;
   projectId: ProjectId;
@@ -96,11 +151,73 @@ interface KanbanDraftDispatchInput {
   providerOptions?: ProviderStartOptions | undefined;
 }
 
-// Racing callers (a re-drop before the board re-derives, drag + send-now) must
-// not queue two turns for the same thread — the server accepts duplicate
-// thread.turn.start commands while the session is still starting. Same pattern
-// as threadCreatePromotion's inFlightThreadCreateById.
-const inFlightDispatchByThreadId = new Map<ThreadId, Promise<KanbanDraftDispatchResult>>();
+const MAX_KANBAN_GOAL_LENGTH = 4096;
+
+// Racing callers (a re-drop before the board re-derives, drag + send-now, or a
+// drag racing a right-click "Send as goal") must not queue two turns for the
+// same thread — the server accepts duplicate thread.turn.start commands while
+// the session is still starting. Same pattern as threadCreatePromotion's
+// inFlightThreadCreateById. The guard is keyed by threadId alone so a
+// concurrent dispatch and "Send as goal" coalesce onto the first turn instead
+// of racing past each other on mode-specific keys.
+const inFlightDispatchByThreadId = new Map<string, Promise<KanbanDraftDispatchResult>>();
+
+function dispatchKanbanDraftThreadInternal(
+  input: KanbanDraftDispatchInput,
+  mode: "dispatch" | "goal",
+): Promise<KanbanDraftDispatchResult> {
+  const existing = inFlightDispatchByThreadId.get(input.threadId);
+  if (existing) {
+    return existing;
+  }
+  if (hasPendingTurnDispatch(input.threadId)) {
+    // A chat send for this thread is already in flight — defer to it instead
+    // of queueing a second turn. Marked deferred so callers never report this
+    // as their own dispatch: the chat send owns the turn (and its failure).
+    const raced = inFlightDispatchByThreadId.get(input.threadId);
+    if (raced) {
+      return raced;
+    }
+    return Promise.resolve<KanbanDraftDispatchResult>({ kind: "dispatched", deferred: true });
+  }
+  const dispatchPromise = dispatchKanbanDraftThreadOnce(input, mode).finally(() => {
+    inFlightDispatchByThreadId.delete(input.threadId);
+  });
+  inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
+  return dispatchPromise;
+}
+
+/**
+ * Board/chat mutual-exclusion probe for the chat send path: true while a
+ * kanban dispatch for this thread is on the wire. A chat send that observes
+ * true must join/defer to the board dispatch instead of starting its own turn.
+ */
+export function isKanbanDispatchInFlight(threadId: ThreadId): boolean {
+  return inFlightDispatchByThreadId.has(threadId);
+}
+
+const KANBAN_DISPATCH_SETTLE_POLL_MS = 25;
+/** Upper bound a chat send waits for a racing board dispatch. Fail-open. */
+export const KANBAN_DISPATCH_SETTLE_TIMEOUT_MS = 5_000;
+
+/**
+ * Chat-send companion to isKanbanDispatchInFlight: wait (bounded) for a board
+ * dispatch on this thread to settle before starting a chat turn, so the two
+ * starters serialize instead of queueing two turns. Fail-open — on timeout the
+ * chat send proceeds, never locking the composer forever.
+ */
+export async function waitForKanbanDispatchToSettle(
+  threadId: ThreadId,
+  timeoutMs: number = KANBAN_DISPATCH_SETTLE_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlightDispatchByThreadId.has(threadId)) {
+    if (Date.now() >= deadline) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, KANBAN_DISPATCH_SETTLE_POLL_MS));
+  }
+}
 
 /**
  * Promote (when needed) and dispatch a draft thread's composer prompt as a queued
@@ -112,19 +229,24 @@ const inFlightDispatchByThreadId = new Map<ThreadId, Promise<KanbanDraftDispatch
 export function dispatchKanbanDraftThread(
   input: KanbanDraftDispatchInput,
 ): Promise<KanbanDraftDispatchResult> {
-  const existing = inFlightDispatchByThreadId.get(input.threadId);
-  if (existing) {
-    return existing;
-  }
-  const dispatchPromise = dispatchKanbanDraftThreadOnce(input).finally(() => {
-    inFlightDispatchByThreadId.delete(input.threadId);
-  });
-  inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
-  return dispatchPromise;
+  return dispatchKanbanDraftThreadInternal(input, "dispatch");
+}
+
+/**
+ * Promote a local-only draft (when needed), set the thread's goal from the live
+ * composer prompt, then queue the turn. Dispatches `thread.meta.update` with
+ * `goalStartBehavior: "defer"` before `thread.turn.start`; if the goal update
+ * fails the turn still starts and a warning is surfaced.
+ */
+export function dispatchKanbanDraftThreadAsGoal(
+  input: KanbanDraftDispatchInput,
+): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftThreadInternal(input, "goal");
 }
 
 async function dispatchKanbanDraftThreadOnce(
   input: KanbanDraftDispatchInput,
+  mode: "dispatch" | "goal",
 ): Promise<KanbanDraftDispatchResult> {
   const { threadId, projectId, thread } = input;
   const api = readNativeApi();
@@ -138,6 +260,7 @@ async function dispatchKanbanDraftThreadOnce(
   const draftComposerState = composerStore.draftsByThreadId[threadId] ?? null;
   const liveSnapshot = buildKanbanComposerDraftSnapshot(draftComposerState);
   const prompt = liveSnapshot?.prompt.trim() ?? "";
+  const preDispatchPrompt = liveSnapshot?.prompt ?? "";
   if (prompt.length === 0 && liveSnapshot?.hasAttachments !== true) {
     return { kind: "open-thread", reason: "empty" };
   }
@@ -237,6 +360,11 @@ async function dispatchKanbanDraftThreadOnce(
   const droppedAtMs = Date.now();
   const createdAt = new Date(droppedAtMs).toISOString();
 
+  // Claim the shared turn-start guard so a concurrent chat send for this
+  // thread defers to this dispatch instead of queueing a second turn. Claimed
+  // after validation so empty/non-dispatchable drops never hold the guard.
+  markPendingTurnDispatch(threadId);
+
   // Optimistic move: show the card In Progress before any round-trip. Provider
   // session init can take seconds; runtime events confirm the move (reconciliation
   // clears the entry) or the failure paths below revert it.
@@ -248,6 +376,8 @@ async function dispatchKanbanDraftThreadOnce(
     baselineTurnId: thread?.latestTurn?.turnId ?? null,
     droppedAtMs,
   });
+
+  let goalWarning: string | undefined;
 
   try {
     if (thread === null) {
@@ -288,6 +418,7 @@ async function dispatchKanbanDraftThreadOnce(
           () => undefined,
         );
         kanbanUi.clearOptimisticDispatch(threadId);
+        clearPendingTurnDispatch(threadId);
         return { kind: "unavailable" };
       }
       if (project?.kind === "chat") {
@@ -297,6 +428,29 @@ async function dispatchKanbanDraftThreadOnce(
           projectId,
           title: fallbackTitle,
         });
+      }
+    }
+
+    if (mode === "goal" && prompt.length > 0) {
+      // Attachment-only drafts intentionally dispatch no goal command; a prompt
+      // over the cap is clamped so the metadata update never fails validation.
+      const truncated = prompt.length > MAX_KANBAN_GOAL_LENGTH;
+      const goal = truncated ? prompt.slice(0, MAX_KANBAN_GOAL_LENGTH) : prompt;
+      if (truncated) {
+        goalWarning = `Goal saved truncated to ${MAX_KANBAN_GOAL_LENGTH} characters.`;
+      }
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId,
+          goal,
+          goalStartBehavior: "defer",
+        });
+      } catch (error) {
+        goalWarning = `Could not save the goal; the task was started anyway. ${
+          error instanceof Error ? error.message : "Unknown error."
+        }`;
       }
     }
 
@@ -329,6 +483,13 @@ async function dispatchKanbanDraftThreadOnce(
       () => undefined,
     );
     kanbanUi.clearOptimisticDispatch(threadId);
+    clearPendingTurnDispatch(threadId);
+    // A turn failure after the goal command was accepted must not lose the
+    // user's text: keep the composer prompt (restoring it when something
+    // cleared it mid-flight) and un-hide a promoted local draft so the draft
+    // card — or the settled thread's unsent-prompt card — stays visible.
+    restoreKanbanDraftPromptAfterFailure(threadId, preDispatchPrompt);
+    rollbackPromotingDraftAfterFailure(threadId, thread);
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
@@ -337,6 +498,39 @@ async function dispatchKanbanDraftThreadOnce(
 
   // The prompt was consumed by the dispatched turn; an open composer for this
   // thread should not keep offering it.
+  clearPendingTurnDispatch(threadId);
   useComposerDraftStore.getState().clearComposerContent(threadId);
-  return { kind: "dispatched" };
+  return { kind: "dispatched", warning: goalWarning };
+}
+
+function restoreKanbanDraftPromptAfterFailure(threadId: ThreadId, preDispatchPrompt: string): void {
+  if (preDispatchPrompt.trim().length === 0) {
+    return;
+  }
+  const store = useComposerDraftStore.getState();
+  const currentPrompt = store.draftsByThreadId[threadId]?.prompt ?? "";
+  if (currentPrompt.trim().length > 0) {
+    return;
+  }
+  store.setPrompt(threadId, preDispatchPrompt);
+}
+
+function rollbackPromotingDraftAfterFailure(
+  threadId: ThreadId,
+  thread: SidebarThreadSummary | null,
+): void {
+  if (thread !== null) {
+    return;
+  }
+  useComposerDraftStore.setState((state) => {
+    const current = state.draftThreadsByThreadId[threadId];
+    if (!current || current.promotedTo === undefined) {
+      return state;
+    }
+    const next = { ...current };
+    delete next.promotedTo;
+    return {
+      draftThreadsByThreadId: { ...state.draftThreadsByThreadId, [threadId]: next },
+    };
+  });
 }

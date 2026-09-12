@@ -33,6 +33,7 @@ import {
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
+import { waitForKanbanDispatchToSettle } from "../../lib/kanbanDispatch";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
@@ -250,6 +251,9 @@ export function useChatTurnExecution({
       let switchedToLocalCheckout = false;
       let turnStartSucceeded = false;
       let settledLocalBranchUpdatedForSend = false;
+      // A board dispatch racing this send must settle first: two starters must
+      // serialize onto one turn, never queue two. Bounded + fail-open.
+      await waitForKanbanDispatchToSettle(threadIdForSend);
       await (async () => {
         // "Work locally" from the setup card: drop any prepared worktree and
         // point the send (and the thread's metadata) back at the project

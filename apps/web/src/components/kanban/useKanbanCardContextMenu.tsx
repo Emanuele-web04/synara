@@ -11,15 +11,21 @@ import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  useAppSettings,
+  getProviderStartOptions,
+  resolveAssistantDeliveryMode,
+} from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
+import { dispatchKanbanDraftCardAsGoal, kanbanDispatchFailureToast } from "~/lib/kanbanDispatch";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { pinActionLabel } from "~/lib/pin";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
+import { dispatchThreadGoal } from "~/threadGoal";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
@@ -27,7 +33,7 @@ import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { getThreadFromState } from "../../threadDerivation";
 import { toastManager } from "../ui/toast";
-import { isKanbanDraftOnlyCard, type KanbanCard } from "./kanban.logic";
+import { isKanbanDraftOnlyCard, resolveDraftDropAction, type KanbanCard } from "./kanban.logic";
 
 interface RenameTarget {
   threadId: ThreadId;
@@ -124,6 +130,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     const isThreadBacked = card.thread !== null;
     const deletesOnlyDraft = !isThreadBacked || isDraftOnlyCard;
     const isThreadActionCard = isThreadBacked && !isDraftOnlyCard;
+    const isDispatchableDraft = resolveDraftDropAction(card) === "dispatch";
+    // Live/done cards already have a thread: the goal can be written onto it
+    // directly (no new turn). Draft-column cards keep the dispatch-path
+    // "Send as goal" item instead, which starts the turn with the goal.
+    const isSettableGoalCard = card.thread !== null && card.column !== "draft";
     const workspacePath = resolveCardWorkspacePath(card);
 
     void (async () => {
@@ -145,11 +156,15 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           ...(isThreadActionCard
             ? [{ id: "archive", label: "Archive", separatorBefore: true }]
             : []),
+          ...(isDispatchableDraft
+            ? [{ id: "send-as-goal", label: "Send as goal", separatorBefore: true }]
+            : []),
+          ...(isSettableGoalCard ? [{ id: "set-as-goal", label: "Set as goal" }] : []),
           {
             id: "delete",
             label: deletesOnlyDraft ? "Delete draft" : "Delete",
             destructive: true,
-            separatorBefore: !isThreadActionCard,
+            separatorBefore: !isThreadActionCard && !isDispatchableDraft,
           },
         ],
         position,
@@ -190,6 +205,80 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           if (!confirmed) return;
         }
         await archiveCardThread(card.threadId);
+        return;
+      }
+      if (clicked === "send-as-goal") {
+        if (!isDispatchableDraft) return;
+        const result = await dispatchKanbanDraftCardAsGoal({
+          card,
+          defaultProvider: settings.defaultProvider,
+          assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
+          providerOptions: getProviderStartOptions(settings),
+        });
+        if (result.kind === "dispatched") {
+          if (result.deferred) {
+            toastManager.add({
+              type: "info",
+              title: "Chat send in progress",
+              description: "The board stood down; the running chat send owns this turn.",
+            });
+          } else if (result.warning) {
+            toastManager.add({
+              type: "warning",
+              title: "Task started",
+              description: result.warning,
+            });
+          } else {
+            toastManager.add({
+              type: "success",
+              title: "Goal set",
+              description: card.title,
+            });
+          }
+          return;
+        }
+        if (result.kind === "open-thread") {
+          toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
+          return;
+        }
+        toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
+        return;
+      }
+      if (clicked === "set-as-goal") {
+        if (!isSettableGoalCard) return;
+        // Prefer the live composer prompt (what Send-as-goal would send) over
+        // the card title, which can be a fallback like "New thread".
+        const livePrompt =
+          useComposerDraftStore.getState().draftsByThreadId[card.threadId]?.prompt.trim() ?? "";
+        const goal = (livePrompt.length > 0 ? livePrompt : card.title).trim();
+        if (goal.length === 0) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: "The thread has no prompt or title to save as its goal.",
+          });
+          return;
+        }
+        try {
+          // Mirrors the AsGoal dispatch's metadata write (goal + defer), but
+          // starts no turn — the existing thread picks the goal up next run.
+          // Clamped to the same cap the dispatch path enforces.
+          await dispatchThreadGoal(card.threadId, goal.slice(0, 4096), {
+            startBehavior: "defer",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: error instanceof Error ? error.message : "Unknown error.",
+          });
+          return;
+        }
+        toastManager.add({
+          type: "success",
+          title: "Goal set",
+          description: card.title,
+        });
         return;
       }
       if (clicked !== "delete") return;

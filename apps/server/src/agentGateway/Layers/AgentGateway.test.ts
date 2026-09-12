@@ -1715,6 +1715,51 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("wires the kanban draft/update/delete helpers through the gateway", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      // Draft creation dispatches thread.create but starts no turn.
+      const draft = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: { title: "Draft it", requestId: "wiring-draft" },
+      });
+      assert.isFalse(isToolError(draft.result), toolErrorText(draft.result));
+      assert.isString(toolResultJson(draft.result).threadId);
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.create"),
+        1,
+      );
+      assert.isTrue(harness.dispatched.every((command) => command.type !== "thread.turn.start"));
+
+      // Metadata update dispatches a patch and settles no work.
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_kanban_card",
+        args: { threadId: "thread-child", title: "Child v2" },
+      });
+      assert.isFalse(isToolError(updated.result), toolErrorText(updated.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.meta.update"),
+        1,
+      );
+
+      // Delete dispatches thread removal.
+      const deleted = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_delete_kanban_card",
+        args: { threadId: "thread-child" },
+      });
+      assert.isFalse(isToolError(deleted.result), toolErrorText(deleted.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.delete"),
+        1,
+      );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1816,6 +1861,9 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        "synara_read_kanban_board",
+        "synara_create_kanban_task",
+        "synara_move_kanban_card",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
         ?.inputSchema.properties;
