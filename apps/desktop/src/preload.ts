@@ -188,6 +188,18 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IPC.appSnap.acknowledgeCapture, captureId),
     listWindows: () => ipcRenderer.invoke(IPC.appSnap.listWindows),
     captureWindow: (input) => ipcRenderer.invoke(IPC.appSnap.captureWindow, input),
+    openPermissionSettings: (pane) => ipcRenderer.invoke(IPC.appSnap.openPermissionSettings, pane),
+    restartApp: () => ipcRenderer.invoke(IPC.appSnap.restartApp),
+    showPermissionGuide: (pane) => ipcRenderer.invoke(IPC.appSnap.showPermissionGuide, pane),
+    hidePermissionGuide: () => ipcRenderer.invoke(IPC.appSnap.hidePermissionGuide),
+    onPermissionGuideState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "string") return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.appSnap.permissionGuideState, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.appSnap.permissionGuideState, wrappedListener);
+    },
     onCaptured: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
         if (typeof capture !== "object" || capture === null) return;

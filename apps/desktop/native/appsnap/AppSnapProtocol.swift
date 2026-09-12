@@ -13,6 +13,7 @@ enum AppSnapMode {
         excludedBundleIdentifier: String,
         externalTrigger: Bool
     )
+    case permissionGuide(pane: String, appPath: String, appName: String)
 }
 
 struct AppSnapOptions {
@@ -23,6 +24,9 @@ struct AppSnapOptions {
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
         var externalTrigger = false
+        var guidePane: String?
+        var guideAppPath: String?
+        var guideAppName: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -51,7 +55,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch":
+            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -65,6 +69,12 @@ struct AppSnapOptions {
                 excludedBundleIdentifier = try readValue("--excluded-bundle-id", "a bundle identifier")
             case "--external-trigger":
                 externalTrigger = true
+            case "--pane":
+                guidePane = try readValue("--pane", "a value")
+            case "--app-path":
+                guideAppPath = try readValue("--app-path", "a path")
+            case "--app-name":
+                guideAppName = try readValue("--app-name", "a value")
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -81,6 +91,29 @@ struct AppSnapOptions {
         case "--request-permissions":
             try rejectWatchArguments("Permission requests do not accept watch arguments.")
             return AppSnapOptions(mode: .requestPermissions)
+        case "--permission-guide":
+            try rejectWatchArguments("The permission guide does not accept watch arguments.")
+            guard let guidePane, guidePane == "screen-recording" || guidePane == "input-monitoring" else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --pane screen-recording or input-monitoring."
+                )
+            }
+            guard let guideAppPath, !guideAppPath.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --app-path."
+                )
+            }
+            guard let guideAppName, !guideAppName.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--permission-guide requires --app-name."
+                )
+            }
+            return AppSnapOptions(
+                mode: .permissionGuide(pane: guidePane, appPath: guideAppPath, appName: guideAppName)
+            )
         case "--watch":
             guard let outputDirectory, !outputDirectory.isEmpty else {
                 throw AppSnapFailure(
@@ -104,7 +137,7 @@ struct AppSnapOptions {
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, or --watch."
+                message: "Expected --check-permissions, --request-permissions, --watch, or --permission-guide."
             )
         }
     }
@@ -203,6 +236,13 @@ final class NDJSONEmitter {
             "type": "windows",
             "requestId": requestId,
             "windows": windows,
+        ])
+    }
+
+    func emitPermissionGuide(state: String) {
+        emit([
+            "type": "permission-guide",
+            "state": state,
         ])
     }
 

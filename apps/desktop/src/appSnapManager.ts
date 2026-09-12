@@ -16,7 +16,9 @@ import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapErrorEvent,
   type DesktopAppSnapPermission,
+  type DesktopAppSnapPermissionGuideState,
   type DesktopAppSnapPlatform,
+  type DesktopAppSnapSettingsPane,
   type DesktopAppSnapShortcut,
   type DesktopAppSnapShortcutAvailability,
   type DesktopAppSnapShortcutUpdateResult,
@@ -89,6 +91,7 @@ type AppSnapHelperMessage =
       sourceWindowTitle?: string | null;
     }
   | { type: "windows"; requestId: string; windows: DesktopAppSnapWindowEntry[] }
+  | { type: "permission-guide"; state: DesktopAppSnapPermissionGuideState }
   | {
       type: "error";
       id?: string;
@@ -109,9 +112,12 @@ export interface DesktopAppSnapManagerOptions {
   helperPath: string;
   captureDirectory: string;
   excludedBundleId: string;
+  appDisplayName?: string;
+  appBundlePath?: string;
   onState: (state: DesktopAppSnapState) => void;
   onCaptured: (capture: DesktopAppSnapCapture) => void;
   onError: (error: DesktopAppSnapErrorEvent, focusApp: boolean) => void;
+  onPermissionGuideState?: (state: DesktopAppSnapPermissionGuideState) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
   shortcutRegistry?: {
@@ -360,6 +366,12 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
     }
     return { type: "windows", requestId: value.requestId, windows };
   }
+  if (
+    value.type === "permission-guide" &&
+    (value.state === "shown" || value.state === "closed" || value.state === "granted")
+  ) {
+    return { type: "permission-guide", state: value.state };
+  }
   return null;
 }
 
@@ -392,7 +404,14 @@ function isBenignCaptureErrorCode(code: string): boolean {
 
 export class DesktopAppSnapManager {
   readonly #options: Required<Pick<DesktopAppSnapManagerOptions, "now" | "spawn">> &
-    Omit<DesktopAppSnapManagerOptions, "now" | "spawn">;
+    Omit<
+      DesktopAppSnapManagerOptions,
+      "now" | "spawn" | "appDisplayName" | "appBundlePath" | "onPermissionGuideState"
+    > & {
+      appDisplayName: string;
+      appBundlePath: string;
+      onPermissionGuideState: (state: DesktopAppSnapPermissionGuideState) => void;
+    };
   readonly #platform: DesktopAppSnapPlatform;
   #enabled = false;
   #inputMonitoringPermission: DesktopAppSnapPermission = "unknown";
@@ -415,10 +434,16 @@ export class DesktopAppSnapManager {
   #pendingWindowRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapWindowEntry[]>>();
   #pendingCaptureRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapCapture>>();
   #timedOutCaptureRequestIds = new Set<string>();
+  #guideProcess: AppSnapHelperProcess | null = null;
+  #guideOutputLines: Readline.Interface | null = null;
+  #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
 
   constructor(options: DesktopAppSnapManagerOptions) {
     this.#options = {
       ...options,
+      appDisplayName: options.appDisplayName ?? "",
+      appBundlePath: options.appBundlePath ?? "",
+      onPermissionGuideState: options.onPermissionGuideState ?? (() => undefined),
       now: options.now ?? (() => new Date()),
       spawn: options.spawn ?? ChildProcess.spawn,
     };
@@ -438,6 +463,7 @@ export class DesktopAppSnapManager {
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
       message: this.#message,
+      appDisplayName: this.#options.appDisplayName,
     };
   }
 
@@ -591,6 +617,74 @@ export class DesktopAppSnapManager {
     });
   }
 
+  showPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
+    if (this.#platform !== "macos" || this.#disposed) return;
+    if (!FS.existsSync(this.#options.helperPath)) return;
+    this.#stopGuideProcess();
+    try {
+      const child = this.#options.spawn(
+        this.#options.helperPath,
+        [
+          "--permission-guide",
+          "--pane",
+          pane,
+          "--app-path",
+          this.#options.appBundlePath,
+          "--app-name",
+          this.#options.appDisplayName,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      // A helper that dies mid-write must not surface as an unhandled stream error.
+      child.stdin?.on("error", () => undefined);
+      this.#guideProcess = child;
+      this.#lastGuideState = null;
+      this.#guideOutputLines = this.#wireHelperOutput(child, (message) =>
+        this.#handleGuideMessage(child, message),
+      );
+      child.once("exit", () => {
+        if (this.#guideProcess !== child) return;
+        this.#guideProcess = null;
+        this.#guideOutputLines?.close();
+        this.#guideOutputLines = null;
+        // Crash or external kill: report closed so the renderer guide stays honest.
+        if (this.#lastGuideState !== "closed" && this.#lastGuideState !== "granted") {
+          this.#lastGuideState = "closed";
+          this.#options.onPermissionGuideState("closed");
+        }
+      });
+    } catch {
+      // The guide is best-effort; the inline steps remain usable without it.
+    }
+  }
+
+  hidePermissionGuide(): void {
+    this.#stopGuideProcess();
+  }
+
+  #stopGuideProcess(): void {
+    const child = this.#guideProcess;
+    if (!child) return;
+    this.#guideProcess = null;
+    this.#guideOutputLines?.close();
+    this.#guideOutputLines = null;
+    try {
+      child.stdin?.write("close\n");
+    } catch {
+      // Fall through to the kill below.
+    }
+    setTimeout(() => {
+      child.kill("SIGTERM");
+    }, 500).unref();
+  }
+
+  #handleGuideMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
+    if (this.#guideProcess !== child) return;
+    if (message.type !== "permission-guide") return;
+    this.#lastGuideState = message.state;
+    this.#options.onPermissionGuideState(message.state);
+  }
+
   #requireWatchProcess(): AppSnapHelperProcess {
     const child = this.#watchProcess;
     if (!child || this.#disposed || !this.#enabled) {
@@ -669,6 +763,7 @@ export class DesktopAppSnapManager {
   dispose(): void {
     this.#disposed = true;
     this.#stopWatchProcess();
+    this.#stopGuideProcess();
     this.#releaseShortcutReservation();
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;

@@ -1295,3 +1295,113 @@ describe("AppSnap window picker requests", () => {
     }
   });
 });
+
+describe("AppSnap permission guide", () => {
+  async function createGuideManager(): Promise<{
+    manager: DesktopAppSnapManager;
+    guideChild: FakeChildProcess;
+    onPermissionGuideState: Mock;
+    spawn: Mock;
+    dispose: () => void;
+  }> {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-"));
+    const guideChild = createFakeChildProcess();
+    const spawn = vi.fn().mockReturnValueOnce(guideChild);
+    const onPermissionGuideState = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara Test",
+      appBundlePath: "/Applications/Synara Test.app",
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      onPermissionGuideState,
+    });
+    manager.showPermissionGuide("input-monitoring");
+    await flushPromises();
+    return {
+      manager,
+      guideChild,
+      onPermissionGuideState,
+      spawn,
+      dispose: () => {
+        manager.dispose();
+        rmSync(captureDirectory, { recursive: true, force: true });
+      },
+    };
+  }
+
+  function lastStdinLine(child: FakeChildProcess): string {
+    return child.stdin.read()?.toString().trimEnd() ?? "";
+  }
+
+  it("spawns the helper in permission-guide mode with the right arguments", async () => {
+    const { guideChild, dispose, spawn } = await createGuideManager();
+    try {
+      expect(lastStdinLine(guideChild)).toBe("");
+      expect(spawn).toHaveBeenCalledWith(
+        process.execPath,
+        [
+          "--permission-guide",
+          "--pane",
+          "input-monitoring",
+          "--app-path",
+          "/Applications/Synara Test.app",
+          "--app-name",
+          "Synara Test",
+        ],
+        expect.any(Object),
+      );
+    } finally {
+      dispose();
+    }
+  });
+
+  it("forwards guide state events to the renderer", async () => {
+    const { manager, guideChild, onPermissionGuideState, dispose } = await createGuideManager();
+    try {
+      guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
+      await flushPromises();
+      expect(onPermissionGuideState).toHaveBeenCalledWith("shown");
+      guideChild.stdout.write(
+        `${JSON.stringify({ type: "permission-guide", state: "granted" })}\n`,
+      );
+      await flushPromises();
+      expect(onPermissionGuideState).toHaveBeenCalledWith("granted");
+    } finally {
+      dispose();
+    }
+  });
+
+  it("writes close and SIGTERMs the guide when hidden", async () => {
+    const { manager, guideChild, dispose } = await createGuideManager();
+    try {
+      manager.hidePermissionGuide();
+      await flushPromises();
+      expect(guideChild.stdin.read()?.toString().trimEnd()).toBe("close");
+      expect(guideChild.kill).not.toHaveBeenCalled();
+      // Wait for the 500 ms SIGTERM delay to elapse.
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      expect(guideChild.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      dispose();
+    }
+  });
+
+  it("forwards a crash/exit as closed when no final state was emitted", async () => {
+    const { manager, guideChild, onPermissionGuideState, dispose } = await createGuideManager();
+    try {
+      guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
+      await flushPromises();
+      guideChild.emit("exit", 1, null);
+      await flushPromises();
+      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
+    } finally {
+      dispose();
+    }
+  });
+});

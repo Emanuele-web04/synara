@@ -58,6 +58,53 @@ do {
         withExtendedLifetime((coordinator, gestureSource, requestListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case let .permissionGuide(pane, appPath, appName):
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let (coach, parentProcessMonitor): (GrantCoach, ParentProcessMonitor) = MainActor.assumeIsolated {
+            let coach = GrantCoach(
+                appName: appName,
+                appPath: appPath,
+                pane: pane
+            )
+            let parentProcessMonitor = ParentProcessMonitor()
+            parentProcessMonitor.start()
+            coach.present(
+                onGranted: {
+                    emitter.emitPermissionGuide(state: "granted")
+                    exit(0)
+                },
+                onDismissed: {
+                    emitter.emitPermissionGuide(state: "closed")
+                    exit(0)
+                }
+            )
+            emitter.emitPermissionGuide(state: "shown")
+            return (coach, parentProcessMonitor)
+        }
+
+        // The parent closes the guide by writing a `close` line to stdin.
+        FileHandle.standardInput.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                FileHandle.standardInput.readabilityHandler = nil
+                return
+            }
+            let line = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line == "close" else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    coach.dismissFromEscape()
+                }
+            }
+        }
+
+        // NSApplication.run() is what pumps NSEvents; a bare RunLoop.main.run()
+        // never dispatches mouse events, which left the drag chip dead.
+        withExtendedLifetime((coach, parentProcessMonitor)) {
+            NSApplication.shared.run()
+        }
     }
 } catch let failure as AppSnapFailure {
     emitter.emitError(failure, capturedAt: appSnapTimestamp())

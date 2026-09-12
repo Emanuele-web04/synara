@@ -7,6 +7,8 @@ import type { IpcMain, WebContents } from "electron";
 import type {
   DesktopAppSnapCapture,
   DesktopAppSnapErrorEvent,
+  DesktopAppSnapPermissionGuideState,
+  DesktopAppSnapSettingsPane,
   DesktopAppSnapState,
 } from "@synara/contracts";
 
@@ -14,6 +16,21 @@ import type { DesktopAppSnapManager } from "./appSnapManager";
 import { APPSNAP_IPC_CHANNELS } from "./ipcChannels";
 
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
+
+export const APP_SNAP_SETTINGS_PANE_URLS: Record<DesktopAppSnapSettingsPane, string> = {
+  "input-monitoring": "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+  "screen-recording":
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+};
+
+export interface AppSnapIpcHandlerOptions {
+  openPermissionSettingsPane: (pane: DesktopAppSnapSettingsPane) => Promise<boolean>;
+  restartApp: () => void;
+}
+
+function parseSettingsPane(value: unknown): DesktopAppSnapSettingsPane | null {
+  return value === "input-monitoring" || value === "screen-recording" ? value : null;
+}
 
 export function sendAppSnapState(
   webContents: WebContents | null | undefined,
@@ -36,7 +53,18 @@ export function sendAppSnapError(
   webContents?.send(APPSNAP_IPC_CHANNELS.error, error);
 }
 
-export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopAppSnapManager): void {
+export function sendAppSnapPermissionGuideState(
+  webContents: WebContents | null | undefined,
+  state: DesktopAppSnapPermissionGuideState,
+): void {
+  webContents?.send(APPSNAP_IPC_CHANNELS.permissionGuideState, state);
+}
+
+export function registerAppSnapIpcHandlers(
+  ipcMain: IpcMain,
+  manager: DesktopAppSnapManager,
+  options: AppSnapIpcHandlerOptions,
+): void {
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.getState);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.getState, async () => manager.refreshState());
 
@@ -86,5 +114,29 @@ export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopApp
       throw new Error("captureWindow requires a valid macOS window id.");
     }
     return manager.captureWindow(windowId);
+  });
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.openPermissionSettings);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.openPermissionSettings, async (_event, pane: unknown) => {
+    const settingsPane = parseSettingsPane(pane);
+    if (!settingsPane) return false;
+    return options.openPermissionSettingsPane(settingsPane);
+  });
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.restartApp);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.restartApp, async () => {
+    options.restartApp();
+  });
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.showPermissionGuide);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.showPermissionGuide, async (_event, pane: unknown) => {
+    const settingsPane = parseSettingsPane(pane);
+    if (!settingsPane) return;
+    manager.showPermissionGuide(settingsPane);
+  });
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.hidePermissionGuide);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.hidePermissionGuide, async () => {
+    manager.hidePermissionGuide();
   });
 }

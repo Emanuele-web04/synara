@@ -452,6 +452,10 @@ export interface DesktopAppSnapShortcutUpdateResult {
   availability: DesktopAppSnapShortcutAvailability;
 }
 
+export type DesktopAppSnapSettingsPane = "input-monitoring" | "screen-recording";
+
+export type DesktopAppSnapPermissionGuideState = "shown" | "closed" | "granted";
+
 export interface DesktopAppSnapState {
   platform: DesktopAppSnapPlatform;
   supported: boolean;
@@ -461,6 +465,8 @@ export interface DesktopAppSnapState {
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
+  /** Name macOS shows for this build in System Settings permission lists. */
+  appDisplayName: string;
 }
 
 export interface DesktopAppSnapCapture {
@@ -671,6 +677,13 @@ export interface DesktopBridge {
     acknowledgeCapture: (captureId: string) => Promise<void>;
     listWindows: () => Promise<DesktopAppSnapWindowEntry[]>;
     captureWindow: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
+    openPermissionSettings: (pane: DesktopAppSnapSettingsPane) => Promise<boolean>;
+    restartApp: () => Promise<void>;
+    showPermissionGuide: (pane: DesktopAppSnapSettingsPane) => Promise<void>;
+    hidePermissionGuide: () => Promise<void>;
+    onPermissionGuideState: (
+      listener: (state: DesktopAppSnapPermissionGuideState) => void,
+    ) => () => void;
     onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
     onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
     onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
