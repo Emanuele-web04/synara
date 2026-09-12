@@ -287,7 +287,6 @@ async function boardByColumn(tools: ReadonlyArray<ToolEntry>, args: Record<strin
   };
 }
 
-
 describe("synara_read_kanban_board", () => {
   it("derives v2 columns + attention flags and skips non-project containers", async () => {
     const { tools } = makeTools({
@@ -680,7 +679,22 @@ describe("synara_create_kanban_draft", () => {
 });
 
 describe("synara_delete_kanban_card", () => {
-  it("deletes an own-project card from a live column", async () => {
+  it("deletes an own-project card with no live turn", async () => {
+    const { tools, deleted } = makeTools({
+      threads: [makeThreadShell("thread-quiet")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_delete_kanban_card"), {
+        threadId: "thread-quiet",
+      }),
+    ) as { threadId: string; deleted: boolean };
+    expect(result.threadId).toBe("thread-quiet");
+    expect(result.deleted).toBe(true);
+    expect(deleted).toEqual([{ threadId: "thread-quiet" }]);
+  });
+
+  it("refuses to delete a card with a live turn", async () => {
     const { tools, deleted } = makeTools({
       threads: [makeRunningShell("thread-live")],
     });
@@ -689,10 +703,10 @@ describe("synara_delete_kanban_card", () => {
       await runHandler(toolById(tools, "synara_delete_kanban_card"), {
         threadId: "thread-live",
       }),
-    ) as { threadId: string; deleted: boolean };
-    expect(result.threadId).toBe("thread-live");
-    expect(result.deleted).toBe(true);
-    expect(deleted).toEqual([{ threadId: "thread-live" }]);
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("live turn");
+    expect(deleted).toHaveLength(0);
   });
 });
 

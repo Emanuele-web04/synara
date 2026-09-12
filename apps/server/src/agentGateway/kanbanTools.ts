@@ -285,6 +285,17 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
             ...(requestId !== undefined ? { requestId } : {}),
           });
         }),
+        // Invalid args throw synchronously (defects), skipping the tap above:
+        // log those too so every call is audited.
+        Effect.tapDefect((defect) =>
+          Effect.logInfo("agent_gateway.kanban_tool", {
+            tool: toolName,
+            callerSessionKey: context.callerSessionKey,
+            callerThreadId: context.callerThreadId,
+            outcome: "invalid-args",
+            error: errorText(defect),
+          }),
+        ),
       );
   }
 
@@ -615,7 +626,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         title: "Create a Kanban task",
         readOnlyHint: false,
         destructiveHint: true,
-        idempotentHint: false,
+        idempotentHint: true,
         openWorldHint: true,
       },
     },
@@ -625,6 +636,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         (args, context) =>
           Effect.suspend(() =>
             Effect.gen(function* () {
+              yield* requireKanbanWriteAuthority(context);
               const caller = context.callerThreadId;
               const title = readStringArg(args, "title", { required: true })!;
               const description = readStringArg(args, "description");
@@ -783,6 +795,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         (args, context) =>
           Effect.suspend(() =>
             Effect.gen(function* () {
+              yield* requireKanbanWriteAuthority(context);
               const threadId = readStringArg(args, "threadId", {
                 required: true,
               })!;
@@ -872,7 +885,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               if (currentColumn === "awaitingYou") {
                 return yield* Effect.fail(
                   new ToolInputError(
-                    'Awaiting-you cards cannot be force-moved. Use a human response or target "inProgress".',
+                    "Awaiting-you cards cannot be force-moved: wait for the human response, then poll with synara_read_kanban_card.",
                   ),
                 );
               }
@@ -1105,7 +1118,14 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               const caller = yield* requireThreadShell(context.callerThreadId).pipe(
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
               );
-              yield* requireDrivableKanbanCard(caller, threadId);
+              const card = yield* requireDrivableKanbanCard(caller, threadId);
+              if (threadHasInFlightTurn(card)) {
+                return yield* Effect.fail(
+                  new ToolInputError(
+                    `Card "${threadId}" has a live turn; settle it with synara_move_kanban_card first — deleting now would strand running provider work.`,
+                  ),
+                );
+              }
               yield* deleteThread({ threadId }).pipe(
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
               );
