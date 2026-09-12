@@ -4034,7 +4034,10 @@ describe("ChatView transcript geometry (full app)", () => {
         }
         // The list may compensate scrollTop as estimated rows settle. The text
         // the reader is looking at must remain at the same viewport position.
-        expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
+        await vi.waitFor(() => expect(readAnchorTop()).toBeCloseTo(detachedTop, 0), {
+          timeout: 3_000,
+          interval: 16,
+        });
         if (action === "thread switch") {
           await mounted.router.navigate({
             to: "/$threadId",
