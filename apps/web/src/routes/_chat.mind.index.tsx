@@ -49,11 +49,12 @@ const MIND_TYPE_BADGE_VARIANT: Record<MindMemoryType, MindBadgeVariant> = {
 };
 
 /**
- * Provenance in human words: who saved the memory. Provider names reuse the
- * shared display map; internal thread ids stay out of the UI.
+ * Provenance in human words, agent rows only. Humans have no save surface,
+ * so user-kind rows (legacy backfills) render with no suffix.
+ * Provider names reuse the shared display map; thread ids stay out of the UI.
  */
-function provenanceLabel(provenance: MindMemory["provenance"]): string {
-  if (provenance.kind === "user") return "Saved by you";
+function provenanceLabel(provenance: MindMemory["provenance"]): string | null {
+  if (provenance.kind === "user") return null;
   return `Saved by ${PROVIDER_DISPLAY_NAMES[provenance.provider]}`;
 }
 
@@ -74,6 +75,7 @@ function MindListRow({
   readonly onDelete: () => void;
 }) {
   const pinLabel = pinActionLabel("memory", memory.pinned);
+  const provenance = provenanceLabel(memory.provenance);
   return (
     <div
       className={cn(
@@ -89,8 +91,8 @@ function MindListRow({
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[0.8125rem] text-foreground">{memory.text}</span>
         <span className="truncate text-xs text-muted-foreground">
-          {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}{" "}
-          · {provenanceLabel(memory.provenance)}
+          {projectName} · {formatRelativeTime(memory.createdAt)} · weight {memory.weight.toFixed(2)}
+          {provenance ? ` · ${provenance}` : ""}
           {memory.accessCount > 0
             ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
             : ""}
