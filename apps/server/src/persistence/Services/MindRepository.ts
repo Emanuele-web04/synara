@@ -1,6 +1,7 @@
 import {
   IsoDateTime,
   MIND_MEMORY_PROJECT_CAP,
+  MIND_PROFILE_TEXT_MAX_CHARS,
   MIND_RECALL_CANDIDATE_MAX_ITEMS,
   MindJournalEntry,
   MindJournalOp,
@@ -149,6 +150,44 @@ export type MindTextRevisionRow = typeof MindTextRevisionRow.Type;
 export const InsertMindRevisionInput = MindTextRevisionRow;
 export type InsertMindRevisionInput = typeof InsertMindRevisionInput.Type;
 
+/**
+ * One project profile row: user-authored context with its own opt-in flag.
+ * Lives in `mind_profiles`, never in `mind_memories`, so FTS, list, cap, and
+ * sweep queries cannot see it by construction.
+ */
+export const MindProfileRow = Schema.Struct({
+  projectId: ProjectId,
+  text: Schema.String.check(Schema.isMaxLength(MIND_PROFILE_TEXT_MAX_CHARS)),
+  optedIn: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+export type MindProfileRow = typeof MindProfileRow.Type;
+
+/** One profile text-revision row: hash evidence of a profile edit, never the text. */
+export const MindProfileRevisionRow = Schema.Struct({
+  projectId: ProjectId,
+  textHash: Schema.String,
+  actor: MindJournalEntry.fields.actor,
+  createdAt: IsoDateTime,
+});
+export type MindProfileRevisionRow = typeof MindProfileRevisionRow.Type;
+
+export const GetMindProfileInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type GetMindProfileInput = typeof GetMindProfileInput.Type;
+
+export const SetMindProfileInput = MindProfileRow;
+export type SetMindProfileInput = typeof SetMindProfileInput.Type;
+
+export const InsertMindProfileRevisionInput = MindProfileRevisionRow;
+export type InsertMindProfileRevisionInput = typeof InsertMindProfileRevisionInput.Type;
+
+export const ListMindProfileRevisionsInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ListMindProfileRevisionsInput = typeof ListMindProfileRevisionsInput.Type;
+
 export const ListMindJournalForMemoryInput = Schema.Struct({
   memoryId: MindMemoryId,
 });
@@ -293,6 +332,23 @@ export interface MindRepositoryShape {
   readonly listRevisions: (
     input: ListMindRevisionsInput,
   ) => Effect.Effect<ReadonlyArray<MindTextRevisionRow>, MindRepositoryError>;
+  /**
+   * The project's profile row, if one was ever saved. Profiles are keyed by
+   * project only — no memory ids, no FTS, no cap accounting.
+   */
+  readonly getProfile: (
+    input: GetMindProfileInput,
+  ) => Effect.Effect<Option.Option<MindProfileRow>, MindRepositoryError>;
+  /** Upserts the project's profile row (text + opt-in flag + timestamp). */
+  readonly setProfile: (input: SetMindProfileInput) => Effect.Effect<void, MindRepositoryError>;
+  /** Records hash-only revision evidence for a profile text change (never the text). */
+  readonly insertProfileRevision: (
+    input: InsertMindProfileRevisionInput,
+  ) => Effect.Effect<void, MindRepositoryError>;
+  /** Every profile revision row for one project, oldest first. */
+  readonly listProfileRevisions: (
+    input: ListMindProfileRevisionsInput,
+  ) => Effect.Effect<ReadonlyArray<MindProfileRevisionRow>, MindRepositoryError>;
   /** Deletes a memory row (FTS sync trigger keeps the index in step). True when a row was deleted. */
   readonly deleteById: (
     input: DeleteMindMemoryInput,

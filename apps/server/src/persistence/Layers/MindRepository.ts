@@ -27,15 +27,20 @@ import {
   FindMindJournalOpInput,
   FindMindMemoryByTextHashInput,
   GetMindMemoryInput,
+  GetMindProfileInput,
   GetMindReceiptInput,
   InsertMindMemoryInput,
+  InsertMindProfileRevisionInput,
   InsertMindRevisionInput,
   ListAllMindMemoriesInput,
   ListMindJournalForMemoryInput,
   ListMindMemoriesInput,
+  ListMindProfileRevisionsInput,
   ListMindRevisionsInput,
   MindRepository,
   MindMemoryRow,
+  MindProfileRow,
+  MindProfileRevisionRow,
   MindTextRevisionRow,
   type MindMemoryCandidate,
   type MindRepositoryError,
@@ -44,6 +49,7 @@ import {
   PutMindReceiptInput,
   SearchMindCandidatesInput,
   SetMindMemoryPinnedInput,
+  SetMindProfileInput,
   isFtsMatchExprQueryable,
 } from "../Services/MindRepository.ts";
 
@@ -92,6 +98,23 @@ const MindRevisionDbRow = Schema.Struct({
 });
 type MindRevisionDbRow = typeof MindRevisionDbRow.Type;
 
+// SQLite stores the opt-in flag as a 0/1 integer; converted in toProfile.
+const MindProfileDbRow = Schema.Struct({
+  projectId: ProjectId,
+  text: Schema.String,
+  optedIn: Schema.Number,
+  updatedAt: IsoDateTime,
+});
+type MindProfileDbRow = typeof MindProfileDbRow.Type;
+
+const MindProfileRevisionDbRow = Schema.Struct({
+  projectId: ProjectId,
+  textHash: Schema.String,
+  actor: Schema.String,
+  createdAt: IsoDateTime,
+});
+type MindProfileRevisionDbRow = typeof MindProfileRevisionDbRow.Type;
+
 const MindReceiptDbRow = Schema.Struct({
   projectId: ProjectId,
   operationId: Schema.String,
@@ -102,6 +125,7 @@ const MindReceiptDbRow = Schema.Struct({
 
 const decodeMemoryRow = Schema.decodeUnknownEffect(MindMemoryRow);
 const decodeJournalEntry = Schema.decodeUnknownEffect(MindJournalEntry);
+const decodeProfileRow = Schema.decodeUnknownEffect(MindProfileRow);
 
 /** Decodes the raw DB row into the domain row (pinned 0/1 → boolean, provenance reassembled). */
 const toMemory = (row: MindMemoryDbRow) =>
@@ -204,6 +228,38 @@ const toRevisionSafe = (row: MindRevisionDbRow): MindTextRevisionRow => {
     memoryId: row.memoryId,
     oldHash: row.oldHash,
     newHash: row.newHash,
+    actor,
+    createdAt: row.createdAt,
+  };
+};
+
+/** Decodes the raw profile row into the domain row (opted_in 0/1 → boolean). */
+const toProfile = (row: MindProfileDbRow) =>
+  decodeProfileRow({
+    projectId: row.projectId,
+    text: row.text,
+    optedIn: row.optedIn === 1,
+    updatedAt: row.updatedAt,
+  }).pipe(Effect.mapError(toPersistenceDecodeError("MindRepository.profileRowToDomain")));
+
+const toProfileOption = (
+  row: Option.Option<MindProfileDbRow>,
+): Effect.Effect<Option.Option<MindProfileRow>, MindRepositoryError> =>
+  Option.match(row, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (profileRow) => Effect.map(toProfile(profileRow), Option.some),
+  });
+
+const toProfileRevisionSafe = (row: MindProfileRevisionDbRow): MindProfileRevisionRow => {
+  let actor: MindProfileRevisionRow["actor"] = { kind: "user" };
+  try {
+    actor = decodeRevisionActor(decodeJournalActor(row.actor));
+  } catch {
+    // Keep the user fallback.
+  }
+  return {
+    projectId: row.projectId,
+    textHash: row.textHash,
     actor,
     createdAt: row.createdAt,
   };
@@ -767,6 +823,81 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toRevisionSafe)),
     );
 
+  const getProfileRow = SqlSchema.findOneOption({
+    Request: GetMindProfileInput,
+    Result: MindProfileDbRow,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          text,
+          opted_in AS "optedIn",
+          updated_at AS "updatedAt"
+        FROM mind_profiles
+        WHERE project_id = ${projectId}
+      `,
+  });
+
+  const setProfileRow = SqlSchema.void({
+    Request: SetMindProfileInput,
+    execute: ({ projectId, text, optedIn, updatedAt }) =>
+      sql`
+        INSERT INTO mind_profiles (project_id, text, opted_in, updated_at)
+        VALUES (${projectId}, ${text}, ${optedIn ? 1 : 0}, ${updatedAt})
+        ON CONFLICT (project_id) DO UPDATE
+        SET text = excluded.text,
+            opted_in = excluded.opted_in,
+            updated_at = excluded.updated_at
+      `,
+  });
+
+  const insertProfileRevisionRow = SqlSchema.void({
+    Request: InsertMindProfileRevisionInput,
+    execute: ({ projectId, textHash, actor, createdAt }) =>
+      sql`
+        INSERT INTO mind_profile_revisions (project_id, text_hash, actor, created_at)
+        VALUES (${projectId}, ${textHash}, ${encodeJournalActor(actor)}, ${createdAt})
+      `,
+  });
+
+  const listProfileRevisionRows = SqlSchema.findAll({
+    Request: ListMindProfileRevisionsInput,
+    Result: MindProfileRevisionDbRow,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          text_hash AS "textHash",
+          actor,
+          created_at AS "createdAt"
+        FROM mind_profile_revisions
+        WHERE project_id = ${projectId}
+        ORDER BY created_at ASC, id ASC
+      `,
+  });
+
+  const getProfile: MindRepositoryShape["getProfile"] = (input) =>
+    getProfileRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.getProfile:query")),
+      Effect.flatMap(toProfileOption),
+    );
+
+  const setProfile: MindRepositoryShape["setProfile"] = (input) =>
+    setProfileRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.setProfile:upsert")),
+    );
+
+  const insertProfileRevision: MindRepositoryShape["insertProfileRevision"] = (input) =>
+    insertProfileRevisionRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.insertProfileRevision:insert")),
+    );
+
+  const listProfileRevisions: MindRepositoryShape["listProfileRevisions"] = (input) =>
+    listProfileRevisionRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.listProfileRevisions:query")),
+      Effect.map((rows) => rows.map(toProfileRevisionSafe)),
+    );
+
   const setPinned: MindRepositoryShape["setPinned"] = (input) =>
     setPinnedRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.setPinned:update")),
@@ -851,6 +982,10 @@ const makeMindRepository = Effect.gen(function* () {
     insertRevision,
     listJournalForMemory,
     listRevisions,
+    getProfile,
+    setProfile,
+    insertProfileRevision,
+    listProfileRevisions,
     setPinned,
     deleteById,
     appendJournal,

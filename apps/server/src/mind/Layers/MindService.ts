@@ -4,6 +4,7 @@ import {
   MIND_HISTORY_MAX_ENTRIES,
   MIND_MEMORY_PROJECT_CAP,
   MIND_MEMORY_TEXT_MAX_CHARS,
+  MIND_PROFILE_TEXT_MAX_CHARS,
   MIND_RECALL_CANDIDATE_MAX_ITEMS,
   MIND_RECALL_HYGIENE_NOTE,
   MIND_RECALL_MAX_DIGEST_CHARS,
@@ -13,6 +14,7 @@ import {
   type MindHistoryResult,
   type MindListResult,
   type MindMemory,
+  type MindProfile,
   type MindRecallItem,
   type MindRecallResult,
   type ProjectId,
@@ -57,6 +59,8 @@ import {
   type MindRecallRequest,
   type MindServiceError,
   type MindServiceShape,
+  type MindProfileGetRequest,
+  type MindProfileSetRequest,
   type MindSetPinnedRequest,
   type MindStatusRequest,
   type MindStatusResult,
@@ -100,6 +104,45 @@ const renderDigest = (items: ReadonlyArray<MindRecallItem>): string => {
   }
   return lines.join("\n");
 };
+
+/** Framed profile block: quoted user data, same `<`-escape as memory lines. */
+const renderProfileDigestBlock = (text: string): string =>
+  `\nProfile:\n- ${escapeDigestText(text)}`;
+
+/**
+ * Memory digest plus the opted-in profile block. Memory lines render first
+ * within the char budget left after reserving the profile block, so the
+ * result always fits the contracts' digest cap; the profile text itself is
+ * truncated only in the degenerate case where it alone exceeds the cap.
+ */
+export const renderDigestWithProfile = (
+  items: ReadonlyArray<MindRecallItem>,
+  profileText: string | null,
+): string => {
+  if (profileText === null) return renderDigest(items);
+  const block = renderProfileDigestBlock(profileText);
+  if (block.length >= MIND_RECALL_MAX_DIGEST_CHARS) {
+    const head = "\nProfile:\n- ";
+    return `${head.slice(1)}${escapeDigestText(profileText).slice(
+      0,
+      Math.max(0, MIND_RECALL_MAX_DIGEST_CHARS - head.length + 1),
+    )}`;
+  }
+  const lines: string[] = [];
+  for (const item of items) {
+    const line = renderDigestLine(item);
+    const candidate = lines.length === 0 ? line : `${lines.join("\n")}\n${line}`;
+    if (candidate.length + block.length > MIND_RECALL_MAX_DIGEST_CHARS) break;
+    lines.push(line);
+  }
+  const base = lines.join("\n");
+  return base.length === 0 ? block.slice(1) : `${base}${block}`;
+};
+
+/** Opted-in profile text for the recall digest, or null when it stays out. */
+const optedInProfileText = (
+  profile: Option.Option<{ readonly text: string; readonly optedIn: boolean }>,
+): string | null => (Option.isSome(profile) && profile.value.optedIn ? profile.value.text : null);
 
 const toRecallItem = (row: MindMemoryRow, weight: number, nowIso: string): MindRecallItem => ({
   memoryId: row.memoryId,
@@ -425,6 +468,9 @@ const makeMindService = Effect.gen(function* () {
   const recall = (input: MindRecallRequest): Effect.Effect<MindRecallResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
+      const profileText = optedInProfileText(
+        yield* repository.getProfile({ projectId: input.projectId }),
+      );
       const query = input.query ?? "";
       const limit = Math.min(
         Math.max(1, input.limit ?? RECALL_DEFAULT_LIMIT),
@@ -436,7 +482,7 @@ const makeMindService = Effect.gen(function* () {
           toRecallItem(row, weight, nowIso),
         );
         return {
-          digest: renderDigest(digestItems),
+          digest: renderDigestWithProfile(digestItems, profileText),
           items: digestItems,
           note: MIND_RECALL_HYGIENE_NOTE,
         };
@@ -466,7 +512,7 @@ const makeMindService = Effect.gen(function* () {
         toRecallItem(candidate.memory, candidate.effectiveWeight, nowIso),
       );
       return {
-        digest: renderDigest(queryItems),
+        digest: renderDigestWithProfile(queryItems, profileText),
         items: queryItems,
         note: MIND_RECALL_HYGIENE_NOTE,
       };
@@ -603,12 +649,14 @@ const makeMindService = Effect.gen(function* () {
         toRecallItem(row, weight, nowIso),
       );
       const oldestIdleDays = rows.reduce((max, row) => Math.max(max, idleDaysOf(row, nowIso)), 0);
+      const profile = yield* repository.getProfile({ projectId: input.projectId });
       return {
         count: rows.length,
         cap: MIND_MEMORY_PROJECT_CAP,
         pinnedCount: rows.filter((row) => row.pinned).length,
-        digestChars: renderDigest(digestItems).length,
+        digestChars: renderDigestWithProfile(digestItems, optedInProfileText(profile)).length,
         oldestIdleDays: roundTo(oldestIdleDays, 2),
+        ...(Option.isSome(profile) ? { profileOptedIn: profile.value.optedIn } : {}),
       };
     });
 
@@ -872,6 +920,67 @@ const makeMindService = Effect.gen(function* () {
       return result;
     });
 
+  const profileGet = (
+    input: MindProfileGetRequest,
+  ): Effect.Effect<MindProfile | null, MindServiceError> =>
+    Effect.map(repository.getProfile({ projectId: input.projectId }), Option.getOrNull);
+
+  // User-only write from the Mind UI: no thread/turn context, no journal row.
+  // An empty text on opt-out keeps the last saved text; with no prior profile
+  // there is nothing to keep, so the save is rejected as empty.
+  const profileSet = (input: MindProfileSetRequest): Effect.Effect<MindProfile, MindServiceError> =>
+    Effect.gen(function* () {
+      const nowIso = yield* nowIsoNow;
+      const existing = yield* repository.getProfile({ projectId: input.projectId });
+      const normalized = normalizeMindText(input.text);
+      const nextText =
+        normalized.length > 0 ? normalized : Option.isSome(existing) ? existing.value.text : "";
+      if (nextText.length === 0) {
+        return yield* Effect.fail(
+          new MindInvalidTextError({
+            reason: "empty",
+            message: "Profile text is empty; write a short project profile or opt back in later.",
+          }),
+        );
+      }
+      if (nextText.length > MIND_PROFILE_TEXT_MAX_CHARS) {
+        return yield* Effect.fail(
+          new MindInvalidTextError({
+            reason: "tooLong",
+            message: `Profile text is ${nextText.length} characters after trimming; keep it at ${MIND_PROFILE_TEXT_MAX_CHARS} or fewer.`,
+          }),
+        );
+      }
+      if (isMindSecret(nextText)) {
+        return yield* Effect.fail(
+          new MindSecretRejectedError({
+            message:
+              "Profile text matches a credential or secret pattern and was rejected; keep secrets in a secret store, never in project memory.",
+          }),
+        );
+      }
+      yield* repository.setProfile({
+        projectId: input.projectId,
+        text: nextText,
+        optedIn: input.optedIn,
+        updatedAt: nowIso,
+      });
+      if (!Option.isSome(existing) || existing.value.text !== nextText) {
+        yield* repository.insertProfileRevision({
+          projectId: input.projectId,
+          textHash: hashMindText(nextText),
+          actor: { kind: "user" },
+          createdAt: nowIso,
+        });
+      }
+      return {
+        projectId: input.projectId,
+        text: nextText,
+        optedIn: input.optedIn,
+        updatedAt: nowIso,
+      };
+    });
+
   const history = (input: MindHistoryRequest): Effect.Effect<MindHistoryResult, MindServiceError> =>
     Effect.gen(function* () {
       const existing = yield* repository.getById({ memoryId: input.memoryId });
@@ -928,6 +1037,8 @@ const makeMindService = Effect.gen(function* () {
       }),
     update,
     history,
+    profileGet,
+    profileSet,
   };
   return shape;
 });

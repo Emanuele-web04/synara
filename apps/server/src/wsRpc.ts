@@ -2128,6 +2128,21 @@ const makeWsRpcHandlersLayer = () =>
             mindService.history({ projectId: input.projectId, memoryId: input.memoryId }),
             "Failed to load memory history",
           ),
+        [WS_METHODS.mindProfileGet]: (input) =>
+          rpcEffect(
+            mindService.profileGet({ projectId: input.projectId }),
+            "Failed to load project profile",
+          ),
+        [WS_METHODS.mindProfileSet]: (input) =>
+          rpcEffect(
+            // The UI has no thread context; profiles are user-only with no journal row.
+            mindService.profileSet({
+              projectId: input.projectId,
+              text: input.text,
+              optedIn: input.optedIn,
+            }),
+            "Failed to save project profile",
+          ),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>

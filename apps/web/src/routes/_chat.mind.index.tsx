@@ -1,10 +1,15 @@
-import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
-import { type MindListResult, type MindMemory, type MindMemoryType } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES, ProjectId } from "@synara/contracts";
+import {
+  type MindListResult,
+  type MindMemory,
+  type MindMemoryType,
+  type MindProfile,
+} from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { type VariantProps } from "class-variance-authority";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
@@ -18,6 +23,8 @@ import { Badge, badgeVariants } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SearchInput } from "~/components/ui/search-input";
+import { Switch } from "~/components/ui/switch";
+import { Textarea } from "~/components/ui/textarea";
 import { toastManager } from "~/components/ui/toast";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -259,6 +266,142 @@ function MindListRow({
   );
 }
 
+/**
+ * Per-project opt-in profile: user-authored context the recall digest appends
+ * only while opted in. Agents have no write path — this card is the only one.
+ * The parent remounts per project id, so draft state starts fresh each time.
+ */
+function MindProfileCard({
+  projectId,
+  projectName,
+}: {
+  readonly projectId: ProjectId;
+  readonly projectName: string;
+}) {
+  const queryClient = useQueryClient();
+  const profileQueryKey = ["mind", "profile", projectId] as const;
+  const profileQuery = useQuery({
+    queryKey: profileQueryKey,
+    queryFn: () => ensureNativeApi().mind.profileGet({ projectId }),
+    staleTime: 30_000,
+  });
+  const saved: MindProfile | null = profileQuery.data ?? null;
+  const [draftText, setDraftText] = useState("");
+  const [optedIn, setOptedIn] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    if (!hydrated && profileQuery.data !== undefined) {
+      setDraftText(profileQuery.data?.text ?? "");
+      setOptedIn(profileQuery.data?.optedIn ?? false);
+      setHydrated(true);
+    }
+  }, [hydrated, profileQuery.data]);
+
+  // Optimistic save, same rollback shape as the memory rows: the card shows
+  // the draft eagerly and the invalidate-on-settle refetch converges it. An
+  // empty text while opting out keeps the last saved text server-side, so the
+  // optimistic row mirrors that instead of blanking.
+  const saveMutation = useMutation({
+    mutationFn: (input: { readonly text: string; readonly optedIn: boolean }) =>
+      ensureNativeApi().mind.profileSet({
+        projectId,
+        text: input.text,
+        optedIn: input.optedIn,
+      }),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: profileQueryKey });
+      const previous = queryClient.getQueryData<MindProfile | null>(profileQueryKey);
+      const trimmed = input.text.trim();
+      queryClient.setQueryData<MindProfile | null>(profileQueryKey, {
+        projectId,
+        text: trimmed.length > 0 ? trimmed : (previous?.text ?? ""),
+        optedIn: input.optedIn,
+        updatedAt: new Date().toISOString(),
+      });
+      return { previous };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: profileQueryKey });
+      toastManager.add({ type: "success", title: "Profile saved" });
+    },
+    onError: (error, _input, context) => {
+      if (context?.previous !== undefined)
+        queryClient.setQueryData(profileQueryKey, context.previous);
+      toastManager.add({ type: "error", title: error.message });
+    },
+  });
+
+  return (
+    <section
+      aria-label="Project profile"
+      className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="truncate text-sm font-medium text-foreground">
+          Project profile · {projectName}
+        </h2>
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+          <Switch
+            checked={optedIn}
+            onCheckedChange={setOptedIn}
+            aria-label="Include profile in recalls"
+          />
+          Include in recalls
+        </label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Opt-in context for this project only. Included in recall digests while opted in, never
+        shared across projects.
+      </p>
+      {profileQuery.isLoading ? (
+        <span className="text-xs text-muted-foreground">Loading profile…</span>
+      ) : profileQuery.isError ? (
+        <span className="text-xs text-muted-foreground">
+          {profileQuery.error instanceof Error
+            ? profileQuery.error.message
+            : "Failed to load profile."}{" "}
+          <button
+            type="button"
+            onClick={() => void profileQuery.refetch()}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Retry
+          </button>
+        </span>
+      ) : (
+        <>
+          <Textarea
+            aria-label="Project profile text"
+            value={draftText}
+            onChange={(event) => setDraftText(event.target.value)}
+            rows={3}
+            maxLength={500}
+            placeholder="E.g. Uses bun, prefers small diffs, deploys on Fridays."
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              disabled={saveMutation.isPending}
+              onClick={() => saveMutation.mutate({ text: draftText, optedIn })}
+            >
+              Save profile
+            </Button>
+            {saved ? (
+              <span className="truncate text-xs text-muted-foreground">
+                Updated {formatRelativeTime(saved.updatedAt)}
+                {saved.optedIn ? " · included in recalls" : " · not included"}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">No profile saved yet.</span>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function MindRouteView() {
   const queryClient = useQueryClient();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -431,6 +574,16 @@ function MindRouteView() {
     const ids = [...new Set(data.memories.map((memory) => memory.projectId))];
     return ids.map((id) => ({ id, name: projectNamesById.get(id) ?? "Unknown project" }));
   }, [data.memories, projectNamesById]);
+  // The profile card edits exactly one project: the chip-selected one, or the
+  // only loaded project when no filter is set. Otherwise the card names the
+  // missing choice instead of guessing across projects. The id re-gains its
+  // brand here — it always originates from server-loaded memory rows.
+  const profileProjectId =
+    projectFilter !== null
+      ? ProjectId.makeUnsafe(projectFilter)
+      : visibleProjects.length === 1 && visibleProjects[0] !== undefined
+        ? ProjectId.makeUnsafe(visibleProjects[0].id)
+        : null;
   const pinnedCount = useMemo(
     () => data.memories.filter((memory) => memory.pinned).length,
     [data.memories],
@@ -561,6 +714,19 @@ function MindRouteView() {
             <h1 className="px-2 font-heading text-2xl font-semibold tracking-tight text-foreground">
               Mind
             </h1>
+            {data.memories.length > 0 ? (
+              profileProjectId !== null ? (
+                <MindProfileCard
+                  key={profileProjectId}
+                  projectId={profileProjectId}
+                  projectName={projectNamesById.get(profileProjectId) ?? "Unknown project"}
+                />
+              ) : (
+                <p className="px-2 text-xs text-muted-foreground">
+                  Select a project to edit its profile.
+                </p>
+              )
+            ) : null}
             {data.memories.length > 0 ? (
               <div className="flex flex-col gap-2 px-2">
                 <p className="text-xs text-muted-foreground">

@@ -4,6 +4,7 @@ import {
   MIND_HISTORY_MAX_ENTRIES,
   MIND_MEMORY_PROJECT_CAP,
   MIND_MEMORY_TEXT_MAX_CHARS,
+  MIND_PROFILE_TEXT_MAX_CHARS,
   MIND_RECALL_MAX_DIGEST_CHARS,
   MIND_RECALL_MAX_ITEMS,
   MIND_RECALL_QUERY_MAX_CHARS,
@@ -15,6 +16,10 @@ import {
   MindListInput,
   MindListResult,
   MindMemory,
+  MindProfile,
+  MindProfileGetInput,
+  MindProfileGetResult,
+  MindProfileSetInput,
   MindRecallInput,
   MindRecallResult,
   MindRememberInput,
@@ -196,6 +201,53 @@ describe("Mind contracts", () => {
       decodes(WebSocketRequest, {
         id: "request-1",
         body: { _tag: "mind.history", memoryId: "memory-1" },
+      }),
+    ).toBe(false);
+  });
+
+  it("routes the profile get/set methods over the WebSocket request body", () => {
+    expect(WS_METHODS.mindProfileGet).toBe("mind.profileGet");
+    expect(WS_METHODS.mindProfileSet).toBe("mind.profileSet");
+    expect(decodes(MindProfileGetInput, { projectId: "project-1" })).toBe(true);
+    expect(decodes(MindProfileGetInput, {})).toBe(false);
+    expect(
+      decodes(MindProfileSetInput, { projectId: "project-1", text: "fact", optedIn: true }),
+    ).toBe(true);
+    expect(
+      decodes(MindProfileSetInput, { projectId: "project-1", text: "fact", optedIn: "yes" }),
+    ).toBe(false);
+    expect(
+      decodes(MindProfileSetInput, {
+        projectId: "project-1",
+        text: "x".repeat(MIND_PROFILE_TEXT_MAX_CHARS + 1),
+        optedIn: true,
+      }),
+    ).toBe(false);
+    const profile = {
+      projectId: "project-1",
+      text: "fact",
+      optedIn: true,
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    expect(decodes(MindProfile, profile)).toBe(true);
+    expect(decodes(MindProfileGetResult, null)).toBe(true);
+    expect(decodes(MindProfileGetResult, profile)).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.profileGet", projectId: "project-1" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.profileSet", projectId: "project-1", text: "fact", optedIn: true },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.profileSet", projectId: "project-1", text: "fact" },
       }),
     ).toBe(false);
   });

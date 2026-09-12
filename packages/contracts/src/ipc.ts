@@ -49,6 +49,10 @@ import type {
   MindListInput,
   MindListResult,
   MindMemory,
+  MindProfile,
+  MindProfileGetInput,
+  MindProfileGetResult,
+  MindProfileSetInput,
   MindSetPinnedInput,
   MindUpdateInput,
 } from "./mind";
@@ -972,6 +976,8 @@ export interface NativeApi {
     affirm: (input: MindAffirmInput) => Promise<MindMemory>;
     update: (input: MindUpdateInput) => Promise<MindMemory>;
     history: (input: MindHistoryInput) => Promise<MindHistoryResult>;
+    profileGet: (input: MindProfileGetInput) => Promise<MindProfileGetResult>;
+    profileSet: (input: MindProfileSetInput) => Promise<MindProfile>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

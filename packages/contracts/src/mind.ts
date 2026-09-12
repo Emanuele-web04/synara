@@ -190,3 +190,35 @@ export const MindHistoryResult = Schema.Struct({
   entries: Schema.Array(MindHistoryEntry).check(Schema.isMaxLength(MIND_HISTORY_MAX_ENTRIES)),
 });
 export type MindHistoryResult = typeof MindHistoryResult.Type;
+
+/** Per-project opt-in profile tier: user-authored context, never agent-written. */
+export const MIND_PROFILE_TEXT_MAX_CHARS = 500;
+
+export const MindProfile = Schema.Struct({
+  projectId: ProjectId,
+  text: Schema.String.check(Schema.isMaxLength(MIND_PROFILE_TEXT_MAX_CHARS)),
+  optedIn: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+export type MindProfile = typeof MindProfile.Type;
+
+export const MindProfileGetInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type MindProfileGetInput = typeof MindProfileGetInput.Type;
+
+/** Null when the project has never saved a profile. */
+export const MindProfileGetResult = Schema.NullOr(MindProfile);
+export type MindProfileGetResult = typeof MindProfileGetResult.Type;
+
+/**
+ * User-only write: trimmed text (kept verbatim when opting out so the last
+ * text survives), plus the opt-in flag. The service enforces 1–500 chars when
+ * opting in and rejects secret-shaped text either way.
+ */
+export const MindProfileSetInput = Schema.Struct({
+  projectId: ProjectId,
+  text: Schema.String.check(Schema.isMaxLength(MIND_PROFILE_TEXT_MAX_CHARS)),
+  optedIn: Schema.Boolean,
+});
+export type MindProfileSetInput = typeof MindProfileSetInput.Type;

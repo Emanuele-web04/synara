@@ -5,6 +5,7 @@ import type {
   MindMemory,
   MindMemoryId,
   MindMemoryType,
+  MindProfile,
   MindRecallResult,
   ProjectId,
   ThreadId,
@@ -97,6 +98,8 @@ export interface MindStatusResult {
   readonly pinnedCount: number;
   readonly digestChars: number;
   readonly oldestIdleDays: number;
+  /** The profile opt-in flag when the project has a saved profile; absent otherwise. */
+  readonly profileOptedIn?: boolean | undefined;
 }
 
 export interface MindListRequest {
@@ -141,6 +144,25 @@ export interface MindUpdateRequest {
 export interface MindHistoryRequest {
   readonly projectId: ProjectId;
   readonly memoryId: MindMemoryId;
+}
+
+/**
+ * Profile read for one project: null when the project never saved a profile.
+ * The recall digest consults this, never the memories table.
+ */
+export interface MindProfileGetRequest {
+  readonly projectId: ProjectId;
+}
+
+/**
+ * User-only profile write (the Mind UI): new text plus the opt-in flag.
+ * Text is kept verbatim when opting out so the last text survives; opting in
+ * requires trimmed 1–500 chars. Secret-shaped text is always rejected.
+ */
+export interface MindProfileSetRequest {
+  readonly projectId: ProjectId;
+  readonly text: string;
+  readonly optedIn: boolean;
 }
 
 export interface MindServiceShape {
@@ -196,6 +218,21 @@ export interface MindServiceShape {
   readonly history: (
     input: MindHistoryRequest,
   ) => Effect.Effect<MindHistoryResult, MindServiceError>;
+  /**
+   * The project's saved profile, or null when never saved. Pure read, no
+   * journal touch — profiles are user context, not memory evidence.
+   */
+  readonly profileGet: (
+    input: MindProfileGetRequest,
+  ) => Effect.Effect<MindProfile | null, MindServiceError>;
+  /**
+   * Upserts text + opt-in flag; records hash-only revision evidence when the
+   * text changes. No journal touch. Only the UI calls this — there is no
+   * agent gateway tool for profiles, so agents cannot set opt-in.
+   */
+  readonly profileSet: (
+    input: MindProfileSetRequest,
+  ) => Effect.Effect<MindProfile, MindServiceError>;
 }
 
 export class MindService extends ServiceMap.Service<MindService, MindServiceShape>()(
