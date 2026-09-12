@@ -5,6 +5,22 @@ description: Continue the same Synara task and working environment with another 
 
 A provider handoff changes which provider continues one Synara task. Use it when the objective and environment should remain the same but another runtime is better suited to the next phase or useful as an independent second opinion.
 
+## Continue in the current conversation
+
+Turn on **Settings → Chat behavior → Continue handoffs in this chat** to keep the same Synara conversation when changing providers. The setting is off by default; while it is off, the existing handoff flow creates a destination conversation.
+
+With continuous handoff enabled, Synara:
+
+- waits for the active turn and provider interactions to settle
+- replaces the provider session without changing the thread or workspace
+- sends the receiving provider a bounded recap on its first turn
+- records each completed transition in the thread activity history
+- shows the provider path in the chat header, including a return marker when the path comes back to an earlier provider
+
+While a switch is pending, Synara disables the composer and rejects new turns at the server boundary. The composer unlocks only after a durable completion or failure record, so a fast follow-up cannot accidentally reach the previous provider. Providers such as Pi that do not have a static default use the first model returned by their configured runtime discovery when no prior or project selection exists.
+
+There is no handoff-count limit. The header compacts long paths to recent transitions, and Synara bounds each receiving-provider recap so a long-running conversation does not grow the next prompt without limit. Every completed transition remains in the durable event history and follows the normal activity-projection retention policy.
+
 ## Handoff or new task
 
 | Choose           | When                                                                                                 |

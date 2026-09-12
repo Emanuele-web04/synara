@@ -296,6 +296,10 @@
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
     },
+    "./providerHandoff": {
+      "types": "./src/providerHandoff.ts",
+      "import": "./src/providerHandoff.ts"
+    },
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"

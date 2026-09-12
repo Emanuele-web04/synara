@@ -1204,6 +1204,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ) AS ranks
         JOIN projection_thread_activities AS ranked USING (thread_id, activity_id)
         WHERE activity_rank <= ${MAX_SNAPSHOT_THREAD_ACTIVITIES}
+          OR kind IN ('provider.handoff.requested', 'provider.handoff.completed', 'provider.handoff.failed')
           OR (
             kind IN ('approval.requested', 'user-input.requested')
             AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -1272,7 +1273,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const listCheckpointRevertLifecycleActivityRows = SqlSchema.findAll({
+  const listCommandLifecycleActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: () =>
@@ -1292,7 +1293,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             thread_id,
             activity_id,
             ROW_NUMBER() OVER (
-              PARTITION BY thread_id
+              PARTITION BY thread_id,
+                CASE WHEN kind IN ('provider.handoff.requested', 'provider.handoff.completed', 'provider.handoff.failed')
+                  THEN 'provider-handoff' ELSE 'checkpoint-revert' END
               ORDER BY
                 CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
                 sequence DESC,
@@ -1303,7 +1306,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           WHERE kind IN (
             'checkpoint.revert.started',
             'checkpoint.revert.succeeded',
-            'checkpoint.revert.failed'
+            'checkpoint.revert.failed',
+            'provider.handoff.requested',
+            'provider.handoff.completed',
+            'provider.handoff.failed'
           )
         ) AS ranks
         JOIN projection_thread_activities AS ranked USING (thread_id, activity_id)
@@ -1847,6 +1853,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 AND (SELECT has_newer_turn FROM cutoff_turn_state)
               )
             )
+            OR kind IN ('provider.handoff.requested', 'provider.handoff.completed', 'provider.handoff.failed')
             OR (
               kind IN ('approval.requested', 'user-input.requested')
               AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -2311,7 +2318,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             proposedPlanRows,
-            checkpointRevertActivityRows,
+            commandLifecycleActivityRows,
             sessionRows,
             latestTurnRows,
             stateRows,
@@ -2360,11 +2367,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listCheckpointRevertLifecycleActivityRows(undefined).pipe(
+            listCommandLifecycleActivityRows(undefined).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
-                  "ProjectionSnapshotQuery.getCommandReadModel:listCheckpointRevertActivities:query",
-                  "ProjectionSnapshotQuery.getCommandReadModel:listCheckpointRevertActivities:decodeRows",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listCommandLifecycleActivities:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listCommandLifecycleActivities:decodeRows",
                 ),
               ),
             ),
@@ -2395,15 +2402,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ]);
 
           const proposedPlans = collectProjectedProposedPlans(proposedPlanRows);
-          const checkpointRevertActivities = collectProjectedActivities(
-            checkpointRevertActivityRows,
+          const commandLifecycleActivities = collectProjectedActivities(
+            commandLifecycleActivityRows,
           );
           const sessions = collectProjectedSessions(sessionRows);
           const latestTurns = collectProjectedLatestTurns(latestTurnRows);
 
           let updatedAt = collectBaseUpdatedAt({ spaceRows, projectRows, threadRows, stateRows });
           updatedAt = maxOptionalIso(updatedAt, proposedPlans.updatedAt);
-          updatedAt = maxOptionalIso(updatedAt, checkpointRevertActivities.updatedAt);
+          updatedAt = maxOptionalIso(updatedAt, commandLifecycleActivities.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
 
@@ -2415,7 +2422,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               latestTurn: latestTurns.byThread.get(row.threadId) ?? null,
               messages: [],
               proposedPlans: proposedPlans.byThread.get(row.threadId) ?? [],
-              activities: checkpointRevertActivities.byThread.get(row.threadId) ?? [],
+              activities: commandLifecycleActivities.byThread.get(row.threadId) ?? [],
               pendingInteractions: [],
               checkpoints: [],
               session: sessions.byThread.get(row.threadId) ?? null,

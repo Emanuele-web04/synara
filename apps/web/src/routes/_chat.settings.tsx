@@ -1169,6 +1169,15 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "enableContinuousProviderHandoff",
+          title: "Continue handoffs in this chat",
+          description:
+            "Switch providers without opening another conversation. The next provider receives a bounded recap of this chat and keeps the same workspace.",
+          resetLabel: "continuous provider handoff",
+          ariaLabel: "Continue provider handoffs in the current chat",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "autoOpenDevicePane",
           title: "Automatically open simulator",
           description:

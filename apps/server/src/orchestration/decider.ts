@@ -10,6 +10,7 @@ import {
   EventId,
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
+  PROVIDER_DISPLAY_NAMES,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
   THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
@@ -23,6 +24,11 @@ import {
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import {
+  PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND,
+  resolvePendingProviderHandoff,
+  toProviderHandoffActivityModelSelection,
+} from "@synara/shared/providerHandoff";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -107,6 +113,21 @@ function validateAutoRuntimeMode(
         new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: issue,
+        }),
+      );
+}
+
+function validateNoPendingProviderHandoff(
+  command: Pick<OrchestrationCommand, "type">,
+  thread: Pick<OrchestrationThread, "id" | "activities">,
+) {
+  const pending = resolvePendingProviderHandoff(thread.activities);
+  return pending === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' is still switching to '${pending.targetModelSelection.provider}'. Wait for the provider handoff to finish.`,
         }),
       );
 }
@@ -1458,6 +1479,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.modelSelection !== undefined) {
+        yield* validateNoPendingProviderHandoff(command, thread);
+      }
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
@@ -1621,6 +1645,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       yield* validateAutoRuntimeMode(command, thread.modelSelection, command.runtimeMode);
       const occurredAt = nowIso();
       return {
@@ -1670,6 +1695,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      yield* validateNoPendingProviderHandoff(command, targetThread);
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
@@ -1831,6 +1857,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, thread);
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2041,6 +2068,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasInFlightTurn(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2101,6 +2129,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2144,6 +2173,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, thread);
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2246,6 +2276,179 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.provider.handoff": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* validateSidechatExecutionAvailable(command, thread);
+      yield* validateNoPendingProviderHandoff(command, thread);
+      yield* validateAutoRuntimeMode(command, command.targetModelSelection, thread.runtimeMode);
+
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
+
+      if (thread.modelSelection.provider !== command.expectedSourceProvider) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is currently assigned to '${thread.modelSelection.provider}', not expected source '${command.expectedSourceProvider}'.`,
+        });
+      }
+      if (command.targetModelSelection.provider === command.expectedSourceProvider) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is already assigned to provider '${command.expectedSourceProvider}'.`,
+        });
+      }
+      if (threadHasInFlightTurn(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has an active turn. Wait for it to finish or interrupt it before switching providers.`,
+        });
+      }
+      if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has a pending provider interaction that must be resolved before switching providers.`,
+        });
+      }
+      if (
+        !thread.messages.some(
+          (message) =>
+            !message.streaming && (message.role === "user" || message.role === "assistant"),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' must contain at least one completed chat message before switching providers.`,
+        });
+      }
+
+      const requestedActivityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(`provider-handoff-requested:${command.commandId}`),
+            tone: "info",
+            kind: PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND,
+            summary: `Switching to ${PROVIDER_DISPLAY_NAMES[command.targetModelSelection.provider]}`,
+            payload: {
+              handoffCommandId: command.commandId,
+              sourceModelSelection: toProviderHandoffActivityModelSelection(thread.modelSelection),
+              targetModelSelection: toProviderHandoffActivityModelSelection(
+                command.targetModelSelection,
+              ),
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      const requestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: requestedActivityEvent.eventId,
+        type: "thread.provider-handoff-requested",
+        payload: {
+          threadId: command.threadId,
+          sourceModelSelection: thread.modelSelection,
+          targetModelSelection: command.targetModelSelection,
+          createdAt: command.createdAt,
+        },
+      };
+      return [requestedActivityEvent, requestedEvent];
+    }
+
+    case "thread.provider.handoff.complete": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const pending = resolvePendingProviderHandoff(thread.activities);
+      if (pending?.handoffCommandId !== command.handoffCommandId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' no longer has provider handoff '${command.handoffCommandId}' pending.`,
+        });
+      }
+      if (thread.modelSelection.provider !== command.sourceModelSelection.provider) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' changed providers before handoff '${command.handoffCommandId}' completed.`,
+        });
+      }
+
+      const metaUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          modelSelection: command.targetModelSelection,
+          updatedAt: command.createdAt,
+        },
+      };
+      const completedActivityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: metaUpdatedEvent.eventId,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(`provider-handoff:${command.handoffEventId}`),
+            tone: "info",
+            kind: "provider.handoff.completed",
+            summary: `Continued with ${PROVIDER_DISPLAY_NAMES[command.targetModelSelection.provider]}`,
+            payload: {
+              handoffCommandId: command.handoffCommandId,
+              sourceModelSelection: toProviderHandoffActivityModelSelection(
+                command.sourceModelSelection,
+              ),
+              targetModelSelection: toProviderHandoffActivityModelSelection(
+                command.targetModelSelection,
+              ),
+              handoffEventId: command.handoffEventId,
+              recapMode: "bounded-transcript",
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [metaUpdatedEvent, completedActivityEvent];
+    }
+
     case "thread.goal.continue": {
       const thread = yield* requireThread({
         readModel,
@@ -2253,6 +2456,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, thread);
+      yield* validateNoPendingProviderHandoff(command, thread);
       return {
         ...withEventBase({
           aggregateKind: "thread",
