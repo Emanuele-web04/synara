@@ -18,7 +18,7 @@ vi.mock("~/lib/browserDownload", () => ({
 
 const png = Uint8Array.from(
   atob(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
   ),
   (char) => char.charCodeAt(0),
 );
@@ -114,6 +114,7 @@ it("renews the grant before downloading after the server has lost its old grants
   grants.clear();
   await screen.getByRole("link", { name: "Download generated image" }).click();
   await vi.waitFor(() => expect(downloadUrlAsBlob).toHaveBeenCalledOnce());
+  await vi.mocked(downloadUrlAsBlob).mock.results[0]?.value;
   expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2);
   await vi.waitFor(() =>
     expect(
