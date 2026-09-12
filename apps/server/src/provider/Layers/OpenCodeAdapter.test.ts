@@ -84,6 +84,7 @@ function createMockOpenCodeRuntime(options?: {
   readonly sessionUpdate?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly scopeCloseDefect?: boolean;
   readonly connectBarrier?: Effect.Effect<void>;
+  readonly abortBarrier?: () => Promise<void>;
   readonly onScopeClose?: () => void;
 }) {
   const abortCalls: Array<{ sessionID: string }> = [];
@@ -145,6 +146,9 @@ function createMockOpenCodeRuntime(options?: {
       },
       abort: async (input: { sessionID: string }) => {
         abortCalls.push(input);
+        if (options?.abortBarrier) {
+          await options.abortBarrier();
+        }
         return { data: null };
       },
       messages: options?.messages ?? (async () => ({ data: [] })),
@@ -1291,6 +1295,58 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
 
     expect(runtime.abortCalls).toHaveLength(1);
+  });
+
+  it("reports an interrupted stop as inactive and resumes the thread on the next start", async () => {
+    const abortBarrier = Deferred.makeUnsafe<void>();
+    const runtime = createMockOpenCodeRuntime({
+      abortBarrier: () => Deferred.await(abortBarrier).pipe(Effect.runPromise),
+    });
+    const threadId = asThreadId("thread-interrupted-stop-recovery");
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: "/repo",
+        });
+        expect(yield* adapter.hasSession(threadId)).toBe(true);
+
+        const stopFiber = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+        yield* Effect.promise(() => vi.waitFor(() => expect(runtime.abortCalls).toHaveLength(1)));
+        yield* Fiber.interrupt(stopFiber);
+        Deferred.doneUnsafe(abortBarrier, Effect.void);
+
+        expect(yield* adapter.hasSession(threadId)).toBe(false);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "opencode-session-1", cwd: "/repo" },
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "recovered turn",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+        });
+        expect(turn.threadId).toBe(threadId);
+        expect(runtime.promptCalls).toHaveLength(1);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
   });
 
   it("does not touch an external OpenCode MCP registry when its setup hook would fail", async () => {

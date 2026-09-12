@@ -4031,7 +4031,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.sync(() => [...sessions.values()].map((context) => context.session));
 
       const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
-        Effect.sync(() => sessions.has(threadId));
+        Effect.sync(() => {
+          const context = sessions.get(threadId);
+          return context !== undefined && !Ref.getUnsafe(context.stopped);
+        });
 
       const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
         function* (threadId) {
