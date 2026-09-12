@@ -1452,6 +1452,18 @@ export default function Sidebar() {
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
+  // Mind count shares the ["mind"] cache with the Mind view, so the sidebar
+  // badge never adds a request the page would not already make.
+  const mindListQuery = useQuery({
+    queryKey: ["mind"],
+    queryFn: () => ensureNativeApi().mind.list({}),
+    staleTime: 30_000,
+  });
+  const mindBadge = useMemo(() => {
+    const count = mindListQuery.data?.count;
+    if (!count) return null;
+    return { text: String(count), accessibleLabel: `${count} memories` };
+  }, [mindListQuery.data]);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
@@ -3766,7 +3778,7 @@ export default function Sidebar() {
         icon: MindIcon,
         label: "Mind",
         active: isOnMind,
-        badge: null,
+        badge: mindBadge,
         onClick: () => {
           void navigate({ to: "/mind" });
         },
@@ -3779,6 +3791,7 @@ export default function Sidebar() {
       isOnKanban,
       isOnMind,
       isOnPullRequests,
+      mindBadge,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,
