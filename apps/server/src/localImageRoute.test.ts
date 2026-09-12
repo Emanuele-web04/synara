@@ -274,6 +274,24 @@ describe("localImageEffectRouteLayer", () => {
     });
   });
 
+  it("exposes missing-file errors to desktop downloads without allowing untrusted origins", async () => {
+    const workspace = makeTempDir("synara-effect-missing-image-");
+    const config = makeServerConfig({ cwd: workspace });
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: "missing.png", cwd: workspace, download: "1" });
+      for (const requestOrigin of ["synara://app", "https://example.test"]) {
+        const response = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Origin: requestOrigin },
+        });
+        expect(response.status).toBe(404);
+        expect(await response.text()).toBe("Not Found");
+        expect(response.headers.get("access-control-allow-origin")).toBe(
+          requestOrigin === "synara://app" ? requestOrigin : null,
+        );
+      }
+    });
+  });
+
   it("returns 404 when the requested path has an unsupported extension", async () => {
     const workspace = makeTempDir("synara-effect-image-bad-ext-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

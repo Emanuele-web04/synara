@@ -29,6 +29,24 @@ function makeActivity(
 }
 
 describe("contextWindow", () => {
+  it("withholds old Claude processed totals while preserving context and other providers", () => {
+    for (const provider of ["claudeAgent", "codex"]) {
+      const payload = { provider, usedTokens: 100, totalProcessedTokens: 400 };
+      const legacy = deriveLatestContextWindowState([
+        makeActivity("legacy", "context-window.updated", payload),
+      ]).snapshot;
+      expect(legacy?.usedTokens).toBe(100);
+      expect(legacy?.totalProcessedTokens).toBe(provider === "claudeAgent" ? null : 400);
+      const corrected = deriveLatestContextWindowState([
+        makeActivity("corrected", "context-window.updated", {
+          ...payload,
+          tokenAccountingVersion: 1,
+        }),
+      ]).snapshot;
+      expect(corrected?.totalProcessedTokens).toBe(400);
+    }
+  });
+
   it("derives the latest valid context window snapshot", () => {
     const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {

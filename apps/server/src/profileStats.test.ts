@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import recoverClaudeUsage from "./persistence/Migrations/103_ClaudeTokenAccounting";
 import {
   aggregateProfileSkillUsageRows,
   heatmapIntensity,
@@ -69,6 +70,128 @@ describe("heatmapIntensity", () => {
 });
 
 describe("ProfileStatsQuery", () => {
+  it("uses versioned Claude results once, recovers retained main usage, and excludes unverifiable history", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        for (const [threadId, parentThreadId, creationSource] of [
+          ["root", null, null],
+          ["mirrored-child", "root", "provider_native"],
+          ["independent-child", "root", "synara_mcp"],
+        ] as const) {
+          yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source)
+          VALUES (${threadId}, 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            ${parentThreadId}, ${creationSource})
+        `;
+        }
+        const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
+        INSERT INTO projection_thread_activities
+          (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES (${id}, ${threadId}, ${turnId}, 'info', 'turn.completed', 'done',
+          ${JSON.stringify(payload)}, ${Number(id)}, '2026-09-10T12:00:00Z')
+      `;
+        const versioned = {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 27_326,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 32,
+              outputTokens: 59,
+              cacheReadInputTokens: 26_816,
+              cacheCreationInputTokens: 419,
+              webSearchRequests: 0,
+              costUSD: 0.031,
+              contextWindow: 200_000,
+              maxOutputTokens: 32_000,
+            },
+            "claude-opus-4-8": {
+              inputTokens: 900,
+              outputTokens: 100,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              costUSD: 0.02,
+              contextWindow: 200_000,
+              maxOutputTokens: 32_000,
+            },
+          },
+        };
+        yield* addActivity("1", "root", "first", versioned);
+        yield* addActivity("2", "root", "first", versioned);
+        yield* addActivity("3", "mirrored-child", "mirrored", versioned);
+        yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
+        yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
+        // An earlier private build emitted a compact shape whose input already
+        // included cache tokens. Its explicit total remains authoritative.
+        yield* addActivity("6", "root", "compact", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 1_000,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 900,
+              outputTokens: 100,
+              totalTokens: 1_000,
+              cacheReadInputTokens: 800,
+              cacheCreationInputTokens: 60,
+            },
+          },
+        });
+        // A malformed nonempty breakdown must not suppress the verified
+        // main-loop fallback or make SQLite JSON functions fail.
+        yield* addActivity("7", "root", "fallback", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 250,
+          modelUsage: { "claude-fable-5": "unusable" },
+        });
+        yield* addActivity("8", "independent-child", "independent", versioned);
+        // Successful main-loop usage survives even though old compact model totals
+        // cannot be classified as per-turn or cumulative without process evidence.
+        yield* sql`
+        INSERT INTO provider_runtime_events
+          (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
+        VALUES ('legacy-result', 'root', 'legacy', 'turn.completed',
+          ${JSON.stringify({
+            provider: "claudeAgent",
+            payload: {
+              usage: {
+                input_tokens: 32,
+                cache_creation_input_tokens: 419,
+                cache_read_input_tokens: 26_816,
+                output_tokens: 59,
+              },
+            },
+          })}, '2026-09-10')
+      `;
+        yield* sql`
+        INSERT INTO projection_thread_activities
+          (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at)
+        VALUES ('inflated', 'root', 'first', 'info', 'context-window.updated', 'usage',
+          '{"provider":"claudeAgent","totalProcessedTokens":141818233}', '2026-09-10')
+      `;
+        yield* sql`
+        INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, model, tokens)
+        VALUES ('old-deleted', '2026-09-10', 'claudeAgent', 'claude-fable-5', 999999)
+      `;
+        const journalBefore = yield* sql`SELECT * FROM provider_runtime_events`;
+        yield* recoverClaudeUsage;
+        yield* recoverClaudeUsage;
+        expect(yield* sql`SELECT * FROM provider_runtime_events`).toEqual(journalBefore);
+        // The verified fallback must outlive ordinary runtime-event retention.
+        yield* sql`DELETE FROM provider_runtime_events`;
+        const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(result.lifetimeTotalTokens).toBe(85_228);
+        expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
+          { model: "claude-fable-5", tokens: 83_228 },
+          { model: "claude-opus-4-8", tokens: 2_000 },
+        ]);
+      }),
+    );
+  });
+
   it("normalizes profile skill usage from structured refs plus slash and dollar prompt tokens", () => {
     expect(
       aggregateProfileSkillUsageRows([
@@ -501,9 +624,9 @@ describe("ProfileStatsQuery", () => {
               'thread-claude',
               'turn-claude-1',
               'info',
-              'context-window.updated',
+              'turn.completed',
               'tokens updated',
-              '{"totalProcessedTokens":5000}',
+              '{"tokenAccountingVersion":1,"mainLoopTokens":5000}',
               1,
               '2026-06-13T10:06:00.000Z'
             )
@@ -643,8 +766,7 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // thread-switch never reports the cumulative counter (like the Claude
-        // adapter below the context window), so usedTokens drives its series.
+        // Claude completes with per-turn totals; provisional context rows are ignored.
         // thread-mixed dips to context scale mid-thread and recovers: only the
         // cumulative rows count (6000 total, not 6000 + the dip recovery).
         yield* sql`
@@ -676,9 +798,9 @@ describe("ProfileStatsQuery", () => {
               'thread-switch',
               'turn-switch-1',
               'info',
-              'context-window.updated',
+              'turn.completed',
               'tokens updated',
-              '{"usedTokens":3000}',
+              '{"tokenAccountingVersion":1,"mainLoopTokens":3000}',
               2,
               '2026-06-13T09:03:00.000Z'
             ),
@@ -687,9 +809,9 @@ describe("ProfileStatsQuery", () => {
               'thread-switch',
               'turn-switch-2',
               'info',
-              'context-window.updated',
+              'turn.completed',
               'tokens updated',
-              '{"usedTokens":5000}',
+              '{"tokenAccountingVersion":1,"mainLoopTokens":2000}',
               3,
               '2026-06-13T09:21:00.000Z'
             ),
@@ -809,6 +931,17 @@ describe("ProfileStatsQuery", () => {
               'client',
               '{"threadId":"thread-hybrid","messageId":"message-hybrid-claude","modelSelection":{"provider":"claudeAgent","model":"claude-haiku-4-5"}}',
               '{}'
+            ),
+            (
+              'event-hybrid-codex-after',
+              'thread',
+              'thread-hybrid',
+              3,
+              'thread.turn-start-requested',
+              '2026-06-13T12:20:00.000Z',
+              'client',
+              '{"threadId":"thread-hybrid","messageId":"message-hybrid-codex-after","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+              '{}'
             )
         `;
 
@@ -837,12 +970,20 @@ describe("ProfileStatsQuery", () => {
               'completed',
               '2026-06-13T12:10:00.000Z',
               '[]'
+            ),
+            (
+              'thread-hybrid',
+              'turn-hybrid-codex-after',
+              'message-hybrid-codex-after',
+              'completed',
+              '2026-06-13T12:20:00.000Z',
+              '[]'
             )
         `;
 
         // Codex has cumulative totals, so its usedTokens-only dip is ignored.
-        // Claude never reports cumulative totals in this thread, so its own
-        // usedTokens series is still counted instead of being dropped.
+        // A large legacy Claude counter sits between the two Codex turns, but
+        // Claude final usage is counted independently and cannot reset that delta.
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -879,15 +1020,15 @@ describe("ProfileStatsQuery", () => {
               '2026-06-13T12:03:00.000Z'
             ),
             (
-              'activity-hybrid-codex-2',
+              'activity-hybrid-claude-legacy',
               'thread-hybrid',
-              'turn-hybrid-codex',
+              'turn-hybrid-claude',
               'info',
               'context-window.updated',
               'tokens updated',
-              '{"usedTokens":1500,"totalProcessedTokens":2500}',
+              '{"usedTokens":700,"totalProcessedTokens":999999}',
               3,
-              '2026-06-13T12:04:00.000Z'
+              '2026-06-13T12:11:00.000Z'
             ),
             (
               'activity-hybrid-claude-1',
@@ -898,18 +1039,29 @@ describe("ProfileStatsQuery", () => {
               'tokens updated',
               '{"usedTokens":700}',
               4,
-              '2026-06-13T12:11:00.000Z'
+              '2026-06-13T12:11:30.000Z'
             ),
             (
               'activity-hybrid-claude-2',
               'thread-hybrid',
               'turn-hybrid-claude',
               'info',
-              'context-window.updated',
+              'turn.completed',
               'tokens updated',
-              '{"usedTokens":1700}',
+              '{"tokenAccountingVersion":1,"mainLoopTokens":1700}',
               5,
               '2026-06-13T12:12:00.000Z'
+            ),
+            (
+              'activity-hybrid-codex-2',
+              'thread-hybrid',
+              'turn-hybrid-codex-after',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1500,"totalProcessedTokens":2500}',
+              6,
+              '2026-06-13T12:21:00.000Z'
             )
         `;
 
@@ -1517,9 +1669,9 @@ describe("ProfileStatsQuery", () => {
               'thread-legacy-bad-json',
               'turn-legacy-1',
               'info',
-              'context-window.updated',
+              'turn.completed',
               'tokens updated',
-              '{"totalProcessedTokens":1500,"provider":"claudeAgent"}',
+              '{"tokenAccountingVersion":1,"mainLoopTokens":1500,"provider":"claudeAgent"}',
               2,
               '2026-06-14T09:10:00.000Z'
             )

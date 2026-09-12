@@ -25,6 +25,60 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("strips terminal formatting from persisted provider activity details", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-plugin-status",
+          kind: "tool.updated",
+          summary: "Pi plugin",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "MCP tool call",
+            detail: "\u001b[38;2;215;119;87mTransmuting...\u001b[0m",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Transmuting...");
+  });
+
+  it("preserves bracketed source text in provider activity details", () => {
+    const detail = "const first = items[0]; // [example]";
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "source-output",
+          kind: "tool.updated",
+          summary: "Read file",
+          payload: { detail },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe(detail);
+  });
+
+  it("cleans persisted notice messages without losing bracketed content", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-notice",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "\u001b[31mEnabled [full] mode\u001b[0m" },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Enabled [full] mode");
+    expect(entry?.label).toBe("Pi extension");
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [
@@ -101,11 +155,13 @@ describe("deriveWorkLogEntries", () => {
     const taskListActivity = (
       id: string,
       createdAt: string,
+      sequence: number,
       tasks: Array<{ task: string; status: string }>,
     ) =>
       makeActivity({
         id,
         createdAt,
+        sequence,
         kind: "turn.tasks.updated",
         summary: "Tasks updated",
         tone: "info",
@@ -113,22 +169,23 @@ describe("deriveWorkLogEntries", () => {
         payload: { tasks },
       });
     const activities: OrchestrationThreadActivity[] = [
-      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", [
+      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", 1, [
         { task: "Implement inline editing", status: "inProgress" },
         { task: "Run verification", status: "pending" },
       ]),
       makeActivity({
         id: "tool-between",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 2,
         kind: "tool.started",
         summary: "Tool call",
         turnId: "turn-1",
       }),
-      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", [
+      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", 3, [
         { task: "Implement inline editing", status: "completed" },
         { task: "Run verification", status: "inProgress" },
       ]),
-      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", [
+      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", 4, [
         { task: "Implement inline editing", status: "completed" },
         { task: "Run verification", status: "completed" },
       ]),
@@ -140,6 +197,7 @@ describe("deriveWorkLogEntries", () => {
     // Anchored at the first snapshot (stable id/createdAt), showing the latest state.
     expect(taskListEntries[0]?.id).toBe("tasks-1");
     expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
+    expect(taskListEntries[0]?.sequence).toBe(1);
     expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
     expect(taskListEntries[0]?.detail).toBeUndefined();
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
@@ -362,7 +420,7 @@ describe("deriveWorkLogEntries", () => {
         id: "context-restart",
         turnId: "turn-hidden",
         kind: "provider.context.changed",
-        summary: "Native session history was unavailable.",
+        summary: "The session's history was lost, so the model continues from a summary.",
         tone: "error",
         payload: {
           provider: "opencode",
@@ -411,7 +469,7 @@ describe("deriveWorkLogEntries", () => {
           id: "context-restart-without-recap",
           turnId: "turn-2",
           kind: "provider.context.changed",
-          summary: "The session restarted without its native history.",
+          summary: "The session restarted without its previous history.",
           tone: "error",
           payload: {
             provider: "codex",
@@ -436,6 +494,43 @@ describe("deriveWorkLogEntries", () => {
       recapInjected: false,
       recapCharacters: 0,
       recapPreview: null,
+      recapPreviewTruncated: false,
+    });
+  });
+
+  it("keeps interrupt-escalation context-loss markers visible", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "interrupt-escalation-context",
+          turnId: "turn-3",
+          kind: "provider.context.changed",
+          summary:
+            "The turn could not be stopped cleanly, so the session was restarted and your message included a summary.",
+          tone: "error",
+          payload: {
+            provider: "opencode",
+            nativeHistory: "unavailable",
+            sessionRestarted: true,
+            restartReason: "interrupt-escalation",
+            recapInjected: true,
+            recapCharacters: 900,
+            recapPreview: "Earlier conversation summary",
+            recapPreviewTruncated: false,
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-3"),
+    );
+
+    expect(entry?.providerContextLifecycle).toEqual({
+      provider: "opencode",
+      nativeHistory: "unavailable",
+      sessionRestarted: true,
+      restartReason: "interrupt-escalation",
+      recapInjected: true,
+      recapCharacters: 900,
+      recapPreview: "Earlier conversation summary",
       recapPreviewTruncated: false,
     });
   });
@@ -633,6 +728,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-1",
         createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 1,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -643,6 +739,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-2",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 2,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -653,6 +750,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-3",
         createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 3,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -665,7 +763,9 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "opencode-retry-3",
+      id: "opencode-retry-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      sequence: 1,
       label: "OpenCode retrying",
       detail: "3 notices - Provider request failed; retrying.",
       preview: "3 notices - Provider request failed; retrying.",
@@ -936,6 +1036,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "a-started",
         createdAt: "2026-02-23T00:00:00.000Z",
+        sequence: 10,
         kind: "tool.started",
         summary: "Tool call",
         payload: {
@@ -947,6 +1048,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "b-started",
         createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 20,
         kind: "tool.started",
         summary: "Tool call",
         payload: {
@@ -958,6 +1060,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "a-completed",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 30,
         kind: "tool.completed",
         summary: "Tool call",
         payload: {
@@ -969,6 +1072,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "b-completed",
         createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 40,
         kind: "tool.completed",
         summary: "Tool call",
         payload: {
@@ -982,9 +1086,144 @@ describe("deriveWorkLogEntries", () => {
     // Without id-based collapse this is 4 rows (a started, b started, a completed,
     // b completed); each tool call must merge to one row, kept at its start position.
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["a-completed", "b-completed"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["a-started", "b-started"]);
+    expect(entries.map((entry) => entry.createdAt)).toEqual([
+      "2026-02-23T00:00:00.000Z",
+      "2026-02-23T00:00:01.000Z",
+    ]);
+    expect(entries.map((entry) => entry.sequence)).toEqual([10, 20]);
     expect(entries.map((entry) => entry.toolName)).toEqual(["Workflow", "WebFetch"]);
   });
+
+  it("keeps a tool at its original timeline anchor when a later turn updates it", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 10,
+        turnId: "turn-1",
+        kind: "tool.started",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "background-command",
+            command: "sleep 10",
+          },
+        },
+      }),
+      makeActivity({
+        id: "intervening-warning",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 15,
+        turnId: "turn-1",
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        tone: "info",
+        payload: { message: "The command is still running." },
+      }),
+      makeActivity({
+        id: "codex-command-update",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 20,
+        turnId: "turn-2",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          detail: "Process exited with code 0",
+          data: {
+            toolCallId: "background-command",
+            summary: "Process exited with code 0",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries[0]).toMatchObject({
+      id: "codex-command-start",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      sequence: 10,
+      turnId: TurnId.makeUnsafe("turn-2"),
+      activityKind: "tool.updated",
+      detail: "Process exited with code 0",
+    });
+    expect(deriveTimelineEntries([], [], entries).map((entry) => entry.id)).toEqual([
+      "codex-command-start",
+      "intervening-warning",
+    ]);
+  });
+
+  it.each([
+    ["completed", "turn.completed", "info"],
+    ["cancelled", "turn.aborted", "info"],
+    ["failed", "turn.completed", "error"],
+  ] as const)(
+    "keeps a cross-turn tool running after its original turn %s",
+    (_state, terminalKind, terminalTone) => {
+      const oldTurn = TurnId.makeUnsafe("turn-1");
+      const activeTurn = TurnId.makeUnsafe("turn-2");
+      const at = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();
+      const tool = (
+        id: string,
+        second: number,
+        kind: OrchestrationThreadActivity["kind"],
+        turnId: TurnId | null,
+      ) =>
+        makeActivity({
+          id,
+          createdAt: at(second),
+          sequence: second,
+          kind,
+          ...(turnId !== null ? { turnId } : {}),
+          summary: "Read file",
+          payload: { itemType: "dynamic_tool_call", data: { toolCallId: "background-tool" } },
+        });
+      const activities = [
+        tool("tool-start", 1, "tool.started", oldTurn),
+        makeActivity({
+          id: "turn-terminal",
+          createdAt: at(2),
+          sequence: 2,
+          turnId: oldTurn,
+          kind: terminalKind,
+          tone: terminalTone,
+        }),
+        tool("tool-next-turn", 3, "tool.updated", activeTurn),
+        tool("tool-progress", 4, "tool.updated", activeTurn),
+        // Some provider updates omit ownership; retain the latest known turn.
+        tool("tool-turnless-progress", 5, "tool.updated", null),
+      ];
+      const options = { activeTurnId: activeTurn, activeTurnStartedAt: at(3) };
+      const findTool = (input: OrchestrationThreadActivity[]) =>
+        deriveWorkLogEntries(input, undefined, options).find((entry) => entry.id === "tool-start");
+      const running = findTool(activities);
+      expect(running).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "running",
+        liveActivity: { state: "running_tool", lastActivityAt: at(5) },
+      });
+
+      const completed = findTool([...activities, tool("tool-complete", 6, "tool.completed", null)]);
+      expect(completed).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "completed",
+        liveActivity: { state: "completed", lastActivityAt: at(6) },
+      });
+    },
+  );
 
   it("keeps distinct calls of the same tool separate by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
@@ -1035,7 +1274,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["first-completed", "second-completed"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["first-started", "second-started"]);
   });
 
   it("orders work log by activity sequence when present", () => {
@@ -1184,7 +1423,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.id).toBe("command-complete");
+    expect(entry?.id).toBe("command-start");
     expect(entry?.toolDetails).toMatchObject({
       kind: "command",
       command: "bun run --cwd apps/web test session-logic.test.ts",
@@ -1376,7 +1615,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "cursor-searched",
+        id: "cursor-searching",
         toolTitle: "Searched",
         detail: "52 files found",
         itemType: "dynamic_tool_call",
@@ -1423,7 +1662,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "cursor-command-complete",
+        id: "cursor-command-start",
         command: "git diff --stat",
         detail: "done",
         itemType: "command_execution",
@@ -1686,7 +1925,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "codex-completed-rich",
+        id: "codex-start-generic",
         command: "git status --short",
         rawCommand: "/bin/zsh -lc 'git status --short'",
         toolTitle: "Checked",
@@ -2303,8 +2542,8 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "tool-complete",
-      createdAt: "2026-02-23T00:00:03.000Z",
+      id: "tool-update-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
       label: "Tool call completed",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       command: "sed -n 1,40p /tmp/app.ts",
@@ -2993,7 +3232,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "claude-complete",
+      id: "claude-update-1",
       label: "Read file",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
@@ -3054,7 +3293,7 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
 
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-1-complete", "tool-2-complete"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-1-update", "tool-2-update"]);
   });
 
   it("collapses same-timestamp lifecycle rows even when completed sorts before updated by id", () => {
@@ -3097,7 +3336,7 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
 
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe("a-complete-same-timestamp");
+    expect(entries[0]?.id).toBe("z-update-earlier");
   });
 
   it("omits routed collab subagent tool lifecycle rows from the transcript", () => {
@@ -3265,6 +3504,50 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)[0]?.detail).toBeUndefined();
   });
 
+  it("renders Cursor ACP subagent task rows with the description heading and prompt", () => {
+    // Shape emitted by AcpRuntimeModel for Cursor's `Task` tool (kind "agent").
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-task-start",
+        createdAt: "2026-09-10T21:26:57.180Z",
+        kind: "tool.started",
+        summary: "Explore composer model/effort UI",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Explore composer model/effort UI",
+          data: {
+            toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+            kind: "agent",
+            tool: "task",
+            prompt: "Explore the Synara web app and report back with file paths.",
+            rawInput: {
+              _toolName: "task",
+              description: "Explore composer model/effort UI",
+              prompt: "Explore the Synara web app and report back with file paths.",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        itemType: "collab_agent_tool_call",
+        toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+        toolTitle: "Explore composer model/effort UI",
+        subagentAction: expect.objectContaining({
+          tool: "task",
+          prompt: "Explore the Synara web app and report back with file paths.",
+        }),
+        liveActivity: expect.objectContaining({ state: "running_tool" }),
+      }),
+    ]);
+    expect(entries[0]?.subagents).toBeUndefined();
+    expect(entries[0]?.detail).toBeUndefined();
+  });
+
   it("uses completed generic agent task output instead of truncated task wrapper text", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3383,7 +3666,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toEqual(
       expect.objectContaining({
-        id: "opencode-task-complete",
+        id: "opencode-task-started",
         itemType: "collab_agent_tool_call",
         toolTitle: "Find changelog implementation",
         detail: "Full changelog report\nwith file references.",
@@ -3456,7 +3739,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(2);
     expect(entries.find((entry) => entry.itemType === "collab_agent_tool_call")).toEqual(
       expect.objectContaining({
-        id: "opencode-task-complete",
+        id: "opencode-task-update",
         itemType: "collab_agent_tool_call",
         toolTitle: "Find changelog implementation",
         detail: "Tool execution aborted",
@@ -3512,6 +3795,227 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each([false, true])(
+    "keeps tools and plans after repeated steering messages (later narration: %s)",
+    (hasLaterNarration) => {
+      const turnId = TurnId.makeUnsafe("steered-turn");
+      const messages = [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user" as const,
+          text: "Investigate usage",
+          createdAt: "2026-09-11T00:00:00Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("preamble"),
+          role: "assistant" as const,
+          turnId,
+          text: "Checking usage",
+          createdAt: "2026-09-11T00:00:01Z",
+          streaming: false,
+        },
+        ...[2, 4].map((second) => ({
+          id: MessageId.makeUnsafe(`steer-${second}`),
+          role: "user" as const,
+          dispatchMode: "steer" as const,
+          startsNewTurn: false,
+          text: "Only Codex",
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          streaming: false,
+        })),
+        ...(hasLaterNarration
+          ? [
+              {
+                id: MessageId.makeUnsafe("continued"),
+                role: "assistant" as const,
+                turnId,
+                text: "Continuing the investigation",
+                createdAt: "2026-09-11T00:00:05Z",
+                streaming: false,
+              },
+            ]
+          : []),
+      ];
+      const entries = deriveTimelineEntries(
+        messages,
+        [
+          {
+            id: "steered-plan",
+            turnId,
+            planMarkdown: "# Fix usage",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-09-11T00:00:07Z",
+            updatedAt: "2026-09-11T00:00:07Z",
+          },
+        ],
+        [3, 6].map((second) => ({
+          id: `tool-${second}`,
+          turnId,
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          tone: "tool" as const,
+          label: "Running command",
+        })),
+      );
+
+      expect(entries.map((entry) => entry.id)).toEqual([
+        "request",
+        "preamble",
+        "steer-2",
+        "tool-3",
+        "steer-4",
+        ...(hasLaterNarration ? ["continued"] : []),
+        "tool-6",
+        "steered-plan",
+      ]);
+    },
+  );
+
+  it("keeps late interrupted-turn tools before a non-native steer turn", () => {
+    const interruptedTurnId = TurnId.makeUnsafe("interrupted-turn");
+    const queuedSteerTurnId = TurnId.makeUnsafe("queued-steer-turn");
+    const messages = [
+      {
+        id: MessageId.makeUnsafe("initial-request"),
+        role: "user" as const,
+        turnId: interruptedTurnId,
+        text: "Investigate usage",
+        createdAt: "2026-09-11T00:00:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("initial-preamble"),
+        role: "assistant" as const,
+        turnId: interruptedTurnId,
+        text: "Checking usage",
+        createdAt: "2026-09-11T00:00:01Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("queued-steer"),
+        role: "user" as const,
+        dispatchMode: "steer" as const,
+        startsNewTurn: true,
+        turnId: null,
+        text: "Switch to tests",
+        createdAt: "2026-09-11T00:00:02Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("steer-answer"),
+        role: "assistant" as const,
+        turnId: queuedSteerTurnId,
+        text: "Checking tests",
+        createdAt: "2026-09-11T00:00:03Z",
+        streaming: true,
+      },
+    ];
+    const entries = deriveTimelineEntries(
+      messages,
+      [],
+      [
+        {
+          id: "new-turn-tool",
+          turnId: queuedSteerTurnId,
+          createdAt: "2026-09-11T00:00:04Z",
+          tone: "tool",
+          label: "New turn tool",
+        },
+        {
+          id: "late-interrupted-tool",
+          turnId: interruptedTurnId,
+          createdAt: "2026-09-11T00:00:05Z",
+          tone: "tool",
+          label: "Late interrupted tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "initial-request",
+      "initial-preamble",
+      "late-interrupted-tool",
+      "queued-steer",
+      "steer-answer",
+      "new-turn-tool",
+    ]);
+  });
+
+  it("keeps late earlier-turn tool updates before the next user request", () => {
+    const oldTurn = TurnId.makeUnsafe("old-turn");
+    const newTurn = TurnId.makeUnsafe("new-turn");
+    const messages = [
+      {
+        id: MessageId.makeUnsafe("first-user"),
+        role: "user" as const,
+        text: "First request",
+        createdAt: "2026-09-07T00:00:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("first-answer"),
+        role: "assistant" as const,
+        turnId: oldTurn,
+        text: "Done",
+        createdAt: "2026-09-07T00:01:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-user"),
+        role: "user" as const,
+        text: "Next request",
+        createdAt: "2026-09-07T00:02:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-answer"),
+        role: "assistant" as const,
+        turnId: newTurn,
+        text: "Working",
+        createdAt: "2026-09-07T00:02:01Z",
+        streaming: true,
+      },
+    ];
+    const oldWork = Array.from({ length: 79 }, (_, index) => ({
+      id: `old-tool-${index}`,
+      turnId: oldTurn,
+      sequence: 200 + index,
+      createdAt: "2026-09-07T00:03:00Z",
+      tone: "tool" as const,
+      label: "Earlier tool",
+    }));
+    const entries = deriveTimelineEntries(
+      messages,
+      [],
+      [
+        ...oldWork,
+        {
+          id: "new-tool",
+          turnId: newTurn,
+          sequence: 100,
+          createdAt: "2026-09-07T00:02:02Z",
+          tone: "tool",
+          label: "Current tool",
+        },
+        { id: "legacy", createdAt: "2026-09-07T00:02:03Z", tone: "info", label: "Legacy status" },
+      ],
+    );
+    const boundary = entries.findIndex((entry) => entry.id === "second-user");
+    expect(entries.slice(0, boundary).filter((entry) => entry.kind === "work")).toHaveLength(79);
+    expect(
+      entries
+        .slice(boundary)
+        .filter((entry) => entry.kind === "work")
+        .map((entry) => entry.id),
+    ).toEqual(["new-tool", "legacy"]);
+    expect(
+      entries
+        .filter((entry) => entry.kind === "work" && entry.entry.turnId === oldTurn)
+        .map((entry) => entry.createdAt),
+    ).toEqual(oldWork.map((entry) => entry.createdAt));
+  });
+
   it("includes proposed plans alongside messages and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
       [
@@ -3824,55 +4328,63 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Compacting context");
   });
 
-  it("collapses a compaction progress row into its terminal row", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-progress-1",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "compaction-completed-1",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses a %s progress row into its terminal row",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "compaction-progress-1",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+          makeActivity({
+            id: "compaction-completed-1",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+      expect(entries[0]?.id).toBe("compaction-progress-1");
+      expect(entries[0]?.createdAt).toBe("2026-02-23T00:00:00.000Z");
+    },
+  );
 
-  it("collapses same-timestamp compaction rows regardless of event id order", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "a-compaction-completed",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "b-compaction-progress",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses same-timestamp %s rows regardless of event id order",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "a-compaction-completed",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+          makeActivity({
+            id: "b-compaction-progress",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+    },
+  );
 
   it("does not merge a new compaction progress row into an earlier terminal row", () => {
     const entries = deriveWorkLogEntries(
