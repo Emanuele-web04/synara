@@ -105,9 +105,12 @@ const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<Righ
 // search query, sidebar visibility) in local component state, so keep it mounted
 // while another tab is active — otherwise switching tabs would tear the subtree
 // down and reset the explorer to its workspace root on return.
+// File panes keep scroll position in the DOM, so unmounting on tab switch
+// resets the reader to the top of the file on return.
 const KEEP_MOUNTED_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "terminal",
   "explorer",
+  "file",
 ]);
 
 export function dockPaneActivationKey(input: {
