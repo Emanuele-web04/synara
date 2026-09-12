@@ -620,10 +620,8 @@ export class DesktopAppSnapManager {
     capture: DesktopAppSnapCapture | null,
     error?: Error,
   ): boolean {
-    const request = this.#pendingCaptureRequests.get(requestId);
+    const request = this.#takeCaptureRequest(requestId);
     if (!request) return false;
-    this.#pendingCaptureRequests.delete(requestId);
-    clearTimeout(request.timer);
     if (error) {
       request.reject(error);
     } else if (capture) {
@@ -633,6 +631,15 @@ export class DesktopAppSnapManager {
     }
     return true;
   }
+
+  #takeCaptureRequest(requestId: string): PendingAppSnapRequest<DesktopAppSnapCapture> | null {
+    const request = this.#pendingCaptureRequests.get(requestId);
+    if (!request) return null;
+    this.#pendingCaptureRequests.delete(requestId);
+    clearTimeout(request.timer);
+    return request;
+  }
+
   // Timed-out request ids are tombstoned for the lifetime of the manager: a
   // late capture for them must always be dropped, never consumed as a hotkey
   // capture. The set stays tiny (timeouts are rare) and is cleared on dispose.
@@ -1329,7 +1336,8 @@ export class DesktopAppSnapManager {
       return;
     }
     const pendingRecord = await this.#persistPendingCapture(capture);
-    if (!this.#pendingCaptureRequests.has(capture.id)) {
+    const request = this.#takeCaptureRequest(capture.id);
+    if (!request) {
       await Promise.all([
         FS.promises.unlink(capturePath).catch(() => undefined),
         this.#deletePendingCaptureFiles(pendingRecord).catch(() => undefined),
@@ -1337,20 +1345,13 @@ export class DesktopAppSnapManager {
       return;
     }
 
-    // Register the durable recovery copy synchronously before resolving the
-    // renderer promise. No timeout callback can interleave between this call
-    // and settlement, so a capture cannot become pending after its caller was
-    // already told that the request failed.
+    // Claiming clears the timeout before the first await below. Register the
+    // durable recovery copy synchronously, then delay resolution until the
+    // helper's temporary file is gone.
     const recordPromise = this.#recordPendingCapture(pendingRecord);
-    const settled = this.#settleCaptureRequest(capture.id, capture);
     await FS.promises.unlink(capturePath).catch(() => undefined);
+    request.resolve(capture);
     await recordPromise;
-    if (!settled) {
-      this.#pendingCaptures = this.#pendingCaptures.filter(
-        ({ capture: pendingCapture }) => pendingCapture.id !== capture.id,
-      );
-      await this.#deletePendingCaptureFiles(pendingRecord).catch(() => undefined);
-    }
   }
 
   #emitCaptureError(
