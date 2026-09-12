@@ -34,7 +34,19 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Data, Effect, FileSystem, Layer, Logger, Option, Path, Schema } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -354,18 +366,30 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
 const commandOutputOptions = (verbose: boolean) =>
   ({
-    stdout: verbose ? "inherit" : "ignore",
+    stdout: verbose ? "inherit" : "pipe",
     stderr: "inherit",
   }) as const;
 
 const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Command) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* commandSpawner.spawn(command);
+  const collectStdout = child.stdout.pipe(
+    Stream.decodeText(),
+    Stream.runCollect,
+    Effect.map((chunks) => chunks.join("")),
+    Effect.orElseSucceed(() => ""),
+  );
+  const collectStdoutFiber = yield* collectStdout.pipe(Effect.forkChild);
   const exitCode = yield* child.exitCode;
+  const stdout = yield* Effect.race(
+    Fiber.join(collectStdoutFiber),
+    Effect.sleep("500 millis").pipe(Effect.as("")),
+  );
 
   if (exitCode !== 0) {
+    const outputTail = stdout.trimEnd().split("\n").slice(-30).join("\n");
     return yield* new BuildScriptError({
-      message: `Command exited with non-zero exit code (${exitCode})`,
+      message: `Command exited with non-zero exit code (${exitCode}).${outputTail ? `\n${outputTail}` : ""}`,
     });
   }
 });
