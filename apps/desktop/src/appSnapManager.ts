@@ -1751,8 +1751,8 @@ export class DesktopAppSnapManager {
     // and settlement, so a capture cannot become pending after its caller was
     // already told that the request failed.
     const recordPromise = this.#recordPendingCapture(pendingRecord);
-    const settled = this.#settleCaptureRequest(capture.id, capture);
     await FS.promises.unlink(capturePath).catch(() => undefined);
+    const settled = this.#settleCaptureRequest(capture.id, capture);
     await recordPromise;
     if (!settled) {
       this.#pendingCaptures = this.#pendingCaptures.filter(
