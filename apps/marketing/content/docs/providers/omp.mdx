@@ -7,10 +7,17 @@ Synara connects to Oh My Pi through its `omp` executable and Agent Client Protoc
 
 ## Install
 
-Follow the official quickstart:
+Install Oh My Pi with the official installer on macOS or Linux:
 
 ```bash
-omp --version
+curl -fsSL https://omp.sh/install | sh
+```
+
+Homebrew and Bun installs are also supported:
+
+```bash
+brew install can1357/tap/omp
+bun install -g @oh-my-pi/pi-coding-agent
 ```
 
 Verify that the executable is available:
