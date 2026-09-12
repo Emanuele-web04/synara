@@ -13,7 +13,7 @@
 // words live here.
 
 import type { ComputerPermission, ComputerProvisionResult } from "@synara/contracts";
-import { listComputerPermissions } from "@synara/shared/computerPermissions";
+import { listComputerPermissions } from "@synara/shared/computerGrants";
 
 import { computerStatusNeedsSetup } from "~/components/ComputerPanel.logic";
 

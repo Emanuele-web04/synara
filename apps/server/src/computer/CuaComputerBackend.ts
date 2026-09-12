@@ -16,7 +16,7 @@ import type {
 import {
   computerPermissionSetupMessage,
   listComputerPermissions,
-} from "@synara/shared/computerPermissions";
+} from "@synara/shared/computerGrants";
 import {
   cuaRequest,
   CUA_HOST_SOCKET_ENV,

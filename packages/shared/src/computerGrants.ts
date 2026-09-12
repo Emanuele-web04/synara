@@ -8,7 +8,7 @@
  * describing the same state in the same session. One ordering, one label per
  * grant, one place that knows what to say about a stale ad-hoc grant.
  *
- * @module computerPermissions
+ * @module computerGrants
  */
 import type { ComputerBuildSignature, ComputerPermission } from "@synara/contracts";
 
@@ -34,7 +34,7 @@ export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
 export const COMPUTER_BLOCKING_PERMISSIONS: readonly ComputerPermission[] = ["accessibility"];
 
 /** Whether any of these missing grants stops the desktop being driven at all. */
-export function computerPermissionsBlockControl(
+export function computerGrantsBlockControl(
   permissions: readonly ComputerPermission[],
 ): boolean {
   return permissions.some((permission) => COMPUTER_BLOCKING_PERMISSIONS.includes(permission));

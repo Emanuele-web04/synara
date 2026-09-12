@@ -13,8 +13,8 @@ afterEach(() => {
 });
 
 function fixture() {
-  const permissions = { start: vi.fn(async () => {}) };
-  vi.stubGlobal("window", { desktopBridge: { permissions } });
+  const permissions = { startPermissionSetup: vi.fn(async () => {}) };
+  vi.stubGlobal("window", { desktopBridge: { appSnap: permissions } });
   const setMode = vi.fn();
   const focusComposer = vi.fn();
   let change!: ReturnType<typeof useComputerControlModeChange>["change"];
@@ -44,7 +44,11 @@ describe("Computer activation permission guide", () => {
       const f = fixture();
       f.change(mode);
       await vi.waitFor(() =>
-        expect(f.permissions.start).toHaveBeenCalledExactlyOnceWith("computer"),
+        expect(f.permissions.startPermissionSetup).toHaveBeenCalledExactlyOnceWith([
+        "accessibility",
+        "inputMonitoring",
+        "screenRecording",
+      ]),
       );
       expect(f.setMode).toHaveBeenCalledWith("test", mode, { revokeQueued: false, generation: 4 });
       expect(f.focusComposer).not.toHaveBeenCalled();
@@ -56,7 +60,7 @@ describe("Computer activation permission guide", () => {
     api.computer.getStatus.mockResolvedValue({ availability: { kind: "available" } });
     f.change("request");
     await vi.waitFor(() => expect(f.focusComposer).toHaveBeenCalledOnce());
-    expect(f.permissions.start).not.toHaveBeenCalled();
+    expect(f.permissions.startPermissionSetup).not.toHaveBeenCalled();
   });
 
   it("does not reopen setup after Off overtakes a permission check", async () => {
@@ -87,7 +91,7 @@ describe("Computer activation permission guide", () => {
     });
     await Promise.resolve();
     await Promise.resolve();
-    expect(f.permissions.start).not.toHaveBeenCalled();
+    expect(f.permissions.startPermissionSetup).not.toHaveBeenCalled();
   });
 
   it("leaves non-macOS activation alone without adding a status probe", async () => {

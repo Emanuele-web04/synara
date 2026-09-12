@@ -439,14 +439,12 @@ describe("AppSnap helper protocol", () => {
     const checkChild = createFakeChildProcess();
     const watchChild = createFakeChildProcess();
     const requestChild = createFakeChildProcess();
-    const freshCheckChild = createFakeChildProcess();
     const restartedWatchChild = createFakeChildProcess();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(checkChild)
       .mockReturnValueOnce(watchChild)
       .mockReturnValueOnce(requestChild)
-      .mockReturnValueOnce(freshCheckChild)
       .mockReturnValueOnce(restartedWatchChild) as unknown as typeof ChildProcess.spawn;
     const register = vi.fn(() => true);
     const unregister = vi.fn();
@@ -505,20 +503,10 @@ describe("AppSnap helper protocol", () => {
     );
     requestChild.stderr.end();
     requestChild.emit("close", 0, null);
-    await flushPromises();
-    freshCheckChild.stdout.end(
-      `${JSON.stringify({
-        type: "permissions",
-        inputMonitoring: "granted",
-        screenRecording: "granted",
-      })}\n`,
-    );
-    freshCheckChild.stderr.end();
-    freshCheckChild.emit("close", 0, null);
     await request;
     restartedWatchChild.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 
-    expect(spawn).toHaveBeenCalledTimes(5);
+    expect(spawn).toHaveBeenCalledTimes(4);
     expect(manager.getState().status).toBe("ready");
     expect(register).toHaveBeenCalledTimes(2);
     manager.dispose();

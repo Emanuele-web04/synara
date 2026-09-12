@@ -19,7 +19,7 @@ import {
   type ThreadComputerState,
 } from "@synara/contracts";
 import { isComputerNamedKey } from "@synara/shared/computerKeyNames";
-import { listComputerPermissions } from "@synara/shared/computerPermissions";
+import { listComputerPermissions } from "@synara/shared/computerGrants";
 
 export interface ComputerFrameGateState {
   readonly lastSequence: number | null;
@@ -73,22 +73,6 @@ export type ComputerAvailabilityView =
       readonly title: string;
       readonly description: string;
     };
-
-/** An installed driver is not evidence that macOS granted access to this build. */
-export function computerPermissionGrants(
-  status: Pick<ComputerStatusResult, "availability" | "health"> | undefined,
-): Record<ComputerPermission, "granted" | "denied" | "unknown"> {
-  const grant = (permission: ComputerPermission) => {
-    if (status?.availability.kind === "permission-required")
-      return status.availability.missing.includes(permission) ? "denied" : "granted";
-    if (status?.availability.kind === "available" && status.health.status === "connected")
-      return permission === "screenRecording" && !status.health.captureAvailable
-        ? "unknown"
-        : "granted";
-    return "unknown";
-  };
-  return { accessibility: grant("accessibility"), screenRecording: grant("screenRecording") };
-}
 
 export function resolveComputerAvailabilityView(
   availability: ComputerAvailability | undefined,

@@ -9,6 +9,7 @@ import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 
 const GUIDE_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
+  accessibility: "Accessibility",
   "input-monitoring": "Input Monitoring",
   "screen-recording": "Screen Recording",
 };

@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { ThreadId } from "@synara/contracts";
+import type { DesktopAppSnapPermissionKind, ThreadId } from "@synara/contracts";
 import type { ComposerComputerControlMode } from "~/computerControlMode";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "~/components/ui/toast";
+
+/** Every grant computer control can need, in coach order. */
+const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] = [
+  "accessibility",
+  "inputMonitoring",
+  "screenRecording",
+];
 
 /** Explicit chat activation also enters the same native permission guide as AppSnap. */
 export function useComputerControlModeChange({
@@ -39,14 +46,14 @@ export function useComputerControlModeChange({
           revokeQueued: mode === "off",
           generation: result.generation ?? 0,
         });
-        const permissions = window.desktopBridge?.permissions;
-        if (result.enabled && permissions) {
+        const appSnap = window.desktopBridge?.appSnap;
+        if (result.enabled && appSnap) {
           settingUp = true;
           // Check live state, not a possibly stale composer availability snapshot.
           const status = await api.computer.getStatus({});
           if (!current()) return;
           if (status.availability.kind === "permission-required") {
-            await permissions.start("computer");
+            await appSnap.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
             return; // Keep Settings/its floating guide in front.
           }
         }

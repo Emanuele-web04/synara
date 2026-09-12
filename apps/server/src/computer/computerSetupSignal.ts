@@ -30,9 +30,9 @@ import type {
   ComputerPermission,
 } from "@synara/contracts";
 import {
-  computerPermissionsBlockControl,
+  computerGrantsBlockControl,
   listComputerPermissions,
-} from "@synara/shared/computerPermissions";
+} from "@synara/shared/computerGrants";
 import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
 
 import { ComputerBackendError } from "./ComputerBackend.ts";
@@ -151,7 +151,7 @@ export function computerSetupSignal(input: {
     return { missing, blocking: true, ...signature, ...app };
   }
   return missing.length > 0
-    ? { missing, blocking: computerPermissionsBlockControl(missing), ...signature, ...app }
+    ? { missing, blocking: computerGrantsBlockControl(missing), ...signature, ...app }
     : undefined;
 }
 

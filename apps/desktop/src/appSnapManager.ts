@@ -398,7 +398,7 @@ export function isPathInsideDirectory(directory: string, candidate: string): boo
 }
 
 function permissionRequiredMessage(permissions: {
-  accessibility?: DesktopAppSnapPermission;
+  accessibility?: DesktopAppSnapPermission | undefined;
   inputMonitoring: DesktopAppSnapPermission;
   screenRecording: DesktopAppSnapPermission;
 }): string {

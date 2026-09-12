@@ -93,7 +93,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("useProvisionComputer", () => {
   it("keeps a newer native grant when the initiating RPC returns an older missing status", async () => {
     reset();
-    vi.stubGlobal("window", { desktopBridge: { permissions: {} } });
+    vi.stubGlobal("window", { desktopBridge: { appSnap: {} } });
     const queryClient = createQueryClient();
     const newer = status();
     queryClient.setQueryData(serverQueryKeys.computerStatus(), newer);

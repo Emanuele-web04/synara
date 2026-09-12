@@ -200,7 +200,7 @@ export type ComputerWindowId = typeof ComputerWindowId.Type;
  * Named rather than described so every surface says the same words: the chat's
  * setup card, the settings panel, and the tool result the agent reads all key
  * off these two identifiers, and their user-facing labels live in one place
- * (`@synara/shared/computerPermissions`). There is no fourth surface — the
+ * (`@synara/shared/computerGrants`). There is no fourth surface — the
  * Electron-side permission preflight that used to be one was deleted, because
  * the prompt has to come from the process that actually needs the grant.
  *

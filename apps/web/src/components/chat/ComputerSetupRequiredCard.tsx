@@ -5,13 +5,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
-import { DesktopPermissionSetup } from "../settings/DesktopPermissionSetup";
 import {
   computerStatusQueryOptions,
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
 } from "~/lib/serverReactQuery";
 import {
-  computerPermissionGrants,
   computerStatusNeedsSetup,
   resolveComputerAvailabilityView,
 } from "../ComputerPanel.logic";
@@ -23,7 +21,7 @@ import type {
 import {
   computerStaleGrantAdvice,
   listComputerPermissions,
-} from "@synara/shared/computerPermissions";
+} from "@synara/shared/computerGrants";
 
 import { Button } from "~/components/ui/button";
 import { MonitorIcon } from "~/lib/icons";
@@ -206,12 +204,6 @@ export function ConnectedComputerSetupRequiredCard(
         onSetUp={setup.provision}
         onRecheck={() => void statusQuery.refetch()}
       />
-      {window.desktopBridge?.permissions ? (
-        <DesktopPermissionSetup
-          feature="computer"
-          grants={computerPermissionGrants(statusQuery.isError ? undefined : status)}
-        />
-      ) : null}
     </div>
   );
 }

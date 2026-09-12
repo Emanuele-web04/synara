@@ -4,7 +4,6 @@
 // Exports: NotificationsSettingsPanel, AppSnapSettingsPanel
 
 import {
-  type DesktopAppSnapPermission,
   type DesktopAppSnapSettingsPane,
   type DesktopAppSnapState,
   type ResolvedKeybindingsConfig,
@@ -29,13 +28,15 @@ import {
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
 } from "~/settingsPanelStyles";
-import { AppSnapPermissionGuide } from "./AppSnapPermissionGuide";
+import {
+  APP_SNAP_PERMISSION_PANES,
+  AppSnapPermissionSection,
+  useAppSnapPermissionGuideBridge,
+} from "./AppSnapPermissionSection";
 import { AppSnapShortcutControl } from "./AppSnapShortcutControl";
 import { SettingResetButton } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
-import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -54,48 +55,6 @@ function appSnapStatusText(state: DesktopAppSnapState | null): string {
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-
-const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
-  granted: "Granted",
-  denied: "Denied",
-  "not-determined": "Not requested yet",
-  restricted: "Restricted",
-  unknown: "Unknown",
-};
-
-function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-      <span
-        aria-hidden
-        className={cn(
-          "size-1.5 rounded-full",
-          permission === "granted"
-            ? "bg-emerald-500"
-            : permission === "denied" || permission === "restricted"
-              ? "bg-red-500"
-              : "bg-[color:var(--color-border)]",
-        )}
-      />
-      {APPSNAP_PERMISSION_LABELS[permission]}
-    </span>
-  );
-}
-
-function appSnapPanePermission(
-  state: DesktopAppSnapState,
-  pane: DesktopAppSnapSettingsPane,
-): DesktopAppSnapPermission {
-  if (pane === "input-monitoring") return state.inputMonitoringPermission;
-  if (pane === "accessibility") return state.accessibilityPermission ?? "unknown";
-  return state.screenRecordingPermission;
-}
-
-const APP_SNAP_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
-  accessibility: "Accessibility",
-  "input-monitoring": "Input Monitoring",
-  "screen-recording": "Screen Recording",
-};
 
 export function NotificationsSettingsPanel({
   settings,
@@ -256,7 +215,6 @@ export function AppSnapSettingsPanel({
 }: AppSettingsBinding & { readonly active: boolean }) {
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
   const [openGuidePane, setOpenGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
-  const [recheckPending, setRecheckPending] = useState(false);
   const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: active });
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
@@ -264,6 +222,14 @@ export function AppSnapSettingsPanel({
   // getState publishes through onState below. A passive refresh must not
   // invalidate an enable request that is waiting for the macOS permission dialog.
   useRefreshOnWindowReturn(() => window.desktopBridge?.appSnap?.getState(), active);
+
+  // Panel-level on purpose: hooks above the `!active` return stay mounted while
+  // the surface is hidden, so a dismissed coach still clears the remembered
+  // pane instead of resurrecting the guide on return.
+  useAppSnapPermissionGuideBridge({
+    onStateChange: setAppSnapState,
+    onGuidePaneChange: setOpenGuidePane,
+  });
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
@@ -283,82 +249,6 @@ export function AppSnapSettingsPanel({
       unsubscribe();
     };
   }, []);
-
-  // macOS fires no event when a TCC permission changes, so an open guide polls
-  // the helper's preflight until the grant shows up (or the user restarts).
-  useEffect(() => {
-    if (!openGuidePane) return;
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
-    let disposed = false;
-    const poll = () => {
-      void bridge
-        .getState()
-        .then((state) => {
-          if (!disposed) setAppSnapState(state);
-        })
-        .catch(() => undefined);
-    };
-    poll();
-    const interval = setInterval(poll, 2_000);
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-    };
-  }, [openGuidePane]);
-
-  // The floating drag-in coach lives for exactly as long as the inline guide.
-  useEffect(() => {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
-    if (openGuidePane) {
-      void bridge.showPermissionGuide(openGuidePane).catch(() => undefined);
-    } else {
-      void bridge.hidePermissionGuide?.();
-    }
-  }, [openGuidePane]);
-
-  // Listen for the native coach to close or report a grant so the inline guide
-  // does not stay stale.
-  useEffect(() => {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
-    let disposed = false;
-    const unsubscribe = bridge.onPermissionGuideState((state) => {
-      if (disposed) return;
-      if (state === "granted") {
-        // Refresh the real permission state so the success effect can close the
-        // guide and show the "Permission granted" toast.
-        void bridge
-          .getState()
-          .then((s) => {
-            if (!disposed) setAppSnapState(s);
-          })
-          .catch(() => undefined);
-      } else if (state === "closed") {
-        // The coach was dismissed (e.g., Escape). Close the matching inline
-        // guide. The manager only forwards events from the active guide, so a
-        // stale 'closed' from a replaced guide cannot close a newer pane.
-        setOpenGuidePane((current) => (current ? null : current));
-      }
-    });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!openGuidePane || !appSnapState) return;
-    if (appSnapPanePermission(appSnapState, openGuidePane) !== "granted") return;
-    const paneLabel = APP_SNAP_PANE_LABELS[openGuidePane];
-    setOpenGuidePane(null);
-    toastManager.add({
-      type: "success",
-      title: "Permission granted",
-      description: `${paneLabel} is ready for AppSnap.`,
-    });
-  }, [openGuidePane, appSnapState]);
 
   async function setAppSnapEnabled(nextEnabled: boolean) {
     const requestGuard = appSnapRequestGuardRef.current;
@@ -405,37 +295,6 @@ export function AppSnapSettingsPanel({
         title: "AppSnap setup failed",
         description: error instanceof Error ? error.message : "Could not configure AppSnap.",
       });
-    }
-  }
-
-  async function recheckAppSnapPermissions() {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge || recheckPending) return;
-    const requestGuard = appSnapRequestGuardRef.current;
-    const requestId = requestGuard.begin();
-    setRecheckPending(true);
-    try {
-      await bridge.requestPermissions();
-      const state = await bridge.setEnabled(settings.enableAppSnap);
-      if (!requestGuard.isCurrent(requestId)) return;
-      setAppSnapState(state);
-      if (state.status === "permission-required") {
-        toastManager.add({
-          type: "info",
-          title: "Permissions unchanged",
-          description:
-            "Use Grant next to a permission to walk through setup. If you just granted, restart Synara to apply it.",
-        });
-      }
-    } catch (error) {
-      if (!requestGuard.isCurrent(requestId)) return;
-      toastManager.add({
-        type: "error",
-        title: "Could not check AppSnap permissions",
-        description: error instanceof Error ? error.message : "Permission check failed.",
-      });
-    } finally {
-      if (requestGuard.isCurrent(requestId)) setRecheckPending(false);
     }
   }
 
@@ -549,97 +408,14 @@ export function AppSnapSettingsPanel({
       </SettingsSection>
 
       {supported && appSnapState ? (
-        <SettingsSection title="macOS permissions">
-          {(
-            [
-              {
-                pane: "input-monitoring" as const,
-                title: "Input Monitoring",
-                description:
-                  "Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded.",
-              },
-              {
-                pane: "screen-recording" as const,
-                title: "Screen Recording",
-                description:
-                  "Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord.",
-              },
-            ] as const
-          ).map(({ pane, title, description }) => {
-            const permission = appSnapPanePermission(appSnapState, pane);
-            const guideOpen = openGuidePane === pane;
-            return (
-              <SettingsRow
-                key={pane}
-                title={title}
-                description={description}
-                control={
-                  <div className="flex items-center gap-2">
-                    <AppSnapPermissionBadge permission={permission} />
-                    {permission !== "granted" ? (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        onClick={() => {
-                          const nextPane = guideOpen ? null : pane;
-                          setOpenGuidePane(nextPane);
-                          if (nextPane) {
-                            void window.desktopBridge?.appSnap
-                              ?.openPermissionSettings(pane)
-                              .catch(() => undefined);
-                          }
-                        }}
-                      >
-                        {guideOpen ? "Hide steps" : "Grant"}
-                      </Button>
-                    ) : null}
-                  </div>
-                }
-              >
-                <DisclosureRegion open={guideOpen}>
-                  <div className="pt-3">
-                    <AppSnapPermissionGuide
-                      pane={pane}
-                      appDisplayName={appSnapState.appDisplayName}
-                      waiting={permission !== "granted"}
-                      onOpenSettings={() => {
-                        void window.desktopBridge?.appSnap
-                          ?.openPermissionSettings(pane)
-                          .catch(() => undefined);
-                      }}
-                      onRestart={() => {
-                        void window.desktopBridge?.appSnap?.restartApp();
-                      }}
-                    />
-                  </div>
-                </DisclosureRegion>
-              </SettingsRow>
-            );
-          })}
-          <SettingsRow
-            title="Permission status"
-            description="Grant each permission with the steps above. macOS applies changes after a restart."
-            control={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={recheckPending}
-                onClick={() => void recheckAppSnapPermissions()}
-              >
-                {recheckPending ? (
-                  <>
-                    <Spinner className="size-3" />
-                    Rechecking…
-                  </>
-                ) : (
-                  "Recheck permissions"
-                )}
-              </Button>
-            }
-          />
-        </SettingsSection>
+        <AppSnapPermissionSection
+          panes={APP_SNAP_PERMISSION_PANES}
+          feature="AppSnap"
+          state={appSnapState}
+          onStateChange={setAppSnapState}
+          guidePane={openGuidePane}
+          onGuidePaneChange={setOpenGuidePane}
+        />
       ) : null}
     </div>
   );

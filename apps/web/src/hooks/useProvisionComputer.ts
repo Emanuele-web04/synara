@@ -60,7 +60,7 @@ export function useProvisionComputer(options?: {
     mutationFn: provisionComputer,
     onSuccess: (result) => {
       // Legacy setup returns its final status; the native guide also pushes later grants.
-      if (globalThis.window?.desktopBridge?.permissions) {
+      if (globalThis.window?.desktopBridge?.appSnap) {
         // Native setup can advance while the initiating RPC is returning.
         // Do not overwrite a newer grant push with its earlier status snapshot.
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.computerStatus() });
@@ -69,7 +69,7 @@ export function useProvisionComputer(options?: {
       }
       if (
         notify &&
-        (!globalThis.window?.desktopBridge?.permissions ||
+        (!globalThis.window?.desktopBridge?.appSnap ||
           computerProvisionOutcome(result) === "ready")
       )
         toastManager.add(computerProvisionResultToast(result));
@@ -98,7 +98,7 @@ export function useProvisionComputer(options?: {
       isPending,
       ...(missing ? { missing } : {}),
       error: mutation.error,
-      result: globalThis.window?.desktopBridge?.permissions ? undefined : mutation.data,
+      result: globalThis.window?.desktopBridge?.appSnap ? undefined : mutation.data,
     }),
   };
 }

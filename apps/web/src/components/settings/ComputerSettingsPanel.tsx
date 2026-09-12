@@ -16,14 +16,15 @@ import {
 import {
   COMPUTER_PERMISSION_LABELS,
   listComputerPermissions,
-} from "@synara/shared/computerPermissions";
+} from "@synara/shared/computerGrants";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
+import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
   computerBackendIsVisibleDesktop,
   computerLastFailureNote,
-  computerPermissionGrants,
   computerReconnectsNote,
   computerStatusNeedsSetup,
   resolveComputerAvailabilityView,
@@ -32,7 +33,12 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
-import { DesktopPermissionSetup } from "./DesktopPermissionSetup";
+import {
+  AppSnapPermissionSection,
+  COMPUTER_PERMISSION_KINDS,
+  COMPUTER_PERMISSION_PANES,
+  useAppSnapPermissionGuideBridge,
+} from "./AppSnapPermissionSection";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
@@ -101,9 +107,41 @@ export function ComputerSettingsPanel({
   });
 
   const status = statusQuery.data;
+  const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const [guidePane, setGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
+  // The native permission surface is the AppSnap helper: the same coach that
+  // AppSnap's own settings drive, asked about the computer-use grant set.
   const hasNativePermissionSetup =
-    typeof window !== "undefined" && !!window.desktopBridge?.permissions;
+    typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
   useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }), active);
+
+  // Panel-level on purpose: hooks above the `!active` return stay mounted while
+  // the surface is hidden, so a dismissed coach still clears the remembered
+  // pane instead of resurrecting the guide on return.
+  useAppSnapPermissionGuideBridge({
+    permissionKinds: COMPUTER_PERMISSION_KINDS,
+    onStateChange: setAppSnapState,
+    onGuidePaneChange: setGuidePane,
+  });
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge || !active) return;
+    let disposed = false;
+    const unsubscribe = bridge.onState((state) => {
+      if (!disposed) setAppSnapState(state);
+    });
+    void bridge
+      .getState(COMPUTER_PERMISSION_KINDS)
+      .then((next) => {
+        if (!disposed) setAppSnapState(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [active]);
   /**
    * The grants the OS is withholding, named. The availability message already
    * explains what to do; the row below is the checklist — the thing a user can
@@ -258,12 +296,19 @@ export function ComputerSettingsPanel({
                 .join(" · ")}
             />
           ) : null}
-          {hasNativePermissionSetup ? (
+          {hasNativePermissionSetup && appSnapState ? (
             <div className="p-3">
-              <DesktopPermissionSetup
-                feature="computer"
-                active={active}
-                grants={computerPermissionGrants(statusQuery.isError ? undefined : status)}
+              {/* One permission section serves every surface; only the pane set
+                  differs. The coach and settings deep links live in the shared
+                  section, so Computer never grows a second guide stack. */}
+              <AppSnapPermissionSection
+                panes={COMPUTER_PERMISSION_PANES}
+                permissionKinds={COMPUTER_PERMISSION_KINDS}
+                feature="Computer control"
+                state={appSnapState}
+                onStateChange={setAppSnapState}
+                guidePane={guidePane}
+                onGuidePaneChange={setGuidePane}
               />
             </div>
           ) : null}
