@@ -233,7 +233,7 @@ describe("threadHandoff", () => {
       }),
     ).toEqual({
       provider: "codex",
-      model: "gpt-5.5",
+      model: "gpt-6-astra",
     });
   });
 });

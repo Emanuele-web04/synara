@@ -26,6 +26,7 @@ import {
   type ServerProviderStatus,
   type TurnDispatchMode,
 } from "@synara/contracts";
+import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Layer, Option } from "effect";
 
@@ -46,6 +47,8 @@ import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts"
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import { readProviderUsageForAgents } from "../../providerUsage/agentReader.ts";
+import { collectProviderUsageSnapshots } from "../../providerUsage/index.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -77,6 +80,7 @@ import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserA
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
+import { makeAgentGatewayUsageTools } from "../usageTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -159,6 +163,30 @@ export const makeAgentGateway = Effect.gen(function* () {
       }),
     );
   });
+  const loadProviderUsage = (provider?: ProviderKind) =>
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getSettings.pipe(Effect.timeout("3 seconds"));
+      const enabledProviders = new Set(
+        PROVIDER_USAGE_PROVIDERS.filter((kind) => settings.providers[kind].enabled),
+      );
+      return yield* readProviderUsageForAgents({
+        providers: provider ? [provider] : [...enabledProviders],
+        enabledProviders,
+        loadSnapshot: (kind) =>
+          Effect.promise(() =>
+            collectProviderUsageSnapshots(
+              {
+                homeDir: serverConfig.homeDir,
+                env: process.env,
+                platform: process.platform,
+                nowMs: Date.now(),
+                claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+              },
+              { providers: [kind] },
+            ),
+          ).pipe(Effect.map((snapshots) => snapshots[0] ?? null)),
+      });
+    });
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository,
@@ -217,6 +245,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       homeDir: serverConfig.homeDir,
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
+    loadProviderUsage,
   });
   const diagnosticTools = makeThreadDiagnosticTools({
     snapshotQuery,
@@ -746,6 +775,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const usageTools = makeAgentGatewayUsageTools({ loadProviderUsage });
   const automationTools = makeAgentGatewayAutomationTools({
     automationService,
     requireThreadShell,
@@ -786,6 +816,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
+    ...usageTools,
     createThreads,
     createThread,
     sendMessage,
