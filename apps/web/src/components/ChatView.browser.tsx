@@ -3981,15 +3981,25 @@ describe("ChatView transcript geometry (full app)", () => {
             expect(bounds.bottom).toBeLessThanOrEqual(viewport.bottom);
           });
           await new Promise<void>((resolve) => setTimeout(resolve, 350));
+        } else if (action === "wheel near end") {
+          // Hosted Chromium often drops a 12px userEvent.wheel, so the list's
+          // two-rAF no-op recovery re-sticks follow. Apply the delta ourselves
+          // after the gesture, matching a real near-end takeover.
+          const initialTop = container.scrollTop;
+          container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -12 }));
+          container.scrollTop = initialTop - 12;
         } else {
           await userEvent.wheel(container, {
-            delta: { y: action === "wheel near end" ? -12 : -350 },
+            delta: { y: -350 },
           });
         }
         await vi.waitFor(() =>
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
+        if (action === "wheel near end") {
+          expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10);
+        }
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
