@@ -29,6 +29,7 @@ const PROJECTS = {
   countOther: "project-mind-count-other",
   receipt: "project-mind-receipt",
   receiptOther: "project-mind-receipt-other",
+  legacy: "project-mind-legacy-agent",
 } as const;
 
 let memoryCounter = 0;
@@ -116,6 +117,50 @@ layer("MindRepository", (it) => {
       const missingHash = yield* repository.findByTextHash({ projectId, textHash: "no-such-hash" });
       assert.isTrue(Option.isNone(missingHash));
       assert.strictEqual(yield* repository.countByProject({ projectId }), 1);
+    }),
+  );
+
+  it.effect("degrades pre-backfill agent rows with null sources to user provenance", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.legacy);
+
+      // Rows written before the 105 backfill can carry agent kind without
+      // source metadata. Reads must degrade, never fail the list.
+      yield* sql`
+        INSERT INTO mind_memories (
+          id,
+          project_id,
+          text,
+          type,
+          text_hash,
+          peak_weight,
+          access_count,
+          pinned,
+          created_at,
+          last_accessed_at,
+          provenance_kind
+        )
+        VALUES (
+          'memory-legacy-agent',
+          ${projectId},
+          'Legacy agent memory without sources.',
+          'semantic',
+          'legacy-agent-hash',
+          0.6,
+          0,
+          0,
+          '2026-09-01T00:00:00.000Z',
+          '2026-09-01T00:00:00.000Z',
+          'agent'
+        )
+      `;
+
+      const listed = yield* repository.listByProject({ projectId });
+      assert.lengthOf(listed, 1);
+      assert.deepStrictEqual(listed[0]?.provenance, { kind: "user" });
     }),
   );
 

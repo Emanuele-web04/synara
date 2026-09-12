@@ -96,8 +96,11 @@ const toMemory = (row: MindMemoryDbRow) =>
     pinned: row.pinned === 1,
     createdAt: row.createdAt,
     lastAccessedAt: row.lastAccessedAt,
+    // Rows written before the 105 backfill can carry agent kind with partial
+    // sources. Degrade those to user provenance (same rule as the migration)
+    // so one inconsistent row never fails the whole list.
     provenance:
-      row.provenanceKind === "agent"
+      row.provenanceKind === "agent" && row.sourceThreadId !== null && row.sourceProvider !== null
         ? { kind: "agent", threadId: row.sourceThreadId, provider: row.sourceProvider }
         : { kind: "user" },
   }).pipe(Effect.mapError(toPersistenceDecodeError("MindRepository.memoryRowToDomain")));
