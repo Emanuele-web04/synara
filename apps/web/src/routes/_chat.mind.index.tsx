@@ -143,7 +143,7 @@ function MindListRow({
               onChange={(event) => setDraftText(event.target.value)}
               rows={3}
               maxLength={500}
-              className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-[0.8125rem] text-foreground outline-none [font:inherit] focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-[0.8125rem] text-foreground outline-none [font-family:var(--font-ui-family)] focus-visible:ring-1 focus-visible:ring-ring"
             />
             <span className="flex items-center gap-1.5">
               <select
