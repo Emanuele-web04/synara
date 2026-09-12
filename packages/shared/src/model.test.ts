@@ -31,6 +31,7 @@ import {
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelDisplayName,
+  normalizeOmpModelOptions,
   normalizeModelSlug,
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
@@ -1238,6 +1239,36 @@ describe("normalizeAntigravityModelOptions", () => {
         runtimeCapabilities,
       ),
     ).toEqual({ reasoningEffort: "high" });
+  });
+});
+describe("normalizePiModelOptions", () => {
+  it("accepts pi thinking levels and drops invalid values", () => {
+    expect(normalizePiModelOptions({ thinkingLevel: "off" })).toEqual({ thinkingLevel: "off" });
+    expect(normalizePiModelOptions({ thinkingLevel: "xhigh" })).toEqual({ thinkingLevel: "xhigh" });
+    expect(normalizePiModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizePiModelOptions({ thinkingLevel: "bogus" as never })).toBeUndefined();
+    expect(normalizePiModelOptions({ thinkingLevel: "  " as never })).toBeUndefined();
+    expect(normalizePiModelOptions(null)).toBeUndefined();
+    expect(normalizePiModelOptions(undefined)).toBeUndefined();
+    expect(normalizePiModelOptions({})).toBeUndefined();
+  });
+});
+
+describe("normalizeOmpModelOptions", () => {
+  it("accepts OMP thinking levels including max and drops invalid values", () => {
+    expect(normalizeOmpModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "xhigh" })).toEqual({
+      thinkingLevel: "xhigh",
+    });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "minimal" })).toEqual({
+      thinkingLevel: "minimal",
+    });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "off" })).toEqual({ thinkingLevel: "off" });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "bogus" as never })).toBeUndefined();
+    expect(normalizeOmpModelOptions({ thinkingLevel: "  " as never })).toBeUndefined();
+    expect(normalizeOmpModelOptions(null)).toBeUndefined();
+    expect(normalizeOmpModelOptions(undefined)).toBeUndefined();
+    expect(normalizeOmpModelOptions({})).toBeUndefined();
   });
 });
 
