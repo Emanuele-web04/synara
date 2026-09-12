@@ -22,12 +22,11 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
 /**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. `thread.updatedAt` advances on
- * every appended message, so a legitimately long-running turn keeps resetting
- * this clock and is never affected.
+ * Recovery grace period for a lifecycle with no authoritative live turn.
+ * Thread/session timestamps describe lifecycle and shell changes, not provider
+ * progress: assistant text and tools deliberately do not update the shell.
+ * An adapter-owned turn must be stopped by its watchdog/interrupt path before
+ * reconciliation can settle it, regardless of this deadline.
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
@@ -132,11 +131,10 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   );
 }
 
-function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
+export function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
   // The later of the session lifecycle timestamp and the thread timestamp:
-  // `thread.updatedAt` advances on every appended message, so a turn that is
-  // actively streaming output never counts as stale even though its session
-  // row only moves on lifecycle transitions.
+  // neither timestamp is an inactivity clock. Live adapter ownership is
+  // checked separately before any age-based settlement.
   const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
   const threadObservedAt = Date.parse(thread.updatedAt);
   const observedAt = Number.isFinite(sessionObservedAt)
@@ -147,7 +145,7 @@ function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number
   return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
 }
 
-/** Time since anything at all was projected onto the thread (messages included). */
+/** Time since the persisted thread shell changed (not assistant/tool progress). */
 function threadActivityAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
   const observedAt = Date.parse(thread.updatedAt);
   return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
@@ -225,7 +223,7 @@ export function planProviderRuntimeReconciliation(input: {
     const detail = pumpDetail(provider, healthByProvider);
     const abandoned =
       lifecycleAgeMs >= maxTurnAgeMs && threadActivityAgeMs(thread, input.nowMs) >= maxTurnAgeMs;
-    const abandonedDetail = ` Nothing has progressed on this thread for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
+    const abandonedDetail = ` The projected lifecycle has not changed for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
 
     // Native child threads share a parent session and intentionally have no
     // directory binding of their own; their parent's terminal events settle
@@ -235,8 +233,24 @@ export function planProviderRuntimeReconciliation(input: {
     const projectedTurnId = projectedInFlightTurnId(thread);
     const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
-    if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
-      if (liveTurnId === projectedTurnId) continue;
+    // A time limit cannot revoke a live turn's ownership: doing so clears its
+    // binding and MCP write authority while the provider keeps executing.
+    if (liveSession?.status === "running" && liveTurnId !== null) {
+      // Completed/error turns are final in the projector. Replaying running
+      // cannot reopen them and would otherwise create a repair on every tick.
+      if (
+        thread.latestTurn?.turnId === liveTurnId &&
+        (thread.latestTurn.state === "completed" || thread.latestTurn.state === "error")
+      )
+        continue;
+      if (
+        liveTurnId === projectedTurnId &&
+        thread.session?.status === "running" &&
+        thread.latestTurn?.turnId === liveTurnId &&
+        thread.latestTurn.state === "running" &&
+        thread.latestTurn.completedAt === null
+      )
+        continue;
       plans.push({
         action: "align-running-turn",
         threadId: thread.id,

@@ -2365,6 +2365,53 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("diagnoses an abandoned startup even without delivery blockers or incidents", () => {
+    const thread = makeThreadShell("thread-parent", {
+      latestTurn: {
+        ...baseThreads[0]!.latestTurn!,
+        state: "interrupted",
+        completedAt: NOW,
+      },
+      session: {
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([thread]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const diagnose = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        });
+      const payload = toolResultJson((yield* diagnose()).result);
+      assert.deepEqual(payload.providerDeliveryBlockers, []);
+      assert.deepEqual(payload.operationalIncidents, []);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_lifecycle_stale"],
+      );
+
+      // The same combination is normal while a new queued turn is starting.
+      const now = new Date().toISOString();
+      harness.setThreadDetail(
+        makeThreadDetail({
+          ...thread,
+          updatedAt: now,
+          session: { ...thread.session!, updatedAt: now },
+        }),
+      );
+      assert.deepEqual(toolResultJson((yield* diagnose()).result).findings, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("creates a standalone cross-provider thread and dispatches the initial turn", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

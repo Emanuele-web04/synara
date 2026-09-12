@@ -47,6 +47,9 @@ import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
+import { ProviderRuntimeReconciler } from "../src/provider/Services/ProviderRuntimeReconciler.ts";
+import { makeProviderRuntimeReconcilerLive } from "../src/provider/Layers/ProviderRuntimeReconciler.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../src/persistence/Layers/ProviderRuntimeEvents.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
@@ -176,6 +179,7 @@ export interface OrchestrationIntegrationHarness {
   readonly engine: OrchestrationEngineShape;
   readonly snapshotQuery: ProjectionSnapshotQuery["Service"];
   readonly providerService: ProviderService["Service"];
+  readonly runtimeReconciler: ProviderRuntimeReconciler["Service"];
   readonly checkpointStore: CheckpointStore["Service"];
   readonly checkpointRepository: ProjectionCheckpointRepository["Service"];
   readonly waitForThread: (
@@ -222,6 +226,8 @@ export interface OrchestrationIntegrationHarness {
 interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderKind;
   readonly realCodex?: boolean;
+  readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
+  readonly runtimeReconcilerOptions?: Parameters<typeof makeProviderRuntimeReconcilerLive>[0];
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -333,7 +339,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(studioOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerSettingsService.layerTest(options?.serverSettings)),
       Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
@@ -354,7 +360,10 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(threadGitMetadataReactorLayer),
       Layer.provideMerge(sidechatExpiryReactorLayer),
     );
-    const layer = orchestrationReactorLayer.pipe(
+    const layer = makeProviderRuntimeReconcilerLive(options?.runtimeReconcilerOptions).pipe(
+      Layer.provideMerge(orchestrationReactorLayer),
+      Layer.provide(providerSessionDirectoryLayer),
+      Layer.provide(ProviderRuntimeEventRepositoryLive),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -374,6 +383,10 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(Effect.orDie);
     const providerService = yield* tryRuntimePromise("load ProviderService service", () =>
       runtime.runPromise(Effect.service(ProviderService)),
+    ).pipe(Effect.orDie);
+    const runtimeReconciler = yield* tryRuntimePromise(
+      "load ProviderRuntimeReconciler service",
+      () => runtime.runPromise(Effect.service(ProviderRuntimeReconciler)),
     ).pipe(Effect.orDie);
     const checkpointStore = yield* tryRuntimePromise("load CheckpointStore service", () =>
       runtime.runPromise(Effect.service(CheckpointStore)),
@@ -536,6 +549,7 @@ export const makeOrchestrationIntegrationHarness = (
       engine,
       snapshotQuery,
       providerService,
+      runtimeReconciler,
       checkpointStore,
       checkpointRepository,
       waitForThread,
