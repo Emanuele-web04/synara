@@ -416,7 +416,9 @@ function MindRouteView() {
     queryFn: () => ensureNativeApi().mind.list({}),
     // Matches the sidebar Mind badge and provider catalog queries: fresh
     // enough to feel live, cached enough to survive route remounts.
+    // Polls the bounded page while open so agent saves appear without refresh.
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
   const data = mindQuery.data ?? EMPTY_MIND_LIST;
 
