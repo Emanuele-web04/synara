@@ -215,23 +215,37 @@ type BoundedProviderCallResult<E> =
     };
 
 /**
- * Runs a provider call under a hard deadline and reduces it to a decision.
- * A call that never returns cannot simply be awaited here: the caller holds the
- * reactor's single delivery permit, so waiting forever stalls every thread.
- * Interruption is re-raised untouched so shutdown still cancels cleanly.
+ * Runs a provider call under a hard deadline and reduces it to a decision. The
+ * call keeps running for the bounded settle grace past the deadline so an
+ * outcome that lands just late is still classified by what actually happened
+ * instead of being written off as uncertain. A call that never returns cannot
+ * simply be awaited here: the caller holds the reactor's single delivery
+ * permit, so waiting forever stalls every thread. Interruption is re-raised
+ * untouched so shutdown still cancels cleanly.
  */
 const runBoundedProviderCall = <E, R>(input: {
   readonly label: string;
   readonly timeout: Duration.Duration;
+  readonly settleGrace: Duration.Duration;
   readonly call: Effect.Effect<unknown, E, R>;
 }): Effect.Effect<BoundedProviderCallResult<E>, E, R> =>
   Effect.suspend(() => {
     let timedOut = false;
+    const startedAt = Date.now();
+    const timeoutMs = Duration.toMillis(input.timeout);
     return input.call.pipe(
-      Effect.timeoutOption(input.timeout),
+      Effect.timeoutOption(Duration.sum(input.timeout, input.settleGrace)),
       Effect.flatMap((result) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           timedOut = Option.isNone(result);
+          const elapsedMs = Date.now() - startedAt;
+          if (!timedOut && elapsedMs > timeoutMs) {
+            yield* Effect.logInfo("provider command settled within its settle grace", {
+              label: input.label,
+              timeoutMs,
+              elapsedMs,
+            });
+          }
         }),
       ),
       Effect.exit,
@@ -445,6 +459,15 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+/**
+ * A provider call that settles just after its command deadline can still carry
+ * a definitive outcome: a bounded startup failure whose retirement outlived the
+ * deadline proves the command never ran. Waiting this short grace window before
+ * declaring the delivery uncertain keeps such recoveries from quarantining the
+ * thread, while a call that never returns still degrades into a terminal
+ * failure well before it could deadlock the single-permit delivery lock.
+ */
+const PROVIDER_COMMAND_SETTLE_GRACE = Duration.seconds(15);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -674,10 +697,12 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
+  readonly commandSettleGrace?: Duration.Duration;
 }
 
 interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
+  readonly commandSettleGrace: Duration.Duration;
 }
 
 class ProviderCommandReactorConfig extends ServiceMap.Service<
@@ -686,7 +711,7 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
 const make = Effect.gen(function* () {
-  const { commandEventTimeout } = yield* ProviderCommandReactorConfig;
+  const { commandEventTimeout, commandSettleGrace } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
@@ -3754,6 +3779,7 @@ const make = Effect.gen(function* () {
     const result = yield* runBoundedProviderCall({
       label: "The provider interrupt",
       timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+      settleGrace: commandSettleGrace,
       call: providerService.interruptTurn({
         threadId: providerThread.id,
         ...(turnId ? { turnId } : {}),
@@ -4449,6 +4475,7 @@ const make = Effect.gen(function* () {
       const childInterrupt = yield* runBoundedProviderCall({
         label: "The provider interrupt",
         timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        settleGrace: commandSettleGrace,
         call: providerService.interruptTurn({
           threadId: providerThread.id,
           turnId: thread.session.activeTurnId,
@@ -4515,6 +4542,7 @@ const make = Effect.gen(function* () {
         const stopped = yield* runBoundedProviderCall({
           label: "The provider session stop",
           timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
+          settleGrace: commandSettleGrace,
           call: providerService.stopRuntimeSession({ threadId: providerThread.id }),
         });
         if (stopped._tag !== "ok") {
@@ -5130,12 +5158,14 @@ const make = Effect.gen(function* () {
         const workerResult = yield* runBoundedProviderCall({
           label: `The provider command '${event.type}'`,
           timeout: commandEventTimeout,
+          settleGrace: commandSettleGrace,
           call: processDomainEvent(event),
         });
         if (workerResult._tag === "timeout") {
           // The delivery lock is single-permit and process-wide, so an attempt
-          // that never returns is a total outage. Settle it as uncertain and
-          // let the thread quarantine rather than block every other thread.
+          // that never returns is a total outage. It has already run through
+          // the bounded settle grace, so settle it as uncertain and let the
+          // thread quarantine rather than block every other thread.
           if (event.type === "thread.turn-start-requested") {
             yield* surfaceTimedOutTurnStart(event, workerResult.detail).pipe(
               Effect.catchCause((cause) =>
@@ -5753,6 +5783,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
+        commandSettleGrace: options?.commandSettleGrace ?? PROVIDER_COMMAND_SETTLE_GRACE,
       }),
     ),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
