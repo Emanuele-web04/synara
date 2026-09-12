@@ -5,7 +5,7 @@ import { Effect } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeAgentGatewayKanbanTools } from "./kanbanTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
-import type { ToolContext, ToolEntry } from "./toolRuntime.ts";
+import { GatewayToolError, type ToolContext, type ToolEntry } from "./toolRuntime.ts";
 
 const NOW_ISO = "2026-08-16T10:00:00.000Z";
 const NOW_MS = Date.parse(NOW_ISO);
@@ -41,6 +41,17 @@ const otherContext: ToolContext = {
   },
   callerThreadId: "thread-other",
   callerTurnId: "turn-other",
+};
+
+const readOnlyContext: ToolContext = {
+  ...context,
+  callerCapabilities: new Set(["thread:read"]),
+};
+
+const inactiveTurnContext: ToolContext = {
+  ...context,
+  assertCallerTurnActive: () =>
+    Effect.fail(new GatewayToolError("caller_turn_inactive", "turn is over")),
 };
 
 function makeProjectShell(
@@ -163,6 +174,9 @@ function makeTools(input: {
   runCreateThreads?: (args: unknown) => unknown;
   startTurn?: (args: unknown) => unknown;
   interruptTurn?: (args: unknown) => unknown;
+  createDraftThread?: (args: unknown) => unknown;
+  updateThreadMeta?: (args: unknown) => unknown;
+  deleteThread?: (args: unknown) => unknown;
   assertCallerMayDriveThread?: () => Effect.Effect<void>;
 }) {
   const started: Array<{
@@ -172,6 +186,9 @@ function makeTools(input: {
   }> = [];
   const interrupted: Array<{ threadId: string }> = [];
   const created: Array<unknown> = [];
+  const drafted: Array<unknown> = [];
+  const metaUpdated: Array<unknown> = [];
+  const deleted: Array<unknown> = [];
   const tools = makeAgentGatewayKanbanTools({
     snapshotQuery: makeSnapshot(input.threads, input.projects ?? projectA),
     workspacePaths: WORKSPACE_PATHS,
@@ -199,9 +216,23 @@ function makeTools(input: {
         interrupted.push(args as never);
         return input.interruptTurn ? input.interruptTurn(args) : Effect.succeed({ sequence: 7 });
       }) as never,
+      createDraftThread: ((args: unknown) => {
+        drafted.push(args as never);
+        return input.createDraftThread
+          ? input.createDraftThread(args)
+          : Effect.succeed({ threadId: "thread-draft-created" });
+      }) as never,
+      updateThreadMeta: ((args: unknown) => {
+        metaUpdated.push(args as never);
+        return input.updateThreadMeta ? input.updateThreadMeta(args) : Effect.void;
+      }) as never,
+      deleteThread: ((args: unknown) => {
+        deleted.push(args as never);
+        return input.deleteThread ? input.deleteThread(args) : Effect.void;
+      }) as never,
     },
   });
-  return { tools, started, interrupted, created };
+  return { tools, started, interrupted, created, drafted, metaUpdated, deleted };
 }
 
 function mcpOk(text: unknown) {
@@ -551,6 +582,33 @@ describe("synara_create_kanban_task", () => {
     expect(spec.projectId).toBe("project-a");
   });
 
+  it("rejects an over-long title or description", async () => {
+    const { tools, created } = makeTools({
+      threads: [makeSessionShell("thread-created")],
+      runCreateThreads: () => createOk(["thread-created"]),
+    });
+
+    const longTitle = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_task"), {
+        title: "x".repeat(257),
+        requestId: "req-long-1",
+      }),
+    );
+    expect(longTitle.isError).toBe(true);
+    expect(longTitle.__errorText).toContain("at most 256");
+
+    const longDescription = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_task"), {
+        title: "Fix bug",
+        description: "x".repeat(4097),
+        requestId: "req-long-2",
+      }),
+    );
+    expect(longDescription.isError).toBe(true);
+    expect(longDescription.__errorText).toContain("at most 4096");
+    expect(created).toHaveLength(0);
+  });
+
   it("defaults the spawned task to the caller's own thread model", async () => {
     const { tools, created } = makeTools({
       threads: [
@@ -735,6 +793,19 @@ describe("synara_move_kanban_card", () => {
     expect(result.card.column).toBe("inProgress");
   });
 
+  it("rejects an over-long move message", async () => {
+    const { tools, started } = makeTools({
+      threads: [makeThreadShell("thread-draft")],
+    });
+
+    const result = await move(tools, "thread-draft", "inProgress", {
+      message: "x".repeat(4097),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("at most 4096");
+    expect(started).toHaveLength(0);
+  });
+
   it("interrupts a live turn for target done", async () => {
     const { tools, interrupted } = makeTools({
       threads: [makeRunningShell("thread-live")],
@@ -906,5 +977,506 @@ describe("synara_move_kanban_card", () => {
     const result = await move(tools, "thread-live", "done");
     expect(result.isError).toBe(true);
     expect(result.__errorText).toContain("provider exploded");
+  });
+});
+
+describe("kanban write concurrency per card", () => {
+  it("fails fast on a second concurrent move of the same card", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools, started } = makeTools({
+      threads: [makeThreadShell("thread-a")],
+      startTurn: () => Effect.promise(() => held.then(() => ({ sequence: 1 }))),
+    });
+    const tool = toolById(tools, "synara_move_kanban_card");
+    const first = runHandler(tool, {
+      threadId: "thread-a",
+      target: "inProgress",
+      message: "go",
+    });
+    // Yield so the first call holds its per-card key before the duplicate arrives.
+    await Promise.resolve();
+    const duplicate = await runHandler(tool, {
+      threadId: "thread-a",
+      target: "inProgress",
+      message: "go again",
+    });
+    expect(duplicate.isError).toBe(true);
+    expect((jsonText(duplicate) as { __errorText?: string }).__errorText).toContain(
+      "already in flight",
+    );
+
+    release();
+    const won = jsonText(await first);
+    expect(won.turnStarted).toBe(true);
+    // Exactly one turn started: the duplicate never dispatched.
+    expect(started).toHaveLength(1);
+  });
+
+  it("keeps moves on different cards fully parallel", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools, started } = makeTools({
+      threads: [makeThreadShell("thread-a"), makeThreadShell("thread-b")],
+      startTurn: () => Effect.promise(() => held.then(() => ({ sequence: 1 }))),
+    });
+    const tool = toolById(tools, "synara_move_kanban_card");
+    const first = runHandler(tool, {
+      threadId: "thread-a",
+      target: "inProgress",
+      message: "go a",
+    });
+    await Promise.resolve();
+    const second = runHandler(tool, {
+      threadId: "thread-b",
+      target: "inProgress",
+      message: "go b",
+    });
+    await Promise.resolve();
+    release();
+    const [resultA, resultB] = await Promise.all([first, second]);
+    expect(resultA.isError).toBeFalsy();
+    expect(resultB.isError).toBeFalsy();
+    expect(started).toHaveLength(2);
+  });
+
+  it("keys creates by requestId: same request conflicts, different requests run parallel", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools, drafted } = makeTools({
+      threads: [],
+      createDraftThread: () =>
+        Effect.promise(() => held.then(() => ({ threadId: "thread-draft-created" }))),
+    });
+    const tool = toolById(tools, "synara_create_kanban_draft");
+    const first = runHandler(tool, { title: "Draft", requestId: "req-same" });
+    await Promise.resolve();
+    const duplicate = await runHandler(tool, { title: "Draft", requestId: "req-same" });
+    expect(duplicate.isError).toBe(true);
+    expect((jsonText(duplicate) as { __errorText?: string }).__errorText).toContain(
+      "already in flight",
+    );
+    const other = runHandler(tool, { title: "Other", requestId: "req-other" });
+    await Promise.resolve();
+    release();
+    expect((await first).isError).toBeFalsy();
+    expect((await other).isError).toBeFalsy();
+    expect(drafted).toHaveLength(2);
+  });
+
+  it("rejects a delete while a move on the same card is in flight", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools, deleted } = makeTools({
+      threads: [makeThreadShell("thread-a")],
+      startTurn: () => Effect.promise(() => held.then(() => ({ sequence: 1 }))),
+    });
+    const moving = runHandler(toolById(tools, "synara_move_kanban_card"), {
+      threadId: "thread-a",
+      target: "inProgress",
+      message: "go",
+    });
+    await Promise.resolve();
+    const deleting = await runHandler(toolById(tools, "synara_delete_kanban_card"), {
+      threadId: "thread-a",
+    });
+    expect(deleting.isError).toBe(true);
+    expect((jsonText(deleting) as { __errorText?: string }).__errorText).toContain(
+      "already in flight",
+    );
+    release();
+    expect((await moving).isError).toBeFalsy();
+    expect(deleted).toHaveLength(0);
+  });
+});
+
+describe("kanban write tool surface", () => {
+  it("marks every write tool thread:write + requiresActiveTurn and reads thread:read", () => {
+    const { tools } = makeTools({ threads: [] });
+    for (const name of [
+      "synara_create_kanban_task",
+      "synara_move_kanban_card",
+      "synara_create_kanban_draft",
+      "synara_delete_kanban_card",
+      "synara_update_kanban_card",
+      "synara_set_kanban_goal",
+    ]) {
+      const tool = toolById(tools, name);
+      expect(tool.requiredCapability).toBe("thread:write");
+      expect(tool.requiresActiveTurn).toBe(true);
+    }
+    for (const name of ["synara_read_kanban_board", "synara_read_kanban_card"]) {
+      const tool = toolById(tools, name);
+      expect(tool.requiredCapability).toBe("thread:read");
+      expect(tool.requiresActiveTurn).toBeFalsy();
+    }
+  });
+
+  it.each([
+    {
+      name: "synara_create_kanban_draft",
+      args: { title: "Draft", requestId: "req-x" },
+    },
+    {
+      name: "synara_delete_kanban_card",
+      args: { threadId: "thread-a" },
+    },
+    {
+      name: "synara_update_kanban_card",
+      args: { threadId: "thread-a", title: "New" },
+    },
+    {
+      name: "synara_set_kanban_goal",
+      args: { threadId: "thread-a", goal: "goal" },
+    },
+  ])("rejects $name without write scope or an active turn", async ({ name, args }) => {
+    const { tools, drafted, metaUpdated, deleted } = makeTools({
+      threads: [makeThreadShell("thread-a")],
+    });
+    const tool = toolById(tools, name);
+
+    const noScope = jsonText(await runHandler(tool, args, readOnlyContext));
+    expect(noScope.isError).toBe(true);
+    expect(noScope.__errorText).toContain("thread:write");
+
+    const noTurn = jsonText(await runHandler(tool, args, inactiveTurnContext));
+    expect(noTurn.isError).toBe(true);
+    expect(noTurn.__errorText).toContain("caller_turn_inactive");
+
+    expect(drafted).toHaveLength(0);
+    expect(metaUpdated).toHaveLength(0);
+    expect(deleted).toHaveLength(0);
+  });
+});
+
+describe("synara_create_kanban_draft", () => {
+  it("creates a thread without dispatching and returns a draft card", async () => {
+    const { tools, drafted, metaUpdated, started } = makeTools({
+      threads: [makeThreadShell("thread-draft-created")],
+      createDraftThread: () => Effect.succeed({ threadId: "thread-draft-created" }),
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_draft"), {
+        title: "Draft it",
+        description: "Do it well",
+        requestId: "req-draft-1",
+      }),
+    ) as { threadId: string; title: string; status: string; card: { column: string } };
+    expect(result.threadId).toBe("thread-draft-created");
+    expect(result.status).toBe("draft_created");
+    expect(result.card.column).toBe("draft");
+    expect(drafted).toHaveLength(1);
+    const spec = drafted[0] as {
+      title: string;
+      projectId: string;
+      modelSelection: { provider: string };
+    };
+    expect(spec.title).toBe("Draft it");
+    expect(spec.projectId).toBe("project-a");
+    expect(spec.modelSelection.provider).toBe("claudeAgent");
+    expect(metaUpdated).toEqual([{ threadId: "thread-draft-created", notes: "Do it well" }]);
+    // No turn started: the card stays a draft.
+    expect(started).toHaveLength(0);
+  });
+
+  it("creates a bare draft with no description update", async () => {
+    const { tools, drafted, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft-created")],
+      createDraftThread: () => Effect.succeed({ threadId: "thread-draft-created" }),
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_draft"), {
+        title: "Draft it",
+        requestId: "req-draft-2",
+      }),
+    ) as { status: string; card: { column: string } };
+    expect(result.status).toBe("draft_created");
+    expect(result.card.column).toBe("draft");
+    expect(drafted).toHaveLength(1);
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects a draft in another project", async () => {
+    const { tools, drafted } = makeTools({ threads: [] });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_draft"), {
+        title: "Draft it",
+        projectId: "project-b",
+        requestId: "req-draft-3",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("own project");
+    expect(drafted).toHaveLength(0);
+  });
+
+  it("rejects an over-long draft title", async () => {
+    const { tools, drafted } = makeTools({ threads: [] });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_create_kanban_draft"), {
+        title: "x".repeat(257),
+        requestId: "req-draft-4",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("at most 256");
+    expect(drafted).toHaveLength(0);
+  });
+});
+
+describe("synara_delete_kanban_card", () => {
+  it("deletes an own-project card from a live column", async () => {
+    const { tools, deleted } = makeTools({
+      threads: [makeRunningShell("thread-live")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_delete_kanban_card"), {
+        threadId: "thread-live",
+      }),
+    ) as { threadId: string; deleted: boolean };
+    expect(result.threadId).toBe("thread-live");
+    expect(result.deleted).toBe(true);
+    expect(deleted).toEqual([{ threadId: "thread-live" }]);
+  });
+
+  it("rejects a cross-project delete", async () => {
+    const { tools, deleted } = makeTools({
+      threads: [makeThreadShell("thread-foreign", "project-b")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_delete_kanban_card"), {
+        threadId: "thread-foreign",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("different project");
+    expect(deleted).toHaveLength(0);
+  });
+
+  it("rejects deleting an archived thread", async () => {
+    const { tools, deleted } = makeTools({
+      threads: [makeThreadShell("thread-archived", "project-a", { archivedAt: NOW_ISO })],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_delete_kanban_card"), {
+        threadId: "thread-archived",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("archived");
+    expect(deleted).toHaveLength(0);
+  });
+});
+
+describe("synara_update_kanban_card", () => {
+  it("edits title and description", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft", "project-a", { title: "Old" })],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-draft",
+        title: "New",
+        description: "Better",
+      }),
+    ) as {
+      threadId: string;
+      title: string;
+      titleUpdated: boolean;
+      descriptionUpdated: boolean;
+      card: { column: string };
+    };
+    expect(result.threadId).toBe("thread-draft");
+    expect(result.title).toBe("New");
+    expect(result.titleUpdated).toBe(true);
+    expect(result.descriptionUpdated).toBe(true);
+    expect(result.card.column).toBe("draft");
+    expect(metaUpdated).toEqual([{ threadId: "thread-draft", title: "New", notes: "Better" }]);
+  });
+
+  it("edits title only", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft", "project-a", { title: "Old" })],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-draft",
+        title: "New",
+      }),
+    ) as { title: string; titleUpdated: boolean; descriptionUpdated: boolean };
+    expect(result.title).toBe("New");
+    expect(result.titleUpdated).toBe(true);
+    expect(result.descriptionUpdated).toBe(false);
+    expect(metaUpdated).toEqual([{ threadId: "thread-draft", title: "New" }]);
+  });
+
+  it("rejects an update with neither title nor description", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-draft",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain('Provide "title" and/or "description"');
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects a cross-project update", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-foreign", "project-b")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-foreign",
+        title: "New",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("different project");
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects an over-long title or description", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft", "project-a", { title: "Old" })],
+    });
+
+    const longTitle = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-draft",
+        title: "x".repeat(257),
+      }),
+    );
+    expect(longTitle.isError).toBe(true);
+    expect(longTitle.__errorText).toContain("at most 256");
+
+    const longDescription = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-draft",
+        description: "x".repeat(4097),
+      }),
+    );
+    expect(longDescription.isError).toBe(true);
+    expect(longDescription.__errorText).toContain("at most 4096");
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects updating an archived thread", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-archived", "project-a", { archivedAt: NOW_ISO })],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_update_kanban_card"), {
+        threadId: "thread-archived",
+        title: "New",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("archived");
+    expect(metaUpdated).toHaveLength(0);
+  });
+});
+
+describe("synara_set_kanban_goal", () => {
+  it("sets the goal on a live card", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeRunningShell("thread-live")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_set_kanban_goal"), {
+        threadId: "thread-live",
+        goal: "  Ship it  ",
+      }),
+    ) as { threadId: string; goal: string | null };
+    expect(result.threadId).toBe("thread-live");
+    expect(result.goal).toBe("Ship it");
+    expect(metaUpdated).toEqual([{ threadId: "thread-live", goal: "Ship it" }]);
+  });
+
+  it("clears the goal on null", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeSessionShell("thread-done")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_set_kanban_goal"), {
+        threadId: "thread-done",
+        goal: null,
+      }),
+    ) as { threadId: string; goal: string | null };
+    expect(result.goal).toBeNull();
+    expect(metaUpdated).toEqual([{ threadId: "thread-done", goal: "" }]);
+  });
+
+  it("rejects an over-long goal", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-draft")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_set_kanban_goal"), {
+        threadId: "thread-draft",
+        goal: "x".repeat(4097),
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("at most 4096");
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects a cross-project goal", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-foreign", "project-b")],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_set_kanban_goal"), {
+        threadId: "thread-foreign",
+        goal: "goal",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("different project");
+    expect(metaUpdated).toHaveLength(0);
+  });
+
+  it("rejects a goal on an archived thread", async () => {
+    const { tools, metaUpdated } = makeTools({
+      threads: [makeThreadShell("thread-archived", "project-a", { archivedAt: NOW_ISO })],
+    });
+
+    const result = jsonText(
+      await runHandler(toolById(tools, "synara_set_kanban_goal"), {
+        threadId: "thread-archived",
+        goal: "goal",
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("archived");
+    expect(metaUpdated).toHaveLength(0);
   });
 });
