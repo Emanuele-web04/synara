@@ -890,6 +890,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.title, "Generated image");
       assert.deepStrictEqual(firstEvent.value.payload.data, {
         kind: "codex.generated_image",
+        origin: "codex.explicit_image_generation",
         path: "/tmp/provider-thread-1/img_call_1.png",
         callId: "img_call_1",
       });
@@ -898,6 +899,50 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       };
       assert.equal(rawPayload.item?.result, undefined);
       assert.equal(rawPayload.item?.result_elided_for_relay, true);
+    }),
+  );
+
+  it.effect("maps started image-view items without generating image artifacts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const imagePath = "C:\\Users\\Test User\\QA 100%\\page.png";
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-view-started"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        providerThreadId: "provider-thread-1",
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("image-view-started-1"),
+        payload: {
+          item: {
+            type: "imageView",
+            id: "image-view-started-1",
+            path: imagePath,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.started");
+      if (firstEvent.value.type !== "item.started") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "image_view");
+      assert.equal(firstEvent.value.payload.detail, imagePath);
+      assert.notEqual(
+        (firstEvent.value.payload.data as { kind?: unknown } | undefined)?.kind,
+        "codex.generated_image",
+      );
     }),
   );
 
@@ -939,6 +984,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.itemType, "image_generation");
       assert.deepStrictEqual(firstEvent.value.payload.data, {
         kind: "codex.generated_image",
+        origin: "codex.explicit_image_generation",
         path: "/tmp/provider-thread-1/img_call_2.png",
         callId: "img_call_2",
       });
