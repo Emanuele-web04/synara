@@ -3759,6 +3759,30 @@ const make = Effect.gen(function* () {
           });
         }
       }),
+      {
+        onAcquireTimeout: ({ detail }) =>
+          Effect.gen(function* () {
+            const createdAt = new Date().toISOString();
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Goal continuation blocked by a checkpoint operation",
+              detail,
+              turnId: null,
+              createdAt,
+              settlementStatus: "retryable",
+            });
+            const thread = yield* resolveThread(event.payload.threadId);
+            if (thread && thread.session?.activeTurnId == null) {
+              yield* setThreadSessionError({
+                threadId: event.payload.threadId,
+                runtimeMode: thread.runtimeMode,
+                detail,
+                createdAt,
+              });
+            }
+          }),
+      },
     );
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
@@ -4256,6 +4280,21 @@ const make = Effect.gen(function* () {
     withProviderSessionLease(
       event.payload.threadId,
       processConversationRollbackRequestedWithoutLease(event),
+      {
+        onAcquireTimeout: ({ detail }) =>
+          Effect.gen(function* () {
+            const createdAt = new Date().toISOString();
+            const thread = yield* resolveThread(event.payload.threadId);
+            if (thread && thread.session?.activeTurnId == null) {
+              yield* setThreadSessionError({
+                threadId: event.payload.threadId,
+                runtimeMode: thread.runtimeMode,
+                detail,
+                createdAt,
+              });
+            }
+          }),
+      },
     );
 
   const processMessageEditResendPayload = Effect.fnUntraced(function* (
