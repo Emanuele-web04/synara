@@ -966,6 +966,7 @@ layer("AutomationService", (it) => {
         ...createInput("local"),
         mode: "dedicated",
         heartbeatCooldownSeconds: 0,
+        schedule: { type: "interval", everySeconds: 300 },
       });
       // A dedicated automation starts without a thread: the server assigns its own.
       assert.strictEqual(created.targetThreadId, null);
@@ -1003,7 +1004,45 @@ layer("AutomationService", (it) => {
           listed.runs.find((entry) => entry.id === first.run.id)?.status === "succeeded",
       });
 
-      const second = yield* service.runNow({ automationId: created.id });
+      const manualTurnId = TurnId.makeUnsafe("turn-dedicated-manual");
+      threadShell = Option.some(
+        makeThreadShell({
+          id: dedicatedThreadId,
+          latestTurn: makeLatestTurn("running", manualTurnId),
+        }),
+      );
+      const definition = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      )!;
+      const scheduled = yield* service.runDueOnce({
+        now: definition.nextRunAt!,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const deferred = scheduled.find((entry) => entry.run.automationId === created.id)!;
+      assert.isNotNull(deferred.run.deferredUntil);
+      assert.isNull(deferred.run.threadId);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.turn.start").length,
+        1,
+      );
+
+      // The observed bug falsely interrupted the manual projection before the
+      // scheduler checked eligibility. This admits dispatch despite a live turn;
+      // the reactor must still queue it (covered by the process integration).
+      threadShell = Option.some(
+        makeThreadShell({
+          id: dedicatedThreadId,
+          latestTurn: makeLatestTurn("interrupted", manualTurnId),
+        }),
+      );
+      const retried = yield* service.runDueOnce({
+        now: deferred.run.deferredUntil!,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const second = retried.find((entry) => entry.run.id === deferred.run.id)!;
+      assert.exists(second, "The deferred dedicated automation must be dispatched.");
 
       // The second run continues the claimed thread instead of opening a new one.
       assert.strictEqual(second.run.threadId, dedicatedThreadId);
@@ -1011,6 +1050,55 @@ layer("AutomationService", (it) => {
       assert.strictEqual(
         dispatchedCommands.filter((command) => command.type === "thread.create").length,
         1,
+      );
+      const queuedStart = dispatchedCommands.find(
+        (command) => command.commandId === second.run.turnStartCommandId,
+      );
+      assert.include(queuedStart, {
+        type: "thread.turn.start",
+        dispatchMode: "queue",
+        dispatchOrigin: "automation",
+      });
+
+      // Neither a live manual turn nor its completion belongs to this run.
+      for (const state of ["running", "completed"] as const) {
+        threadShell = Option.some(
+          makeThreadShell({
+            id: dedicatedThreadId,
+            latestTurn: makeLatestTurn(state, manualTurnId),
+          }),
+        );
+        yield* service.reconcileThread({ threadId: dedicatedThreadId });
+        const waiting = (yield* service.list({ projectId })).runs.find(
+          (entry) => entry.id === second.run.id,
+        );
+        assert.strictEqual(waiting?.status, "running");
+        assert.isNull(waiting?.turnId);
+      }
+
+      const automationTurnId = TurnId.makeUnsafe("turn-dedicated-scheduled");
+      yield* completeAutomationRun({
+        run: second.run,
+        threadId: dedicatedThreadId,
+        turnId: automationTurnId,
+      });
+      yield* service.reportResult({
+        callerThreadId: dedicatedThreadId,
+        callerTurnId: automationTurnId,
+        decision: "silent",
+        title: "No changes",
+        summary: "The scheduled check completed.",
+      });
+      yield* service.reconcileThread({ threadId: dedicatedThreadId });
+      const finished = yield* waitForAutomationList({
+        service,
+        description: "the queued dedicated run to report its own result",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === second.run.id)?.status === "succeeded",
+      });
+      assert.strictEqual(
+        finished.runs.find((entry) => entry.id === second.run.id)?.result?.decision,
+        "silent",
       );
     }),
   );
