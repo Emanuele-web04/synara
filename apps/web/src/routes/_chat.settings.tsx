@@ -6,6 +6,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -93,7 +94,7 @@ import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
-import { RotateCcwIcon } from "../lib/icons";
+import { ResetIcon } from "../lib/icons";
 import {
   cn,
   getNavigatorPlatform,
@@ -347,6 +348,7 @@ function SettingsRouteView() {
     ...(settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes
       ? ["Stop idle agent processes"]
       : []),
+    ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
@@ -454,6 +456,7 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
+      <SafariAccessSetupButton />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
@@ -758,15 +761,6 @@ function SettingsRouteView() {
             description: "Show the pinned-messages checklist in the Environment panel.",
             resetLabel: "pinned messages section",
             ariaLabel: "Show the Pinned messages section in the Environment panel",
-          })}
-
-          {renderBooleanSettingRow({
-            settingKey: "showEnvironmentMarkers",
-            title: "Text markers",
-            description:
-              "Show highlighted and underlined transcript text in the Environment panel.",
-            resetLabel: "text markers section",
-            ariaLabel: "Show the Text markers section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({
@@ -1214,6 +1208,15 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "composerEffortSlider",
+          title: "Effort slider",
+          description:
+            "Once a chat has started, show reasoning effort as a slider in the composer's model menu, with fast mode and the model list alongside it. New chats keep the separate model and effort pickers.",
+          resetLabel: "effort slider",
+          ariaLabel: "Show effort slider in the composer",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "autoOpenDevicePane",
           title: "Automatically open simulator",
           description:
@@ -1347,7 +1350,7 @@ function SettingsRouteView() {
                     disabled={changedSettingLabels.length === 0}
                     onClick={() => void restoreDefaults()}
                   >
-                    <RotateCcwIcon className="size-3.5" />
+                    <ResetIcon className="size-3.5" />
                     Restore defaults
                   </Button>
                 </div>

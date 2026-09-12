@@ -1056,6 +1056,8 @@ describe("wsNativeApi", () => {
       { x: 200, y: 300 },
     );
 
+    expect(api.browser.vault).toBeUndefined();
+
     expect(showContextMenu).toHaveBeenCalledWith(
       [
         { id: "rename", label: "Rename thread" },
