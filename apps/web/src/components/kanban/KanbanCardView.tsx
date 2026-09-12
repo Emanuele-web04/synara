@@ -40,6 +40,8 @@ export interface KanbanCardViewProps {
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  /** Keyboard handler — the board uses it for Alt+Arrow draft reorder. */
+  onKeyDown?: (card: KanbanCard, event: React.KeyboardEvent) => void;
   prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
@@ -143,6 +145,7 @@ function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
+  onKeyDown,
   prByThreadId,
   isOverlay: isOverlayProp,
   isDragSource: isDragSourceProp,
@@ -185,6 +188,7 @@ function KanbanCardViewComponent({
       tabIndex={isOverlay ? -1 : 0}
       onClick={onOpen ? () => onOpen(card) : undefined}
       onContextMenu={onContextMenu ? (event) => onContextMenu(card, event) : undefined}
+      onKeyDown={onKeyDown ? (event) => onKeyDown(card, event) : undefined}
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg bg-card/70 px-3 py-2.5 text-left transition-colors",
         RAISED_SURFACE_CHROME_CLASS_NAME,

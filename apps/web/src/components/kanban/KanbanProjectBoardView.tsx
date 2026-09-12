@@ -16,7 +16,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { useRef, useState } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import {
   getProviderStartOptions,
@@ -151,6 +151,30 @@ export function KanbanProjectBoardView({
     toastManager.add(kanbanDispatchFailureToast(result, "Could not send draft"));
   };
 
+  // Keyboard reorder for draft cards that can not be dragged: Alt+ArrowUp/Down
+  // moves the focused card one slot, reusing the same order math as a drop.
+  // Other columns are derived-only, so their cards ignore reorder keys.
+  const handleCardKeyDown = (card: KanbanCard, event: ReactKeyboardEvent) => {
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) {
+      return;
+    }
+    if (card.column !== "draft") {
+      return;
+    }
+    event.preventDefault();
+    const visibleCardIds = board.draft.map((draftCard) => draftCard.cardId);
+    const index = visibleCardIds.indexOf(card.cardId);
+    const neighbor =
+      event.key === "ArrowUp" ? visibleCardIds[index - 1] : visibleCardIds[index + 1];
+    if (index === -1 || neighbor === undefined) {
+      return;
+    }
+    const nextOrder = reorderDraftCardIds(visibleCardIds, card.cardId, neighbor);
+    if (nextOrder) {
+      setDraftOrder(board.projectId, nextOrder);
+    }
+  };
+
   const handleDragStart = (event: DragStartEvent) => {
     const card = board.draft.find((candidate) => candidate.cardId === event.active.id) ?? null;
     setActiveCard(card);
@@ -255,6 +279,7 @@ export function KanbanProjectBoardView({
             cards={board.draft}
             onOpenCard={handleOpenCard}
             onCardContextMenu={onCardContextMenu}
+            onCardKeyDown={handleCardKeyDown}
             sortable
             droppable
             activeCard={activeCard}

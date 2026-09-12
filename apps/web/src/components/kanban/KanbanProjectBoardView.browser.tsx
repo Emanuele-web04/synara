@@ -33,6 +33,20 @@ import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared
 import { dispatchKanbanDraftCardAsGoal } from "../../lib/kanbanDispatch";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import type { KanbanCard, KanbanProjectBoard } from "./kanban.logic";
+import { useKanbanUiStore } from "../../kanbanUiStore";
+
+const dispatchAsGoalMock = vi.mocked(dispatchKanbanDraftCardAsGoal);
+
+// A usable provider status: with no usable status the drop handler toasts
+// "Provider status is still loading" and never reaches the dispatch call.
+const READY_CODEX_STATUS: ServerProviderStatus = {
+  provider: "codex",
+  status: "ready",
+  available: true,
+  authStatus: "authenticated",
+  checkedAt: "2026-08-21T12:00:00.000Z",
+  message: "Codex is ready.",
+};
 
 const NOW_MS = Date.parse("2026-08-21T12:00:00.000Z");
 
@@ -183,5 +197,82 @@ async function dragCardOntoColumn(titleSnippet: string, columnHeading: string) {
     }
     expect(document.body.textContent).not.toContain(KANBAN_COLUMN_V2_LABELS.awaitingYou);
     await unmount();
+  });
+
+  it("dispatches a draft drop on In Progress WITH the goal variant", async () => {
+    dispatchAsGoalMock.mockClear();
+    const goalBoard = {
+      ...board,
+      draft: [
+        makeCard("goal-1", "draft", {
+          cardId: "draft:goal-1",
+          title: "Sendable goal card",
+          draftPrompt: "Write the goal down",
+        }),
+      ],
+    } satisfies KanbanProjectBoard;
+    const { unmount } = await render(
+      <KanbanProjectBoardView
+        board={goalBoard}
+        onOpenCard={vi.fn()}
+        onNewTask={vi.fn()}
+        prByThreadId={new Map()}
+        nowMs={NOW_MS}
+        viewMode="v2"
+      />,
+    );
+    try {
+      await expect.poll(() => findCardButton("Sendable goal card") !== null).toBe(true);
+      await dragCardOntoColumn("Sendable goal card", KANBAN_COLUMN_V2_LABELS.inProgress);
+      await expect.poll(() => dispatchAsGoalMock.mock.calls.length, { timeout: 5000 }).toBe(1);
+      expect(dispatchAsGoalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          card: expect.objectContaining({ threadId: "goal-1" }),
+        }),
+      );
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("reorders draft cards with Alt+Arrow keys", async () => {
+    const reorderBoard = {
+      ...board,
+      draft: [
+        makeCard("key-1", "draft", { cardId: "draft:key-1", title: "Key card one" }),
+        makeCard("key-2", "draft", { cardId: "draft:key-2", title: "Key card two" }),
+      ],
+    } satisfies KanbanProjectBoard;
+    // Start from a clean slate: earlier tests may have stored an order.
+    const reorderProjectId = "project-1" as KanbanProjectBoard["projectId"];
+    useKanbanUiStore.getState().setDraftOrder(reorderProjectId, ["draft:key-1", "draft:key-2"]);
+    const { unmount } = await render(
+      <KanbanProjectBoardView
+        board={reorderBoard}
+        onOpenCard={vi.fn()}
+        onNewTask={vi.fn()}
+        prByThreadId={new Map()}
+        nowMs={NOW_MS}
+        viewMode="v2"
+      />,
+    );
+    try {
+      await expect.poll(() => findCardButton("Key card one") !== null).toBe(true);
+      findCardButton("Key card one")?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowDown",
+          altKey: true,
+        }),
+      );
+      await expect
+        .poll(() => useKanbanUiStore.getState().draftOrderByProjectId["project-1"], {
+          timeout: 5000,
+        })
+        .toEqual(["draft:key-2", "draft:key-1"]);
+    } finally {
+      await unmount();
+    }
   });
 });

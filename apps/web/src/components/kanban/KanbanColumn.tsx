@@ -45,12 +45,14 @@ function SortableKanbanCard({
   card,
   onOpen,
   onContextMenu,
+  onKeyDown,
   prByThreadId,
   nowMs,
 }: {
   card: KanbanCard;
   onOpen: (card: KanbanCard) => void;
   onContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  onKeyDown?: ((card: KanbanCard, event: React.KeyboardEvent) => void) | undefined;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
 }) {
@@ -70,6 +72,7 @@ function SortableKanbanCard({
         card={card}
         onOpen={onOpen}
         {...(onContextMenu ? { onContextMenu } : {})}
+        {...(onKeyDown ? { onKeyDown } : {})}
         prByThreadId={prByThreadId}
         isDragSource={isDragging}
         {...(nowMs !== undefined ? { nowMs } : {})}
@@ -84,6 +87,7 @@ function KanbanColumnComponent({
   cards,
   onOpenCard,
   onCardContextMenu,
+  onCardKeyDown,
   sortable: sortableProp,
   droppable: droppableProp,
   activeCard: activeCardProp,
@@ -97,6 +101,8 @@ function KanbanColumnComponent({
   onOpenCard: (card: KanbanCard) => void;
   /** Right-click handler forwarded to each card's context menu. */
   onCardContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  /** Keyboard handler forwarded to each card (board: Alt+Arrow draft reorder). */
+  onCardKeyDown?: ((card: KanbanCard, event: React.KeyboardEvent) => void) | undefined;
   /** Draft column in the project board: cards reorder via dnd-kit sortable. */
   sortable?: boolean;
   /** Project board only — the column body registers as a drop target. */
@@ -129,6 +135,7 @@ function KanbanColumnComponent({
         card={card}
         onOpen={onOpenCard}
         onContextMenu={onCardContextMenu}
+        onKeyDown={onCardKeyDown}
         prByThreadId={prByThreadId}
         {...(nowMs !== undefined ? { nowMs } : {})}
       />
@@ -138,6 +145,7 @@ function KanbanColumnComponent({
           card={card}
           onOpen={onOpenCard}
           {...(onCardContextMenu ? { onContextMenu: onCardContextMenu } : {})}
+          {...(onCardKeyDown ? { onKeyDown: onCardKeyDown } : {})}
           prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
