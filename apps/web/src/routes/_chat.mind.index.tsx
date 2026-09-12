@@ -24,6 +24,7 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
+import { formatMindCountLabel, optimisticForgetCount } from "~/lib/mindList";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
 import { cn } from "~/lib/utils";
@@ -133,11 +134,16 @@ function MindRouteView() {
   const mindQuery = useQuery({
     queryKey: mindQueryKey,
     queryFn: () => ensureNativeApi().mind.list({}),
+    // Matches the sidebar Mind badge and provider catalog queries: fresh
+    // enough to feel live, cached enough to survive route remounts.
+    staleTime: 30_000,
   });
   const data = mindQuery.data ?? EMPTY_MIND_LIST;
 
   // Optimistic removal: the row disappears immediately; the server's forget is
   // idempotent, so the invalidate-on-settle only converges the count/cap meta.
+  // While the page is truncated the count is the true total and stays put —
+  // the refetch converges it (see optimisticForgetCount).
   const forgetMutation = useMutation({
     mutationFn: (memory: MindMemory) =>
       ensureNativeApi().mind.forget({ projectId: memory.projectId, memoryId: memory.memoryId }),
@@ -148,7 +154,7 @@ function MindRouteView() {
         prev
           ? {
               memories: prev.memories.filter((item) => item.memoryId !== memory.memoryId),
-              count: Math.max(0, prev.count - 1),
+              count: optimisticForgetCount({ count: prev.count, shown: prev.memories.length }),
               cap: prev.cap,
             }
           : prev,
@@ -314,8 +320,12 @@ function MindRouteView() {
             {data.memories.length > 0 ? (
               <div className="flex flex-col gap-2 px-2">
                 <p className="text-xs text-muted-foreground">
-                  {data.count} {pluralize(data.count, "memory", "memories")} · {pinnedCount} pinned
-                  · cap {data.cap}
+                  {formatMindCountLabel({
+                    shown: data.memories.length,
+                    total: data.count,
+                    pinnedCount,
+                    cap: data.cap,
+                  })}
                 </p>
                 {visibleProjects.length > 1 ? (
                   <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by project">

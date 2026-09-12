@@ -2073,6 +2073,7 @@ const makeWsRpcHandlersLayer = () =>
                     memories,
                     count: all.count,
                     cap: MIND_MEMORY_PROJECT_CAP,
+                    ...(all.skipped === undefined ? {} : { skipped: all.skipped }),
                   };
                 }),
             "Failed to list memories",

@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { MindMemoryId, ProjectId, ThreadId } from "@synara/contracts";
+import { MIND_MEMORY_PROJECT_CAP, MindMemoryId, ProjectId, ThreadId } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -30,6 +30,9 @@ const PROJECTS = {
   receipt: "project-mind-receipt",
   receiptOther: "project-mind-receipt-other",
   legacy: "project-mind-legacy-agent",
+  poison: "project-mind-poison",
+  bound: "project-mind-bound",
+  desync: "project-mind-desync",
 } as const;
 
 let memoryCounter = 0;
@@ -253,6 +256,133 @@ layer("MindRepository", (it) => {
     assert.strictEqual(buildMindFtsMatchExpr("NEAR(a b) OR x"), '"NEAR(a"* "b)"* "OR"* "x"*');
     assert.strictEqual(buildMindFtsMatchExpr(""), "");
   });
+
+  it.effect("lists skip undecodable rows instead of failing the whole read", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.poison);
+
+      const good = yield* repository.insert(memoryInput({ projectId, textHash: "poison-good" }));
+      // Legacy corruption / manual DB edits can leave rows the schema rejects
+      // (here: an unknown provider no CHECK constrains — e.g. a provider
+      // renamed after the row was written). Reads must drop the row and keep
+      // the rest — the service layer accounts the skip.
+      yield* sql`
+        INSERT INTO mind_memories (
+          id,
+          project_id,
+          text,
+          type,
+          text_hash,
+          peak_weight,
+          access_count,
+          pinned,
+          created_at,
+          last_accessed_at,
+          provenance_kind,
+          source_thread_id,
+          source_provider
+        )
+        VALUES (
+          'memory-poison-row',
+          ${projectId},
+          'Poison row neutral fact.',
+          'semantic',
+          'poison-hash',
+          0.6,
+          0,
+          0,
+          '2026-09-01T00:00:00.000Z',
+          '2026-09-01T00:00:00.000Z',
+          'agent',
+          'thread-poison',
+          'bogus-provider'
+        )
+      `;
+
+      const listed = yield* repository.listByProject({ projectId });
+      assert.deepStrictEqual(
+        listed.map((memory) => memory.memoryId),
+        [good.memoryId],
+      );
+      assert.strictEqual(yield* repository.countByProject({ projectId }), 2);
+    }),
+  );
+
+  it.effect("listAll is bounded to one project-cap page with an explicit limit override", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.bound);
+      for (let index = 0; index < MIND_MEMORY_PROJECT_CAP + 5; index++) {
+        memoryCounter += 1;
+        yield* repository.insert({
+          memoryId: MindMemoryId.makeUnsafe(`memory-bound-${memoryCounter}`),
+          projectId,
+          text: `bound filler fact ${memoryCounter}`,
+          type: "semantic",
+          textHash: `bound-hash-${memoryCounter}`,
+          peakWeight: 0.6,
+          accessCount: 0,
+          pinned: false,
+          createdAt: "2026-09-01T00:00:00.000Z",
+          lastAccessedAt: "2026-09-01T00:00:00.000Z",
+          provenance: { kind: "user" },
+        });
+      }
+
+      // The default page never exceeds the cap even though the project holds more.
+      assert.strictEqual((yield* repository.listAll()).length, MIND_MEMORY_PROJECT_CAP);
+      assert.strictEqual((yield* repository.listAll({ limit: 2 })).length, 2);
+      assert.isTrue((yield* repository.countAll()) >= MIND_MEMORY_PROJECT_CAP + 5);
+    }),
+  );
+
+  it.effect("FTS search survives index desync and never throws on query edges", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.desync);
+
+      const indexed = yield* repository.insert(
+        memoryInput({ projectId, text: "Desync probe alpha token", textHash: "desync-indexed" }),
+      );
+      // Desync one way: the FTS row is gone but the memory row survives.
+      yield* sql`DELETE FROM mind_memories_fts WHERE rowid = (SELECT rowid FROM mind_memories WHERE id = ${indexed.memoryId})`;
+      assert.deepStrictEqual(
+        yield* repository.searchCandidates({
+          projectId,
+          matchExpr: buildMindFtsMatchExpr("alpha token"),
+        }),
+        [],
+      );
+      // Desync the other way: an FTS orphan with no memory row never surfaces.
+      yield* sql`INSERT INTO mind_memories_fts (rowid, text) VALUES (987654321, 'orphan alpha token')`;
+      assert.deepStrictEqual(
+        yield* repository.searchCandidates({
+          projectId,
+          matchExpr: buildMindFtsMatchExpr("orphan"),
+        }),
+        [],
+      );
+
+      // Query edges return no candidates instead of throwing: CJK,
+      // punctuation-only, quotes-only, and the 200-char cap edge.
+      for (const query of ["日本語テスト", "!!!", '"', "?", "x".repeat(200), "   "]) {
+        assert.deepStrictEqual(
+          yield* repository.searchCandidates({
+            projectId,
+            matchExpr: buildMindFtsMatchExpr(query),
+          }),
+          [],
+          query,
+        );
+      }
+    }),
+  );
 
   it.effect("applyConfirm updates weight, access count, and the decay anchor", () =>
     Effect.gen(function* () {

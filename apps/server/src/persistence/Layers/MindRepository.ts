@@ -7,7 +7,6 @@ import {
   MindMemoryType,
   NonNegativeInt,
   ProjectId,
-  ProviderKind,
   ThreadId,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema, Struct } from "effect";
@@ -29,15 +28,18 @@ import {
   GetMindMemoryInput,
   GetMindReceiptInput,
   InsertMindMemoryInput,
+  ListAllMindMemoriesInput,
   ListMindMemoriesInput,
   MindRepository,
   MindMemoryRow,
   type MindMemoryCandidate,
   type MindRepositoryError,
   type MindRepositoryShape,
+  PruneMindReceiptsInput,
   PutMindReceiptInput,
   SearchMindCandidatesInput,
   SetMindMemoryPinnedInput,
+  isFtsMatchExprQueryable,
 } from "../Services/MindRepository.ts";
 
 const MindMemoryDbRow = Schema.Struct({
@@ -53,8 +55,12 @@ const MindMemoryDbRow = Schema.Struct({
   createdAt: IsoDateTime,
   lastAccessedAt: IsoDateTime,
   provenanceKind: Schema.Literals(["user", "agent"]),
-  sourceThreadId: Schema.NullOr(ThreadId),
-  sourceProvider: Schema.NullOr(ProviderKind),
+  // Source columns carry no CHECK (providers and thread-id formats evolve),
+  // so they decode as plain strings here. Domain validation happens in
+  // `toMemory`, where a per-row failure is isolated instead of failing the
+  // whole list read.
+  sourceThreadId: Schema.NullOr(Schema.String),
+  sourceProvider: Schema.NullOr(Schema.String),
 });
 type MindMemoryDbRow = typeof MindMemoryDbRow.Type;
 
@@ -113,8 +119,29 @@ const toMemoryOption = (
     onSome: (memoryRow) => Effect.map(toMemory(memoryRow), Option.some),
   });
 
+/**
+ * One corrupt row must never fail a whole list read (legacy corruption,
+ * manual DB edits). Decode each row independently and drop the failures; the
+ * service layer reconciles the shown rows against the table count and logs
+ * the skip with shown/total counts.
+ */
+const toMemorySafe = (row: MindMemoryDbRow): Effect.Effect<MindMemoryRow | undefined, never> =>
+  toMemory(row).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+
+const toMemoryListSafe = (
+  rows: ReadonlyArray<MindMemoryDbRow>,
+): Effect.Effect<ReadonlyArray<MindMemoryRow>, never> =>
+  Effect.forEach(rows, toMemorySafe, { concurrency: "unbounded" }).pipe(
+    Effect.map((decoded) => decoded.filter((row) => row !== undefined)),
+  );
+
 const toCandidate = (row: typeof MindMemoryCandidateDbRow.Type) =>
   toMemory(row).pipe(Effect.map((memory): MindMemoryCandidate => ({ memory, bm25: row.bm25 })));
+
+const toCandidateSafe = (
+  row: typeof MindMemoryCandidateDbRow.Type,
+): Effect.Effect<MindMemoryCandidate | undefined, never> =>
+  toCandidate(row).pipe(Effect.option, Effect.map(Option.getOrUndefined));
 
 const toJournalEntryOption = (
   row: Option.Option<MindJournalDbRow>,
@@ -513,13 +540,13 @@ const makeMindRepository = Effect.gen(function* () {
   const listByProject: MindRepositoryShape["listByProject"] = (input) =>
     listMemoryRows(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.listByProject:query")),
-      Effect.flatMap((rows) => Effect.forEach(rows, toMemory, { concurrency: "unbounded" })),
+      Effect.flatMap(toMemoryListSafe),
     );
 
   const listAllMemoryRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ListAllMindMemoriesInput,
     Result: MindMemoryDbRow,
-    execute: () =>
+    execute: ({ limit }) =>
       sql`
         SELECT
           id AS "memoryId",
@@ -536,23 +563,48 @@ const makeMindRepository = Effect.gen(function* () {
           source_thread_id AS "sourceThreadId",
           source_provider AS "sourceProvider"
         FROM mind_memories
+        ORDER BY pinned DESC, last_accessed_at DESC, id ASC
+        LIMIT ${limit}
       `,
   });
 
-  const listAll: MindRepositoryShape["listAll"] = () =>
-    listAllMemoryRows(undefined).pipe(
+  // Bounded to one project-cap page: the global Mind view never reads the
+  // whole table. Callers pair this with `countAll` for the true total.
+  const listAll: MindRepositoryShape["listAll"] = (input) =>
+    listAllMemoryRows({ limit: input?.limit ?? MIND_MEMORY_PROJECT_CAP }).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.listAll:query")),
-      Effect.flatMap((rows) => Effect.forEach(rows, toMemory, { concurrency: "unbounded" })),
+      Effect.flatMap(toMemoryListSafe),
+    );
+
+  const countAllRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: () =>
+      sql`
+        SELECT COUNT(*) AS "count"
+        FROM mind_memories
+      `,
+  });
+
+  const countAll: MindRepositoryShape["countAll"] = () =>
+    countAllRows(undefined).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.countAll:query")),
+      Effect.map((rows) => rows[0]?.count ?? 0),
     );
 
   const searchCandidates: MindRepositoryShape["searchCandidates"] = (input) => {
-    // An empty match expression is not valid FTS5 syntax; no tokens means no candidates.
-    if (input.matchExpr.trim() === "") {
+    // No indexable token (empty, punctuation/quotes-only) is not valid FTS5
+    // syntax for a useful search; no tokens means no candidates, never a throw.
+    if (!isFtsMatchExprQueryable(input.matchExpr)) {
       return Effect.succeed([]);
     }
     return searchCandidateRows(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.searchCandidates:query")),
-      Effect.flatMap((rows) => Effect.forEach(rows, toCandidate, { concurrency: "unbounded" })),
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, toCandidateSafe, { concurrency: "unbounded" }).pipe(
+          Effect.map((candidates) => candidates.filter((candidate) => candidate !== undefined)),
+        ),
+      ),
     );
   };
 
@@ -602,12 +654,44 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.length > 0),
     );
 
+  const pruneReceiptRows = SqlSchema.findAll({
+    Request: PruneMindReceiptsInput,
+    Result: Schema.Struct({ operationId: Schema.String }),
+    execute: ({ projectId, olderThanIso, limit }) =>
+      sql`
+        DELETE FROM mind_operation_receipts
+        WHERE rowid IN (
+          SELECT r.rowid
+          FROM mind_operation_receipts AS r
+          WHERE r.project_id = ${projectId}
+            AND r.created_at < ${olderThanIso}
+            AND EXISTS (
+              SELECT 1
+              FROM mind_journal AS j
+              WHERE j.project_id = r.project_id
+                AND j.memory_id = json_extract(r.result_json, '$.memoryId')
+                AND j.op = r.op
+            )
+          ORDER BY r.created_at ASC
+          LIMIT ${limit}
+        )
+        RETURNING operation_id AS "operationId"
+      `,
+  });
+
+  const pruneReceipts: MindRepositoryShape["pruneReceipts"] = (input) =>
+    pruneReceiptRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.pruneReceipts:delete")),
+      Effect.map((rows) => rows.length),
+    );
+
   return {
     insert,
     findByTextHash,
     getById,
     listByProject,
     listAll,
+    countAll,
     searchCandidates,
     applyConfirm,
     setPinned,
@@ -617,6 +701,7 @@ const makeMindRepository = Effect.gen(function* () {
     countByProject,
     getReceipt,
     putReceipt,
+    pruneReceipts,
   } satisfies MindRepositoryShape;
 });
 

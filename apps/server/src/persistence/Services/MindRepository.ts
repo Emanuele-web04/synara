@@ -19,6 +19,9 @@ import type { PersistenceDecodeError, PersistenceSqlError } from "../Errors.ts";
 
 export type MindRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
+/** Per-run bound for the receipt retention sweep (see `pruneReceipts`). */
+export const MIND_RECEIPT_PRUNE_MAX_ITEMS = 500;
+
 /**
  * A stored mind memory: the persisted row (peak weight, decay anchor,
  * provenance) before any server-computed effective weight is derived from it.
@@ -87,6 +90,25 @@ export const SearchMindCandidatesInput = Schema.Struct({
 });
 export type SearchMindCandidatesInput = typeof SearchMindCandidatesInput.Type;
 
+export const ListAllMindMemoriesInput = Schema.Struct({
+  // The global Mind view is one cap-sized page; the true total comes from
+  // `countAll` so callers can label truncation honestly.
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_MEMORY_PROJECT_CAP })),
+  ).pipe(Schema.withDecodingDefault(() => MIND_MEMORY_PROJECT_CAP)),
+});
+export type ListAllMindMemoriesInput = typeof ListAllMindMemoriesInput.Type;
+
+export const PruneMindReceiptsInput = Schema.Struct({
+  projectId: ProjectId,
+  /** Receipts created strictly before this instant are retention-eligible. */
+  olderThanIso: IsoDateTime,
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_RECEIPT_PRUNE_MAX_ITEMS })),
+  ).pipe(Schema.withDecodingDefault(() => MIND_RECEIPT_PRUNE_MAX_ITEMS)),
+});
+export type PruneMindReceiptsInput = typeof PruneMindReceiptsInput.Type;
+
 export const ApplyMindConfirmInput = Schema.Struct({
   memoryId: MindMemoryId,
   peakWeight: MindMemory.fields.weight,
@@ -151,6 +173,16 @@ export const buildMindFtsMatchExpr = (query: string): string =>
     .map((token) => `"${token.replace(/"/g, '""')}"*`)
     .join(" ");
 
+/**
+ * Read guard for FTS5 candidate search: an expression with no letter or digit
+ * (punctuation/quotes/whitespace only) can never match an indexed token, so
+ * the caller returns [] without paying for an FTS parse. Letter- or
+ * digit-bearing expressions — including CJK, which unicode61 accepts — still
+ * query; FTS returns no rows for those, never throws.
+ */
+export const isFtsMatchExprQueryable = (matchExpr: string): boolean =>
+  /[\p{L}\p{N}]/u.test(matchExpr);
+
 export interface MindRepositoryShape {
   /**
    * Inserts a new memory row. The `UNIQUE (project_id, text_hash)` constraint
@@ -169,6 +201,8 @@ export interface MindRepositoryShape {
   /**
    * Lists a project's memories pinned-first, then most recently accessed.
    * Callers re-rank by effective weight; this order is the deterministic base.
+   * Poison rows (undecodable, e.g. legacy corruption) are skipped, never
+   * fatal: callers reconcile `countByProject` against the shown rows.
    */
   readonly listByProject: (
     input: ListMindMemoriesInput,
@@ -176,8 +210,14 @@ export interface MindRepositoryShape {
   /**
    * Every memory across all projects, newest-access first. Backs the global
    * Mind list: memories whose project rows left the projection stay reachable.
+   * Bounded to one project-cap page (see `ListAllMindMemoriesInput`); the true
+   * total comes from `countAll`. Poison rows are skipped, never fatal.
    */
-  readonly listAll: () => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
+  readonly listAll: (
+    input?: ListAllMindMemoriesInput,
+  ) => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
+  /** True total across all projects — the denominator for the bounded `listAll` page. */
+  readonly countAll: () => Effect.Effect<number, MindRepositoryError>;
   /**
    * FTS5 candidate fetch: joins `mind_memories` against `mind_memories_fts`
    * and returns rows with their raw bm25 rank (best first). The match
@@ -221,6 +261,16 @@ export interface MindRepositoryShape {
    * the caller should replay the recorded result instead of re-applying.
    */
   readonly putReceipt: (input: PutMindReceiptInput) => Effect.Effect<boolean, MindRepositoryError>;
+  /**
+   * Retention sweep for operation receipts: deletes up to `limit` receipts
+   * older than `olderThanIso`, but only when a journal row for the same
+   * `(project, memory, op)` exists — the journal is the replay fallback, so a
+   * retry after GC still replays instead of re-applying. Returns the deleted
+   * count. Receipts without a proving journal row are always kept.
+   */
+  readonly pruneReceipts: (
+    input: PruneMindReceiptsInput,
+  ) => Effect.Effect<number, MindRepositoryError>;
 }
 
 export class MindRepository extends ServiceMap.Service<MindRepository, MindRepositoryShape>()(

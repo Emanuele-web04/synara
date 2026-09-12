@@ -91,11 +91,17 @@ export type MindListInput = typeof MindListInput.Type;
 /**
  * Full Mind list for the UI: every memory of the (project-scoped) store with
  * its server-computed effective weight, the project's total count, and the cap.
+ *
+ * `count` is always the true total. `memories` is the shown page: it can be
+ * shorter than `count` when the global view truncates to one cap-sized page,
+ * and `skipped` counts the undecodable (poison) rows dropped during the read.
+ * Both fields are optional so older payloads still decode.
  */
 export const MindListResult = Schema.Struct({
   memories: Schema.Array(MindMemory).check(Schema.isMaxLength(MIND_MEMORY_PROJECT_CAP)),
   count: NonNegativeInt,
   cap: NonNegativeInt,
+  skipped: Schema.optional(NonNegativeInt),
 });
 export type MindListResult = typeof MindListResult.Type;
 

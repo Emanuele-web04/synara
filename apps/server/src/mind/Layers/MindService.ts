@@ -22,7 +22,9 @@ import { Clock, Effect, Layer, Option } from "effect";
 
 import {
   buildMindFtsMatchExpr,
+  MIND_RECEIPT_PRUNE_MAX_ITEMS,
   MindRepository,
+  type MindMemoryCandidate,
   type MindMemoryRow,
 } from "../../persistence/Services/MindRepository.ts";
 import {
@@ -58,8 +60,12 @@ import {
 const DAY_MS = 86_400_000;
 /** Lazy prune sweep cadence: at most once per 24h per project (plan 05 §6.2). */
 const PRUNE_SWEEP_INTERVAL_MS = DAY_MS;
-/** Query-recall default (plan 05 §6.3); the result is always bounded by the contracts' 8-item cap. */
-const RECALL_DEFAULT_LIMIT = 10;
+/** Per-run bound: one sweep deletes at most 100 memories; the rest resume next interval. */
+const SWEEP_MAX_DELETES = 100;
+/** Operation receipts younger than this are always kept; older ones need a proving journal row. */
+const RECEIPT_RETENTION_MS = 30 * DAY_MS;
+/** Query-recall default matches the contracts' 8-item result cap. */
+const RECALL_DEFAULT_LIMIT = 8;
 /** Digest line format mirrors mind's ACTIVE.md hot-memories list. */
 const roundTo = (value: number, decimals: number) => Number(value.toFixed(decimals));
 
@@ -160,7 +166,12 @@ const makeMindService = Effect.gen(function* () {
   /**
    * Runs the prune sweep at most once per 24h per project, on the first memory
    * operation after the interval. Deletes prune-eligible rows (journaling
-   * op:'prune' per id); pinned rows are exempt via shouldPrune.
+   * op:'prune' per id), capped at SWEEP_MAX_DELETES per run so one sweep never
+   * holds the writer long — the remainder resumes on the next interval (and a
+   * restart simply re-arms the in-memory clock and sweeps again sooner).
+   * Pinned rows are exempt via shouldPrune. Also GCs operation receipts older
+   * than 30d when a journal row proves the op, so retries still replay.
+   * Callers run this OUTSIDE any mutation transaction; it commits on its own.
    */
   const maybeSweep = (projectId: ProjectId) =>
     Effect.gen(function* () {
@@ -172,10 +183,15 @@ const makeMindService = Effect.gen(function* () {
       lastSweepAtByProject.set(projectId, nowMillis);
       const nowIso = new Date(nowMillis).toISOString();
       const rows = yield* repository.listByProject({ projectId });
-      const pruneIds = rows.filter((row) => shouldPrune(row, nowIso)).map((row) => row.memoryId);
+      const pruneIds = rows
+        .filter((row) => shouldPrune(row, nowIso))
+        .map((row) => row.memoryId)
+        .slice(0, SWEEP_MAX_DELETES);
+      let pruned = 0;
       for (const memoryId of pruneIds) {
         const deleted = yield* repository.deleteById({ memoryId });
         if (deleted) {
+          pruned += 1;
           yield* repository.appendJournal({
             projectId,
             memoryId,
@@ -188,14 +204,27 @@ const makeMindService = Effect.gen(function* () {
           });
         }
       }
+      const receiptsPruned = yield* repository.pruneReceipts({
+        projectId,
+        olderThanIso: new Date(nowMillis - RECEIPT_RETENTION_MS).toISOString(),
+        limit: MIND_RECEIPT_PRUNE_MAX_ITEMS,
+      });
+      if (pruned > 0 || receiptsPruned > 0) {
+        yield* Effect.logInfo("Mind hygiene sweep pruned rows.", {
+          projectId,
+          prunedMemories: pruned,
+          prunedReceipts: receiptsPruned,
+        });
+      }
     });
 
-  const remember = (
+  // The remember mutation serialized in its own transaction (check-then-act:
+  // receipt lookup, text-hash dedupe, cap count, insert) so concurrent retries
+  // and saves stay race-free: one reinforcement, one cap check, one row. The
+  // hygiene sweep runs before this, never inside it — see `remember`.
+  const rememberInTransaction = (
     input: MindRememberRequest,
   ): Effect.Effect<MindRememberResult, MindServiceError> =>
-    // The remember path is check-then-act (receipt lookup, text-hash dedupe,
-    // cap count, insert). Serializing it in a transaction makes concurrent
-    // retries and saves race-free: one reinforcement, one cap check, one row.
     sqlClient
       .withTransaction(
         Effect.gen(function* () {
@@ -225,8 +254,8 @@ const makeMindService = Effect.gen(function* () {
             );
           }
 
-          // The sweep runs before the mutation so pruned rows free cap slots.
-          yield* maybeSweep(input.projectId);
+          // The sweep already ran outside this transaction (see above), so the
+          // cap count below sees the freed slots without holding them in-transaction.
           const nowMillis = yield* Clock.currentTimeMillis;
           const nowIso = new Date(nowMillis).toISOString();
           const textHash = hashMindText(normalized);
@@ -378,6 +407,15 @@ const makeMindService = Effect.gen(function* () {
         ),
       );
 
+  // Hygiene runs BEFORE the mutation transaction, never inside it: pruned
+  // rows free cap slots for the cap check, and the bounded sweep never holds
+  // the write transaction open. Both halves are lazy effect descriptions, so
+  // `andThen` runs the sweep strictly before the transaction runs.
+  const remember = (
+    input: MindRememberRequest,
+  ): Effect.Effect<MindRememberResult, MindServiceError> =>
+    Effect.andThen(maybeSweep(input.projectId), rememberInTransaction(input));
+
   const recall = (input: MindRecallRequest): Effect.Effect<MindRecallResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
@@ -397,11 +435,23 @@ const makeMindService = Effect.gen(function* () {
           note: MIND_RECALL_HYGIENE_NOTE,
         };
       }
-      const candidates = yield* repository.searchCandidates({
-        projectId: input.projectId,
-        matchExpr: buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS)),
-        limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
-      });
+      const candidates = yield* repository
+        .searchCandidates({
+          projectId: input.projectId,
+          matchExpr: buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS)),
+          limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
+        })
+        .pipe(
+          // Recall stays a pure read that never throws on query-shaped FTS
+          // failures (tokenizer edges on exotic input): best-effort, no
+          // matches. Decode-level corruption is already skipped row-wise by
+          // the repository, so only SQL failures can land here.
+          Effect.catchTag("PersistenceSqlError", (error) =>
+            Effect.logWarning("Mind recall FTS search failed; returning no matches.", {
+              error: error.message,
+            }).pipe(Effect.as([] as ReadonlyArray<MindMemoryCandidate>)),
+          ),
+        );
       // rankCandidates sorts ascending by score. bm25 is negative/lower-is-better and
       // the weight factor is a positive multiplier, so the best match carries the most
       // negative score and heads the ascending list — consume from the front.
@@ -438,6 +488,11 @@ const makeMindService = Effect.gen(function* () {
       }
       const operationId =
         input.turnId === null ? null : `confirm:${input.turnId}:${input.memoryId}`;
+      // Confirm-race note: the read (getById) and write (applyConfirm) below
+      // are not atomic, but repeats are still safe. Same-turn repeats hit the
+      // receipt/journal replay above and return the row untouched; concurrent
+      // confirms from different turns may each apply once (+0.15, capped at
+      // 1.0, decay anchor reset) — a benign double-bump, never a lost write.
       if (operationId !== null) {
         const receipt = yield* repository.getReceipt({
           projectId: row.projectId,
@@ -555,22 +610,57 @@ const makeMindService = Effect.gen(function* () {
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
       const rows = yield* repository.listByProject({ projectId: input.projectId });
+      // `count` is the true total; `memories` is the shown page. A shortfall
+      // means undecodable rows were skipped read-side (never fatal) — log it
+      // with shown/total so corruption is visible instead of silent.
+      const total = yield* repository.countByProject({ projectId: input.projectId });
+      const skipped = Math.max(0, total - rows.length);
+      if (skipped > 0) {
+        yield* Effect.logWarning("Mind list skipped undecodable rows.", {
+          projectId: input.projectId,
+          shown: rows.length,
+          total,
+          skipped,
+        });
+      }
       const memories = rows
         .map((row) => toMindMemory(row, nowIso))
         .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-      return { memories, count: memories.length, cap: MIND_MEMORY_PROJECT_CAP };
+      return {
+        memories,
+        count: total,
+        cap: MIND_MEMORY_PROJECT_CAP,
+        ...(skipped > 0 ? { skipped } : {}),
+      };
     });
 
   // Global list for the project-agnostic Mind view: every memory across all
-  // projects, so rows whose project left the projection stay reachable.
+  // projects, so rows whose project left the projection stay reachable. The
+  // repository page is bounded to one cap; `count` stays the true total and
+  // `skipped` counts only undecodable rows within the page, never the
+  // truncation beyond it.
   const listAll = (): Effect.Effect<MindListResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
-      const rows = yield* repository.listAll();
+      const rows = yield* repository.listAll({ limit: MIND_MEMORY_PROJECT_CAP });
+      const total = yield* repository.countAll();
+      const skipped = Math.max(0, Math.min(total, MIND_MEMORY_PROJECT_CAP) - rows.length);
+      if (skipped > 0) {
+        yield* Effect.logWarning("Mind list skipped undecodable rows.", {
+          shown: rows.length,
+          total,
+          skipped,
+        });
+      }
       const memories = rows
         .map((row) => toMindMemory(row, nowIso))
         .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-      return { memories, count: memories.length, cap: MIND_MEMORY_PROJECT_CAP };
+      return {
+        memories,
+        count: total,
+        cap: MIND_MEMORY_PROJECT_CAP,
+        ...(skipped > 0 ? { skipped } : {}),
+      };
     });
 
   const setPinned = (input: MindSetPinnedRequest): Effect.Effect<MindMemory, MindServiceError> =>

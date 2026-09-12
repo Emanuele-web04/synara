@@ -136,6 +136,17 @@ describe("Mind contracts", () => {
     expect(decodes(MindListResult, { memories: [], count: 0, cap: MIND_MEMORY_PROJECT_CAP })).toBe(
       true,
     );
+    expect(
+      decodes(MindListResult, { memories: [], count: 2, cap: MIND_MEMORY_PROJECT_CAP, skipped: 2 }),
+    ).toBe(true);
+    expect(
+      decodes(MindListResult, {
+        memories: [],
+        count: 0,
+        cap: MIND_MEMORY_PROJECT_CAP,
+        skipped: -1,
+      }),
+    ).toBe(false);
   });
 
   it("targets forget and setPinned by project and memory id", () => {

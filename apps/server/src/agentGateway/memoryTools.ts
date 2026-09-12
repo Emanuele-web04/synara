@@ -1,7 +1,7 @@
 import {
   MIND_MEMORY_TEXT_MAX_CHARS,
+  MIND_RECALL_MAX_ITEMS,
   MIND_RECALL_QUERY_MAX_CHARS,
-  MIND_RECALL_REQUEST_MAX_ITEMS,
   MindMemoryId,
   type MindMemoryType,
   type OrchestrationThreadShell,
@@ -92,9 +92,12 @@ function readRecallQuery(args: Record<string, unknown>): string | undefined {
 function readRecallLimit(args: Record<string, unknown>): number | undefined {
   const limit = readNumberArg(args, "limit");
   if (limit === undefined) return undefined;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MIND_RECALL_REQUEST_MAX_ITEMS) {
+  // The result never exceeds the contracts' 8-item cap, so the tool clamps
+  // tighter than MindRecallInput's transport bound (20): what you ask is what
+  // fits.
+  if (!Number.isInteger(limit) || limit < 1 || limit > MIND_RECALL_MAX_ITEMS) {
     throw new ToolInputError(
-      `Argument "limit" must be an integer between 1 and ${MIND_RECALL_REQUEST_MAX_ITEMS}.`,
+      `Argument "limit" must be an integer between 1 and ${MIND_RECALL_MAX_ITEMS}.`,
     );
   }
   return limit;
@@ -192,8 +195,8 @@ export function makeAgentGatewayMemoryTools(
           limit: {
             type: "number",
             minimum: 1,
-            maximum: MIND_RECALL_REQUEST_MAX_ITEMS,
-            description: `Maximum matches for a query recall (default 10, max ${MIND_RECALL_REQUEST_MAX_ITEMS}). Ignored without a query.`,
+            maximum: MIND_RECALL_MAX_ITEMS,
+            description: `Maximum matches for a query recall (default 8, max ${MIND_RECALL_MAX_ITEMS}). Ignored without a query.`,
           },
         },
         additionalProperties: false,

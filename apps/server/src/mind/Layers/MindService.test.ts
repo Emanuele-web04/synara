@@ -72,6 +72,11 @@ const PROJECTS = {
   ui: "project-mind-service-ui",
   pinSweep: "project-mind-service-pin-sweep",
   xproject: "project-mind-service-xproject",
+  poison: "project-mind-service-poison",
+  gc: "project-mind-service-gc",
+  sweepBound: "project-mind-service-sweep-bound",
+  ftsEdge: "project-mind-service-fts-edge",
+  queryLimit: "project-mind-service-query-limit",
 } as const;
 
 let memoryCounter = 0;
@@ -766,6 +771,210 @@ layer("MindService", (it) => {
         }),
       );
       assert.strictEqual(pinError._tag, "MindMemoryNotFoundError");
+    }),
+  );
+
+  it.effect("list isolates poison rows with shown/total/skipped counts", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.poison);
+      yield* ensureProjectRow(PROJECTS.poison);
+      const good = yield* service.remember(
+        rememberRequest(projectId, "Poison test survivor fact", { turnId: "turn-poison-create" }),
+      );
+      // A row the schema rejects (unknown provider, no CHECK constraining
+      // it — e.g. a provider renamed after the row was written) must not fail
+      // the read — it is skipped and accounted.
+      yield* sql`
+        INSERT INTO mind_memories (
+          id,
+          project_id,
+          text,
+          type,
+          text_hash,
+          peak_weight,
+          access_count,
+          pinned,
+          created_at,
+          last_accessed_at,
+          provenance_kind,
+          source_thread_id,
+          source_provider
+        )
+        VALUES (
+          'memory-poison-row',
+          ${projectId},
+          'Poison row neutral fact.',
+          'semantic',
+          'poison-hash',
+          0.6,
+          0,
+          0,
+          '2026-09-01T00:00:00.000Z',
+          '2026-09-01T00:00:00.000Z',
+          'agent',
+          'thread-poison',
+          'bogus-provider'
+        )
+      `;
+
+      const list = yield* service.list({ projectId });
+      assert.deepStrictEqual(
+        list.memories.map((memory) => memory.memoryId),
+        [good.memoryId],
+      );
+      assert.strictEqual(list.count, 2);
+      assert.strictEqual(list.skipped, 1);
+    }),
+  );
+
+  it.effect("receipt GC keeps only journal-proven rows and retries still replay", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.gc);
+      yield* ensureProjectRow(PROJECTS.gc);
+
+      const text = "GC retention probe fact";
+      const first = yield* service.remember(
+        rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
+      );
+      // An orphan receipt with no journal row must survive GC no matter its age.
+      const oldIso = new Date((yield* Clock.currentTimeMillis) - 40 * DAY_MS).toISOString();
+      yield* sql`
+        INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at)
+        VALUES (${projectId}, 'orphan-op', 'remember', '{"memoryId":"memory-ghost","created":true}', ${oldIso})
+      `;
+      // Age the real receipt past the 30d retention edge.
+      yield* sql`UPDATE mind_operation_receipts SET created_at = ${oldIso} WHERE project_id = ${projectId} AND operation_id != 'orphan-op'`;
+
+      // Push past the 24h sweep interval and trigger hygiene with a fresh write.
+      yield* TestClock.adjust(Duration.hours(25));
+      yield* service.remember(
+        rememberRequest(projectId, "GC sweep trigger fact", { turnId: "turn-gc-2" }),
+      );
+
+      const remaining = (yield* sql<{
+        readonly operation_id: string;
+      }>`SELECT operation_id FROM mind_operation_receipts WHERE project_id = ${projectId}`).map(
+        (row) => row.operation_id,
+      );
+      assert.isTrue(remaining.includes("orphan-op"));
+      assert.isFalse(
+        remaining.some((operationId) => operationId.startsWith("remember:turn-gc-1:")),
+      );
+      assert.lengthOf(remaining, 2);
+
+      // The GC'd receipt replays from the journal: no double bump, no second row.
+      const replay = yield* service.remember(
+        rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
+      );
+      assert.strictEqual(replay.replayed, true);
+      assert.strictEqual(replay.memoryId, first.memoryId);
+      const row = Option.getOrThrow(yield* repository.getById({ memoryId: first.memoryId }));
+      assert.strictEqual(row.accessCount, 0);
+    }),
+  );
+
+  it.effect("the sweep deletes at most 100 memories per run and resumes next interval", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.sweepBound);
+      yield* ensureProjectRow(PROJECTS.sweepBound);
+      const aged = new Date((yield* Clock.currentTimeMillis) - 46 * DAY_MS).toISOString();
+      for (let index = 0; index < 105; index++) {
+        yield* seedMemory({
+          projectId,
+          textHash: `sweep-bound-${index}`,
+          text: `sweep bound filler ${index}`,
+          peakWeight: 0.05,
+          createdAt: aged,
+          lastAccessedAt: aged,
+        });
+      }
+      const trigger = (text: string) =>
+        service.remember({
+          projectId,
+          text,
+          type: "semantic",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+      const eligible = () =>
+        repository
+          .listByProject({ projectId })
+          .pipe(
+            Effect.map((rows) => rows.filter((row) => row.text.startsWith("sweep bound filler"))),
+          );
+
+      yield* trigger("sweep bound trigger one");
+      assert.lengthOf(yield* eligible(), 5);
+
+      // Past the 24h interval the next mutation resumes and finishes the sweep.
+      yield* TestClock.adjust(Duration.hours(25));
+      yield* trigger("sweep bound trigger two");
+      assert.lengthOf(yield* eligible(), 0);
+    }),
+  );
+
+  it.effect("query recall on CJK, punctuation-only, and cap-edge queries returns empty", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.ftsEdge);
+      yield* ensureProjectRow(PROJECTS.ftsEdge);
+      yield* service.remember(
+        rememberRequest(projectId, "Use bun run test, never bun test.", {
+          turnId: "turn-fts-edge",
+        }),
+      );
+
+      // None of these may throw; FTS has no indexable match for them.
+      for (const query of ["日本語テスト", "!!!", '"', "?", "x".repeat(200)]) {
+        const result = yield* service.recall({ projectId, query });
+        assert.deepStrictEqual(result.items, [], query);
+      }
+      // The guard did not break normal queries.
+      const hit = yield* service.recall({ projectId, query: "bun" });
+      assert.strictEqual(hit.items.length, 1);
+    }),
+  );
+
+  it.effect("query recall defaults to 8 items", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.queryLimit);
+      yield* ensureProjectRow(PROJECTS.queryLimit);
+      for (let index = 0; index < 10; index++) {
+        yield* seedMemory({
+          projectId,
+          textHash: `query-limit-${index}`,
+          text: `quxylimit fact ${index}`,
+        });
+      }
+      const result = yield* service.recall({ projectId, query: "quxylimit" });
+      assert.strictEqual(result.items.length, 8);
+    }),
+  );
+
+  it.effect("listAll pairs the bounded page with the true total", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const all = yield* service.listAll();
+      assert.strictEqual(all.count, yield* repository.countAll());
+      assert.isTrue(all.memories.length <= all.count);
+      assert.isTrue(all.memories.length <= MIND_MEMORY_PROJECT_CAP);
+      assert.isTrue(all.skipped === undefined || all.skipped >= 0);
     }),
   );
 });
