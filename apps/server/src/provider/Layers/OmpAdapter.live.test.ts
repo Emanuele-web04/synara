@@ -5,7 +5,9 @@
 
 import { ThreadId, type ProviderRuntimeEvent } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer, Stream } from "effect";
+import * as OfficialAcp from "@agentclientprotocol/sdk";
+import { Effect, Layer, Queue, Sink, Stream } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
@@ -28,18 +30,24 @@ const modelSelection = {
   options: { thinkingLevel: "off" as const },
 };
 
-const adapterLayer = (settings: OmpAcpRuntimeSettings) => {
+const adapterLayer = (
+  settings: OmpAcpRuntimeSettings,
+  extraDeps?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
+) => {
   const configLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-omp-live-",
   }).pipe(Layer.provide(NodeServices.layer));
   return makeOmpAdapterLive(settings).pipe(
-    Layer.provide(Layer.mergeAll(NodeServices.layer, configLayer)),
+    Layer.provide(
+      Layer.mergeAll(NodeServices.layer, configLayer, ...(extraDeps ? [extraDeps] : [])),
+    ),
   );
 };
 
 const withAdapter = <A, E>(
   settings: OmpAcpRuntimeSettings,
   run: (adapter: OmpAdapterShape, events: ProviderRuntimeEvent[]) => Effect.Effect<A, E>,
+  extraDeps?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
 ) =>
   Effect.runPromise(
     Effect.scoped(
@@ -52,7 +60,7 @@ const withAdapter = <A, E>(
           }),
         ).pipe(Effect.forkScoped);
         return yield* run(adapter, events);
-      }).pipe(Effect.provide(adapterLayer(settings))),
+      }).pipe(Effect.provide(adapterLayer(settings, extraDeps))),
     ),
   );
 
@@ -252,4 +260,145 @@ describe.skipIf(!LIVE)("OmpAdapter live E2E against real `omp acp`", () => {
       }),
     );
   }, 120_000);
+});
+
+// Deterministic regression coverage for the settled-turn straggler fix: a
+// session/update that lands after the prompt response settles must be
+// attributed to the just-settled turn instead of dropped as an orphan. Runs an
+// in-memory ACP agent through a fake ChildProcessSpawner, so it needs no real
+// `omp` binary and is not gated on SYNARA_LIVE_OMP.
+const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value) + "\n");
+
+describe("OmpAdapter late session/update attribution (in-memory ACP)", () => {
+  it("attributes a post-settlement agent_message_chunk to the settled turn", async () => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const sessionUpdate = (text: string) =>
+      encode({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-omp-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        },
+      });
+
+    let agentConnection: { close(error?: unknown): void } | undefined;
+    const agentApp = OfficialAcp.agent({ name: "fake-omp" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+        protocolVersion: 1,
+        agentInfo: { name: "fake-omp", version: "0.0.0" },
+        agentCapabilities: {},
+        authMethods: [{ id: "agent", name: "Agent authentication" }],
+      }))
+      .onRequest(OfficialAcp.methods.agent.authenticate, () => ({}))
+      .onRequest(OfficialAcp.methods.agent.session.new, () => ({
+        sessionId: "fake-omp-session",
+        // currentValue already matches the test's modelSelection, so the
+        // adapter's set_config_option calls short-circuit without an RPC.
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            type: "select",
+            category: "model",
+            currentValue: FAST_MODEL,
+            options: [{ value: FAST_MODEL, name: FAST_MODEL }],
+          },
+          {
+            id: "thinking",
+            name: "Thinking",
+            type: "select",
+            category: "thinking",
+            currentValue: "off",
+            options: [{ value: "off", name: "Off" }],
+          },
+        ],
+      }))
+      .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
+        // The turn's normal chunk is written before the response so the one
+        // offered after turn.completed below is the straggler under test.
+        Effect.runPromise(Queue.offer(agentToClient, sessionUpdate("EARLY")));
+        return { stopReason: "end_turn" };
+      });
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          const input = new ReadableStream<Uint8Array>({
+            pull: (controller) =>
+              Effect.runPromise(Queue.take(clientToAgent))
+                .then((chunk) => {
+                  try {
+                    controller.enqueue(chunk);
+                  } catch {
+                    // Stream already closed during teardown.
+                  }
+                })
+                .catch(() => undefined),
+          });
+          const output = new WritableStream<Uint8Array>({
+            write: (chunk) =>
+              Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
+          });
+          agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
+          return ChildProcessSpawner.makeHandle({
+            // Must be a pid no real process can have: stopAll runs the real
+            // process-tree teardown, which captures every descendant of this
+            // pid and signals it — a small pid like 1 (launchd) makes teardown
+            // SIGTERM the whole user session, killing the vitest worker.
+            pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+
+    try {
+      await withAdapter(
+        {},
+        (adapter, events) =>
+          Effect.gen(function* () {
+            const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
+            yield* startSession(adapter, threadId);
+            const turn = yield* sendTurn(adapter, threadId, "hi");
+            yield* waitForEvent(
+              events,
+              (e) => e.type === "turn.completed" && e.turnId === turn.turnId,
+              30_000,
+              "turn completion",
+            );
+            // Settlement has fully finished: activeTurnId is cleared and the
+            // drain is closed. This chunk can only land via the late path.
+            yield* Queue.offer(agentToClient, sessionUpdate("LATE-CHUNK"));
+            yield* waitForEvent(
+              events,
+              (e) =>
+                e.type === "content.delta" &&
+                e.turnId === turn.turnId &&
+                JSON.stringify(e.payload).includes("LATE-CHUNK"),
+              10_000,
+              "late content.delta attribution",
+            );
+            yield* adapter.stopAll();
+          }),
+        spawnerLayer,
+      );
+    } finally {
+      agentConnection?.close();
+      await Effect.runPromise(Queue.shutdown(clientToAgent));
+      await Effect.runPromise(Queue.shutdown(agentToClient));
+    }
+  }, 45_000);
 });
