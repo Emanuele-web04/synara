@@ -27,6 +27,11 @@ import {
 } from "../composerDraftStore";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { readNativeApi } from "../nativeApi";
+import {
+  clearPendingTurnDispatch,
+  hasPendingTurnDispatch,
+  markPendingTurnDispatch,
+} from "../pendingTurnDispatch";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SidebarThreadSummary } from "../types";
@@ -165,11 +170,52 @@ function dispatchKanbanDraftThreadInternal(
   if (existing) {
     return existing;
   }
+  if (hasPendingTurnDispatch(input.threadId)) {
+    // A chat send for this thread is already in flight — defer to it instead
+    // of queueing a second turn.
+    const raced = inFlightDispatchByThreadId.get(input.threadId);
+    if (raced) {
+      return raced;
+    }
+    return Promise.resolve<KanbanDraftDispatchResult>({ kind: "dispatched" });
+  }
   const dispatchPromise = dispatchKanbanDraftThreadOnce(input, mode).finally(() => {
     inFlightDispatchByThreadId.delete(input.threadId);
   });
   inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
   return dispatchPromise;
+}
+
+/**
+ * Board/chat mutual-exclusion probe for the chat send path: true while a
+ * kanban dispatch for this thread is on the wire. A chat send that observes
+ * true must join/defer to the board dispatch instead of starting its own turn.
+ */
+export function isKanbanDispatchInFlight(threadId: ThreadId): boolean {
+  return inFlightDispatchByThreadId.has(threadId);
+}
+
+const KANBAN_DISPATCH_SETTLE_POLL_MS = 25;
+/** Upper bound a chat send waits for a racing board dispatch. Fail-open. */
+export const KANBAN_DISPATCH_SETTLE_TIMEOUT_MS = 5_000;
+
+/**
+ * Chat-send companion to isKanbanDispatchInFlight: wait (bounded) for a board
+ * dispatch on this thread to settle before starting a chat turn, so the two
+ * starters serialize instead of queueing two turns. Fail-open — on timeout the
+ * chat send proceeds, never locking the composer forever.
+ */
+export async function waitForKanbanDispatchToSettle(
+  threadId: ThreadId,
+  timeoutMs: number = KANBAN_DISPATCH_SETTLE_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlightDispatchByThreadId.has(threadId)) {
+    if (Date.now() >= deadline) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, KANBAN_DISPATCH_SETTLE_POLL_MS));
+  }
 }
 
 /**
@@ -313,6 +359,11 @@ async function dispatchKanbanDraftThreadOnce(
   const droppedAtMs = Date.now();
   const createdAt = new Date(droppedAtMs).toISOString();
 
+  // Claim the shared turn-start guard so a concurrent chat send for this
+  // thread defers to this dispatch instead of queueing a second turn. Claimed
+  // after validation so empty/non-dispatchable drops never hold the guard.
+  markPendingTurnDispatch(threadId);
+
   // Optimistic move: show the card In Progress before any round-trip. Provider
   // session init can take seconds; runtime events confirm the move (reconciliation
   // clears the entry) or the failure paths below revert it.
@@ -366,6 +417,7 @@ async function dispatchKanbanDraftThreadOnce(
           () => undefined,
         );
         kanbanUi.clearOptimisticDispatch(threadId);
+        clearPendingTurnDispatch(threadId);
         return { kind: "unavailable" };
       }
       if (project?.kind === "chat") {
@@ -430,6 +482,7 @@ async function dispatchKanbanDraftThreadOnce(
       () => undefined,
     );
     kanbanUi.clearOptimisticDispatch(threadId);
+    clearPendingTurnDispatch(threadId);
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
@@ -444,6 +497,7 @@ async function dispatchKanbanDraftThreadOnce(
     // A turn failure after the goal command was accepted must not lose the
     // user's text: keep the composer prompt (restoring it when something
     // cleared it mid-flight) and un-hide a promoted local draft so the draft
+  clearPendingTurnDispatch(threadId);
     // card — or the settled thread's unsent-prompt card — stays visible.
     restoreKanbanDraftPromptAfterFailure(threadId, preDispatchPrompt);
     rollbackPromotingDraftAfterFailure(threadId, thread);

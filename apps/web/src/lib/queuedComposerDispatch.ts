@@ -18,6 +18,7 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendBrowserAnnotationsToPrompt } from "./browserAnnotations";
+import { waitForKanbanDispatchToSettle } from "./kanbanDispatch";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -48,6 +49,10 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   if (!thread) {
     return false;
   }
+
+  // Serialize with a racing board dispatch: two starters must never queue two
+  // turns for the same thread. Bounded + fail-open.
+  await waitForKanbanDispatchToSettle(input.threadId);
 
   const createdAt = new Date().toISOString();
   const messageId = newMessageId();

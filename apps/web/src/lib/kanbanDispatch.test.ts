@@ -15,6 +15,8 @@ import {
   dispatchKanbanDraftCardAsGoal,
   dispatchKanbanDraftThread,
   dispatchKanbanDraftThreadAsGoal,
+  isKanbanDispatchInFlight,
+  waitForKanbanDispatchToSettle,
 } from "./kanbanDispatch";
 
 const nativeApiMocks = vi.hoisted(() => ({
