@@ -2,6 +2,7 @@ import {
   type AssistantDeliveryMode,
   CommandId,
   EventId,
+  isToolLifecycleItemType,
   MessageId,
   type OrchestrationCheckpointFile,
   type OrchestrationEvent,
@@ -334,7 +335,7 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     case "item.updated":
     case "item.completed": {
       const itemType = event.payload.itemType;
-      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+      return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
     case "user-input.requested":

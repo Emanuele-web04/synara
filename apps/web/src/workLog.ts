@@ -2355,6 +2355,73 @@ function mergeTimelineEntries(
   return merged;
 }
 
+/** Old snapshots can contain one segment per token. Only a visible intervening
+ * row warrants another Markdown document; keep the persisted text untouched. */
+function coalesceAdjacentMessageSegments(entries: TimelineEntry[]): TimelineEntry[] {
+  if (
+    !entries.some((entry, index) => {
+      const previous = entries[index - 1];
+      return (
+        entry.kind === "message-segment" &&
+        previous?.kind === "message-segment" &&
+        entry.message === previous.message &&
+        entry.segmentIndex === previous.segmentIndex + 1
+      );
+    })
+  ) {
+    return entries;
+  }
+  type SegmentEntry = Extract<TimelineEntry, { kind: "message-segment" }>;
+  const groupsByMessage = new Map<ChatMessage, SegmentEntry[][]>();
+  const runs: Array<TimelineEntry | SegmentEntry[]> = [];
+  for (const entry of entries) {
+    const previous = runs.at(-1);
+    if (entry.kind !== "message-segment") {
+      runs.push(entry);
+    } else if (
+      Array.isArray(previous) &&
+      previous[0]!.message === entry.message &&
+      previous.at(-1)!.segmentIndex + 1 === entry.segmentIndex
+    ) {
+      previous.push(entry);
+    } else {
+      const group = [entry];
+      runs.push(group);
+      const groups = groupsByMessage.get(entry.message) ?? [];
+      groups.push(group);
+      groupsByMessage.set(entry.message, groups);
+    }
+  }
+
+  const replacements = new Map<SegmentEntry[], TimelineEntry>();
+  for (const [message, groups] of groupsByMessage) {
+    if (!groups.some((group) => group.length > 1)) continue;
+    const textSegments = groups.map((group) => {
+      const first = message.textSegments![group[0]!.segmentIndex]!;
+      const last = message.textSegments![group.at(-1)!.segmentIndex]!;
+      return {
+        ...first,
+        endedAt: last.endedAt,
+        text: group.map((entry) => message.textSegments![entry.segmentIndex]!.text).join(""),
+      };
+    });
+    if (groups.length === 1 && textSegments[0]!.text === message.text) {
+      replacements.set(groups[0]!, {
+        id: message.id,
+        kind: "message",
+        createdAt: groups[0]![0]!.createdAt,
+        message,
+      });
+      continue;
+    }
+    const displayMessage = { ...message, textSegments };
+    groups.forEach((group, segmentIndex) => {
+      replacements.set(group, { ...group[0]!, message: displayMessage, segmentIndex });
+    });
+  }
+  return runs.map((run) => (Array.isArray(run) ? (replacements.get(run) ?? run[0]!) : run));
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -2482,13 +2549,15 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  return mergeTimelineEntries(
+  return coalesceAdjacentMessageSegments(
     mergeTimelineEntries(
-      sortedTimelineEntries(messageRows, compare),
-      sortedTimelineEntries(proposedPlanRows, compare),
+      mergeTimelineEntries(
+        sortedTimelineEntries(messageRows, compare),
+        sortedTimelineEntries(proposedPlanRows, compare),
+        compare,
+      ),
+      sortedTimelineEntries(workRows, compare),
       compare,
     ),
-    sortedTimelineEntries(workRows, compare),
-    compare,
   );
 }

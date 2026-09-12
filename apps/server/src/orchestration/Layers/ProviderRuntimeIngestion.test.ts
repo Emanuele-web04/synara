@@ -855,6 +855,72 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.find((message) => message.id === messageId)?.text).toBe("streamed once");
   });
 
+  it.each(["streaming", "buffered"] as const)(
+    "keeps tokenized Codex Markdown contiguous in %s delivery despite non-row item updates",
+    async (assistantDeliveryMode) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-cjk");
+      const itemId = asItemId("item-cjk");
+      const text = "知道。\n\n- 前端 Web：`/project/web`\n- `erp-code` 是 ERP 项目。";
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-cjk-start"),
+          threadId,
+          message: { messageId: asMessageId("request-cjk"), role: "user", text: "项目?", attachments: [] },
+          assistantDeliveryMode,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
+      const push = (event: ProviderRuntimeEvent) =>
+        Effect.runPromise(harness.runtimeEventRepository.append(event));
+      const base = { provider: "codex" as const, createdAt: now, threadId, turnId, itemId };
+      await push({ ...base, type: "turn.started", eventId: asEventId("cjk-start"), payload: {} });
+      for (const [index, delta] of Array.from(text).entries()) {
+        await push({
+          type: "content.delta",
+          eventId: asEventId(`cjk-delta-${index}`),
+          ...base,
+          payload: { streamKind: "assistant_text", delta },
+        });
+        // Untyped provider lifecycle notifications project no visible tool row.
+        await push({
+          type: "item.updated",
+          eventId: asEventId(`cjk-update-${index}`),
+          ...base,
+          payload: { itemType: "unknown" },
+        });
+      }
+      await harness.drain();
+      if (assistantDeliveryMode === "streaming") {
+        const thread = await waitForThread(harness.engine, (entry) =>
+          entry.messages.some((message) => message.text === text),
+        );
+        expect(
+          thread.messages.find((message) => message.id === "assistant:item-cjk")?.textSegments,
+        ).toHaveLength(1);
+      }
+      await push({
+        type: "item.completed",
+        eventId: asEventId("cjk-completed"),
+        ...base,
+        payload: { itemType: "assistant_message", status: "completed" },
+      });
+      await harness.drain();
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.messages.some((message) => message.text === text && !message.streaming),
+      );
+      expect(
+        thread.messages.find((message) => message.id === "assistant:item-cjk")?.textSegments,
+      ).toBeUndefined();
+    },
+  );
+
   it("marks streamed assistant text segments at tool-intervention boundaries", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-segment-interleave");

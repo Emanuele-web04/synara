@@ -8,6 +8,7 @@ import {
   isProviderFileEditWorkLogEntry,
   omitRoutedSubagentWorkEntries,
 } from "./workLog";
+import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
 
 describe("deriveWorkLogEntries", () => {
@@ -4226,6 +4227,72 @@ describe("deriveTimelineEntries", () => {
       createdAt: "2026-02-23T00:00:01.000Z",
       message: { id: messageId },
     });
+  });
+
+  it.each([true, false])("renders tokenized CJK Markdown as one document (streaming=%s)", (streaming) => {
+    const text = "知道。\n\n- 前端 Web 项目：`/project/web`\n- `erp-code` 通常指 C# ERP 项目。";
+    const message: ChatMessage = {
+      id: MessageId.makeUnsafe("assistant-cjk"),
+      role: "assistant",
+      text,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      streaming,
+      textSegments: Array.from(text, (text, index) => ({
+        sequence: index + 1,
+        startedAt: "2026-02-23T00:00:01.000Z",
+        endedAt: "2026-02-23T00:00:01.000Z",
+        text,
+      })),
+    };
+    // The same shape arrives from both a live detail update and a reopened snapshot.
+    for (const incoming of [message, JSON.parse(JSON.stringify(message)) as ChatMessage]) {
+      expect(deriveTimelineEntries([incoming], [], [])).toEqual([
+        { id: message.id, kind: "message", createdAt: message.createdAt, message: incoming },
+      ]);
+    }
+    expect(message.textSegments).toHaveLength(Array.from(text).length);
+  });
+
+  it("coalesces token runs while preserving warning boundaries and other messages", () => {
+    const message: ChatMessage = {
+      id: MessageId.makeUnsafe("assistant-cjk-warning"),
+      role: "assistant",
+      text: "前端`web`后端`erp`",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      streaming: false,
+      textSegments: ["前端", "`web`", "后端", "`erp`"].map((text, index) => ({
+        sequence: (index + 1) * 10,
+        startedAt: "2026-02-23T00:00:01.000Z",
+        endedAt: "2026-02-23T00:00:01.000Z",
+        text,
+      })),
+    };
+    const other: ChatMessage = {
+      ...message,
+      id: MessageId.makeUnsafe("assistant-other"),
+      createdAt: "2026-02-23T00:00:02.000Z",
+      textSegments: undefined,
+    };
+    const entries = deriveTimelineEntries([message, other], [], [
+      {
+        id: "warning",
+        createdAt: message.createdAt,
+        sequence: 25,
+        tone: "info",
+        label: "Check workspace",
+      },
+    ]);
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "message-segment",
+      "work",
+      "message-segment",
+      "message",
+    ]);
+    const segments = entries.filter((entry) => entry.kind === "message-segment");
+    expect(
+      segments.map((entry) => entry.message.textSegments?.[entry.segmentIndex]?.text),
+    ).toEqual(["前端`web`", "后端`erp`"]);
+    expect(message.textSegments).toHaveLength(4);
   });
 
   it("keeps a single live message row while segments are still streaming", () => {
