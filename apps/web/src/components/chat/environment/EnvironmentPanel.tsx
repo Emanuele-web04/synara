@@ -36,6 +36,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -311,23 +312,17 @@ export function EnvironmentPanel({
           onClick={() => {
             const api = readNativeApi();
             if (!api) {
-              toastManager.add({
-                type: "error",
-                title: "Unable to open folder",
-                description: "The desktop connection is not available yet.",
+              showFileManagerErrorToast({
+                kind: "folder",
+                error: "The desktop connection is not available yet.",
               });
               return;
             }
             void api.shell
               .showInFolder(studioFolderPath)
               .then(onClose)
-              .catch((error) => {
-                toastManager.add({
-                  type: "error",
-                  title: "Unable to open folder",
-                  description:
-                    error instanceof Error ? error.message : "An unknown error occurred.",
-                });
+              .catch((error: unknown) => {
+                showFileManagerErrorToast({ kind: "folder", error });
               });
           }}
         />
