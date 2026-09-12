@@ -4,7 +4,12 @@
 // Depends on: Vitest and text helpers
 
 import { describe, expect, it } from "vitest";
-import { pluralize, splitsSurrogatePair, unicodeSafeEndOffset } from "./text";
+import {
+  pluralize,
+  splitsSurrogatePair,
+  stripTerminalControlSequences,
+  unicodeSafeEndOffset,
+} from "./text";
 
 describe("UTF-16 boundaries", () => {
   const text = "a📌b";
@@ -21,6 +26,39 @@ describe("UTF-16 boundaries", () => {
     expect(unicodeSafeEndOffset(text, 2)).toBe(1);
     expect(unicodeSafeEndOffset(text, 3)).toBe(3);
     expect(unicodeSafeEndOffset(text, text.length)).toBe(text.length);
+  });
+});
+
+describe("stripTerminalControlSequences", () => {
+  it("removes ANSI color and cursor sequences while preserving text", () => {
+    expect(
+      stripTerminalControlSequences("\u001b[38;2;215;119;87mTransmuting...\u001b[0m\u001b[?25l"),
+    ).toBe("Transmuting...");
+  });
+
+  it.each([
+    "[test] completed",
+    "items[0]",
+    "/tmp/[draft]/project",
+    "[Open file](src/main.ts)",
+    "[38;2;215;119;87mCaveman level: FULL[0m",
+  ])("preserves ordinary bracketed text: %s", (value) => {
+    expect(stripTerminalControlSequences(value)).toBe(value);
+  });
+
+  it.each(["\u0007", "\u001b\\", "\u009c"])(
+    "preserves labels and text between OSC controls terminated by %j",
+    (terminator) => {
+      const link = `\u001b]8;;https://example.com${terminator}visible\u001b]8;;${terminator}`;
+      expect(stripTerminalControlSequences(`${link} after ${link}`)).toBe("visible after visible");
+    },
+  );
+
+  it("handles single-byte CSI and OSC introducers", () => {
+    expect(stripTerminalControlSequences("\u009b31mred\u009b0m")).toBe("red");
+    expect(
+      stripTerminalControlSequences("\u009d8;;https://example.com\u009cvisible\u009d8;;\u009c"),
+    ).toBe("visible");
   });
 });
 

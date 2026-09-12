@@ -453,31 +453,19 @@ function ChatRouteGlobalShortcuts() {
             });
             return;
           }
-          await handleNewThread(target.projectId, {
-            provider,
-            ...(target.inheritContext
-              ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-              : {}),
-          });
+          await handleNewThread(target.projectId, { provider });
         })();
         return;
       }
 
       if (command !== "chat.new") return;
-      // Falls back to the most recent project when none is focused (e.g. the landing
-      // view) so the primary "new thread" chord always creates a thread; on that
-      // fallback the active branch/worktree context belongs to the absent project, so
-      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      // Fall back to the most recent project when none is focused and let the
+      // shared bootstrap apply that project's preferred environment.
       const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
       if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(
-        target.projectId,
-        target.inheritContext
-          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-          : undefined,
-      );
+      void handleNewThread(target.projectId);
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });

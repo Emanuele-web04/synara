@@ -14,7 +14,10 @@ import type {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
+import {
+  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+  THREAD_NOT_ARCHIVED_INVARIANT_MARKER,
+} from "@synara/shared/errorMessages";
 import {
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
@@ -402,7 +405,7 @@ export function requireApprovalNotResponded(input: {
   return Effect.fail(
     invariantError(
       input.command.type,
-      `Approval request '${input.requestId}' on thread '${input.threadId}' was already answered.`,
+      `Approval request '${input.requestId}' on thread '${input.threadId}' ${APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER}`,
     ),
   );
 }
