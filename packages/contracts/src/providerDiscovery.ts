@@ -5,7 +5,7 @@
 
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
-import { OMP_THINKING_LEVEL_OPTIONS, ProviderOptionDescriptor } from "./model";
+import { ProviderOptionDescriptor } from "./model";
 
 const ProviderDiscoveryKind = Schema.Literals([
   "codex",
