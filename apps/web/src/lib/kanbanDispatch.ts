@@ -259,6 +259,7 @@ async function dispatchKanbanDraftThreadOnce(
   const composerFileComments = draftComposerState?.fileComments ?? [];
   const sendableTerminalContexts = filterTerminalContextsWithText(
     draftComposerState?.terminalContexts ?? [],
+  const preDispatchPrompt = liveSnapshot?.prompt ?? "";
   );
   const titleSeed =
     prompt ||
@@ -439,4 +440,42 @@ async function dispatchKanbanDraftThreadOnce(
   // thread should not keep offering it.
   useComposerDraftStore.getState().clearComposerContent(threadId);
   return { kind: "dispatched", warning: goalWarning };
+}
+    // A turn failure after the goal command was accepted must not lose the
+    // user's text: keep the composer prompt (restoring it when something
+    // cleared it mid-flight) and un-hide a promoted local draft so the draft
+    // card — or the settled thread's unsent-prompt card — stays visible.
+    restoreKanbanDraftPromptAfterFailure(threadId, preDispatchPrompt);
+    rollbackPromotingDraftAfterFailure(threadId, thread);
+
+function restoreKanbanDraftPromptAfterFailure(threadId: ThreadId, preDispatchPrompt: string): void {
+  if (preDispatchPrompt.trim().length === 0) {
+    return;
+  }
+  const store = useComposerDraftStore.getState();
+  const currentPrompt = store.draftsByThreadId[threadId]?.prompt ?? "";
+  if (currentPrompt.trim().length > 0) {
+    return;
+  }
+  store.setPrompt(threadId, preDispatchPrompt);
+}
+
+function rollbackPromotingDraftAfterFailure(
+  threadId: ThreadId,
+  thread: SidebarThreadSummary | null,
+): void {
+  if (thread !== null) {
+    return;
+  }
+  useComposerDraftStore.setState((state) => {
+    const current = state.draftThreadsByThreadId[threadId];
+    if (!current || current.promotedTo === undefined) {
+      return state;
+    }
+    const next = { ...current };
+    delete next.promotedTo;
+    return {
+      draftThreadsByThreadId: { ...state.draftThreadsByThreadId, [threadId]: next },
+    };
+  });
 }
