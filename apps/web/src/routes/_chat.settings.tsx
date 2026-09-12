@@ -60,6 +60,7 @@ import {
   SettingsSectionShell,
 } from "../components/settings/SettingsPanelPrimitives";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { VoiceDictationSettingsPanel } from "../components/settings/VoiceDictationSettingsPanel";
 import { ThemeModePicker } from "../components/settings/ThemeModePicker";
 import { ThemePackEditor } from "../components/ThemePackEditor";
 import {
@@ -310,6 +311,16 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.voiceTranscriptionProvider !== defaults.voiceTranscriptionProvider
+      ? ["Transcription provider"]
+      : []),
+    ...(settings.voiceTranscriptionGroqModel !== defaults.voiceTranscriptionGroqModel
+      ? ["Groq voice model"]
+      : []),
+    ...(settings.voiceTranscriptionGroqApiKeyConfigured !==
+    defaults.voiceTranscriptionGroqApiKeyConfigured
+      ? ["Groq API key"]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -541,6 +552,12 @@ function SettingsRouteView() {
           }
         />
       </SettingsSection>
+
+      <VoiceDictationSettingsPanel
+        settings={settings}
+        defaults={defaults}
+        updateSettings={updateSettings}
+      />
 
       <SettingsSection title="Sidebar organization">
         <SettingsRow

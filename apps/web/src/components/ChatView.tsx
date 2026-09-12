@@ -2431,6 +2431,8 @@ export default function ChatView({
     threadId,
     selectedProvider,
     activeProviderStatus: voiceProviderStatus,
+    voiceTranscriptionProvider: settings.voiceTranscriptionProvider,
+    groqApiKeyConfigured: settings.voiceTranscriptionGroqApiKeyConfigured,
     pendingUserInputCount: pendingUserInputs.length,
     onTranscriptReady: appendVoiceTranscriptToComposer,
     refreshVoiceStatus: refreshProviderStatuses,
