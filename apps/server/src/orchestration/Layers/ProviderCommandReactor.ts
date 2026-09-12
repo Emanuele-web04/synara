@@ -36,6 +36,7 @@ import {
   Effect,
   Equal,
   Exit,
+  Fiber,
   Layer,
   Option,
   Queue,
@@ -468,6 +469,14 @@ const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
  * failure well before it could deadlock the single-permit delivery lock.
  */
 const PROVIDER_COMMAND_SETTLE_GRACE = Duration.seconds(15);
+/**
+ * Provider intents take the per-thread checkpoint lease before they can start,
+ * and that lease is also held by checkpoint captures that park on slow git
+ * work. Bound only the acquisition: a command that cannot start within this
+ * window is rejected as retryable instead of silently consuming its delivery
+ * deadline and racing the provider startup timeout into a quarantine.
+ */
+const PROVIDER_COMMAND_LEASE_ACQUIRE_TIMEOUT = Duration.seconds(30);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -698,11 +707,13 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
   readonly commandSettleGrace?: Duration.Duration;
+  readonly commandLeaseAcquireTimeout?: Duration.Duration;
 }
 
 interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
   readonly commandSettleGrace: Duration.Duration;
+  readonly commandLeaseAcquireTimeout: Duration.Duration;
 }
 
 class ProviderCommandReactorConfig extends ServiceMap.Service<
@@ -711,7 +722,8 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
 const make = Effect.gen(function* () {
-  const { commandEventTimeout, commandSettleGrace } = yield* ProviderCommandReactorConfig;
+  const { commandEventTimeout, commandSettleGrace, commandLeaseAcquireTimeout } =
+    yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
@@ -1371,10 +1383,63 @@ const make = Effect.gen(function* () {
   const resolveProviderSessionThread = (threadId: ThreadId) =>
     resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
 
-  const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+  const withProviderSessionLease = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+    options?: {
+      readonly onAcquireTimeout?: (input: {
+        readonly detail: string;
+        readonly provider: ProviderKind;
+      }) => Effect.Effect<unknown, unknown>;
+    },
+  ) =>
     resolveProviderSessionThread(threadId).pipe(
       Effect.flatMap((providerThread) =>
-        turnCheckpointCoordinator.withThreadLease(providerThread?.id ?? threadId, effect),
+        Effect.gen(function* () {
+          const leaseThreadId = providerThread?.id ?? threadId;
+          const acquired = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const leaseFiber = yield* Effect.forkChild(
+            turnCheckpointCoordinator.withThreadLease(
+              leaseThreadId,
+              Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            ),
+            { startImmediately: true },
+          );
+          const handshake = yield* Deferred.await(acquired).pipe(
+            Effect.timeoutOption(commandLeaseAcquireTimeout),
+          );
+          if (Option.isNone(handshake)) {
+            yield* Fiber.interrupt(leaseFiber).pipe(Effect.ignore);
+            const detail = `Another checkpoint operation held thread '${leaseThreadId}' for more than ${Duration.toMillis(commandLeaseAcquireTimeout)}ms.`;
+            const projectedProvider = providerThread?.session?.providerName;
+            const thread = yield* resolveThread(threadId);
+            const provider: ProviderKind =
+              projectedProvider !== null &&
+              projectedProvider !== undefined &&
+              Schema.is(ProviderKind)(projectedProvider)
+                ? projectedProvider
+                : (thread?.modelSelection.provider ?? "codex");
+            if (options?.onAcquireTimeout !== undefined) {
+              yield* options.onAcquireTimeout({ detail, provider }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to surface a provider command lease timeout", {
+                    threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "provider.session.lease",
+              issue: detail,
+            });
+          }
+          return yield* effect.pipe(
+            Effect.ensuring(Deferred.succeed(release, undefined).pipe(Effect.ignore)),
+          );
+        }),
       ),
     );
 
@@ -3259,7 +3324,30 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) =>
-    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event));
+    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event), {
+      onAcquireTimeout: ({ detail }) =>
+        Effect.gen(function* () {
+          const createdAt = new Date().toISOString();
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start blocked by a checkpoint operation",
+            detail,
+            turnId: null,
+            createdAt,
+            settlementStatus: "retryable",
+          });
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (thread && thread.session?.activeTurnId == null) {
+            yield* setThreadSessionError({
+              threadId: event.payload.threadId,
+              runtimeMode: event.payload.runtimeMode,
+              detail,
+              createdAt,
+            });
+          }
+        }),
+    });
 
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
@@ -5784,6 +5872,8 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
         commandSettleGrace: options?.commandSettleGrace ?? PROVIDER_COMMAND_SETTLE_GRACE,
+        commandLeaseAcquireTimeout:
+          options?.commandLeaseAcquireTimeout ?? PROVIDER_COMMAND_LEASE_ACQUIRE_TIMEOUT,
       }),
     ),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
