@@ -70,4 +70,3 @@ export const tokenStats = {
   heatmapMetric: "tokens",
   heatmap: [tokenHeatmapCell],
 } satisfies ProfileTokenStats;
-
