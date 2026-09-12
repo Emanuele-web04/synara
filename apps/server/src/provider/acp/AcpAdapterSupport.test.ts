@@ -15,10 +15,9 @@ import {
 describe("AcpAdapterSupport", () => {
   it("maps every ACP tool kind to its canonical runtime item type", () => {
     expect(
-      ["execute", "edit", "delete", "move", "fetch", "search", "read", undefined].map((kind) => [
-        kind,
-        canonicalItemTypeFromAcpToolKind(kind),
-      ]),
+      ["execute", "edit", "delete", "move", "fetch", "search", "read", "agent", undefined].map(
+        (kind) => [kind, canonicalItemTypeFromAcpToolKind(kind)],
+      ),
     ).toEqual([
       ["execute", "command_execution"],
       ["edit", "file_change"],
@@ -27,6 +26,7 @@ describe("AcpAdapterSupport", () => {
       ["fetch", "web_search"],
       ["search", "dynamic_tool_call"],
       ["read", "dynamic_tool_call"],
+      ["agent", "collab_agent_tool_call"],
       [undefined, "dynamic_tool_call"],
     ]);
   });

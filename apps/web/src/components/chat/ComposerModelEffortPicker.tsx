@@ -28,6 +28,7 @@ import {
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
+import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
   getComposerTraitSelection,
@@ -40,7 +41,9 @@ import {
   ProviderModelMenuItems,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
-import { TraitsMenuContent } from "./TraitsPicker";
+import { hasComposerAgentControls, TraitsMenuContent } from "./TraitsPicker";
+
+export type ComposerEffortControl = "menu" | "slider";
 
 type ComposerModelEffortPickerProps = {
   // Model picker data.
@@ -59,6 +62,10 @@ type ComposerModelEffortPickerProps = {
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   disabled?: boolean;
+  // "menu" (default) lists effort levels as radio rows; "slider" renders the
+  // effort ladder as a stepped slider card with the model list behind its label.
+  // Models without an effort ladder always fall back to the menu layout.
+  effortControl?: ComposerEffortControl;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   onSelectionCommitted?: () => void;
 
@@ -111,6 +118,16 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   );
 
   const hasTraitsTopSection = hasVisibleComposerTraitControls(traitSelection);
+  const usesEffortSlider =
+    props.effortControl === "slider" && traitSelection.effortLevels.length > 0;
+  // Trait sections the slider card does not own (thinking, context window, agent).
+  const hasSliderCompanionTraits =
+    usesEffortSlider &&
+    (hasVisibleComposerTraitControls(traitSelection, {
+      includeEffort: false,
+      includeFastMode: false,
+    }) ||
+      hasComposerAgentControls(props.provider, props.runtimeAgents));
 
   const triggerStatusLabel = resolveComposerTraitStatusLabel(traitSelection);
   const showsFastBadge = showsComposerFastModeBadge(traitSelection);
@@ -186,6 +203,46 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     </span>
   );
 
+  // Shared between the radio and slider layouts so both reach the same model list;
+  // each layout decides what a committed model selection closes.
+  const renderModelSubmenuPopup = (onAfterSelection: () => void) => (
+    <ComposerPickerMenuSubPopup
+      fixedWidth
+      className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+    >
+      <ProviderModelMenuItems
+        provider={props.provider}
+        model={props.model}
+        lockedProvider={props.lockedProvider}
+        {...(props.providers ? { providers: props.providers } : {})}
+        modelOptionsByProvider={props.modelOptionsByProvider}
+        {...(props.loadingModelProviders
+          ? { loadingModelProviders: props.loadingModelProviders }
+          : {})}
+        {...(props.discoveryErrorsByProvider
+          ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
+          : {})}
+        {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+        {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+        {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+        onProviderModelChange={props.onProviderModelChange}
+        onAfterSelection={onAfterSelection}
+      />
+    </ComposerPickerMenuSubPopup>
+  );
+
+  const traitsMenuContentProps = {
+    provider: props.provider,
+    threadId: props.threadId,
+    model: props.model,
+    ...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {}),
+    ...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {}),
+    ...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {}),
+    modelOptions: props.modelOptions,
+    prompt: props.prompt,
+    onPromptChange: props.onPromptChange,
+  };
+
   return (
     <Menu
       open={isMenuOpen}
@@ -217,56 +274,61 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-        {hasTraitsTopSection ? (
-          <TraitsMenuContent
-            provider={props.provider}
-            threadId={props.threadId}
-            model={props.model}
-            {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
-            {...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {})}
-            {...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {})}
-            modelOptions={props.modelOptions}
-            prompt={props.prompt}
-            onPromptChange={props.onPromptChange}
-            onSelectionComplete={handleAfterTraitsSelection}
-          />
-        ) : null}
-
-        {hasTraitsTopSection ? <MenuSeparator /> : null}
-
-        <MenuSub>
-          <MenuSubTrigger>
-            <ProviderIcon
-              aria-hidden="true"
-              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
-            />
-            <span className="truncate">{modelLabel}</span>
-          </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup
-            fixedWidth
-            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
-          >
-            <ProviderModelMenuItems
+      <ComposerPickerMenuPopup
+        align="end"
+        side="top"
+        {...(usesEffortSlider
+          ? // Standard picker width; rounder shell so the slider reads as a card, not a menu.
+            { fixedWidth: true, className: "rounded-[1.25rem]" }
+          : { fixedWidth: true })}
+      >
+        {usesEffortSlider ? (
+          <>
+            <ComposerEffortSliderCard
               provider={props.provider}
+              threadId={props.threadId}
               model={props.model}
-              lockedProvider={props.lockedProvider}
-              {...(props.providers ? { providers: props.providers } : {})}
-              modelOptionsByProvider={props.modelOptionsByProvider}
-              {...(props.loadingModelProviders
-                ? { loadingModelProviders: props.loadingModelProviders }
-                : {})}
-              {...(props.discoveryErrorsByProvider
-                ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
-                : {})}
-              {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-              {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-              {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-              onProviderModelChange={props.onProviderModelChange}
-              onAfterSelection={handleAfterModelSelection}
+              modelLabel={modelLabel}
+              {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+              modelOptions={props.modelOptions}
+              prompt={props.prompt}
+              onPromptChange={props.onPromptChange}
+              renderModelSubmenuPopup={renderModelSubmenuPopup}
             />
-          </ComposerPickerMenuSubPopup>
-        </MenuSub>
+            {hasSliderCompanionTraits ? (
+              <>
+                <MenuSeparator />
+                <TraitsMenuContent
+                  {...traitsMenuContentProps}
+                  excludeEffort
+                  onSelectionComplete={handleAfterTraitsSelection}
+                />
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {hasTraitsTopSection ? (
+              <TraitsMenuContent
+                {...traitsMenuContentProps}
+                onSelectionComplete={handleAfterTraitsSelection}
+              />
+            ) : null}
+
+            {hasTraitsTopSection ? <MenuSeparator /> : null}
+
+            <MenuSub>
+              <MenuSubTrigger>
+                <ProviderIcon
+                  aria-hidden="true"
+                  className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
+                />
+                <span className="truncate">{modelLabel}</span>
+              </MenuSubTrigger>
+              {renderModelSubmenuPopup(handleAfterModelSelection)}
+            </MenuSub>
+          </>
+        )}
       </ComposerPickerMenuPopup>
     </Menu>
   );

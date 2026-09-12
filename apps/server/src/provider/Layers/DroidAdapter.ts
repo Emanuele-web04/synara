@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * DroidAdapterLive - Factory Droid CLI (`droid exec --output-format acp`) via ACP.
  *
@@ -1820,7 +1821,7 @@ export function makeDroidAdapter(
     const readThread: DroidAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const readExternalThread: NonNullable<DroidAdapterShape["readExternalThread"]> = (input) =>

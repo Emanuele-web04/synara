@@ -11,10 +11,13 @@ import type { Thread, ThreadSession } from "../types";
 import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
+  clearQueuedComposerAutoDispatchRetry,
   endQueuedComposerAutoDispatch,
+  getQueuedComposerAutoDispatchRetryDelay,
   getQueuedComposerSteerGate,
   isQueuedComposerAwaitingTurnStart,
   releaseQueuedComposerAutoDispatch,
+  recordQueuedComposerAutoDispatchFailure,
   resetQueuedComposerDrainForTests,
   shouldAutoDispatchQueuedComposerTurn,
   startQueuedComposerDrainWatcher,
@@ -52,6 +55,7 @@ function makeQueuedChatTurn(id: string): QueuedComposerTurn {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     selectedProvider: "codex",
@@ -272,6 +276,52 @@ describe("queued composer drain watcher", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await flushDrain();
     expect(dispatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("shares the bounded retry budget with a claimed ChatView drain", () => {
+    resetQueuedComposerDrainForTests();
+    let now = 10_000;
+    startQueuedComposerDrainWatcher({ dispatch, now: () => now });
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-claimed-failing"));
+
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      1_000,
+    );
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        error: "Turn start failed for test.",
+      }),
+    );
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      1_000,
+    );
+
+    now += 1_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      5_000,
+    );
+
+    now += 5_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      15_000,
+    );
+
+    now += 15_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBeNull();
+
+    clearQueuedComposerAutoDispatchRetry(THREAD_ID);
+    expect(
+      getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing"),
+    ).toBeUndefined();
   });
 
   it("does not schedule drain work for unrelated streaming message updates", async () => {

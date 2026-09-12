@@ -1,14 +1,271 @@
 import "../../index.css";
 
-import { type ModelSlug, ThreadId } from "@synara/contracts";
-import { page } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import {
+  type CodexModelOptions,
+  type ModelSlug,
+  type ProviderKind,
+  type ServerProviderStatus,
+  ThreadId,
+} from "@synara/contracts";
+import { page, userEvent } from "vitest/browser";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import {
+  COMPOSER_DRAFT_STORAGE_KEY,
+  type ComposerThreadDraftState,
+  useComposerDraftStore,
+  useComposerThreadDraft,
+  useEffectiveComposerModelState,
+} from "../../composerDraftStore";
+import { type ProviderModelOption } from "../../providerModelOptions";
 import { ComposerModelEffortPicker } from "./ComposerModelEffortPicker";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-grok-model-effort-picker");
 const GROK_4_6 = "grok-4.6" as ModelSlug;
+
+const EMPTY_MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<ProviderModelOption>> = {
+  claudeAgent: [],
+  codex: [],
+  cursor: [],
+  devin: [],
+  antigravity: [],
+  grok: [],
+  droid: [],
+  opencode: [],
+  pi: [],
+};
+
+const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
+  claudeAgent: [],
+  codex: [],
+  cursor: [],
+  devin: [],
+  antigravity: [],
+  grok: [],
+  droid: [],
+  opencode: [],
+  pi: [],
+};
+
+// ── Slider layout (store-backed) ──────────────────────────────────────
+
+const CODEX_THREAD_ID = ThreadId.makeUnsafe("thread-codex-effort-slider");
+const GPT_5_5 = "gpt-5.5" as ModelSlug;
+const GPT_5_4 = "gpt-5.4" as ModelSlug;
+
+const CODEX_PROVIDER_STATUS: ServerProviderStatus = {
+  provider: "codex",
+  status: "ready",
+  available: true,
+  authStatus: "authenticated",
+  checkedAt: "2026-04-10T10:00:00.000Z",
+};
+
+type CodexSliderHarnessProps = {
+  // Unlocked providers nest the model list one level deeper (provider → models).
+  lockedProvider?: ProviderKind | null;
+  onProviderModelChange?: (provider: ProviderKind, model: ModelSlug) => void;
+};
+
+function CodexSliderHarness(props: CodexSliderHarnessProps) {
+  const lockedProvider = props.lockedProvider === undefined ? "codex" : props.lockedProvider;
+  const prompt = useComposerThreadDraft(CODEX_THREAD_ID).prompt;
+  const setPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const { modelOptions, selectedModel } = useEffectiveComposerModelState({
+    threadId: CODEX_THREAD_ID,
+    selectedProvider: "codex",
+    threadModelSelection: null,
+    projectModelSelection: null,
+    customModelsByProvider: EMPTY_CUSTOM_MODELS_BY_PROVIDER,
+  });
+  return (
+    <ComposerModelEffortPicker
+      provider="codex"
+      model={(selectedModel ?? GPT_5_5) as ModelSlug}
+      // Started threads pin their provider, which also gives the model submenu a
+      // flat model list instead of one submenu per provider.
+      lockedProvider={lockedProvider}
+      providers={[CODEX_PROVIDER_STATUS]}
+      modelOptionsByProvider={{
+        ...EMPTY_MODEL_OPTIONS_BY_PROVIDER,
+        codex: [
+          { slug: GPT_5_5, name: "GPT-5.5" },
+          { slug: GPT_5_4, name: "GPT-5.4" },
+        ],
+      }}
+      effortControl="slider"
+      onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
+      threadId={CODEX_THREAD_ID}
+      modelOptions={modelOptions?.codex}
+      prompt={prompt}
+      onPromptChange={(next) => setPrompt(CODEX_THREAD_ID, next)}
+    />
+  );
+}
+
+async function mountCodexSlider(
+  options?: CodexModelOptions,
+  harnessProps: CodexSliderHarnessProps = {},
+) {
+  const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
+    [CODEX_THREAD_ID]: {
+      prompt: "",
+      promptHistorySavedDraft: null,
+      images: [],
+      files: [],
+      nonPersistedImageIds: [],
+      persistedAttachments: [],
+      assistantSelections: [],
+      browserAnnotations: [],
+      terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      pullRequestContexts: [],
+      skills: [],
+      mentions: [],
+      queuedTurns: [],
+      modelSelectionByProvider: {
+        codex: {
+          provider: "codex",
+          model: GPT_5_5,
+          ...(options ? { options } : {}),
+        },
+      },
+      activeProvider: "codex",
+      runtimeMode: null,
+      interactionMode: null,
+    },
+  };
+  useComposerDraftStore.setState({
+    draftsByThreadId,
+    draftThreadsByThreadId: {},
+    projectDraftThreadIdByProjectId: {},
+  });
+  const screen = await render(<CodexSliderHarness {...harnessProps} />);
+  return {
+    cleanup: async () => {
+      await screen.unmount();
+    },
+  };
+}
+
+describe("ComposerModelEffortPicker (effort slider)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+    });
+  });
+
+  it("renders the effort ladder as a slider and commits keyboard steps", async () => {
+    const { cleanup } = await mountCodexSlider({ reasoningEffort: "medium" });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
+      // Base UI backs the thumb with a native range input: one stop per effort level.
+      await expect.element(slider).toHaveAttribute("max", "3");
+      // Radio rows are gone: the slider owns the ladder.
+      expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
+
+      await slider.element().focus();
+      await userEvent.keyboard("{ArrowRight}");
+
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+      expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
+        provider: "codex",
+        options: { reasoningEffort: "high" },
+      });
+      // The stacked label follows the thumb and the menu stays open.
+      await expect.element(page.getByRole("menuitem", { name: /^High/u })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("toggles fast mode and resets both controls from the card", async () => {
+    const { cleanup } = await mountCodexSlider({ reasoningEffort: "xhigh" });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+
+      const fastToggle = page.getByRole("button", { name: "Fast mode" });
+      await expect.element(fastToggle).toHaveAttribute("aria-pressed", "false");
+      await fastToggle.click();
+      await expect.element(fastToggle).toHaveAttribute("aria-pressed", "true");
+
+      const reset = page.getByRole("button", { name: "Reset effort and speed" });
+      await reset.click();
+
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
+      await expect.element(fastToggle).toHaveAttribute("aria-pressed", "false");
+      await expect.element(reset).toBeDisabled();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("opens the model list from the stacked effort/model label", async () => {
+    const { cleanup } = await mountCodexSlider(undefined);
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      // The stacked "effort / model" label is the submenu trigger for the model list.
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT-5.5" })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps the slider open after picking a model so effort can be adjusted", async () => {
+    const onProviderModelChange = vi.fn();
+    const { cleanup } = await mountCodexSlider(undefined, { onProviderModelChange });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      await page.getByRole("menuitemradio", { name: "GPT-5.4" }).click();
+
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      // Only the model list closes; the card stays up with the slider ready to use.
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
+      });
+      await expect.element(page.getByRole("slider", { name: "Reasoning effort" })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("closes nested provider lists too when a model is picked", async () => {
+    const onProviderModelChange = vi.fn();
+    const { cleanup } = await mountCodexSlider(undefined, {
+      lockedProvider: null,
+      onProviderModelChange,
+    });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      await page.getByRole("menuitem", { name: "Codex" }).click();
+      await page.getByRole("menuitemradio", { name: "GPT-5.4" }).click();
+
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
+        expect(document.body.textContent ?? "").not.toContain("Add Providers");
+      });
+      await expect.element(page.getByRole("slider", { name: "Reasoning effort" })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+});
 
 describe("ComposerModelEffortPicker", () => {
   it("keeps Grok 4.6 effort visible in compact layouts before runtime discovery", async () => {
@@ -18,15 +275,8 @@ describe("ComposerModelEffortPicker", () => {
         model={GROK_4_6}
         lockedProvider={null}
         modelOptionsByProvider={{
-          claudeAgent: [],
-          codex: [],
-          cursor: [],
-          devin: [],
-          antigravity: [],
+          ...EMPTY_MODEL_OPTIONS_BY_PROVIDER,
           grok: [{ slug: GROK_4_6, name: "Grok 4.6" }],
-          droid: [],
-          opencode: [],
-          pi: [],
         }}
         hideStatusLabel
         onProviderModelChange={vi.fn()}

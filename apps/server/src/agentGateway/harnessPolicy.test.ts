@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 import {
   renderSynaraHarnessPolicy,
@@ -9,6 +10,34 @@ import {
 } from "./harnessPolicy.ts";
 
 describe("Synara harness policy", () => {
+  it("defers duplicate automation authoring text while preserving tool routing and run rules", () => {
+    const inline = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const deferred = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      automationAuthoring: "tool-descriptions",
+    });
+    assert.equal(deferred, inline.replace(`${AUTOMATION_AUTHORING_GUIDANCE}\n`, ""));
+    assert.include(deferred, "synara_create_automation");
+    assert.include(deferred, "synara_view_automation");
+    assert.include(deferred, "synara_report_automation_result");
+  });
+  it("includes honest completion evidence and opt-in delegated E2E testing", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    for (const text of [
+      "completion report",
+      "artifactPath",
+      "![Result description]",
+      "explicitly asked",
+      "synara_e2e_review",
+      "Do not load it for unrelated work",
+    ]) {
+      assert.include(policy, text);
+    }
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "browser_screenshot({kind:'proof'})",
+    );
+  });
   it("identifies Synara and explains exact batch coordination when MCP is available", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);

@@ -107,7 +107,13 @@ function deriveLatestUsageContextWindowState(
       snapshot: {
         usedTokens,
         usedPercent: payloadUsedPercent,
-        totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
+        // Older Claude totals counted completed content blocks repeatedly.
+        // Keep the context meter, but withhold an unverifiable lifetime counter.
+        totalProcessedTokens:
+          payload?.provider === "claudeAgent" && payload.tokenAccountingVersion !== 1
+            ? null
+            : asFiniteNumber(payload?.totalProcessedTokens),
+        tokenAccountingVersion: payload?.tokenAccountingVersion === 1 ? 1 : null,
         maxTokens,
         remainingTokens,
         usedPercentage,
@@ -187,6 +193,7 @@ export function deriveLatestContextWindowState(
       usedTokens,
       usedPercent: usageSnapshot?.usedPercent ?? null,
       totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
+      tokenAccountingVersion: usageSnapshot?.tokenAccountingVersion ?? null,
       maxTokens,
       remainingTokens,
       usedPercentage,
