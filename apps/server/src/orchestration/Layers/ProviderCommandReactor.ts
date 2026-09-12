@@ -1671,6 +1671,7 @@ const make = Effect.gen(function* () {
       );
     }
     const shouldRegisterContextBootstrap =
+      options?.providerHandoffSource !== undefined ||
       !suppressContextBootstrapOnNextStartThreadIds.has(threadId);
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
@@ -1908,7 +1909,11 @@ const make = Effect.gen(function* () {
     }
 
     let bootstrapTranscriptIfResumeFails = false;
-    if (providerService.forkThread && thread.forkSourceThreadId) {
+    if (
+      options?.providerHandoffSource === undefined &&
+      providerService.forkThread &&
+      thread.forkSourceThreadId
+    ) {
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
         sourceThreadId: thread.forkSourceThreadId,
@@ -2003,10 +2008,7 @@ const make = Effect.gen(function* () {
     if (startOutcome.priorTranscriptBootstrapPending) {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
-      } else if (
-        (preferredProvider === "opencode" || preferredProvider === "devin") &&
-        providerService.completePriorTranscriptBootstrap
-      ) {
+      } else if (providerService.completePriorTranscriptBootstrap) {
         // An explicit stop intentionally discards pending synthetic context.
         // If its best-effort persistence cleanup was interrupted, finish that
         // cleanup before starting the fresh session instead of resurrecting it.
@@ -2516,11 +2518,14 @@ const make = Effect.gen(function* () {
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
       const tracksDurableContextAcceptance =
-        (selectedProvider === "opencode" || selectedProvider === "devin") &&
-        ((hasPendingFreshSessionTranscriptBootstrap &&
-          (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
-            specializedBootstrapCompletesFreshSessionContext)) ||
-          (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
+        (hasPendingFreshSessionTranscriptBootstrap &&
+          (priorTranscriptBootstrapText !== null ||
+            specializedBootstrapCompletesFreshSessionContext ||
+            ((selectedProvider === "opencode" || selectedProvider === "devin") &&
+              priorTranscriptBootstrapRetiresOnAcceptedTurn))) ||
+        ((selectedProvider === "opencode" || selectedProvider === "devin") &&
+          hasPendingRollbackTranscriptBootstrap &&
+          priorTranscriptBootstrapRetiresOnAcceptedTurn);
       // Only Codex awaits a provider turn/start acknowledgement. The other
       // adapters enqueue/fork prompts or launch a process before acceptance;
       // their matching terminal success confirms that recovery was consumed.
@@ -2744,12 +2749,11 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
           input.threadId,
-          selectedProvider,
+          selectedProvider as ProviderKind,
         );
       }
       if (durableCompletionSucceeded) {

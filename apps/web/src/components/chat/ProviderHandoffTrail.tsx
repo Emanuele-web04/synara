@@ -12,10 +12,8 @@ import { ProviderIcon } from "../ProviderIcon";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-export interface ProviderHandoffTrailEntry {
-  readonly provider: ProviderKind;
-  readonly isReturn: boolean;
-}
+import type { ProviderHandoffTrailEntry } from "~/lib/threadHandoff";
+export type { ProviderHandoffTrailEntry } from "~/lib/threadHandoff";
 
 export interface ProviderHandoffTrailPresentation {
   readonly first: ProviderHandoffTrailEntry | null;
@@ -25,7 +23,6 @@ export interface ProviderHandoffTrailPresentation {
 
 const HEADER_TRAIL_LIMIT = 5;
 const HEADER_TRAILING_COUNT = 3;
-const TOOLTIP_TRAIL_LIMIT = 12;
 
 export function resolveProviderHandoffTrailPresentation(
   trail: ReadonlyArray<ProviderHandoffTrailEntry>,
@@ -125,7 +122,7 @@ function HeaderTrail({
           >
             +{presentation.hiddenCount}
           </span>
-          <TrailConnector isReturn={false} />
+          <TrailConnector isReturn={presentation.trailing[0]?.isReturn ?? false} />
         </>
       ) : null}
       {presentation.trailing.map((entry, index) => {
@@ -142,23 +139,17 @@ function HeaderTrail({
 }
 
 function TooltipTrail({ trail }: { readonly trail: ReadonlyArray<ProviderHandoffTrailEntry> }) {
-  const visibleTrail = trail.slice(-TOOLTIP_TRAIL_LIMIT);
-  const hiddenCount = trail.length - visibleTrail.length;
-
   return (
-    <div className="max-w-96 py-1">
+    <div className="max-h-64 max-w-96 overflow-y-auto py-1">
       <div className="font-medium text-foreground">Provider path</div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1" dir="ltr">
-        {hiddenCount > 0 ? (
-          <span className="text-muted-foreground">{hiddenCount} earlier ·</span>
-        ) : null}
-        {visibleTrail.map((entry, index) => (
+        {trail.map((entry, index) => (
           <React.Fragment key={`${index}:${entry.provider}`}>
             {index > 0 ? <TrailConnector isReturn={entry.isReturn} /> : null}
             <span
               className={cn(
                 "inline-flex items-center gap-1 rounded-[4px] px-1 py-0.5",
-                index === visibleTrail.length - 1
+                index === trail.length - 1
                   ? "bg-[var(--color-bg-accent)] text-foreground"
                   : "text-muted-foreground",
               )}
@@ -209,6 +200,7 @@ export function ProviderHandoffTrail({
       <TooltipTrigger
         render={
           <Badge
+            tabIndex={0}
             aria-label={accessibleLabel}
             variant="secondary"
             className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] font-normal text-muted-foreground sm:inline-flex"

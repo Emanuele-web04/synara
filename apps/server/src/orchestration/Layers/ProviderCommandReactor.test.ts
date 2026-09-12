@@ -1069,95 +1069,175 @@ describe("ProviderCommandReactor", () => {
     );
   }
 
-  it("switches an established thread provider and primes a bounded transcript recap", async () => {
+  it.each([
+    "grok",
+    "claudeAgent",
+    "cursor",
+    "devin",
+    "antigravity",
+    "droid",
+    "opencode",
+    "pi",
+  ] as const)(
+    "switches to %s and retains the recap until a completed turn",
+    async (targetProvider) => {
+      const harness = await createHarness({
+        serverSettings: { enableContinuousProviderHandoff: true },
+        confirmNativeResume: () => false,
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "provider-handoff-context",
+        text: "The release train is amber.",
+        createdAt,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-provider-handoff-source-ready"),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "ready");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.provider.handoff",
+          commandId: CommandId.makeUnsafe("cmd-provider-handoff-to-grok"),
+          threadId,
+          expectedSourceProvider: "codex",
+          targetModelSelection: { provider: targetProvider, model: "grok-code" },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+      await waitFor(async () => {
+        const current = await readHarnessThread(harness);
+        return (
+          current?.modelSelection.provider === targetProvider &&
+          current.activities.some((activity) => activity.kind === "provider.handoff.completed")
+        );
+      });
+      const switchedThread = await readHarnessThread(harness);
+      expect(switchedThread?.session?.providerName).toBe(targetProvider);
+      expect(switchedThread?.activities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "provider.handoff.completed",
+            payload: expect.objectContaining({
+              handoffCommandId: "cmd-provider-handoff-to-grok",
+              recapMode: "bounded-transcript",
+            }),
+          }),
+        ]),
+      );
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+      expect(harness.startSessionWithOutcome).toHaveBeenLastCalledWith(
+        threadId,
+        expect.objectContaining({
+          provider: targetProvider,
+          modelSelection: expect.objectContaining({ provider: targetProvider, model: "grok-code" }),
+        }),
+        { registerPriorTranscriptBootstrapOnFreshStart: true },
+      );
+
+      // The lightweight service double records restarts additively, unlike the
+      // real ProviderService's stop-first replacement. Remove its old source row
+      // before the follow-up so the remainder exercises the target session.
+      await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "provider-handoff-target-turn",
+        text: "What color is the release train?",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      const targetInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(targetInput.input).toContain("<thread_context>");
+      expect(targetInput.input).toContain("The release train is amber.");
+      expect(targetInput.input).toContain("What color is the release train?");
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+      await emitHarnessTurnTerminal(harness, {
+        provider: targetProvider,
+        eventId: "provider-handoff-target-completed",
+        type: "completed",
+      });
+      await waitFor(() => !harness.pendingPriorTranscriptBootstraps.has(threadId));
+    },
+  );
+
+  it("starts a fresh target session when handing off a stopped fork", async () => {
+    const threadId = ThreadId.makeUnsafe("handoff-stopped-fork");
     const harness = await createHarness({
       serverSettings: { enableContinuousProviderHandoff: true },
-      confirmNativeResume: () => false,
+      forkThreadResult: { threadId, resumeCursor: { nativeFork: true } },
     });
-    const threadId = ThreadId.makeUnsafe("thread-1");
     const createdAt = new Date().toISOString();
-
-    await dispatchHarnessUserTurn(harness, {
-      messageId: "provider-handoff-context",
-      text: "The release train is amber.",
-      createdAt,
-    });
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-provider-handoff-source-ready"),
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("create-handoff-stopped-fork"),
         threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: new Date().toISOString(),
-        },
-        createdAt: new Date().toISOString(),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Fork to hand off",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("fork-handoff-context"),
+            role: "user",
+            text: "The release train is amber.",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
       }),
     );
-    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "ready");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("stop-fork-before-handoff"),
+        threadId,
+        createdAt,
+      }),
+    );
+    await waitFor(
+      async () => (await readHarnessThread(harness, threadId))?.session?.status === "stopped",
+    );
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.provider.handoff",
-        commandId: CommandId.makeUnsafe("cmd-provider-handoff-to-grok"),
+        commandId: CommandId.makeUnsafe("handoff-stopped-fork"),
         threadId,
         expectedSourceProvider: "codex",
         targetModelSelection: { provider: "grok", model: "grok-code" },
-        createdAt: new Date().toISOString(),
+        createdAt,
       }),
     );
-
-    await waitFor(async () => {
-      const current = await readHarnessThread(harness);
-      return (
-        current?.modelSelection.provider === "grok" &&
-        current.activities.some((activity) => activity.kind === "provider.handoff.completed")
-      );
-    });
-    const switchedThread = await readHarnessThread(harness);
-    expect(switchedThread?.session?.providerName).toBe("grok");
-    expect(switchedThread?.activities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "provider.handoff.completed",
-          payload: expect.objectContaining({
-            handoffCommandId: "cmd-provider-handoff-to-grok",
-            recapMode: "bounded-transcript",
-          }),
-        }),
-      ]),
+    await waitFor(
+      async () => (await readHarnessThread(harness, threadId))?.modelSelection.provider === "grok",
     );
+    expect(harness.forkThread).not.toHaveBeenCalled();
     expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
-    expect(harness.startSessionWithOutcome).toHaveBeenLastCalledWith(
-      threadId,
-      expect.objectContaining({
-        provider: "grok",
-        modelSelection: expect.objectContaining({ provider: "grok", model: "grok-code" }),
-      }),
-      { registerPriorTranscriptBootstrapOnFreshStart: true },
-    );
-
-    // The lightweight service double records restarts additively, unlike the
-    // real ProviderService's stop-first replacement. Remove its old source row
-    // before the follow-up so the remainder exercises the target session.
-    await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
-
-    await dispatchHarnessUserTurn(harness, {
-      messageId: "provider-handoff-target-turn",
-      text: "What color is the release train?",
-      createdAt: new Date().toISOString(),
-    });
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    const targetInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
-    expect(targetInput.input).toContain("<thread_context>");
-    expect(targetInput.input).toContain("The release train is amber.");
-    expect(targetInput.input).toContain("What color is the release train?");
   });
 
   it("keeps the provider unchanged when continuous handoff is disabled", async () => {

@@ -88,3 +88,23 @@ export function resolvePendingProviderHandoff(
 
   return pending;
 }
+
+/** Provider transitions are durable conversation metadata, outside the work-log cap. */
+export function isProviderHandoffActivity(activity: { readonly kind: string }): boolean {
+  return (
+    activity.kind === PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_COMPLETED_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND
+  );
+}
+
+export function retainProviderHandoffHistory<T extends { readonly kind: string }>(
+  activities: readonly T[],
+  maxActivities: number,
+): readonly T[] {
+  if (activities.length <= maxActivities) return activities;
+  const tailStart = activities.length - maxActivities;
+  return activities.filter(
+    (activity, index) => index >= tailStart || isProviderHandoffActivity(activity),
+  );
+}

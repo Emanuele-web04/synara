@@ -5,6 +5,7 @@ import { MessageId, TurnId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  capThreadActivities,
   createThreadActivityAccumulator,
   dedupeActivitiesById,
   dedupeActivitiesByIdAfterAppend,
@@ -394,5 +395,21 @@ describe("accounting activity retention", () => {
       makeActivity({ id: "new-tool", turnId: TurnId.makeUnsafe("new-turn"), sequence: 6001 }),
     );
     expect(accumulator.result()).toHaveLength(1999);
+  });
+});
+
+describe("provider transition retention", () => {
+  it("keeps the provider path and pending transition outside the work-log cap", () => {
+    const transitions = [
+      "provider.handoff.requested",
+      "provider.handoff.completed",
+      "provider.handoff.failed",
+    ].map((kind, index) => makeActivity({ id: `handoff-${index}`, kind }));
+    const noise = Array.from({ length: 2_010 }, (_, index) =>
+      makeActivity({ id: `noise-${index}` }),
+    );
+    const capped = capThreadActivities([...transitions, ...noise]);
+    expect(capped.slice(0, 3)).toEqual(transitions);
+    expect(capped).toHaveLength(2_003);
   });
 });

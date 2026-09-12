@@ -21,9 +21,7 @@ import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
   CheckIcon,
-  HandoffIcon,
   HistoryIcon,
-  LoaderCircleIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
@@ -33,16 +31,14 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
-  ChatHeaderButton,
   ChatHeaderIconButton,
   SurfaceChipIcon,
   SurfaceTabChip,
 } from "./chatHeaderControls";
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
-import { Badge } from "../ui/badge";
-import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
+import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
@@ -64,6 +60,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { ChatHandoffMenu, type ProviderHandoffMode } from "./ChatHandoffMenu";
 import { ProviderHandoffTrail } from "./ProviderHandoffTrail";
 
 /**
@@ -158,7 +155,7 @@ interface ChatHeaderProps {
   onCloseThreadPane?: () => void;
 }
 
-export type ProviderHandoffMode = "continue" | "new-thread";
+export type { ProviderHandoffMode } from "./ChatHandoffMenu";
 
 const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
@@ -622,14 +619,6 @@ export function ChatHeader({
       />
     );
   };
-  const renderHandoffTargetItems = (mode: ProviderHandoffMode) =>
-    handoffActionTargetProviders.map((provider) => (
-      <MenuItem key={provider} onClick={() => onCreateHandoff(provider, mode)}>
-        {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-        {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
-        <span>{PROVIDER_DISPLAY_NAMES[provider]}</span>
-      </MenuItem>
-    ));
 
   // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts
   // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
@@ -810,63 +799,15 @@ export function ChatHeader({
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
         {!minimalChrome && !hideHandoffControls ? (
-          <Menu modal={false}>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <MenuTrigger
-                    render={
-                      <ChatHeaderButton
-                        type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
-                      />
-                    }
-                  >
-                    {handoffPending ? (
-                      <LoaderCircleIcon className="size-[1em] shrink-0 animate-spin opacity-80" />
-                    ) : (
-                      <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    )}
-                    {!compact ? (
-                      <span className="truncate font-normal">
-                        {handoffPending ? "Switching…" : "Hand off"}
-                      </span>
-                    ) : null}
-                  </MenuTrigger>
-                }
-              />
-              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
-            </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
-              {continuousHandoffEnabled ? (
-                <>
-                  <MenuSub>
-                    <MenuSubTrigger>
-                      <MessageCircleIcon className="size-3.5 shrink-0" />
-                      <span>Continue here</span>
-                    </MenuSubTrigger>
-                    <ComposerPickerMenuSubPopup className="w-48 min-w-48">
-                      {renderHandoffTargetItems("continue")}
-                    </ComposerPickerMenuSubPopup>
-                  </MenuSub>
-                  <MenuSub>
-                    <MenuSubTrigger>
-                      <HandoffIcon className="size-3.5 shrink-0" />
-                      <span>New conversation</span>
-                    </MenuSubTrigger>
-                    <ComposerPickerMenuSubPopup className="w-48 min-w-48">
-                      {renderHandoffTargetItems("new-thread")}
-                    </ComposerPickerMenuSubPopup>
-                  </MenuSub>
-                </>
-              ) : (
-                renderHandoffTargetItems("new-thread")
-              )}
-            </ComposerPickerMenuPopup>
-          </Menu>
+          <ChatHandoffMenu
+            compact={compact}
+            handoffActionLabel={handoffActionLabel}
+            handoffPending={handoffPending}
+            handoffDisabled={handoffDisabled}
+            handoffActionTargetProviders={handoffActionTargetProviders}
+            continuousHandoffEnabled={continuousHandoffEnabled}
+            onCreateHandoff={onCreateHandoff}
+          />
         ) : null}
         {!minimalChrome && activeProjectScripts ? (
           <ProjectScriptsControl
