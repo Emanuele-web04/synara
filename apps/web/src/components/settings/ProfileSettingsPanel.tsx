@@ -22,6 +22,7 @@ import {
   selectProfileModelUsage,
   selectProfileTopProvider,
 } from "../profile/profileSelectors";
+import { ProfileUsageCoverage } from "../profile/ProfileUsageCoverage";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
 import { useProfileHandle } from "../profile/useProfileHandle";
@@ -33,6 +34,8 @@ import {
   formatCompact,
   formatDays,
   formatNumber,
+  formatProviderLabel,
+  formatProfileUsageBasis,
   toDisplayName,
 } from "../profile/profileFormatting";
 
@@ -174,7 +177,9 @@ function ProfileContent({
               value={
                 topProvider.provider
                   ? `${formatProviderLabel(topProvider.provider)}${
-                      topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
+                      topProvider.percent !== null
+                        ? ` · ${topProvider.percent}% of ${formatProfileUsageBasis(topProvider.metric)}`
+                        : ""
                     }`
                   : "—"
               }
@@ -203,6 +208,7 @@ function ProfileContent({
             />
             <InsightRow label="Total threads" value={formatNumber(stats.activity.totalThreads)} />
           </dl>
+          <ProfileUsageCoverage unavailableProviders={topProvider.unavailableProviders} />
         </section>
 
         <section className="flex flex-col gap-3">
@@ -238,6 +244,9 @@ function ProfileContent({
       {/* Model usage */}
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-medium">Model usage</h3>
+        <p className="text-xs text-muted-foreground">
+          Share of {formatProfileUsageBasis(modelUsage.metric)}.
+        </p>
         {modelUsage.entries.length > 0 ? (
           <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
             {modelUsage.entries.slice(0, 6).map((entry) => (
@@ -252,13 +261,7 @@ function ProfileContent({
         ) : (
           <p className="text-sm text-muted-foreground">No model activity yet.</p>
         )}
-        {modelUsage.unavailableProviders.length > 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Token usage isn’t tracked yet for{" "}
-            {modelUsage.unavailableProviders.map(formatProviderLabel).join(", ")}, so those turns
-            aren’t reflected above — they still count toward Total prompts and Total threads.
-          </p>
-        ) : null}
+        <ProfileUsageCoverage unavailableProviders={modelUsage.unavailableProviders} />
       </section>
 
       <ShareDialog
@@ -339,29 +342,6 @@ function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]
   }
   const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
   return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
-}
-
-function formatProviderLabel(provider: ProviderKind): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claudeAgent":
-      return "Claude";
-    case "cursor":
-      return "Cursor";
-    case "devin":
-      return "Devin";
-    case "antigravity":
-      return "Antigravity";
-    case "grok":
-      return "Grok";
-    case "droid":
-      return "Droid";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "Pi";
-  }
 }
 
 function ModelUsageRow({

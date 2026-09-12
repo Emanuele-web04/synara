@@ -21,8 +21,8 @@ export interface ProfileTopProviderSelection {
   readonly percent: number | null;
   readonly metric: "tokens" | "turns";
   /**
-   * Providers with real turns that never emitted token telemetry, so they
-   * cannot be ranked by tokens. Only populated when `metric === "tokens"`;
+   * Providers with real turns but no usable token records in profile totals,
+   * so they cannot be ranked by tokens. Only populated when `metric === "tokens"`;
    * empty when ranking already fell back to turn counts (every provider is
    * represented there). Callers should disclose this list rather than let
    * those providers silently read as unused (see #1007).
