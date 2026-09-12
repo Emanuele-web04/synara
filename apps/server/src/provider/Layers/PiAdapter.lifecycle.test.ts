@@ -9,8 +9,8 @@ import type {
   AgentSessionEvent,
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { Effect, Layer, Stream } from "effect";
-import { ThreadId, type ProviderRuntimeEvent, type TurnId } from "@synara/contracts";
+import { Effect, Layer, Schema, Stream } from "effect";
+import { ApprovalRequestId, ThreadId, ProviderRuntimeEvent, type TurnId } from "@synara/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   AgentGatewayCredentials,
@@ -201,6 +201,123 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it.each([
+  { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
+  { toolName: "bash", args: { command: " \n" }, title: "bash" },
+  { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
+  { toolName: "grep", args: { pattern: "needle \n" }, title: "grep needle" },
+])(
+  "persists $toolName lifecycle titles without changing tool arguments: $title",
+  async ({ toolName, args, title }) => {
+    responses("until-abort");
+    await withAdapter(async (adapter, events) => {
+      const turn = await send(adapter);
+      const session = captured.sessions[0]!;
+      await waitFor(() => expect(session.isStreaming).toBe(true));
+      const emit = (event: AgentSessionEvent) =>
+        (session as unknown as { _emit(event: AgentSessionEvent): void })._emit(event);
+      emit({ type: "tool_execution_start", toolCallId: "title-tool", toolName, args });
+      emit({
+        type: "tool_execution_update",
+        toolCallId: "title-tool",
+        toolName,
+        args,
+        partialResult: { content: [{ type: "text", text: "working" }], details: {} },
+      });
+      emit({
+        type: "tool_execution_end",
+        toolCallId: "title-tool",
+        toolName,
+        result: { content: [{ type: "text", text: "done" }], details: {} },
+        isError: false,
+      });
+      const toolEvents = () =>
+        events.filter(
+          (event) =>
+            (event.type === "item.started" ||
+              event.type === "item.updated" ||
+              event.type === "item.completed") &&
+            event.itemId === "pi-tool-title-tool",
+        );
+      await waitFor(() => expect(toolEvents()).toHaveLength(3));
+      for (const event of toolEvents()) {
+        const encodable = await Effect.runPromise(
+          Schema.encodeEffect(Schema.fromJsonString(ProviderRuntimeEvent))(event).pipe(
+            Effect.match({ onFailure: () => false, onSuccess: () => true }),
+          ),
+        );
+        expect(encodable).toBe(true);
+        expect(event.payload).toMatchObject({ title });
+      }
+      const snapshot = await Effect.runPromise(adapter.readThread(threadId));
+      expect(snapshot.turns.find((entry) => entry.id === turn.turnId)?.items).toContainEqual(
+        expect.objectContaining({ callId: "title-tool", args }),
+      );
+      await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    });
+  },
+);
+
+it("retains only the latest cumulative tool snapshot while preserving final output", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    const emit = (event: AgentSessionEvent) =>
+      (session as unknown as { _emit(event: AgentSessionEvent): void })._emit(event);
+    emit({
+      type: "tool_execution_start",
+      toolCallId: "memory-tool",
+      toolName: "bash",
+      args: { command: "test" },
+    });
+    for (let update = 1; update <= 64; update++) {
+      emit({
+        type: "tool_execution_update",
+        toolCallId: "memory-tool",
+        toolName: "bash",
+        args: { command: "test" },
+        partialResult: {
+          content: [{ type: "text", text: "x".repeat(update * 1024) }],
+          details: {},
+        },
+      });
+    }
+    const active = await Effect.runPromise(adapter.readThread(threadId));
+    const items = active.turns.find((entry) => entry.id === turn.turnId)!.items as Array<{
+      type: string;
+      output?: string;
+    }>;
+    expect(items.filter((item) => item.type === "tool_call")).toHaveLength(1);
+    expect(items.find((item) => item.type === "tool_call")?.output).toHaveLength(64 * 1024);
+    expect(items.find((item) => item.type === "tool_call")).toMatchObject({
+      callId: "memory-tool",
+      args: { command: "test" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolCallId: "memory-tool",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "final output" }], details: {} },
+      isError: false,
+    });
+    const final = await Effect.runPromise(adapter.readThread(threadId));
+    expect(final.turns.find((entry) => entry.id === turn.turnId)!.items).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        callId: "memory-tool",
+        args: { command: "test" },
+        status: "completed",
+        output: "final output",
+      }),
+    );
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
 async function expectNextTurn(
   adapter: PiAdapterShape,
   events: ProviderRuntimeEvent[],
@@ -214,6 +331,86 @@ async function expectNextTurn(
   );
   expect(completions(events).filter((event) => event.turnId === previous)).toHaveLength(1);
 }
+
+it("does not turn extension footer status into transcript tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠠\u001b[0m caveman level: FULL");
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠔\u001b[0m caveman level: FULL");
+      context.ui.setWorkingMessage("Working...");
+      context.ui.setTitle("Pi terminal");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("keeps extension notifications visible without inventing tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.notify("\u001b[31mEnabled [full] mode\u001b[0m");
+      context.ui.notify("Configuration saved", "info");
+      context.ui.notify("Please reconnect", "warning");
+      context.ui.notify("Tool failed", "error");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const notices = events.filter((event) => event.raw?.method === "extension/ui/notify");
+    expect(notices.map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+      {
+        type: "runtime.warning",
+        payload: { message: "Enabled [full] mode", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Configuration saved", detail: { type: "info" } },
+      },
+      {
+        type: "runtime.warning",
+        payload: { message: "Please reconnect", detail: { type: "warning" } },
+      },
+      { type: "runtime.warning", payload: { message: "Tool failed", detail: { type: "error" } } },
+    ]);
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
+it("cleans input prompt formatting while preserving the user's answer", async () => {
+  responses("success");
+  const answer = "items[0]; \u001b[31m";
+  let received: string | undefined;
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", async (_event, context) => {
+      received = await context.ui.input("\u001b[31mExpression [code]\u001b[0m");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    const sent = send(adapter);
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "user-input.requested")).toBe(true),
+    );
+    const request = events.find((event) => event.type === "user-input.requested")!;
+    expect(request.payload.questions[0]?.question).toBe("Expression [code]");
+    await Effect.runPromise(
+      adapter.respondToUserInput(threadId, ApprovalRequestId.makeUnsafe(request.requestId!), {
+        input: answer,
+      }),
+    );
+    await sent;
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(received).toBe(answer);
+  });
+});
 
 it("keeps one turn through a real SDK retry and settles text, reasoning and usage once", async () => {
   const calls = responses("error", "success");
@@ -354,6 +551,223 @@ it("keeps steering during backoff inside the same logical turn", async () => {
           message.role === "user" && JSON.stringify(message.content).includes("Also check this"),
       ),
     ).toBe(true);
+  });
+});
+
+it("queues a send during an active turn as an SDK follow-up instead of erroring", async () => {
+  const calls = responses("error", "success", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isRetrying).toBe(true));
+    const queued = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Queued while running" }),
+    );
+    expect(queued.turnId).toBe(turn.turnId);
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Queued while running")),
+    ).toBe(true);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "completed" },
+    });
+    expect(calls()).toBe(3);
+    expect(
+      session.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Queued while running"),
+      ),
+    ).toBe(true);
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("serializes a concurrent send dispatching behind a committing prompt", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const first = Effect.runPromise(adapter.sendTurn({ threadId, input: "First prompt" }));
+    const second = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Second while first commits" }),
+    );
+    const session = captured.sessions[0]!;
+    const [firstTurn, secondTurn] = await Promise.all([first, second]);
+    expect(secondTurn.turnId).toBe(firstTurn.turnId);
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Second while first commits")),
+    ).toBe(true);
+    await Effect.runPromise(adapter.interruptTurn(threadId, firstTurn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+  });
+});
+
+it("does not strand a concurrent send when the committing prompt is an extension command", async () => {
+  let markCommandStarted!: () => void;
+  const commandStarted = new Promise<void>((resolve) => {
+    markCommandStarted = resolve;
+  });
+  let releaseCommand!: () => void;
+  const commandGate = new Promise<void>((resolve) => {
+    releaseCommand = resolve;
+  });
+  captured.extensions.push((pi) => {
+    pi.registerCommand("pause", {
+      description: "Pause without inference",
+      handler: async () => {
+        markCommandStarted();
+        await commandGate;
+      },
+    });
+  });
+  const calls = responses("success", "success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const command = Effect.runPromise(adapter.sendTurn({ threadId, input: "/pause" }));
+    await commandStarted;
+    const prompt = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after the command" }),
+    );
+    releaseCommand();
+    const [commandTurn, promptTurn] = await Promise.all([command, prompt]);
+    expect(promptTurn.turnId).not.toBe(commandTurn.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(3));
+    expect(calls()).toBe(2);
+    expect(captured.sessions[0]!.pendingMessageCount).toBe(0);
+    expect(
+      captured.sessions[0]!.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Run after the command"),
+      ),
+    ).toBe(true);
+  });
+});
+
+it("starts a concurrent send cleanly after the committing prompt rejects preflight", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let rejectPrompt!: (cause: Error) => void;
+    vi.spyOn(session, "prompt")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectPrompt = reject;
+          }),
+      )
+      .mockImplementation(realPrompt);
+    const first = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Rejected in preflight" }),
+    );
+    const secondPromise = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after rejection" }),
+    );
+    rejectPrompt(new Error("preflight rejected"));
+    const second = await secondPromise;
+    expect(second.turnId).not.toBe(first.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: first.turnId,
+      payload: { state: "failed", errorMessage: "preflight rejected" },
+    });
+    expect(completions(events)[1]).toMatchObject({
+      turnId: second.turnId,
+      payload: { state: "completed" },
+    });
+    expect(session.pendingMessageCount).toBe(0);
+  });
+});
+
+it("aborts a turn interrupted while its prompt is still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // prompt() is gated in preflight — nothing exists for abort() to reach.
+    expect(session.isStreaming).toBe(false);
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "interrupted" },
+    });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects a send to a turn whose interrupt is pending while still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    const outcome = await Effect.runPromise(
+      adapter
+        .sendTurn({ threadId, input: "Would be dropped" })
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "sendTurn",
+    });
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({ payload: { state: "interrupted" } });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects steering into an untracked SDK run instead of orphaning a queued turn", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const promptSpy = vi.spyOn(session, "prompt");
+    const outcome = await Effect.runPromise(
+      adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => null }),
+      ),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "steerTurn",
+    });
+    expect(steerSpy).not.toHaveBeenCalled();
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(session.pendingMessageCount).toBe(0);
+    expect(completions(events)).toHaveLength(0);
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.activeTurnId).toBeUndefined();
+    streamingSpy.mockRestore();
   });
 });
 
@@ -614,6 +1028,17 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
       const stopped = Effect.runPromise(adapter.stopSession(threadId));
       try {
         await waitFor(() => expect(credentials.cancelSessionTurnRequests).toHaveBeenCalled());
+        const sendDuringStop = Effect.runPromise(
+          adapter
+            .sendTurn({ threadId, input: "Must not restart during teardown" })
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        drain();
+        await stopped;
+        expect(await sendDuringStop).toMatchObject({
+          _tag: "ProviderAdapterSessionNotFoundError",
+        });
         await waitFor(() => expect(session.isIdle).toBe(true));
         expect(calls()).toBe(1);
         expect(session.pendingMessageCount).toBe(0);

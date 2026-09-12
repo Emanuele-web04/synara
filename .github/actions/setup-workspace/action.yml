@@ -32,7 +32,10 @@ runs:
     # electron input: Install Electron test runtime extracts the binary into
     # apps/desktop/node_modules/electron/dist INSIDE node_modules, so the
     # electron lane's tree differs from other lanes and must not share a blob.
+    # Windows cache restores can leave Bun's isolated dependency links missing.
+    # Recreate that tree from the package cache instead of restoring node_modules.
     - name: Cache node_modules
+      if: ${{ runner.os != 'Windows' }}
       uses: actions/cache@v5
       with:
         path: |

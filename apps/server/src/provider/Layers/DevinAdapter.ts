@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * DevinAdapterLive — Devin CLI (`devin acp`) via ACP.
  *
@@ -33,6 +34,7 @@ import {
   getDevinStaticModelVariants,
   getModelCapabilities,
   getProviderOptionDescriptors,
+  humanizeModelSlug,
   normalizeModelSlug,
   resolveDevinModelVariant,
   trimOrNull,
@@ -723,10 +725,6 @@ function isDevinAcpDebugEnabled(): boolean {
   );
 }
 
-function formatDevinModelName(slug: string): string {
-  return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 interface DevinModelDescriptorSeed {
   readonly slug: string;
   readonly name?: string;
@@ -983,7 +981,7 @@ export function mergeDevinModelDescriptors(
       const key = slug.toLowerCase();
       if (!slug || seen.has(key)) continue;
       seen.add(key);
-      const name = model.name?.trim() || formatDevinModelName(slug);
+      const name = model.name?.trim() || humanizeModelSlug(slug);
       const rawVariants = model.variants ?? [];
       const effortValues = uniqueStrings(rawVariants.map(inferDevinReasoningEffort)).toSorted(
         (left, right) => DEVIN_EFFORT_ORDER.indexOf(left) - DEVIN_EFFORT_ORDER.indexOf(right),
@@ -1042,7 +1040,7 @@ export function mergeDevinModelDescriptors(
           ? {
               supportedReasoningEfforts: effortValues.map((value) => ({
                 value,
-                label: DEVIN_EFFORT_LABELS[value] ?? formatDevinModelName(value),
+                label: DEVIN_EFFORT_LABELS[value] ?? humanizeModelSlug(value),
               })),
               ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
             }
@@ -3072,7 +3070,7 @@ export function makeDevinAdapter(
         const ctx = yield* requireSession(threadId);
         return {
           threadId,
-          turns: ctx.turns,
+          turns: snapshotProviderTurns(ctx.turns),
           cwd: ctx.session.cwd ?? null,
         } satisfies ProviderThreadSnapshot;
       });

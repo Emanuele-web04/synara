@@ -37,6 +37,9 @@ import {
 } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
 import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
   type ManagedAttachmentPrincipal,
@@ -62,7 +65,7 @@ import {
   type OrchestrationCommandQueues,
   takeNextOrchestrationCommand,
   tryAdmitOrchestrationCommand,
-  usesReservedCommandAdmission,
+  isQuiescingCommandAdmissible,
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
@@ -105,6 +108,8 @@ interface EngineAdmissionState {
 
 type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
+  /** Sequences whose deferred phase was settled inside the commit transaction. */
+  readonly deferredSettledSequences: ReadonlySet<number>;
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
 };
@@ -157,6 +162,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const managedAttachments = yield* ManagedAttachmentRepository;
+  const messageRepository = yield* ProjectionThreadMessageRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
@@ -173,9 +179,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     normal: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
     wake: yield* Queue.unbounded<void>(),
   } satisfies OrchestrationCommandQueues<CommandEnvelope>;
-  const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
+  const eventPubSub = yield* PubSub.sliding<OrchestrationEvent>(
     ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
   );
+  const eventPublicationLock = yield* Semaphore.make(1);
+  let lastPublishedSequence = 0;
   const initiallyIdle = yield* Deferred.make<void>();
   yield* Deferred.succeed(initiallyIdle, undefined).pipe(Effect.orDie);
   const engineAdmissionState = yield* Ref.make<EngineAdmissionState>({
@@ -198,12 +206,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   > | null>(null);
   const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
-  // Committed events are durable before they reach this boundary. Once
-  // publication starts, a dispatch deadline must not interrupt it and leave
-  // live consumers behind the durable log. Bounded PubSub backpressure is
-  // therefore lossless; engine scope close shuts the bus to release it.
+  // Reactors can dispatch commands while consuming these events. Waiting for
+  // a slow subscriber here would deadlock the single command worker. Keep a
+  // bounded live window; subscribers recover overflow from the durable log.
   const publishCommittedEvent = (event: OrchestrationEvent) =>
-    Effect.uninterruptible(PubSub.publish(eventPubSub, event)).pipe(Effect.asVoid);
+    eventPublicationLock
+      .withPermits(1)(
+        PubSub.publish(eventPubSub, event).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              lastPublishedSequence = Math.max(lastPublishedSequence, event.sequence);
+            }),
+          ),
+        ),
+      )
+      .pipe(Effect.uninterruptible);
 
   const makeCommandTimeoutError = (command: OrchestrationCommand) =>
     new OrchestrationCommandTimeoutError({
@@ -483,19 +500,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
     const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    const mergedThread =
-      existingThread && existingThread.messages.length > 0
-        ? {
-            ...thread,
-            messages: existingThread.messages,
-          }
-        : thread;
+    // The command cache may contain only deltas received since a restart.
+    // Durable detail includes the complete text, now including pending chunks.
+    // Overlaying that detail with a partial cache would truncate completion.
     const hasThread = existingThread !== undefined;
     return {
       ...model,
       threads: hasThread
-        ? model.threads.map((entry) => (entry.id === thread.id ? mergedThread : entry))
-        : [...model.threads, mergedThread],
+        ? model.threads.map((entry) => (entry.id === thread.id ? thread : entry))
+        : [...model.threads, thread],
     };
   };
 
@@ -538,11 +551,42 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           : Effect.succeed(commandReadModel);
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":
-      case "thread.message.assistant.complete":
       case "thread.approval.respond":
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.assistant.complete":
+        // Read the exact message, including a resumed message older than the
+        // transcript window. This avoids loading a whole thread to finalize it.
+        return messageRepository
+          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: `Failed to load the complete assistant message: ${error.message}`,
+                }),
+            ),
+            Effect.flatMap((message) => {
+              const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
+                ? Effect.succeed(commandReadModel)
+                : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+              return model.pipe(
+                Effect.map((readModel) => {
+                  const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+                  // A missing projection row must not discard text still in cache.
+                  // SQL failures stay errors; a present row remains authoritative.
+                  if (!thread || Option.isNone(message)) return readModel;
+                  return overlayThread(readModel, {
+                    ...thread,
+                    messages: [orchestrationMessageFromStoredMessage(message.value)],
+                  });
+                }),
+              );
+            }),
+          );
       default:
         return Effect.succeed(commandReadModel);
     }
@@ -791,6 +835,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         never
       > = Effect.gen(function* () {
         const committedEvents: OrchestrationEvent[] = [];
+        const deferredSettledSequences = new Set<number>();
         let nextCommandReadModel = commandReadModel;
 
         if (command.type === "thread.turn.start") {
@@ -820,7 +865,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (isShellMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
-            yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            const { deferredPhaseSettled } =
+              yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+            if (deferredPhaseSettled) deferredSettledSequences.add(savedEvent.sequence);
           }
           committedEvents.push(savedEvent);
         }
@@ -853,6 +900,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
         return {
           committedEvents,
+          deferredSettledSequences,
           lastSequence: lastSavedEvent.sequence,
           nextCommandReadModel,
         } as const;
@@ -904,6 +952,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         committedCommand.committedEvents,
         (event) =>
           Effect.gen(function* () {
+            // Settled inside the commit transaction; no deferred work remains.
+            if (committedCommand.deferredSettledSequences.has(event.sequence)) return;
             const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
             if (isDeferredProjectionDirty) {
               yield* scheduleDeferredProjectionCatchUp({
@@ -1060,6 +1110,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   yield* projectionPipeline.bootstrap;
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+  lastPublishedSequence = yield* eventStore.getHighWaterSequence();
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
@@ -1226,9 +1277,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
   const getThreadTitleHighWaterSequence = (threadId: string) =>
     eventStore.getThreadTitleHighWaterSequence(threadId);
-  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
-    eventPubSub,
-  ).pipe(Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))));
+  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
+    eventPublicationLock.withPermits(1)(
+      Effect.gen(function* () {
+        // Capture the cursor atomically with attachment, so a publication cannot
+        // fall between the live subscription and its initial replay boundary.
+        const subscription = yield* PubSub.subscribe(eventPubSub);
+        let cursor = lastPublishedSequence;
+        return Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
+          Stream.flatMap((event) => {
+            if (event.sequence <= cursor) return Stream.empty;
+            const gap =
+              event.sequence > cursor + 1
+                ? eventStore
+                    .readFromSequence(cursor, Number.MAX_SAFE_INTEGER, event.sequence - 1)
+                    .pipe(Stream.orDie)
+                : Stream.empty;
+            return Stream.concat(gap, Stream.succeed(event)).pipe(
+              Stream.tap((delivered) =>
+                Effect.sync(() => {
+                  cursor = delivered.sequence;
+                }),
+              ),
+            );
+          }),
+        );
+      }),
+    );
 
   // Compatibility bridge for older tests and out-of-tree callers. Production
   // code should use ProjectionSnapshotQuery directly instead of depending on
@@ -1255,7 +1330,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (
             current.phase === "draining" ||
             current.phase === "stopped" ||
-            (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
+            (current.phase === "quiescing" && !isQuiescingCommandAdmissible(command.type))
           ) {
             return [{ accepted: false, reason: "stopped" as const }, current] as const;
           }
@@ -1538,4 +1613,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 export const OrchestrationEngineLive = Layer.effect(
   OrchestrationEngineService,
   makeOrchestrationEngine,
-).pipe(Layer.provideMerge(ManagedAttachmentRepositoryLive));
+).pipe(
+  Layer.provide(ProjectionThreadMessageRepositoryLive),
+  Layer.provideMerge(ManagedAttachmentRepositoryLive),
+);

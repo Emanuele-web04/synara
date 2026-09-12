@@ -30,6 +30,63 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect(
+    "selects the latest turn per thread with stable ties and preserves historical update time",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_state`;
+        yield* sql`DELETE FROM projection_turns`;
+        yield* sql`DELETE FROM projection_thread_sessions`;
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_thread_proposed_plans`;
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('latest-project', 'Latest', '/tmp/latest', '[]',
+          '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, latest_turn_id, created_at, updated_at
+        ) VALUES
+          ('latest-a', 'latest-project', 'A', '{"provider":"pi","model":"openai/gpt-4o"}',
+            'turn-old', '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z'),
+          ('latest-b', 'latest-project', 'B', '{"provider":"pi","model":"openai/gpt-4o"}',
+            NULL, '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, completed_at, checkpoint_files_json
+        ) VALUES
+          ('latest-a', 'turn-old', 'completed', '2026-09-10T00:00:01.000Z', '2026-09-10T00:00:09.000Z', '[]'),
+          ('latest-a', 'turn-a', 'completed', '2026-09-10T00:00:02.000Z', NULL, '[]'),
+          ('latest-a', 'turn-z', 'running', '2026-09-10T00:00:02.000Z', NULL, '[]'),
+          ('latest-a', NULL, 'pending', '2026-09-10T00:00:10.000Z', NULL, '[]'),
+          ('latest-b', 'turn-old', 'completed', '2026-09-10T00:00:03.000Z', NULL, '[]')
+      `;
+        for (const snapshot of [
+          yield* query.getSnapshot(),
+          yield* query.getShellSnapshot(),
+          yield* query.getCommandReadModel(),
+        ]) {
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === "latest-a")?.latestTurn?.turnId,
+            "turn-z",
+          );
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === "latest-b")?.latestTurn?.turnId,
+            "turn-old",
+          );
+          assert.equal(snapshot.updatedAt, "2026-09-10T00:00:09.000Z");
+        }
+      }),
+  );
+
   it.effect("marks only an empty shell with an active durable project for repair", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -441,8 +498,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatExpiredAt: null,
           lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
-          hasPendingApprovals: true,
-          hasPendingUserInput: true,
+          // A present empty pending-interaction projection is authoritative;
+          // historical activity rows alone must not resurrect stale prompts.
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
           hasActionableProposedPlan: true,
           latestTurn: {
             turnId: asTurnId("turn-1"),
@@ -919,6 +978,42 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(activities.length, 2_000);
       assert.equal(activities[0]?.id, asEventId("oversized-activity-151"));
       assert.equal(activities.at(-1)?.id, asEventId("oversized-activity-2150"));
+      // Enrich retained legacy usage without exempting accounting from the caps.
+      yield* sql`UPDATE projection_thread_activities SET kind = 'context-window.updated'
+        WHERE activity_id IN ('oversized-activity-1', 'oversized-activity-2000')`;
+      yield* sql`UPDATE projection_thread_activities SET kind = 'turn.completed'
+        WHERE activity_id = 'oversized-activity-2001'`;
+      yield* sql`INSERT INTO provider_runtime_events (event_id, thread_id, event_type, event_json, persisted_at)
+        VALUES ('oversized-activity-2000', 'thread-oversized-turn', 'thread.token-usage.updated',
+          '{"provider":"codex","providerRefs":{"providerThreadId":"provider-session"},"raw":{"payload":{"tokenUsage":{"total":{"inputTokens":3000,"outputTokens":30,"cachedInputTokens":2000,"cacheWriteInputTokens":500}}}}}',
+          '2026-02-24T00:00:00.000Z')`;
+      const updated = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-oversized-turn"));
+      const retained = Option.isSome(updated) ? updated.value.activities : [];
+      assert.equal(retained.length, 2000);
+      assert.deepEqual(
+        retained.find((activity) => activity.id === "oversized-activity-2000")?.payload,
+        {
+          stage: "completed",
+          usageSessionId: "provider-session",
+          cumulativeUsage: {
+            inputTokens: 3000,
+            outputTokens: 30,
+            cachedInputTokens: 2000,
+            cacheCreationInputTokens: 500,
+          },
+        },
+      );
+      assert.isFalse(retained.some((activity) => activity.id === "oversized-activity-1"));
+      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-2000"));
+      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-2001"));
+      const bulk = yield* snapshotQuery.getSnapshot();
+      assert.equal(bulk.threads[0]?.activities.length, 500);
+      assert.isTrue(
+        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2000"),
+      );
+      assert.isTrue(
+        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2001"),
+      );
     }),
   );
 
@@ -1009,8 +1104,31 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         `;
       }
 
+      yield* sql`DELETE FROM message_text_segments`;
+      for (const index of [0, 2_004]) {
+        yield* sql`
+          INSERT INTO message_text_segments (
+            thread_id, message_id, sequence, started_at, ended_at, text
+          ) VALUES (
+            ${threadId}, ${`message-${index}`}, ${index},
+            '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', ${`segment ${index}`}
+          )
+        `;
+      }
+      // Providers can reuse a message id in another thread. Its segments must
+      // never be joined to the retained message in this thread.
+      yield* sql`
+        INSERT INTO message_text_segments (
+          thread_id, message_id, sequence, started_at, ended_at, text
+        ) VALUES (
+          'other-segment-owner', 'message-2004', 2004,
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', 'other thread text'
+        )
+      `;
+
       const cappedDetail = yield* snapshotQuery.getThreadDetailById(threadId);
       const exportDetail = yield* snapshotQuery.getThreadDetailForExportById(threadId);
+      const bulk = yield* snapshotQuery.getSnapshot();
 
       assert.isTrue(Option.isSome(cappedDetail));
       assert.isTrue(Option.isSome(exportDetail));
@@ -1022,6 +1140,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(exportMessages.length, messageCount);
       assert.equal(exportMessages[0]?.text, "message 0");
       assert.equal(exportMessages.at(-1)?.text, "message 2004");
+      assert.equal(cappedMessages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(exportMessages[0]?.textSegments?.[0]?.text, "segment 0");
+      assert.equal(exportMessages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(cappedMessages.at(-1)?.textSegments?.length, 1);
+      assert.equal(bulk.threads[0]?.messages.length, 2_000);
+      assert.equal(bulk.threads[0]?.messages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(bulk.threads[0]?.messages.at(-1)?.textSegments?.length, 1);
+      yield* sql`DELETE FROM message_text_segments`;
     }),
   );
 
@@ -1122,6 +1248,78 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         Option.isSome(detail) ? detail.value.pendingInteractions : [],
         expectedPendingInteractions,
       );
+    }),
+  );
+
+  it.effect("uses a settlement row when mixed activity counters replay a stale approval", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-mixed-approval-sequence");
+
+      yield* sql`DELETE FROM projection_pending_interactions`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-mixed-approval-sequence', 'Mixed approval sequence',
+          '/tmp/project-mixed-approval-sequence',
+          '{"provider":"claudeAgent","model":"claude-sonnet-5"}', '[]',
+          '2026-09-09T22:00:00.000Z', '2026-09-09T22:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-mixed-approval-sequence', 'project-mixed-approval-sequence',
+          'Mixed approval sequence',
+          '{"provider":"claudeAgent","model":"claude-sonnet-5"}',
+          NULL, NULL, NULL,
+          '2026-09-09T22:00:00.000Z', '2026-09-09T22:02:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        ) VALUES
+          (
+            'activity-approval-requested-high', 'thread-mixed-approval-sequence', NULL,
+            'approval', 'approval.requested', 'Command approval requested',
+            '{"requestId":"approval-mixed","requestKind":"command"}',
+            1695339, '2026-09-09T22:01:00.000Z'
+          ),
+          (
+            'activity-approval-stale-low', 'thread-mixed-approval-sequence', NULL,
+            'error', 'provider.approval.respond.failed', 'Provider approval response failed',
+            '{"requestId":"approval-mixed","detail":"Stale pending approval request: approval-mixed. Provider callback state does not survive app restarts."}',
+            667085, '2026-09-09T22:02:00.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_pending_interactions (
+          interaction_kind, request_id, thread_id, turn_id, lifecycle_generation, status,
+          decision, response_command_id, response_requested_at, created_at, resolved_at
+        ) VALUES (
+          'approval', 'approval-mixed', 'thread-mixed-approval-sequence', NULL,
+          NULL, 'uncertain', NULL, 'restart-reconcile-command', NULL,
+          '2026-09-09T22:01:00.000Z', '2026-09-09T22:02:00.000Z'
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(threadId);
+
+      assert.isTrue(Option.isSome(detail));
+      if (Option.isSome(detail)) {
+        assert.isFalse(detail.value.hasPendingApprovals ?? true);
+        assert.equal(detail.value.pendingInteractions?.[0]?.status, "uncertain");
+      }
     }),
   );
 

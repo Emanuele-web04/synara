@@ -38,6 +38,7 @@ const baseRow = {
   ]),
   dispatchMode: "steer",
   dispatchOrigin: "automation",
+  startsNewTurn: 1,
   isStreaming: 1,
   source: "native",
   sequence: 42,
@@ -61,6 +62,7 @@ describe("projection thread message row codec", () => {
       mentions: [{ name: "github", path: "plugin://github" }],
       dispatchMode: "steer",
       dispatchOrigin: "automation",
+      startsNewTurn: true,
       isStreaming: true,
       source: "native",
       sequence: 42,
@@ -80,6 +82,7 @@ describe("projection thread message row codec", () => {
       mentions: [{ name: "github" }],
       dispatchMode: "steer",
       dispatchOrigin: "automation",
+      startsNewTurn: true,
     });
     expect("sequence" in projected).toBe(false);
 
@@ -91,6 +94,7 @@ describe("projection thread message row codec", () => {
       mentions: null,
       dispatchMode: null,
       dispatchOrigin: null,
+      startsNewTurn: null,
       isStreaming: 0,
       sequence: null,
     });
@@ -111,6 +115,7 @@ describe("projection thread message row codec", () => {
       "mentions",
       "dispatchMode",
       "dispatchOrigin",
+      "startsNewTurn",
       "sequence",
     ]) {
       expect(optionalField in repositoryMessage).toBe(false);
