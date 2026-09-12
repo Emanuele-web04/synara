@@ -2374,6 +2374,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
 
+      yield* sql`DELETE FROM projection_thread_messages`;
       yield* sql`DELETE FROM projection_thread_sessions`;
       yield* sql`DELETE FROM projection_turns`;
       yield* sql`DELETE FROM projection_threads`;
@@ -2423,6 +2424,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-queued-oldest', 'project-runtime-candidates', 'Queued',
             '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, 'turn-queued',
             '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-running-without-turn', 'project-runtime-candidates', 'Running no turn',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-fresh-queued', 'project-runtime-candidates', 'Fresh queued',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T09:59:00.000Z', NULL, NULL
           )
       `;
       yield* sql`
@@ -2465,7 +2476,28 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (
             'thread-queued-oldest', 'starting', 'codex', NULL, NULL,
             'full-access', NULL, NULL, '2026-07-21T00:00:00.000Z'
+          ),
+          (
+            'thread-running-without-turn', 'running', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-20T00:00:00.000Z'
+          ),
+          (
+            'thread-fresh-queued', 'starting', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-23T09:59:00.000Z'
           )
+      `;
+      // The thread/session lifecycle timestamps are old, but the latest
+      // assistant message is still advancing. Reconciliation must use this
+      // existing hot-path timestamp without rewriting projection_threads.
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          thread_id, message_id, turn_id, role, text, is_streaming, source,
+          sequence, created_at, updated_at
+        ) VALUES (
+          'thread-stale-running', 'message-still-streaming', 'turn-stale',
+          'assistant', '', 1, 'provider', 100,
+          '2026-07-23T00:00:00.000Z', '2026-07-23T09:30:00.000Z'
+        )
       `;
       yield* sql`
         INSERT INTO provider_session_runtime (
@@ -2500,17 +2532,33 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       });
 
       // Candidacy covers every thread whose projection still claims an active
-      // turn past the staleness cutoff, including threads whose runtime binding
-      // row is already gone (`thread-unbound-oldest`) and archived threads
-      // (`thread-archived-running`) - archiving does not settle a live turn.
-      // Excluded: `thread-fresh-running` (updated after the cutoff),
-      // `thread-settled` (no active turn), and `thread-queued-oldest` (a pending
-      // turn with no active turn id on either the session or the runtime row).
+      // lifecycle past the staleness cutoff, including starting/running sessions
+      // with no turn id, threads whose runtime binding row is already gone, and
+      // archived threads (archiving does not settle a live turn). Fresh running
+      // and starting sessions remain excluded by the combined timestamp guard,
+      // as does a long-running turn whose assistant message is still advancing.
       assert.deepEqual(candidates, [
+        ThreadId.makeUnsafe("thread-running-without-turn"),
+        ThreadId.makeUnsafe("thread-queued-oldest"),
         ThreadId.makeUnsafe("thread-unbound-oldest"),
         ThreadId.makeUnsafe("thread-archived-running"),
-        ThreadId.makeUnsafe("thread-stale-running"),
       ]);
+
+      const storedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.makeUnsafe("thread-stale-running"),
+      );
+      assert.equal(storedShell._tag, "Some");
+      if (storedShell._tag === "Some") {
+        assert.equal(storedShell.value.updatedAt, "2026-07-23T00:00:00.000Z");
+      }
+      const reconciliationShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.makeUnsafe("thread-stale-running"),
+        { includeLatestMessageActivity: true },
+      );
+      assert.equal(reconciliationShell._tag, "Some");
+      if (reconciliationShell._tag === "Some") {
+        assert.equal(reconciliationShell.value.updatedAt, "2026-07-23T09:30:00.000Z");
+      }
 
       // Oldest-first ordering, so a bounded sweep drains the longest-stuck
       // threads first.
@@ -2518,7 +2566,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         updatedBefore: "2026-07-23T09:00:00.000Z",
         limit: 1,
       });
-      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-unbound-oldest")]);
+      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-running-without-turn")]);
     }),
   );
 

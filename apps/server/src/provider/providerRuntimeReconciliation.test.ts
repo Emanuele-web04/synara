@@ -768,17 +768,26 @@ describe("planProviderRuntimeReconciliation", () => {
     expect(plans[0]?.reason).toContain("runtime-event pump is recovering");
   });
 
-  it("does not treat an actively streaming turn as stale when only the session row is quiet", () => {
-    // thread.updatedAt advances on every appended message. A turn that is
-    // streaming output must never become a settle candidate just because the
-    // session lifecycle row has not moved since the turn started.
+  it("does not abandon a turn past the max age while assistant messages still advance", () => {
+    // The reconciliation query overlays the latest message activity onto the
+    // shell timestamp. A streaming turn must not become a settle candidate just
+    // because the persisted thread/session lifecycle rows have stayed quiet.
     const plans = planProviderRuntimeReconciliation({
-      threads: [threadShell({ updatedAt: "2026-07-23T20:00:28.000Z" })],
+      threads: [
+        threadShell({
+          updatedAt: "2026-07-23T20:00:28.000Z",
+          session: {
+            ...threadShell().session!,
+            updatedAt: "2026-07-23T19:00:00.000Z",
+          },
+        }),
+      ],
       bindings: [binding(null)],
       liveSessions: [liveSession({ status: "ready" })],
       pumpHealth: [],
       nowMs: NOW,
       staleAfterMs: 10_000,
+      maxTurnAgeMs: 30 * 60_000,
     });
 
     expect(plans).toEqual([]);

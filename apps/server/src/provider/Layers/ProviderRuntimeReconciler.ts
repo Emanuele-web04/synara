@@ -232,7 +232,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       );
       const threads = (yield* Effect.forEach(
         candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
+        (threadId) =>
+          projectionSnapshotQuery.getThreadShellById(threadId, {
+            includeLatestMessageActivity: true,
+          }),
         { concurrency: 8 },
       )).flatMap(Option.toArray);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));

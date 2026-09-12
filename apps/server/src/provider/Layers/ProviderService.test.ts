@@ -1326,7 +1326,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* sleep(25);
       const bindingAfterStaleEvent = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.equal(bindingAfterStaleEvent?.lifecycleGeneration, secondGeneration);
-      assert.equal(bindingAfterStaleEvent?.status, "running");
+      // The replacement generation has not acquired a turn, so the retired
+      // session's terminal event can safely settle its empty lifecycle state.
+      assert.equal(bindingAfterStaleEvent?.status, "stopped");
+      assert.equal(
+        asRuntimePayloadRecord(bindingAfterStaleEvent?.runtimePayload).activeTurnId,
+        null,
+      );
 
       const defaultStart = routing.codex.startSession.getMockImplementation();
       if (!defaultStart) assert.fail("Expected the fake adapter start implementation");
@@ -1428,6 +1434,84 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }),
     );
 
+    it.effect("processes stale terminal events when the current binding has no active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-terminal-no-active-turn");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(typeof binding?.lifecycleGeneration, "string");
+        assert.equal(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId, null);
+
+        const staleGeneration = "retired-generation-without-active-turn";
+        staleSettlementRouting.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("stale-complete-no-active-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-retired-before-binding"),
+          createdAt: "2026-07-14T14:10:00.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: { state: "completed" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "runtime.error",
+          eventId: asEventId("stale-error-no-active-turn"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-14T14:10:01.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: {
+            message: "Retired provider failed after lifecycle rotation.",
+            class: "transport_error",
+          },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "session.exited",
+          eventId: asEventId("stale-exit-no-active-turn"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-14T14:10:02.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: { reason: "late retired runtime exit", recoverable: false, exitKind: "error" },
+        });
+
+        yield* waitUntil(
+          () =>
+            staleSettlementPersistedEvents.has("stale-complete-no-active-turn") &&
+            staleSettlementPersistedEvents.has("stale-exit-no-active-turn") &&
+            staleSettlementPersistedEvents.has("stale-error-no-active-turn"),
+          1_000,
+          10,
+          "stale terminal events without an active turn to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-complete-no-active-turn")?.type,
+          "turn.completed",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-exit-no-active-turn")?.type,
+          "session.exited",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-error-no-active-turn")?.type,
+          "runtime.error",
+        );
+        const settledBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(settledBinding?.lifecycleGeneration, binding?.lifecycleGeneration);
+        assert.equal(settledBinding?.status, "stopped");
+        assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
+      }),
+    );
+
     it.effect("settles a stale terminal event naming the binding's active turn", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -1451,16 +1535,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
         // stale terminal event for a different turn stays dropped.
         staleSettlementRouting.codex.emit({
           type: "turn.aborted",
-          eventId: asEventId("stale-abort-matching-turn"),
-          provider: "codex",
-          threadId,
-          turnId: TurnId.makeUnsafe(String(activeTurnId)),
-          createdAt: "2026-07-14T14:00:00.000Z",
-          lifecycleGeneration: "old-generation",
-          payload: { reason: "late abort for the bound turn" },
-        });
-        staleSettlementRouting.codex.emit({
-          type: "turn.aborted",
           eventId: asEventId("stale-abort-other-turn"),
           provider: "codex",
           threadId,
@@ -1468,6 +1542,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
           createdAt: "2026-07-14T14:00:01.000Z",
           lifecycleGeneration: "old-generation",
           payload: { reason: "late abort for a different turn" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "turn.aborted",
+          eventId: asEventId("stale-abort-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          createdAt: "2026-07-14T14:00:02.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { reason: "late abort for the bound turn" },
         });
 
         yield* waitUntil(
