@@ -1512,6 +1512,22 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
 }
 
+async function waitForScrollLayoutToSettle(container: HTMLElement): Promise<void> {
+  let previous = [container.scrollTop, container.scrollHeight, container.clientHeight];
+  let stableSince = performance.now();
+  await vi.waitFor(
+    () => {
+      const current = [container.scrollTop, container.scrollHeight, container.clientHeight];
+      if (current.some((value, index) => value !== previous[index])) {
+        previous = current;
+        stableSince = performance.now();
+      }
+      expect(performance.now() - stableSince).toBeGreaterThanOrEqual(200);
+    },
+    { timeout: 4_000, interval: 20 },
+  );
+}
+
 /**
  * Whether the virtualized transcript is actually painted. LegendList keeps its
  * container wrapper at `opacity: 0` until its own initial scroll has finished,
@@ -3907,6 +3923,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
+      // End proximity can be transient while the last streamed rows are measured.
+      // Start the gesture from a settled viewport, then resume streaming below.
+      await waitForScrollLayoutToSettle(container);
 
       if (action === "wheel down") {
         await userEvent.wheel(container, { delta: { y: 100 } });
@@ -3989,7 +4008,8 @@ describe("ChatView transcript geometry (full app)", () => {
         await vi.waitFor(() =>
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
-        await waitForLayout();
+        // Playwright dispatches wheel input before native scrolling has settled.
+        await waitForScrollLayoutToSettle(container);
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),

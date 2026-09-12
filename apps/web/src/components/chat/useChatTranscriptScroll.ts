@@ -120,13 +120,7 @@ export function useChatTranscriptScroll({
   const clearTranscriptAutoFollow = useCallback(
     (synchronous = false) => {
       cancelPendingScrollGesture();
-      // Regular streaming scrollToEnd calls can still be settling measurements.
-      // Cancel their list-owned target as well as an explicit arrow jump when
-      // the reader takes ownership, before it can pull the viewport back down.
-      const scrollTarget =
-        settledScrollInFlightRef.current || !isUserScrollDetachedRef.current
-          ? legendListRef.current
-          : null;
+      const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
       autoFollowThreadIdRef.current = null;
       animateNextAutoFollowScrollRef.current = false;
       settledScrollRequestRef.current += 1;
