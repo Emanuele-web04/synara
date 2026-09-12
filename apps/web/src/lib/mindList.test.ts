@@ -9,6 +9,7 @@ import {
   formatMindDigestSuffix,
   formatMindHistoryActorLabel,
   formatMindHistoryOpLabel,
+  formatMindWeightLabel,
   groupMindMemoriesByDay,
   isMindListTruncated,
   mindCapPercent,
@@ -28,19 +29,19 @@ describe("isMindListTruncated", () => {
 describe("formatMindCountLabel", () => {
   it("renders the plain count when the whole store is loaded", () => {
     expect(formatMindCountLabel({ shown: 2, total: 2, pinnedCount: 1, cap: 500 })).toBe(
-      "2 memories · 1 pinned · cap 500",
+      "2 memories · 1 pinned",
     );
   });
 
   it("renders the singular noun for one memory", () => {
     expect(formatMindCountLabel({ shown: 1, total: 1, pinnedCount: 0, cap: 500 })).toBe(
-      "1 memory · 0 pinned · cap 500",
+      "1 memory · 0 pinned",
     );
   });
 
   it("renders showing X of N when the page is truncated", () => {
     expect(formatMindCountLabel({ shown: 500, total: 2300, pinnedCount: 12, cap: 500 })).toBe(
-      "Showing 500 of 2300 memories · 12 pinned · cap 500",
+      "Showing 500 of 2300 memories · 12 pinned",
     );
   });
 });
@@ -159,18 +160,35 @@ describe("mindCapPercent", () => {
 });
 
 describe("formatMindDigestSuffix", () => {
-  it("appends stale count and cap pressure without touching the meta line", () => {
+  it("names stale memories and cap pressure in words", () => {
     expect(formatMindDigestSuffix({ staleCount: 3, count: 400, cap: 500 })).toBe(
-      " · 3 stale · 80% of cap",
+      " · 3 need review · 80% of cap",
+    );
+    expect(formatMindDigestSuffix({ staleCount: 1, count: 400, cap: 500 })).toBe(
+      " · 1 needs review · 80% of cap",
     );
   });
 
-  it("omits the stale part when nothing is stale", () => {
-    expect(formatMindDigestSuffix({ staleCount: 0, count: 10, cap: 500 })).toBe(" · 2% of cap");
+  it("stays quiet about the cap until half full", () => {
+    expect(formatMindDigestSuffix({ staleCount: 0, count: 10, cap: 500 })).toBe("");
+    expect(formatMindDigestSuffix({ staleCount: 1, count: 10, cap: 500 })).toBe(
+      " · 1 needs review",
+    );
   });
 
   it("is empty when there is no cap and nothing stale", () => {
     expect(formatMindDigestSuffix({ staleCount: 0, count: 0, cap: 0 })).toBe("");
+  });
+});
+
+describe("formatMindWeightLabel", () => {
+  it("says strong, fading, or needs review instead of a decimal", () => {
+    expect(formatMindWeightLabel(0.9)).toBe("strong");
+    expect(formatMindWeightLabel(0.6)).toBe("strong");
+    expect(formatMindWeightLabel(0.42)).toBe("fading");
+    expect(formatMindWeightLabel(0.25)).toBe("fading");
+    expect(formatMindWeightLabel(0.24)).toBe("needs review");
+    expect(formatMindWeightLabel(0)).toBe("needs review");
   });
 });
 

@@ -36,6 +36,7 @@ import {
   countStaleMindMemories,
   formatMindCountLabel,
   formatMindDigestSuffix,
+  formatMindWeightLabel,
   formatMindHistoryActorLabel,
   formatMindHistoryOpLabel,
   groupMindMemoriesByDay,
@@ -142,7 +143,7 @@ function MindListRow({
               onChange={(event) => setDraftText(event.target.value)}
               rows={3}
               maxLength={500}
-              className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-[0.8125rem] text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-[0.8125rem] text-foreground outline-none [font:inherit] focus-visible:ring-1 focus-visible:ring-ring"
             />
             <span className="flex items-center gap-1.5">
               <select
@@ -175,8 +176,8 @@ function MindListRow({
           <>
             <span className="truncate text-[0.8125rem] text-foreground">{memory.text}</span>
             <span className="truncate text-xs text-muted-foreground">
-              {projectName} · {formatRelativeTime(memory.createdAt)} · weight{" "}
-              {memory.weight.toFixed(2)}
+              {projectName} · {formatRelativeTime(memory.createdAt)} ·{" "}
+              {formatMindWeightLabel(memory.weight)}
               {provenance ? ` · ${provenance}` : ""}
               {memory.accessCount > 0
                 ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
@@ -226,42 +227,47 @@ function MindListRow({
           </>
         )}
       </span>
-      <button
-        type="button"
-        aria-label="Still true"
-        title="Still true"
-        onClick={onAffirm}
-        className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <CentralIcon name="checkmark-1-small" className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        aria-label="Edit memory"
-        title="Edit"
-        onClick={openEditor}
-        className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <CentralIcon name="pencil" className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        aria-label={pinLabel}
-        title={pinLabel}
-        onClick={onTogglePinned}
-        className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <PinStatusIcon pinned={memory.pinned} className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        aria-label="Delete memory"
-        title="Delete"
-        onClick={onDelete}
-        className="shrink-0 self-center rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        <CentralIcon name="trash-can-simple" className="size-3.5" />
-      </button>
+      {/* Trailing actions hide while editing: Save/Cancel own the row then. */}
+      {isEditing ? null : (
+        <>
+          <button
+            type="button"
+            aria-label="Still true"
+            title="Still true"
+            onClick={onAffirm}
+            className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <CentralIcon name="checkmark-1-small" className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Edit memory"
+            title="Edit"
+            onClick={openEditor}
+            className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <CentralIcon name="pencil" className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={pinLabel}
+            title={pinLabel}
+            onClick={onTogglePinned}
+            className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <PinStatusIcon pinned={memory.pinned} className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Delete memory"
+            title="Delete"
+            onClick={onDelete}
+            className="shrink-0 self-center rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <CentralIcon name="trash-can-simple" className="size-3.5" />
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -691,8 +697,8 @@ function MindRouteView() {
             <div className="min-w-0 flex-1" />
             <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
               <SearchInput
-                aria-label="Search loaded memories"
-                placeholder="Search loaded memories"
+                aria-label="Search memories"
+                placeholder="Search memories"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 className="w-56"

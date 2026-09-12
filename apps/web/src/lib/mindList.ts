@@ -10,7 +10,7 @@ export function isMindListTruncated(input: {
   return input.shown < input.total;
 }
 
-/** "N memories · P pinned · cap C", or "Showing S of N memories · …" when truncated. */
+/** "N memories · P pinned", or "Showing S of N memories · …" when truncated. */
 export function formatMindCountLabel(input: {
   readonly shown: number;
   readonly total: number;
@@ -21,7 +21,7 @@ export function formatMindCountLabel(input: {
   const head = isMindListTruncated(input)
     ? `Showing ${input.shown} of ${input.total} ${noun}`
     : `${input.total} ${noun}`;
-  return `${head} · ${input.pinnedCount} pinned · cap ${input.cap}`;
+  return `${head} · ${input.pinnedCount} pinned`;
 }
 
 /**
@@ -132,9 +132,9 @@ export function mindCapPercent(input: { readonly count: number; readonly cap: nu
 }
 
 /**
- * Digest signals appended to the meta count line: stale count plus cap
- * pressure, e.g. " · 3 stale · 80% of cap". Empty only when there is nothing
- * to say (no cap and nothing stale).
+ * Digest signals appended to the meta count line: stale memories needing
+ * review, plus cap pressure only once half the cap is in use — quiet
+ * otherwise, so the line reads like status, not telemetry.
  */
 export function formatMindDigestSuffix(input: {
   readonly staleCount: number;
@@ -143,12 +143,24 @@ export function formatMindDigestSuffix(input: {
 }): string {
   const parts: string[] = [];
   if (input.staleCount > 0) {
-    parts.push(`${input.staleCount} stale`);
+    parts.push(input.staleCount === 1 ? "1 needs review" : `${input.staleCount} need review`);
   }
-  if (input.cap > 0) {
-    parts.push(`${mindCapPercent({ count: input.count, cap: input.cap })}% of cap`);
+  const percent = mindCapPercent({ count: input.count, cap: input.cap });
+  if (input.cap > 0 && percent >= 50) {
+    parts.push(`${percent}% of cap`);
   }
   return parts.length === 0 ? "" : ` · ${parts.join(" · ")}`;
+}
+
+/**
+ * Weight in human words: the raw 0–1 number is retrieval math, not
+ * information. Bands match the prune story — under 0.25 the memory is
+ * close to pruning, so the row says so.
+ */
+export function formatMindWeightLabel(weight: number): string {
+  if (weight >= 0.6) return "strong";
+  if (weight >= 0.25) return "fading";
+  return "needs review";
 }
 
 /**
