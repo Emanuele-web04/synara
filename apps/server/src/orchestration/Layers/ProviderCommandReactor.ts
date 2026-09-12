@@ -112,6 +112,7 @@ import { ProjectionPendingInteractionRepository } from "../../persistence/Servic
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
+  type ProviderBlockingDeliveryEvidence,
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
@@ -520,6 +521,16 @@ function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
   return goalPromptOverheadChars > 0
     ? "The latest message is too long to include the persistent thread goal. Shorten the message and retry."
     : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
+}
+
+function isUnavailableInteractionRuntime(cause: Cause.Cause<ProviderServiceError>): boolean {
+  return Option.match(Cause.findErrorOption(cause), {
+    onNone: () => false,
+    onSome: (error) =>
+      (error._tag === "ProviderValidationError" && error.reason !== undefined) ||
+      error._tag === "ProviderAdapterSessionNotFoundError" ||
+      error._tag === "ProviderAdapterSessionClosedError",
+  });
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -3078,6 +3089,21 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
         hasLiveTurn;
+      if (event.payload.dispatchMode === "steer") {
+        // The decider records its projected decision on the message immediately,
+        // then this runtime check corrects either race direction before delivery:
+        // only a genuinely live native steer continues the current turn.
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.set-turn-boundary",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-boundary:${event.eventId}:${isNativeSteer ? "continuation" : "new-turn"}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          startsNewTurn: !isNativeSteer,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (!isNativeSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event);
         // The promotion raced another live turn and was re-queued. Release
@@ -3222,6 +3248,22 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      // A requested steer can still become a separate queued turn (for
+      // providers without native steering, or if the live turn already
+      // settled). Persist that effective boundary while leaving native steer
+      // continuations unbound to a new turn.
+      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.bind-turn",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-bind:${event.eventId}:${startedTurn.turnId}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          turnId: startedTurn.turnId,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (startedTurn && isPendingQueuedDispatch) {
         yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
       }
@@ -3716,6 +3758,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly turnId?: TurnId | undefined;
     readonly createdAt: string;
+    readonly intentionalQuit?: boolean;
   }) {
     const thread = yield* resolveThread(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -3735,6 +3778,14 @@ const make = Effect.gen(function* () {
       });
 
     if (!providerThread || !providerThread.session || providerThread.session.status === "stopped") {
+      if (
+        input.intentionalQuit &&
+        providerThread?.session?.status === "stopped" &&
+        providerThread.session.activeTurnId === null &&
+        providerThread.session.lastError === null
+      ) {
+        return;
+      }
       yield* reportInterruptFailure("No active provider session is bound to this thread.");
       // Nothing is left that could ever emit a terminal event for this turn.
       return yield* settleInterruptedProviderTurn({
@@ -3759,6 +3810,19 @@ const make = Effect.gen(function* () {
     });
     if (result._tag === "ok") {
       return;
+    }
+
+    // Desktop quit also closes the provider. If that closure already settled
+    // successfully, a late interrupt rejection is an intentional stop, not a failure.
+    if (input.intentionalQuit) {
+      const settled = (yield* resolveProviderSessionThread(input.threadId))?.session;
+      if (
+        settled?.status === "stopped" &&
+        settled.activeTurnId === null &&
+        settled.lastError === null
+      ) {
+        return;
+      }
     }
 
     // An interrupt that timed out or failed uncertainly is escalated to a full
@@ -3800,6 +3864,7 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       createdAt: event.payload.createdAt,
+      intentionalQuit: event.commandId?.startsWith("quit-resume-interrupt:") === true,
     });
   });
 
@@ -3938,6 +4003,20 @@ const make = Effect.gen(function* () {
         // outcome and needs no user-visible settlement.
         return null;
       }
+      if (
+        pendingRow?.lifecycleGeneration != null &&
+        event.payload.lifecycleGeneration === undefined
+      ) {
+        // An old client must refresh the request identity. A generation-less stale
+        // marker would also invalidate the replacement callback it never addressed.
+        yield* appendInteractionResponseFailure(event, {
+          interactionKind: input.interactionKind,
+          detail:
+            "Refresh this thread before answering: the provider lifecycle generation is missing.",
+          settlementStatus: "retryable",
+        });
+        return null;
+      }
       // No durable row, or a row this command can never claim (e.g. a lifecycle
       // generation mismatch). Silence here permanently stranded the prompt: the
       // client saw neither a resolution nor a failure, so every retry was
@@ -3967,16 +4046,22 @@ const make = Effect.gen(function* () {
       // settlement would orphan it and silently swallow every future response.
       yield* appendInteractionResponseFailure(event, {
         interactionKind: input.interactionKind,
-        detail: "No provider session thread is bound to this thread.",
-        settlementStatus: "retryable",
+        detail: buildStalePendingRequestFailureDetail(
+          input.interactionKind === "approval" ? "approval" : "user-input",
+          event.payload.requestId,
+        ),
+        settlementStatus: "uncertain",
       });
       return null;
     }
     if (providerThread.session?.status !== "stopped") return providerThread.id;
     yield* appendInteractionResponseFailure(event, {
       interactionKind: input.interactionKind,
-      detail: "No active provider session is bound to this thread.",
-      settlementStatus: "retryable",
+      detail: buildStalePendingRequestFailureDetail(
+        input.interactionKind === "approval" ? "approval" : "user-input",
+        event.payload.requestId,
+      ),
+      settlementStatus: "uncertain",
     });
     return null;
   });
@@ -4003,7 +4088,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingApprovalRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingApprovalRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "approval",
             detail: unknownPendingRequest
@@ -4037,7 +4123,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingUserInputRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingUserInputRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "userInput",
             detail: unknownPendingRequest
@@ -4843,15 +4930,9 @@ const make = Effect.gen(function* () {
   // serially in the same source but do not acquire delivery claims yet.
   const startProviderIntentSource = Effect.gen(function* () {
     const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
-    // Detach the engine from this reactor's processing latency. The engine
-    // publishes committed events into a bounded PubSub from an uninterruptible
-    // section of its single command worker, so a subscriber that stalls (a hung
-    // provider call, or just slow boot replay below) back-pressures the worker
-    // and then fails every dispatched command with a dispatch timeout. Draining
-    // into an unbounded queue immediately after subscribing keeps the engine
-    // free while boot work runs; ordering is preserved because the queue is FIFO
-    // and `processOrderedEvent` skips anything at or below the durable cursor.
-    const liveEventQueue = yield* Queue.unbounded<OrchestrationEvent, Cause.Done>();
+    // Preserve the source/consumer handoff without retaining an unbounded event
+    // mirror while startup or a provider call runs. The engine replays overflow.
+    const liveEventQueue = yield* Queue.bounded<OrchestrationEvent, Cause.Done>(1);
     yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
     const liveEvents = Stream.fromQueue(liveEventQueue);
     const consumerState = yield* deliveryRepository.getConsumerState(
@@ -5369,9 +5450,57 @@ const make = Effect.gen(function* () {
       );
     };
 
-    // Self-heal only legacy quarantines whose recorded details prove the
-    // command frame was never written. Exit-unproven process failures remain
-    // quarantined because the old provider may still be running.
+    const isSettledQuitInterruptBlocker = Effect.fnUntraced(function* (
+      blocker: ProviderBlockingDeliveryEvidence,
+    ) {
+      if (
+        !blocker.lastError?.startsWith(
+          "Error: Orchestration command admission is stopped (thread.activity.append, server:provider-failure-activity:",
+        )
+      ) {
+        return false;
+      }
+      const intent = yield* readProviderIntentEvent(blocker.eventSequence);
+      if (
+        intent.type !== "thread.turn-interrupt-requested" ||
+        !intent.commandId?.startsWith("quit-resume-interrupt:")
+      ) {
+        return false;
+      }
+
+      // Require durable stop evidence before the failed diagnostic, not a stop
+      // from some later session. Never infer provider exit from admission alone.
+      const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
+      return yield* orchestrationEngine
+        .readThreadEventsThrough(blocker.threadId, blocker.eventSequence, highWater, [
+          "thread.session-set",
+        ])
+        .pipe(
+          Stream.runFold(
+            () => false,
+            (settled, event) => {
+              if (event.type !== "thread.session-set") return settled;
+              const session = event.payload.session;
+              if (
+                session.activeTurnId !== null ||
+                session.status === "running" ||
+                session.status === "ready"
+              ) {
+                return false;
+              }
+              return (
+                settled ||
+                (event.occurredAt <= blocker.updatedAt &&
+                  session.status === "stopped" &&
+                  session.lastError === null)
+              );
+            },
+          ),
+        );
+    });
+
+    // Recover only proven pre-write failures or quit interrupts whose provider
+    // had already stopped. Exit-unproven failures remain quarantined.
     // Skipped prompts are not replayed at startup; instead, surface a durable
     // activity asking the user to resend them.
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
@@ -5385,7 +5514,8 @@ const make = Effect.gen(function* () {
           limit: pageSize,
         });
         for (const blocker of startupBlockers) {
-          if (!isSafeLegacyProviderBlocker(blocker.lastError)) continue;
+          const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
+          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) continue;
           const reconciled = yield* deliveryRepository.reconcile({
             reconciliationId: crypto.randomUUID(),
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -5394,12 +5524,36 @@ const make = Effect.gen(function* () {
             expectedState: blocker.state,
             outcome: "abandon",
             reconciledBy: "system:provider-command-reactor",
-            note: "Recorded failure proves the provider never executed this command; settled at startup.",
+            note: settledQuit
+              ? "Intentional quit interrupt: provider stop was recorded before shutdown rejected its diagnostic; settled without replay."
+              : "Recorded failure proves the provider never executed this command; settled at startup.",
             reconciledAt: new Date().toISOString(),
           });
           if (Option.isNone(reconciled)) continue;
 
           quarantinedThreads.delete(blocker.threadId);
+          if (settledQuit) {
+            const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId: blocker.threadId,
+            });
+            const session = (yield* resolveThread(blocker.threadId))?.session;
+            if (
+              Option.isNone(remaining) &&
+              session?.status === "error" &&
+              session.activeTurnId === null &&
+              blocker.lastError !== null &&
+              session.lastError === formatProviderDeliveryBlockDetail(blocker.lastError)
+            ) {
+              const createdAt = new Date().toISOString();
+              yield* setThreadSession({
+                threadId: blocker.threadId,
+                expectedSession: session,
+                session: { ...session, status: "stopped", lastError: null, updatedAt: createdAt },
+                createdAt,
+              });
+            }
+          }
           if (!startupRecoveryNotifiedThreads.has(blocker.threadId)) {
             const skippedPromptCount = yield* countSkippedPrompts({
               threadId: blocker.threadId,

@@ -779,6 +779,8 @@ describe("provider runtime activity projection", () => {
         turnId: TURN_ID,
         payload: {
           state: "completed",
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 1_000,
           modelUsage: {
             "claude-fable-5": {
               inputTokens: 100,
@@ -795,6 +797,9 @@ describe("provider runtime activity projection", () => {
       kind: "turn.completed",
       payload: {
         state: "completed",
+        provider: "claudeAgent",
+        tokenAccountingVersion: 1,
+        mainLoopTokens: 1_000,
         modelUsage: {
           "claude-fable-5": {
             inputTokens: 960,

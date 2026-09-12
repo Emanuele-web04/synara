@@ -1,3 +1,5 @@
+import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
+import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1638,71 +1640,88 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it("settles orphaned pending interactions when a provider session (re)starts", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
+  it.each(["pending", "responding", "uncertain"] as const)(
+    "settles orphaned %s interactions when a provider session (re)starts",
+    async (status) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
 
-    // A user-input request left behind by a previous runtime: its in-memory
-    // callback cannot survive the restart, so no response can ever consume it.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-user-input-requested-orphaned"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: asEventId("activity-user-input-requested-orphaned"),
-          tone: "info",
-          kind: "user-input.requested",
-          summary: "User input requested",
-          payload: {
-            requestId: "user-input-request-orphaned",
-            lifecycleGeneration: "generation-before-restart",
-            questions: [],
+      // A user-input request left behind by a previous runtime: its in-memory
+      // callback cannot survive the restart, so no response can ever consume it.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe("cmd-user-input-requested-orphaned"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          activity: {
+            id: asEventId("activity-user-input-requested-orphaned"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "user-input-request-orphaned",
+              lifecycleGeneration: "generation-before-restart",
+              questions: [],
+            },
+            turnId: null,
+            createdAt: now,
           },
-          turnId: null,
           createdAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+        }),
+      );
 
-    harness.emit({
-      type: "session.started",
-      eventId: asEventId("evt-session-restarted-orphaned"),
-      provider: "codex",
-      threadId: asThreadId("thread-1"),
-      createdAt: new Date().toISOString(),
-    });
-    await harness.drain();
+      const pendingRepository = await runtime!.runPromise(
+        Effect.service(ProjectionPendingInteractionRepository).pipe(
+          Effect.provide(ProjectionPendingInteractionRepositoryLive),
+        ),
+      );
+      const existing = (
+        await Effect.runPromise(
+          pendingRepository.listByThreadId({ threadId: asThreadId("thread-1") }),
+        )
+      )[0]!;
+      await Effect.runPromise(pendingRepository.upsert({ ...existing, status }));
 
-    const readModel = await Effect.runPromise(harness.engine.getReadModel());
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
-    const failureActivity = thread?.activities.find(
-      (activity) => activity.kind === "provider.user-input.respond.failed",
-    );
-    expect(failureActivity?.payload).toMatchObject({
-      requestId: "user-input-request-orphaned",
-      lifecycleGeneration: "generation-before-restart",
-      detail: expect.stringContaining(
-        "Stale pending user-input request: user-input-request-orphaned",
-      ),
-    });
+      harness.emit({
+        type: "session.started",
+        eventId: asEventId("evt-session-restarted-orphaned"),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
 
-    // Re-ingesting another session start must not duplicate the settlement.
-    harness.emit({
-      type: "session.started",
-      eventId: asEventId("evt-session-restarted-orphaned-again"),
-      provider: "codex",
-      threadId: asThreadId("thread-1"),
-      createdAt: new Date().toISOString(),
-    });
-    await harness.drain();
-    const readModelAfter = await Effect.runPromise(harness.engine.getReadModel());
-    const failuresAfter = readModelAfter.threads
-      .find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))
-      ?.activities.filter((activity) => activity.kind === "provider.user-input.respond.failed");
-    expect(failuresAfter).toHaveLength(1);
-  });
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      const failureActivity = thread?.activities.find(
+        (activity) => activity.kind === "provider.user-input.respond.failed",
+      );
+      expect(failureActivity?.payload).toMatchObject({
+        requestId: "user-input-request-orphaned",
+        lifecycleGeneration: "generation-before-restart",
+        detail: expect.stringContaining(
+          "Stale pending user-input request: user-input-request-orphaned",
+        ),
+      });
+
+      // Re-ingesting another session start must not duplicate the settlement.
+      harness.emit({
+        type: "session.started",
+        eventId: asEventId("evt-session-restarted-orphaned-again"),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      const readModelAfter = await Effect.runPromise(harness.engine.getReadModel());
+      const failuresAfter = readModelAfter.threads
+        .find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))
+        ?.activities.filter((activity) => activity.kind === "provider.user-input.respond.failed");
+      expect(failuresAfter).toHaveLength(1);
+    },
+  );
 
   it("keeps Claude background approvals until the provider resolves their callbacks", async () => {
     const harness = await createHarness();
@@ -7053,39 +7072,40 @@ describe("ProviderRuntimeIngestion", () => {
     expect(activity?.tone).toBe("info");
   });
 
-  it("projects context compaction progress updates into thread activities", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
+  it.each(["item.started", "item.updated"] as const)(
+    "projects context compaction progress from %s into thread activities",
+    async (type) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
 
-    harness.emit({
-      type: "item.updated",
-      eventId: asEventId("evt-thread-compacting"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      payload: {
-        itemType: "context_compaction",
-        status: "inProgress",
-        detail: "Compacting context",
-        data: { state: "compacting" },
-      },
-    });
+      harness.emit({
+        type,
+        eventId: asEventId("evt-thread-compacting"),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        payload: {
+          itemType: "context_compaction",
+          status: "inProgress",
+          detail: "Compacting context",
+          data: { state: "compacting" },
+        },
+      });
 
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) =>
-          activity.kind === "context-compaction" &&
-          activity.summary === "Compacting conversation...",
-      ),
-    );
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "context-compaction" && activity.summary === "Compacting context",
+        ),
+      );
 
-    const activity = thread.activities.find(
-      (candidate: ProviderRuntimeTestActivity) =>
-        candidate.kind === "context-compaction" &&
-        candidate.summary === "Compacting conversation...",
-    );
-    expect(activity?.tone).toBe("info");
-  });
+      const activity = thread.activities.find(
+        (candidate: ProviderRuntimeTestActivity) =>
+          candidate.kind === "context-compaction" && candidate.summary === "Compacting context",
+      );
+      expect(activity?.tone).toBe("info");
+    },
+  );
 
   it("projects context compaction completion and failure into thread activities", async () => {
     const harness = await createHarness();

@@ -47,7 +47,7 @@ import {
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
 } from "@synara/shared/threadSummary";
-import { Effect, Option } from "effect";
+import { Array as Arr, Effect, Option } from "effect";
 
 import type { ProjectionPendingInteraction } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
@@ -153,8 +153,8 @@ function planStalePendingRequestCommands(input: {
       // their callback has already been explicitly invalidated.
       if (
         interaction.status === "confirmed" ||
-        (interaction.status === "uncertain" &&
-          (interaction.interactionKind === "approval" || isAlreadyStale(interaction)))
+        isAlreadyStale(interaction) ||
+        (interaction.status === "uncertain" && interaction.interactionKind === "approval")
       ) {
         continue;
       }
@@ -363,20 +363,19 @@ export const reconcileRestartStuckTurns: Effect.Effect<
 > = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
-  const pendingInteractionRepository = yield* ProjectionPendingInteractionRepository;
-
   const readModel = yield* engine.getReadModel();
-  const pendingInteractions = yield* pendingInteractionRepository.listUnsettled().pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("restart reconciliation could not read pending interactions", {
-        cause,
-      }).pipe(Effect.as([] as ReadonlyArray<ProjectionPendingInteraction>)),
-    ),
-  );
-  const threadIdsWithUnsettledInteractions = new Set(
-    pendingInteractions.map((interaction) => interaction.threadId),
-  );
 
+  const pendingInteractions = yield* ProjectionPendingInteractionRepository;
+  const unsettled = yield* pendingInteractions
+    .listUnsettled({})
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to read restart-orphaned callbacks", { cause }).pipe(
+          Effect.as([]),
+        ),
+      ),
+    );
+  const unsettledByThread = new Map(Object.entries(Arr.groupBy(unsettled, (row) => row.threadId)));
   const now = new Date().toISOString();
   const threadsNeedingRestartCleanup = readModel.threads.filter(
     (thread) =>
@@ -384,9 +383,7 @@ export const reconcileRestartStuckTurns: Effect.Effect<
       threadHasCheckpointRevertInProgress(thread) ||
       thread.hasPendingApprovals ||
       thread.hasPendingUserInput ||
-      // A row can be the only surviving evidence: the thread's session and turn
-      // projections look clean, yet an unanswerable question card is still up.
-      threadIdsWithUnsettledInteractions.has(thread.id),
+      unsettledByThread.has(thread.id),
   );
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
@@ -394,22 +391,25 @@ export const reconcileRestartStuckTurns: Effect.Effect<
 
   const reconcilableThreads = yield* Effect.forEach(
     threadsNeedingRestartCleanup,
-    (thread) =>
-      snapshotQuery.getThreadDetailById(thread.id).pipe(
-        Effect.map((detail) => Option.getOrElse(detail, () => thread)),
+    (thread) => {
+      const pendingInteractions = unsettledByThread.get(thread.id);
+      const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
+      return snapshotQuery.getThreadDetailById(thread.id).pipe(
+        Effect.map((detail) => Option.getOrElse(detail, () => fallback)),
         Effect.catchCause((cause) =>
           Effect.logWarning("restart turn reconciliation continuing without thread activities", {
             threadId: thread.id,
             cause,
-          }).pipe(Effect.as(thread)),
+          }).pipe(Effect.as(fallback)),
         ),
-      ),
+      );
+    },
     { concurrency: 4 },
   );
 
   const commands = planRestartTurnReconciliation({
     threads: reconcilableThreads,
-    pendingInteractions,
+    pendingInteractions: unsettled,
     now,
   });
   if (commands.length === 0) {

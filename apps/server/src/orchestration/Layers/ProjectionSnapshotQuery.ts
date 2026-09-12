@@ -18,7 +18,6 @@ import {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
   ThreadPinnedMessages,
-  ThreadMarkers,
   ThreadGoalAchievements,
   ProjectScript,
   ProjectId,
@@ -113,7 +112,6 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
-    threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
     goalAchievements: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(ThreadGoalAchievements)),
     ).pipe(Schema.withDecodingDefault(() => null)),
@@ -122,7 +120,6 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
 );
 const {
   pinnedMessages: _projectionThreadPinnedMessagesField,
-  threadMarkers: _projectionThreadMarkersField,
   notes: _projectionThreadNotesField,
   goalAchievements: _projectionThreadGoalAchievementsField,
   ...ProjectionThreadShellFields
@@ -179,6 +176,7 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   assistantMessageId: Schema.NullOr(MessageId),
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+  historyUpdatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
@@ -613,6 +611,7 @@ function collectProjectedLatestTurns(rows: ReadonlyArray<ProjectionLatestTurnDbR
   const byThread = new Map<string, OrchestrationLatestTurn>();
   let updatedAt: string | null = null;
   for (const row of rows) {
+    updatedAt = maxOptionalIso(updatedAt, row.historyUpdatedAt);
     updatedAt = maxIso(updatedAt, row.requestedAt);
     updatedAt = maxOptionalIso(updatedAt, row.startedAt);
     updatedAt = maxOptionalIso(updatedAt, row.completedAt);
@@ -764,7 +763,6 @@ function toProjectedThread(input: {
     pendingInteractions: input.pendingInteractions,
     checkpoints: input.checkpoints,
     ...(threadRow.pinnedMessages !== null ? { pinnedMessages: threadRow.pinnedMessages } : {}),
-    ...(threadRow.threadMarkers !== null ? { threadMarkers: threadRow.threadMarkers } : {}),
     ...(threadRow.notes !== null ? { notes: threadRow.notes } : {}),
     ...(threadRow.goal !== null ? { goal: threadRow.goal } : {}),
     ...(threadRow.goalStartedAt !== null ? { goalStartedAt: threadRow.goalStartedAt } : {}),
@@ -899,7 +897,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
-          thread_markers_json AS "threadMarkers",
           notes,
           goal,
           goal_started_at AS "goalStartedAt",
@@ -1063,6 +1060,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           mentions_json AS "mentions",
           dispatch_mode AS "dispatchMode",
           dispatch_origin AS "dispatchOrigin",
+          starts_new_turn AS "startsNewTurn",
           is_streaming AS "isStreaming",
           source,
           sequence,
@@ -1379,24 +1377,42 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Seek one turn per thread using the existing (thread_id, requested_at) index.
+  // Keep the history timestamp as a scalar aggregate instead of decoding every
+  // historical turn merely to discard it in collectProjectedLatestTurns.
   const listLatestTurnRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionLatestTurnDbRowSchema,
     execute: () =>
       sql`
         SELECT
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          state,
-          requested_at AS "requestedAt",
-          started_at AS "startedAt",
-          completed_at AS "completedAt",
-          assistant_message_id AS "assistantMessageId",
-          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
-          source_proposed_plan_id AS "sourceProposedPlanId"
-        FROM projection_turns
-        WHERE turn_id IS NOT NULL
-        ORDER BY thread_id ASC, requested_at DESC, turn_id DESC
+          latest.thread_id AS "threadId",
+          latest.turn_id AS "turnId",
+          latest.state,
+          latest.requested_at AS "requestedAt",
+          latest.started_at AS "startedAt",
+          latest.completed_at AS "completedAt",
+          latest.assistant_message_id AS "assistantMessageId",
+          latest.source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          latest.source_proposed_plan_id AS "sourceProposedPlanId",
+          (
+            SELECT MAX(MAX(
+              requested_at,
+              COALESCE(started_at, requested_at),
+              COALESCE(completed_at, requested_at)
+            ))
+            FROM projection_turns
+            WHERE turn_id IS NOT NULL
+          ) AS "historyUpdatedAt"
+        FROM projection_threads AS threads
+        JOIN projection_turns AS latest ON latest.row_id = (
+          SELECT row_id
+          FROM projection_turns
+          WHERE thread_id = threads.thread_id AND turn_id IS NOT NULL
+          ORDER BY requested_at DESC, turn_id DESC
+          LIMIT 1
+        )
+        ORDER BY latest.thread_id ASC
       `,
   });
 
@@ -1571,7 +1587,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
-          thread_markers_json AS "threadMarkers",
           notes,
           goal,
           goal_started_at AS "goalStartedAt",
@@ -1631,7 +1646,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
-          thread_markers_json AS "threadMarkers",
           notes,
           goal,
           goal_started_at AS "goalStartedAt",
@@ -1688,6 +1702,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           mentions_json AS "mentions",
           dispatch_mode AS "dispatchMode",
           dispatch_origin AS "dispatchOrigin",
+          starts_new_turn AS "startsNewTurn",
           is_streaming AS "isStreaming",
           source,
           sequence,

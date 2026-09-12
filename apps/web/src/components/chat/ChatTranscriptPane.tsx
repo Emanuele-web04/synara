@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@synara/contracts";
+import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
@@ -61,7 +61,6 @@ interface ChatTranscriptPaneProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   onForkFromMessage?: (messageId: MessageId) => void;
-  threadMarkers?: readonly ThreadMarker[];
   goalAchievements?: ComponentProps<typeof MessagesTimeline>["goalAchievements"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
@@ -140,7 +139,6 @@ export function ChatTranscriptPane({
   canPinMessage,
   onTogglePinMessage,
   onForkFromMessage,
-  threadMarkers,
   goalAchievements,
   enteringUserMessageIds,
   tailAnchorMessageId,
@@ -260,7 +258,6 @@ export function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(onForkFromMessage ? { onForkFromMessage } : {})}
-            {...(threadMarkers ? { threadMarkers } : {})}
             {...(goalAchievements ? { goalAchievements } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             tailAnchorMessageId={tailAnchorMessageId ?? null}

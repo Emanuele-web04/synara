@@ -200,13 +200,16 @@ const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(functio
   readonly displayName: string;
   readonly connection: AgentGatewaySessionLease["connection"];
 }) {
-  const result = yield* runOpenCodeSdk("mcp.add", () =>
-    input.client.mcp.add({
-      directory: input.directory,
-      name: SYNARA_MCP_SERVER_NAME,
-      config: buildOpenCodeMcpServer(input.connection),
-    }),
-  );
+  const result = yield* runOpenCodeSdk("mcp.add", (signal) =>
+    input.client.mcp.add(
+      {
+        directory: input.directory,
+        name: SYNARA_MCP_SERVER_NAME,
+        config: buildOpenCodeMcpServer(input.connection),
+      },
+      { signal },
+    ),
+  ).pipe(Effect.timeout("10 seconds"));
   const status = result.data?.[SYNARA_MCP_SERVER_NAME];
   if (status?.status === "connected") {
     return;
@@ -3482,17 +3485,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                                 ),
                           ),
                         );
-                    const loadModelContextLimits = openCodeRuntime
-                      .loadOpenCodeInventory(client)
-                      .pipe(
-                        Effect.map(buildOpenCodeModelContextLimitMap),
-                        Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
-                      );
-                    // Session creation and metadata discovery are independent once the server is up.
-                    const [openCodeSessionId, modelContextLimitBySlug] = yield* Effect.all(
-                      [createSessionId, loadModelContextLimits],
-                      { concurrency: "unbounded" },
+                    const modelContextLimitBySlug = new Map<string, number>();
+                    // Context metadata is optional. A slow discovery endpoint
+                    // must not hold a usable session behind the startup deadline.
+                    yield* openCodeRuntime.loadOpenCodeInventory(client).pipe(
+                      Effect.map(buildOpenCodeModelContextLimitMap),
+                      Effect.timeoutOption("10 seconds"),
+                      Effect.map(Option.getOrElse(() => new Map<string, number>())),
+                      Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
+                      Effect.tap((limits) =>
+                        Effect.sync(() => {
+                          for (const [slug, limit] of limits) {
+                            modelContextLimitBySlug.set(slug, limit);
+                          }
+                        }),
+                      ),
+                      Effect.forkIn(sessionScope),
                     );
+                    const openCodeSessionId = yield* createSessionId;
 
                     return {
                       sessionScope,

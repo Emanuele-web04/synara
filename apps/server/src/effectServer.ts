@@ -1,3 +1,4 @@
+import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -214,7 +215,9 @@ export const createEffectServer = Effect.fn(function* (
   // in-memory runtimes died, so they can never complete or be answered on their
   // own) before clients can observe the stale "Working" state or an
   // unanswerable question card.
-  yield* reconcileRestartStuckTurns;
+  yield* reconcileRestartStuckTurns.pipe(
+    Effect.provide(ProjectionPendingInteractionRepositoryLive),
+  );
   // The reconciliation above terminalizes durable turn projections without a
   // provider terminal event. Remove their replay-ledger rows now so the next
   // process start cannot replay state-dependent commands against the terminal

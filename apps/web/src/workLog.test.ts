@@ -3504,6 +3504,50 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)[0]?.detail).toBeUndefined();
   });
 
+  it("renders Cursor ACP subagent task rows with the description heading and prompt", () => {
+    // Shape emitted by AcpRuntimeModel for Cursor's `Task` tool (kind "agent").
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-task-start",
+        createdAt: "2026-09-10T21:26:57.180Z",
+        kind: "tool.started",
+        summary: "Explore composer model/effort UI",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Explore composer model/effort UI",
+          data: {
+            toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+            kind: "agent",
+            tool: "task",
+            prompt: "Explore the Synara web app and report back with file paths.",
+            rawInput: {
+              _toolName: "task",
+              description: "Explore composer model/effort UI",
+              prompt: "Explore the Synara web app and report back with file paths.",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        itemType: "collab_agent_tool_call",
+        toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+        toolTitle: "Explore composer model/effort UI",
+        subagentAction: expect.objectContaining({
+          tool: "task",
+          prompt: "Explore the Synara web app and report back with file paths.",
+        }),
+        liveActivity: expect.objectContaining({ state: "running_tool" }),
+      }),
+    ]);
+    expect(entries[0]?.subagents).toBeUndefined();
+    expect(entries[0]?.detail).toBeUndefined();
+  });
+
   it("uses completed generic agent task output instead of truncated task wrapper text", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3751,6 +3795,227 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each([false, true])(
+    "keeps tools and plans after repeated steering messages (later narration: %s)",
+    (hasLaterNarration) => {
+      const turnId = TurnId.makeUnsafe("steered-turn");
+      const messages = [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user" as const,
+          text: "Investigate usage",
+          createdAt: "2026-09-11T00:00:00Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("preamble"),
+          role: "assistant" as const,
+          turnId,
+          text: "Checking usage",
+          createdAt: "2026-09-11T00:00:01Z",
+          streaming: false,
+        },
+        ...[2, 4].map((second) => ({
+          id: MessageId.makeUnsafe(`steer-${second}`),
+          role: "user" as const,
+          dispatchMode: "steer" as const,
+          startsNewTurn: false,
+          text: "Only Codex",
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          streaming: false,
+        })),
+        ...(hasLaterNarration
+          ? [
+              {
+                id: MessageId.makeUnsafe("continued"),
+                role: "assistant" as const,
+                turnId,
+                text: "Continuing the investigation",
+                createdAt: "2026-09-11T00:00:05Z",
+                streaming: false,
+              },
+            ]
+          : []),
+      ];
+      const entries = deriveTimelineEntries(
+        messages,
+        [
+          {
+            id: "steered-plan",
+            turnId,
+            planMarkdown: "# Fix usage",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-09-11T00:00:07Z",
+            updatedAt: "2026-09-11T00:00:07Z",
+          },
+        ],
+        [3, 6].map((second) => ({
+          id: `tool-${second}`,
+          turnId,
+          createdAt: `2026-09-11T00:00:0${second}Z`,
+          tone: "tool" as const,
+          label: "Running command",
+        })),
+      );
+
+      expect(entries.map((entry) => entry.id)).toEqual([
+        "request",
+        "preamble",
+        "steer-2",
+        "tool-3",
+        "steer-4",
+        ...(hasLaterNarration ? ["continued"] : []),
+        "tool-6",
+        "steered-plan",
+      ]);
+    },
+  );
+
+  it("keeps late interrupted-turn tools before a non-native steer turn", () => {
+    const interruptedTurnId = TurnId.makeUnsafe("interrupted-turn");
+    const queuedSteerTurnId = TurnId.makeUnsafe("queued-steer-turn");
+    const messages = [
+      {
+        id: MessageId.makeUnsafe("initial-request"),
+        role: "user" as const,
+        turnId: interruptedTurnId,
+        text: "Investigate usage",
+        createdAt: "2026-09-11T00:00:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("initial-preamble"),
+        role: "assistant" as const,
+        turnId: interruptedTurnId,
+        text: "Checking usage",
+        createdAt: "2026-09-11T00:00:01Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("queued-steer"),
+        role: "user" as const,
+        dispatchMode: "steer" as const,
+        startsNewTurn: true,
+        turnId: null,
+        text: "Switch to tests",
+        createdAt: "2026-09-11T00:00:02Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("steer-answer"),
+        role: "assistant" as const,
+        turnId: queuedSteerTurnId,
+        text: "Checking tests",
+        createdAt: "2026-09-11T00:00:03Z",
+        streaming: true,
+      },
+    ];
+    const entries = deriveTimelineEntries(
+      messages,
+      [],
+      [
+        {
+          id: "new-turn-tool",
+          turnId: queuedSteerTurnId,
+          createdAt: "2026-09-11T00:00:04Z",
+          tone: "tool",
+          label: "New turn tool",
+        },
+        {
+          id: "late-interrupted-tool",
+          turnId: interruptedTurnId,
+          createdAt: "2026-09-11T00:00:05Z",
+          tone: "tool",
+          label: "Late interrupted tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "initial-request",
+      "initial-preamble",
+      "late-interrupted-tool",
+      "queued-steer",
+      "steer-answer",
+      "new-turn-tool",
+    ]);
+  });
+
+  it("keeps late earlier-turn tool updates before the next user request", () => {
+    const oldTurn = TurnId.makeUnsafe("old-turn");
+    const newTurn = TurnId.makeUnsafe("new-turn");
+    const messages = [
+      {
+        id: MessageId.makeUnsafe("first-user"),
+        role: "user" as const,
+        text: "First request",
+        createdAt: "2026-09-07T00:00:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("first-answer"),
+        role: "assistant" as const,
+        turnId: oldTurn,
+        text: "Done",
+        createdAt: "2026-09-07T00:01:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-user"),
+        role: "user" as const,
+        text: "Next request",
+        createdAt: "2026-09-07T00:02:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-answer"),
+        role: "assistant" as const,
+        turnId: newTurn,
+        text: "Working",
+        createdAt: "2026-09-07T00:02:01Z",
+        streaming: true,
+      },
+    ];
+    const oldWork = Array.from({ length: 79 }, (_, index) => ({
+      id: `old-tool-${index}`,
+      turnId: oldTurn,
+      sequence: 200 + index,
+      createdAt: "2026-09-07T00:03:00Z",
+      tone: "tool" as const,
+      label: "Earlier tool",
+    }));
+    const entries = deriveTimelineEntries(
+      messages,
+      [],
+      [
+        ...oldWork,
+        {
+          id: "new-tool",
+          turnId: newTurn,
+          sequence: 100,
+          createdAt: "2026-09-07T00:02:02Z",
+          tone: "tool",
+          label: "Current tool",
+        },
+        { id: "legacy", createdAt: "2026-09-07T00:02:03Z", tone: "info", label: "Legacy status" },
+      ],
+    );
+    const boundary = entries.findIndex((entry) => entry.id === "second-user");
+    expect(entries.slice(0, boundary).filter((entry) => entry.kind === "work")).toHaveLength(79);
+    expect(
+      entries
+        .slice(boundary)
+        .filter((entry) => entry.kind === "work")
+        .map((entry) => entry.id),
+    ).toEqual(["new-tool", "legacy"]);
+    expect(
+      entries
+        .filter((entry) => entry.kind === "work" && entry.entry.turnId === oldTurn)
+        .map((entry) => entry.createdAt),
+    ).toEqual(oldWork.map((entry) => entry.createdAt));
+  });
+
   it("includes proposed plans alongside messages and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
       [
@@ -4063,55 +4328,63 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Compacting context");
   });
 
-  it("collapses a compaction progress row into its terminal row", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-progress-1",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "compaction-completed-1",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses a %s progress row into its terminal row",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "compaction-progress-1",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+          makeActivity({
+            id: "compaction-completed-1",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+      expect(entries[0]?.id).toBe("compaction-progress-1");
+      expect(entries[0]?.createdAt).toBe("2026-02-23T00:00:00.000Z");
+    },
+  );
 
-  it("collapses same-timestamp compaction rows regardless of event id order", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "a-compaction-completed",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "b-compaction-progress",
-          createdAt: "2026-02-23T00:00:00.000Z",
-          kind: "context-compaction",
-          summary: "Compacting conversation...",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
+  it.each(["Compacting context", "Compacting conversation..."])(
+    "collapses same-timestamp %s rows regardless of event id order",
+    (summary) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "a-compaction-completed",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            tone: "info",
+          }),
+          makeActivity({
+            id: "b-compaction-progress",
+            createdAt: "2026-02-23T00:00:00.000Z",
+            kind: "context-compaction",
+            summary,
+            tone: "info",
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Context compacted");
+    },
+  );
 
   it("does not merge a new compaction progress row into an earlier terminal row", () => {
     const entries = deriveWorkLogEntries(

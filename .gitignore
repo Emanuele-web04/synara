@@ -47,3 +47,5 @@ __screenshots__/
 # workflow into the directory the server reads at install time. Built artifacts,
 # never sources.
 apps/server/native/computer-use-kwin/prebuilt/
+# Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
+.smoke/

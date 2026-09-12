@@ -65,16 +65,10 @@ export interface ProjectionPendingInteractionRepositoryShape {
   readonly listByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
-  /**
-   * Every row across all threads that still expects an answer — `pending`,
-   * `retryable`, and `responding` claims whose response never landed. Boot-time
-   * reconciliation needs a thread-independent view: a process that died hard
-   * left rows behind on threads whose other projections look perfectly clean.
-   */
-  readonly listUnsettled: () => Effect.Effect<
-    ReadonlyArray<ProjectionPendingInteraction>,
-    ProjectionRepositoryError
-  >;
+  /** Outstanding callbacks, excluding explicit invalidations; omitting threadId is for boot recovery. */
+  readonly listUnsettled: (input: {
+    readonly threadId?: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
   readonly getPendingCountsByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ProjectionPendingInteractionCounts, ProjectionRepositoryError>;

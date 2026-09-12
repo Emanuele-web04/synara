@@ -100,8 +100,8 @@ export function ContextWindowMeter(props: {
           {(usage.totalProcessedTokens ?? null) !== null &&
           (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
             <div className="text-xs text-muted-foreground">
-              Total processed: {formatContextWindowTokens(usage.totalProcessedTokens ?? null)}{" "}
-              tokens
+              {usage.tokenAccountingVersion === 1 ? "Estimated total processed" : "Total processed"}
+              : {formatContextWindowTokens(usage.totalProcessedTokens ?? null)} tokens
             </div>
           ) : null}
           {usage.compactsAutomatically ? (

@@ -70,6 +70,9 @@ import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCur
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
+// Pre-transform the compiler-heavy component before the first hydration deadline.
+// This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
+import "./ChatView";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");

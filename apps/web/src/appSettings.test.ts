@@ -422,18 +422,15 @@ describe("environment panel defaults", () => {
   it("starts optional text sections disabled without overriding explicit preferences", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
     expect(defaults).toMatchObject({
-      showEnvironmentMarkers: false,
       showEnvironmentInstructions: false,
       showEnvironmentNotepad: false,
     });
 
     const enabled = AppSettingsSchema.makeUnsafe({
-      showEnvironmentMarkers: true,
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
     expect(enabled).toMatchObject({
-      showEnvironmentMarkers: true,
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });

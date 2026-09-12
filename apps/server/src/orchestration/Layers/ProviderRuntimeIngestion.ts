@@ -77,7 +77,6 @@ import {
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import {
   buildStalePendingRequestSettlementCommand,
-  isUnsettledPendingInteraction,
   pendingInteractionRequestKind,
 } from "../stalePendingInteractions.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
@@ -1886,9 +1885,8 @@ const make = Effect.gen(function* () {
     scopeFilter?: (row: ProjectionPendingInteraction) => boolean,
   ) =>
     Effect.gen(function* () {
-      const rows = yield* pendingInteractions.listByThreadId({ threadId });
+      const rows = yield* pendingInteractions.listUnsettled({ threadId });
       for (const row of rows) {
-        if (!isUnsettledPendingInteraction(row)) continue;
         if (scopeFilter && !scopeFilter(row)) continue;
         const requestKind = pendingInteractionRequestKind(row.interactionKind);
         yield* orchestrationEngine.dispatch(
