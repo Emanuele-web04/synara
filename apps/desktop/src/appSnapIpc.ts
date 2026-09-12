@@ -123,11 +123,14 @@ export function registerAppSnapIpcHandlers(
   );
 
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.startPermissionSetup);
-  ipcMain.handle(APPSNAP_IPC_CHANNELS.startPermissionSetup, async (_event, permissions: unknown) => {
-    const kinds = parsePermissionKinds(permissions);
-    if (!kinds) throw new Error("Permission setup requires at least one grant.");
-    return manager.startPermissionSetup(kinds);
-  });
+  ipcMain.handle(
+    APPSNAP_IPC_CHANNELS.startPermissionSetup,
+    async (_event, permissions: unknown) => {
+      const kinds = parsePermissionKinds(permissions);
+      if (!kinds) throw new Error("Permission setup requires at least one grant.");
+      return manager.startPermissionSetup(kinds);
+    },
+  );
 
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.listPendingCaptures);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.listPendingCaptures, async () =>

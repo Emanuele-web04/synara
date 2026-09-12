@@ -69,8 +69,7 @@ export function useProvisionComputer(options?: {
       }
       if (
         notify &&
-        (!globalThis.window?.desktopBridge?.appSnap ||
-          computerProvisionOutcome(result) === "ready")
+        (!globalThis.window?.desktopBridge?.appSnap || computerProvisionOutcome(result) === "ready")
       )
         toastManager.add(computerProvisionResultToast(result));
       if (computerProvisionOutcome(result) === "ready") onReady?.(result);

@@ -306,7 +306,10 @@ export function useChatTurnSubmission({
         return lateSendHandlers.advanceActivePendingUserInput(answerOverrides);
       }
       const queuedChatTurn = queuedTurn ?? null;
-      const dispatchSettings = resolveQueuedTurnDispatchSettings(turnDispatchSettings, queuedChatTurn);
+      const dispatchSettings = resolveQueuedTurnDispatchSettings(
+        turnDispatchSettings,
+        queuedChatTurn,
+      );
       const computerControlSequenceForSend = computerControlChangeSequence.current;
       const liveComposerSnapshot =
         queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;

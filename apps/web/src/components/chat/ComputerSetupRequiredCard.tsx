@@ -9,19 +9,13 @@ import {
   computerStatusQueryOptions,
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
 } from "~/lib/serverReactQuery";
-import {
-  computerStatusNeedsSetup,
-  resolveComputerAvailabilityView,
-} from "../ComputerPanel.logic";
+import { computerStatusNeedsSetup, resolveComputerAvailabilityView } from "../ComputerPanel.logic";
 import type {
   ComputerBuildSignature,
   ComputerPermission,
   ComputerStatusResult,
 } from "@synara/contracts";
-import {
-  computerStaleGrantAdvice,
-  listComputerPermissions,
-} from "@synara/shared/computerGrants";
+import { computerStaleGrantAdvice, listComputerPermissions } from "@synara/shared/computerGrants";
 
 import { Button } from "~/components/ui/button";
 import { MonitorIcon } from "~/lib/icons";

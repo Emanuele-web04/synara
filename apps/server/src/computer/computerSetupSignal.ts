@@ -29,10 +29,7 @@ import type {
   ComputerBuildSignature,
   ComputerPermission,
 } from "@synara/contracts";
-import {
-  computerGrantsBlockControl,
-  listComputerPermissions,
-} from "@synara/shared/computerGrants";
+import { computerGrantsBlockControl, listComputerPermissions } from "@synara/shared/computerGrants";
 import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
 
 import { ComputerBackendError } from "./ComputerBackend.ts";

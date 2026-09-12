@@ -45,10 +45,10 @@ describe("Computer activation permission guide", () => {
       f.change(mode);
       await vi.waitFor(() =>
         expect(f.permissions.startPermissionSetup).toHaveBeenCalledExactlyOnceWith([
-        "accessibility",
-        "inputMonitoring",
-        "screenRecording",
-      ]),
+          "accessibility",
+          "inputMonitoring",
+          "screenRecording",
+        ]),
       );
       expect(f.setMode).toHaveBeenCalledWith("test", mode, { revokeQueued: false, generation: 4 });
       expect(f.focusComposer).not.toHaveBeenCalled();

@@ -637,9 +637,7 @@ export class DesktopAppSnapManager {
     if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
       return this.getState();
     }
-    this.#guidePaneQueue = permissions.map(
-      (kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind],
-    );
+    this.#guidePaneQueue = permissions.map((kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]);
     this.#guideSessionKinds = [...permissions];
     this.#guideSessionOpensSettings = true;
     this.#advancePermissionGuide();
@@ -1479,9 +1477,7 @@ export class DesktopAppSnapManager {
     return await run;
   }
 
-  #applyPermissionReport(
-    message: Extract<AppSnapHelperMessage, { type: "permissions" }>,
-  ): void {
+  #applyPermissionReport(message: Extract<AppSnapHelperMessage, { type: "permissions" }>): void {
     // Fields absent from the payload were not part of this request; leaving
     // them untouched keeps an accessibility-aware check from erasing the
     // AppSnap set and vice versa.
@@ -1516,13 +1512,9 @@ export class DesktopAppSnapManager {
     return await new Promise<boolean>((resolve) => {
       let child: AppSnapHelperProcess;
       try {
-        child = this.#options.spawn(
-          this.#options.helperPath,
-          [command, ...permissionArguments],
-          {
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
+        child = this.#options.spawn(this.#options.helperPath, [command, ...permissionArguments], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
       } catch (error) {
         this.#setState(
           "error",

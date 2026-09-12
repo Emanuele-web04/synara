@@ -13,10 +13,7 @@ import {
   type ComputerCapabilities,
   type ComputerPermission,
 } from "@synara/contracts";
-import {
-  COMPUTER_PERMISSION_LABELS,
-  listComputerPermissions,
-} from "@synara/shared/computerGrants";
+import { COMPUTER_PERMISSION_LABELS, listComputerPermissions } from "@synara/shared/computerGrants";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
@@ -111,8 +108,7 @@ export function ComputerSettingsPanel({
   const [guidePane, setGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
   // The native permission surface is the AppSnap helper: the same coach that
   // AppSnap's own settings drive, asked about the computer-use grant set.
-  const hasNativePermissionSetup =
-    typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
+  const hasNativePermissionSetup = typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
   useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }), active);
 
   // Panel-level on purpose: hooks above the `!active` return stay mounted while

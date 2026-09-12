@@ -34,9 +34,7 @@ export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
 export const COMPUTER_BLOCKING_PERMISSIONS: readonly ComputerPermission[] = ["accessibility"];
 
 /** Whether any of these missing grants stops the desktop being driven at all. */
-export function computerGrantsBlockControl(
-  permissions: readonly ComputerPermission[],
-): boolean {
+export function computerGrantsBlockControl(permissions: readonly ComputerPermission[]): boolean {
   return permissions.some((permission) => COMPUTER_BLOCKING_PERMISSIONS.includes(permission));
 }
 

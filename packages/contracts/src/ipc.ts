@@ -471,16 +471,10 @@ export interface DesktopAppSnapShortcutUpdateResult {
   availability: DesktopAppSnapShortcutAvailability;
 }
 
-export type DesktopAppSnapSettingsPane =
-  | "accessibility"
-  | "input-monitoring"
-  | "screen-recording";
+export type DesktopAppSnapSettingsPane = "accessibility" | "input-monitoring" | "screen-recording";
 
 /** A macOS privacy grant the AppSnap helper can check or request. */
-export type DesktopAppSnapPermissionKind =
-  | "accessibility"
-  | "inputMonitoring"
-  | "screenRecording";
+export type DesktopAppSnapPermissionKind = "accessibility" | "inputMonitoring" | "screenRecording";
 
 export type DesktopAppSnapPermissionGuideState = "shown" | "closed" | "granted";
 
