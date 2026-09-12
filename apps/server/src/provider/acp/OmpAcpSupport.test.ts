@@ -181,7 +181,6 @@ describe("applyOmpAcpInteractionMode", () => {
       applyOmpAcpInteractionMode({
         runtime,
         interactionMode: "default",
-        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );

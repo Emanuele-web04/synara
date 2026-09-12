@@ -4,8 +4,11 @@
  * @module OmpAcpSupport
  */
 import { existsSync } from "node:fs";
+import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 
+import { resolveExecutable } from "@synara/shared/executable";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import {
   type ProviderInteractionMode,
   type ProviderModelDescriptor,
@@ -60,21 +63,33 @@ const OMP_PLAN_MODE_ID = "plan";
 
 const OMP_AGENT_AUTH_METHOD_ID = "agent";
 
+export interface OmpCliResolutionOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+  readonly homeDir?: string;
+  readonly pathExists?: (path: string) => boolean;
+}
+
 /** Honors a configured binary path first, then resolves `omp` from PATH. */
-export function resolveOmpCliBinaryPath(binaryPath?: string | null): string {
+export function resolveOmpCliBinaryPath(
+  binaryPath?: string | null,
+  options: OmpCliResolutionOptions = {},
+): string {
   const configured = binaryPath?.trim();
   if (configured) {
     return configured;
   }
   const name = "omp";
-  const searchPath = process.env.PATH ?? "";
-  for (const directory of searchPath.split(nodePath.delimiter)) {
-    if (!directory.trim()) {
-      continue;
-    }
-    const candidate = nodePath.join(directory, name);
-    if (existsSync(candidate)) {
-      return candidate;
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const resolved = resolveExecutable(name, { platform, env });
+  if (resolved) {
+    return resolved;
+  }
+  if (supportsPosixPermissions(platform)) {
+    const localBin = nodePath.join(options.homeDir ?? nodeOs.homedir(), ".local", "bin", name);
+    if ((options.pathExists ?? existsSync)(localBin)) {
+      return localBin;
     }
   }
   return name;
@@ -92,8 +107,8 @@ export function buildOmpAcpSpawnInput(
       provider: "omp",
       // omp is pi-lineage: PI_CODING_AGENT_DIR selects the profile directory
       // (auth, sessions, skills, models) for every child invocation.
-      ...(ompSettings?.agentDir
-        ? { overrides: { PI_CODING_AGENT_DIR: ompSettings.agentDir } }
+      ...(ompSettings?.agentDir?.trim()
+        ? { overrides: { PI_CODING_AGENT_DIR: ompSettings.agentDir.trim() } }
         : undefined),
     }),
   };
@@ -101,6 +116,7 @@ export function buildOmpAcpSpawnInput(
 
 export const resolveOmpAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
+  agentDir?: string,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
@@ -112,7 +128,7 @@ export const resolveOmpAcpAuthMethodId = (
       errorMessage: "OMP ACP authentication is unavailable.",
       data: {
         authMethods: [...authMethodIds],
-        detail: "Run `omp` to authenticate locally so ~/.omp credentials exist.",
+        detail: `Run \`omp\` to authenticate locally so ${agentDir?.trim() || "~/.omp"} credentials exist.`,
       },
     });
   });
@@ -125,7 +141,8 @@ export const makeOmpAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildOmpAcpSpawnInput(input.ompSettings, input.cwd),
-        resolveAuthMethodId: resolveOmpAcpAuthMethodId,
+        resolveAuthMethodId: (initializeResult) =>
+          resolveOmpAcpAuthMethodId(initializeResult, input.ompSettings?.agentDir),
         authenticateMeta: { headless: true },
       }).pipe(
         Layer.provide(
@@ -159,7 +176,7 @@ export function applyOmpAcpModelSelection<E>(input: {
         .setConfigOption(OMP_MODEL_CONFIG_ID, model)
         .pipe(Effect.mapError(mapError));
     }
-    const thinkingLevel = input.thinkingLevel?.trim();
+    const thinkingLevel = input.thinkingLevel?.trim().toLowerCase();
     if (thinkingLevel) {
       yield* input.runtime
         .setConfigOption(OMP_THINKING_CONFIG_ID, thinkingLevel)
@@ -179,7 +196,6 @@ export function applyOmpAcpModelSelection<E>(input: {
 export function applyOmpAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly runtimeMode?: "approval-required" | "full-access";
   readonly mapError: (context: OmpAcpModeSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   const requestedModeId = input.interactionMode === "plan" ? OMP_PLAN_MODE_ID : OMP_DEFAULT_MODE_ID;
@@ -222,7 +238,6 @@ export function applyOmpAcpInteractionMode<E>(input: {
  */
 const OMP_THINKING_LABELS: Readonly<Record<string, string>> = {
   off: "Off",
-  auto: "Auto",
   minimal: "Minimal",
   low: "Low",
   medium: "Medium",

@@ -3,8 +3,6 @@
  *
  * @module OmpAdapterLive
  */
-import * as nodeOs from "node:os";
-import * as nodePath from "node:path";
 import {
   ApprovalRequestId,
   EventId,
@@ -16,7 +14,6 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
-  RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
   ThreadId,
@@ -52,12 +49,15 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
   ProviderAdapterRequestError,
@@ -102,6 +102,7 @@ import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntime
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
@@ -419,12 +420,14 @@ export function makeOmpAdapter(
       });
     const collectDiscoveryStreamAsString = <E>(
       stream: Stream.Stream<Uint8Array, E>,
-    ): Effect.Effect<string, E> =>
-      Stream.runFold(
+    ): Effect.Effect<string, E> => {
+      const decoder = new TextDecoder();
+      return Stream.runFold(
         stream,
         () => "",
-        (acc, chunk) => acc + new TextDecoder().decode(chunk),
-      );
+        (acc, chunk) => acc + decoder.decode(chunk, { stream: true }),
+      ).pipe(Effect.map((acc) => acc + decoder.decode()));
+    };
 
     // OMP publishes its full multi-provider catalog via `omp models --json` in a
     // single subprocess call; each model carries its own `thinking` efforts
@@ -614,9 +617,12 @@ export function makeOmpAdapter(
         Effect.gen(function* () {
           if (!ctx.stopped) {
             ctx.stopped = true;
+            yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
             ctx.gatewaySessionLease?.release();
             sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
-            sessions.delete(ctx.threadId);
+            if (sessions.get(ctx.threadId) === ctx) {
+              sessions.delete(ctx.threadId);
+            }
             yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
             if (ctx.sessionConfigReady !== undefined) {
@@ -1112,9 +1118,12 @@ export function makeOmpAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                // Only real turn progress resets the idle watchdog; mode,
+                // config, and usage updates must not keep a finished or
+                // wedged prompt alive forever.
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -1395,6 +1404,16 @@ export function makeOmpAdapter(
               );
             }
 
+            // A concurrent stop during the config/replay waits (interruptTurn,
+            // or a sendTurn error path that tore the session down) must not
+            // still emit the ready sequence for a dead session.
+            if (ctx.stopped) {
+              return yield* new ProviderAdapterSessionClosedError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              });
+            }
+
             yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "session.started",
               ...(yield* makeEventStamp()),
@@ -1557,7 +1576,6 @@ export function makeOmpAdapter(
           yield* applyOmpAcpInteractionMode({
             runtime: ctx.acp,
             interactionMode,
-            runtimeMode,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -1906,7 +1924,7 @@ export function makeOmpAdapter(
     const readThread: OmpAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const rollbackThread: OmpAdapterShape["rollbackThread"] = (threadId, numTurns) =>
@@ -1961,6 +1979,16 @@ export function makeOmpAdapter(
           );
 
         const activeSource = sessions.get(input.sourceThreadId);
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
+        if (activeSource?.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Omp session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
         const forked = activeSource
           ? yield* forkRuntime(activeSource.acp)
           : yield* Effect.gen(function* () {
@@ -2000,20 +2028,17 @@ export function makeOmpAdapter(
               return yield* forkRuntime(runtime);
             }).pipe(Effect.scoped);
 
-        const resumeCursor = {
-          schemaVersion: OMP_RESUME_VERSION,
-          sessionId: forked.sessionId,
-        };
-        yield* startSession({
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
+        return {
           threadId: input.threadId,
-          provider: PROVIDER,
-          cwd: targetCwd,
-          runtimeMode: input.runtimeMode,
-          resumeCursor,
-          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-        });
-        return { threadId: input.threadId, resumeCursor };
+          resumeCursor: {
+            schemaVersion: OMP_RESUME_VERSION,
+            sessionId: forked.sessionId,
+          },
+        };
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderAdapterRequestError ||
@@ -2075,9 +2100,10 @@ export function makeOmpAdapter(
             ompSettingsBinaryPath: ompSettings.binaryPath ?? null,
           });
           const binaryPath = input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp";
-          const agentDir =
-            input.agentDir?.trim() || nodePath.join(nodeOs.homedir(), ".omp", "agent");
-          const cacheKey = `${binaryPath}::${agentDir}`;
+          // Match the session spawn path: honor input > settings, and pass no
+          // override when unset so omp uses its own default/ambient env.
+          const agentDir = input.agentDir?.trim() || ompSettings.agentDir?.trim() || undefined;
+          const cacheKey = [binaryPath, agentDir ?? ""].join("\u0000");
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
             log.info("model/list cache hit", {
@@ -2175,10 +2201,14 @@ export function makeOmpAdapter(
             source: "omp-acp",
             cached: false,
           } satisfies ProviderListCommandsResult;
-          setOmpDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
-            expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
-            result,
-          });
+          // A slow first advertise can leave the 500ms poll empty; caching that
+          // would pin "no slash commands" for the whole TTL.
+          if (commands.length > 0) {
+            setOmpDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
+              expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
+              result,
+            });
+          }
           return result;
         }).pipe(
           Effect.scoped,
@@ -2210,14 +2240,10 @@ export function makeOmpAdapter(
       );
 
     const stopAll: OmpAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
-        discard: true,
-      });
+      settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
-        discard: true,
-      }).pipe(
+      settleConcurrentTeardowns(sessions.values(), stopSessionInternal).pipe(
         Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),
