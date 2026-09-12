@@ -25,6 +25,8 @@ import {
   type CuaReply,
   type CuaToolResult,
   type CuaEffect,
+  type CuaComputerTask,
+  cuaComputerTaskKey,
 } from "@synara/shared/cuaDriverProtocol";
 import {
   ComputerBackendError,
@@ -45,6 +47,7 @@ import {
 } from "./DesktopOperationQueue.ts";
 import { StillFramePublisher } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
+import { currentComputerTask } from "./computerTaskContext.ts";
 import { pngDimensions } from "../pngHeader.ts";
 
 export class CuaActionError extends ComputerBackendError {
@@ -144,6 +147,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private cachedImage: ComputerScreenshot | undefined;
   private desktopEpoch: number | undefined;
   private imageGeneration = 0;
+  private readonly previewTasks = new Map<string, CuaComputerTask>();
   private clearCachedImage(): void {
     this.imageGeneration += 1;
     this.cachedImage = undefined;
@@ -200,11 +204,18 @@ export class CuaComputerBackend implements ComputerBackend {
         "gui_host_required",
       );
     assertDesktopOperationActive();
+    const task = request.method === "call" ? currentComputerTask() : undefined;
+    if (task) {
+      this.previewTasks.set(cuaComputerTaskKey(task), task);
+      while (this.previewTasks.size > 256)
+        this.previewTasks.delete(this.previewTasks.keys().next().value!);
+    }
     try {
       const reply = await this.request<CuaReply>(
         this.endpoint,
         {
           ...request,
+          ...(task ? { task } : {}),
           ...(request.method === "call" &&
           (request.name === "get_window_state" || request.name === "get_desktop_state")
             ? { modelObservation: allowModelObservation && isModelDesktopObservationActive() }
@@ -1020,6 +1031,7 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   async stopInput() {
     this.clearCachedImage();
+    this.previewTasks.clear();
     if (this.endpoint) {
       const result = await this.request<CuaReply>(this.endpoint, {
         method: "stop",
@@ -1033,6 +1045,20 @@ export class CuaComputerBackend implements ComputerBackend {
     }
     this.observedGeometry.clear();
     this.snapshotAt = 0;
+  }
+  async endTask(threadId: string, turnId?: string): Promise<void> {
+    if (!this.endpoint || this.disposed) return;
+    const matches = [...this.previewTasks].filter(
+      ([, task]) => task.threadId === threadId && (turnId === undefined || task.turnId === turnId),
+    );
+    if (matches.length === 0) return;
+    const reply = await this.request<CuaReply>(this.endpoint, {
+      method: "end_task",
+      task: { threadId, ...(turnId ? { turnId } : {}) },
+      capability: this.capability,
+    });
+    if (!reply.ok) throw new Error(reply.error ?? "Computer preview did not stop.");
+    for (const [key] of matches) this.previewTasks.delete(key);
   }
   async dispose() {
     this.clearCachedImage();

@@ -1950,20 +1950,28 @@ export class ComputerManager {
    */
   async releaseDesktopControl(threadId: string, turnId?: string): Promise<void> {
     const owner = agentThreadId(threadId);
-    if (owner === undefined || this.lease?.threadId !== owner) return;
-    if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
-    if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
-      this.lease.releaseRequested = true;
-      return;
-    }
-    await this.operations.run(async () => {
+    if (owner === undefined) return;
+    const previewStopped = this.backend.endTask?.(owner, turnId);
+    // Capture cleanup must not delay or prevent release of desktop control.
+    void previewStopped?.catch(() => undefined);
+    try {
       if (this.lease?.threadId !== owner) return;
       if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
-      await this.backend.clearFocusWindow?.();
-      this.lease = null;
-      await this.announceDrivingAgent(null);
-    });
-    await this.publishAllThreads();
+      if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
+        this.lease.releaseRequested = true;
+        return;
+      }
+      await this.operations.run(async () => {
+        if (this.lease?.threadId !== owner) return;
+        if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
+        await this.backend.clearFocusWindow?.();
+        this.lease = null;
+        await this.announceDrivingAgent(null);
+      });
+      await this.publishAllThreads();
+    } finally {
+      await previewStopped;
+    }
   }
 
   /**

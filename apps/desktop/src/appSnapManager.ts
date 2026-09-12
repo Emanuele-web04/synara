@@ -3,6 +3,8 @@
 // Layer: Desktop main-process service
 // Depends on: A signed Swift helper plus narrow filesystem/process adapters.
 
+import { stopNativeHelper } from "./stopNativeHelper";
+
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
@@ -51,39 +53,6 @@ const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
-
-/** Wait for the owned helper before allowing another request or removing its files. */
-async function stopRequestedCapture(
-  child: AppSnapHelperProcess,
-  hasExited: () => boolean,
-): Promise<void> {
-  if (hasExited()) return;
-  await new Promise<void>((resolve, reject) => {
-    let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    const done = () => {
-      clearTimeout(killTimer);
-      clearTimeout(forceTimer);
-      child.removeListener("exit", done);
-      child.removeListener("close", done);
-      resolve();
-    };
-    const killTimer = setTimeout(() => {
-      child.kill("SIGKILL");
-      if (hasExited()) return done();
-      forceTimer = setTimeout(() => {
-        child.removeListener("exit", done);
-        child.removeListener("close", done);
-        reject(
-          new Error("AppSnap helper has not stopped; another capture is blocked until it exits."),
-        );
-      }, 1_000);
-    }, 1_000);
-    child.once("exit", done);
-    child.once("close", done);
-    child.kill("SIGTERM");
-    if (hasExited()) done();
-  });
-}
 
 interface PendingAppSnapCaptureRecord {
   capture: DesktopAppSnapCapture;
@@ -814,7 +783,7 @@ export class DesktopAppSnapManager {
     } finally {
       try {
         if (processState.child)
-          await stopRequestedCapture(processState.child, () => processState.exited);
+          await stopNativeHelper(processState.child, () => processState.exited);
       } finally {
         if (!processState.child || processState.exited) await cleanup();
         else {

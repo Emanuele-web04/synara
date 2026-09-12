@@ -1,4 +1,5 @@
 import { CuaDriverHost } from "./cuaDriverHost";
+import { ComputerNativePreview } from "./computerNativePreview";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
@@ -3641,6 +3642,15 @@ async function startCuaHost(): Promise<void> {
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
     bundleId: desktopIdentity.bundleId,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    preview: new ComputerNativePreview({
+      helperPath: resolveAppSnapHelperPath(),
+      onUserStop: (task) => {
+        void host
+          .stopTaskByUser(task)
+          .catch((error) => safeConsoleError("[desktop] computer preview stop failed", error));
+      },
+      onError: (error) => safeConsoleError("[desktop] computer preview failed", error),
+    }),
     checkPermissions: async () => {
       const state = await getDesktopPermissions().check(COMPUTER_PERMISSIONS);
       return {

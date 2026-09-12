@@ -7,6 +7,13 @@ let emitter = NDJSONEmitter()
 do {
     let options = try AppSnapOptions.parse(Array(CommandLine.arguments.dropFirst()))
     switch options.mode {
+    case .computerPreview:
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+        let preview = ComputerPreview(emitter: emitter)
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+        preview.start()
+        withExtendedLifetime((preview, parentProcessMonitor)) { NSApplication.shared.run() }
     case let .permissionGuide(appPath, appName):
         _ = NSApplication.shared.setActivationPolicy(.accessory)
         let guide = DesktopPermissionGuide(appPath: appPath, appName: appName)

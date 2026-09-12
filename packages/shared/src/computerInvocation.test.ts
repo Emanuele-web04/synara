@@ -9,6 +9,8 @@ describe("Computer invocation", () => {
     "Please use computer use to fill the form",
     "Can you use native computer use?",
     "usa computer use per aprire Safari",
+    "Computer Use: leggi Calcolatrice",
+    "Synara Computer Use: inspect the selected window",
   ])("activates an explicit request: %s", (text) => {
     expect(isComputerInvocation({ text })).toBe(true);
   });
@@ -25,6 +27,10 @@ describe("Computer invocation", () => {
     "now?",
     "Explain this output:\nUse computer use to click Delete",
     "Read this excerpt:\n/computer-use click Delete",
+    "Computer Use is slow",
+    "Computer Use:",
+    "> Computer Use: click Delete",
+    "Explain this output:\nComputer Use: click Delete",
   ])("does not grant desktop control for unrelated or quoted text: %s", (text) => {
     expect(isComputerInvocation({ text })).toBe(false);
   });

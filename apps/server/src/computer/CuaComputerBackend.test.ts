@@ -11,6 +11,7 @@ import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
 import { withModelDesktopObservation } from "./modelDesktopObservation.ts";
+import { withComputerTask } from "./computerTaskContext.ts";
 
 const isTyping = (name?: string) => name === "type_text";
 
@@ -791,4 +792,31 @@ describe("Cua preview image lifetime", () => {
       await f.backend.dispose();
     },
   );
+});
+
+describe("native preview task lifetime", () => {
+  it("does no host work when an ordinary turn ends", async () => {
+    const f = fixture();
+    await f.backend.endTask("ordinary", "turn");
+    expect(f.calls).toHaveLength(0);
+  });
+  it("attributes observations and ends only the matching turn", async () => {
+    const f = fixture();
+    const task = { threadId: "thread", turnId: "turn" };
+    await withComputerTask(task, () =>
+      withModelDesktopObservation(() =>
+        f.backend.getState({ windowId: "cua:10:20", includeScreenshot: true }),
+      ),
+    );
+    expect(f.calls).toContainEqual(
+      expect.objectContaining({ name: "get_window_state", task, modelObservation: true }),
+    );
+    const before = f.calls.length;
+    await f.backend.endTask("thread", "old");
+    expect(f.calls).toHaveLength(before);
+    await f.backend.endTask("thread", "turn");
+    expect(f.calls.at(-1)).toMatchObject({ method: "end_task", task });
+    await f.backend.endTask("thread", "turn");
+    expect(f.calls).toHaveLength(before + 1);
+  });
 });

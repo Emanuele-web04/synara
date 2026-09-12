@@ -13,6 +13,7 @@ export function isComputerInvocation(input: {
       ?.trim() ?? "";
   if (/^[>"“`~<]/.test(request)) return false;
   if (/^(?:\/|\$)(?:synara-)?computer-use(?:\s|$)/i.test(request)) return true;
+  if (/^(?:synara\s+)?computer[ -]use:\s*\S/i.test(request)) return true;
   return /^(?:(?:please|can you|could you|i want you to|per favore|puoi)\s+)?(?:use|using|invoke|start|usa|utilizza|attiva)\s+(?:(?:the|il|native|nativo|synara)\s+)*computer[ -]use\b/i.test(
     request,
   );
