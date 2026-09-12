@@ -3,9 +3,9 @@
 // Fetching and quota interpretation stay in providerUsage; gateway code only applies authority.
 
 import type { ProviderKind, ServerAgentProviderUsage } from "@synara/contracts";
-import { Duration, Effect, Option } from "effect";
+import { Effect } from "effect";
 
-import { AGENT_PROVIDER_USAGE_MAX_AGE_MS } from "../providerUsage/agent.ts";
+import { summarizeProviderUsageForAgent } from "../providerUsage/agent.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
 import { errorText } from "./toolInput.ts";
 import { READ_ONLY_TOOL_ANNOTATIONS, type ToolEntry } from "./toolRuntime.ts";
@@ -14,30 +14,11 @@ export interface AgentGatewayUsageToolsInput {
   readonly loadProviderUsage: (
     provider?: ProviderKind,
   ) => Effect.Effect<ReadonlyArray<ServerAgentProviderUsage>, unknown, never>;
-  /** Override for the stall bound. Production default is {@link USAGE_TOOL_TIMEOUT}. */
-  readonly timeout?: Duration.Input;
-}
-
-// Same bound as synara_context so a stalled provider lookup reports
-// unavailable usage instead of holding the MCP call open.
-const USAGE_TOOL_TIMEOUT = "3 seconds" as const;
-
-function timedOutUsage(provider: ProviderKind): ServerAgentProviderUsage {
-  return {
-    provider,
-    availability: "unavailable",
-    unavailableReason: "timed-out",
-    checkedAt: new Date().toISOString(),
-    freshness: { stale: true, ageMs: 0, maxAgeMs: AGENT_PROVIDER_USAGE_MAX_AGE_MS },
-    snapshot: null,
-    quotaWindows: [],
-  };
 }
 
 export function makeAgentGatewayUsageTools(
   input: AgentGatewayUsageToolsInput,
 ): ReadonlyArray<ToolEntry> {
-  const timeout = input.timeout ?? USAGE_TOOL_TIMEOUT;
   const getUsage: ToolEntry = {
     requiredCapability: "usage:read",
     definition: {
@@ -49,15 +30,15 @@ export function makeAgentGatewayUsageTools(
     },
     handler: (_args, context) =>
       input.loadProviderUsage(context.callerProvider).pipe(
-        Effect.timeoutOption(timeout),
-        // Caller-scoped load always requests exactly one provider.
-        // Keep an explicit null fallback defensive against future loader changes.
-        Effect.map((usage) =>
+        Effect.map((results) =>
           mcpToolResultJson({
-            usage: Option.match(usage, {
-              onNone: () => timedOutUsage(context.callerProvider),
-              onSome: (results) => results[0] ?? null,
-            }),
+            usage:
+              results[0] ??
+              summarizeProviderUsageForAgent({
+                provider: context.callerProvider,
+                enabled: true,
+                snapshot: null,
+              }),
           }),
         ),
         Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
@@ -75,13 +56,7 @@ export function makeAgentGatewayUsageTools(
     },
     handler: () =>
       input.loadProviderUsage().pipe(
-        Effect.timeoutOption(timeout),
-        Effect.map((usage) =>
-          Option.match(usage, {
-            onNone: () => mcpToolResultError("Provider usage lookup timed out."),
-            onSome: (results) => mcpToolResultJson({ usage: results }),
-          }),
-        ),
+        Effect.map((usage) => mcpToolResultJson({ usage })),
         Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
       ),
   };

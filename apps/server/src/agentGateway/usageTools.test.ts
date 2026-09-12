@@ -1,5 +1,7 @@
 import type { ServerAgentProviderUsage } from "@synara/contracts";
-import { Duration, Effect } from "effect";
+import { Effect } from "effect";
+
+import { readProviderUsageForAgents } from "../providerUsage/agentReader";
 import { describe, expect, it } from "vitest";
 
 import type { ToolContext } from "./toolRuntime";
@@ -96,8 +98,13 @@ describe("makeAgentGatewayUsageTools", () => {
 
   it("returns timed-out unavailable usage when the caller load stalls", async () => {
     const [tool] = makeAgentGatewayUsageTools({
-      loadProviderUsage: () => Effect.never,
-      timeout: Duration.millis(10),
+      loadProviderUsage: () =>
+        readProviderUsageForAgents({
+          providers: ["codex"],
+          enabledProviders: new Set(["codex"]),
+          loadSnapshot: () => Effect.never,
+          timeout: "10 millis",
+        }),
     });
 
     const result = await Effect.runPromise(tool!.handler({}, context));
@@ -109,15 +116,35 @@ describe("makeAgentGatewayUsageTools", () => {
     expect(timedOut.quotaWindows).toEqual([]);
   });
 
-  it("returns an error result when the list load stalls", async () => {
+  it("preserves healthy provider quotas when another provider stalls", async () => {
     const tools = makeAgentGatewayUsageTools({
-      loadProviderUsage: () => Effect.never,
-      timeout: Duration.millis(10),
+      loadProviderUsage: () =>
+        readProviderUsageForAgents({
+          providers: ["codex", "cursor"],
+          enabledProviders: new Set(["codex", "cursor"]),
+          loadSnapshot: (provider) =>
+            provider === "codex" ? Effect.succeed(usage.snapshot) : Effect.never,
+          timeout: "10 millis",
+          now: () => Date.parse(usage.checkedAt),
+        }),
     });
 
     const result = await Effect.runPromise(tools[1]!.handler({}, context));
+    const results = resultJson(result).usage as ServerAgentProviderUsage[];
 
-    expect(result.isError).toBe(true);
+    expect(result.isError).not.toBe(true);
+    expect(results[0]?.quotaWindows[0]?.remainingPercent).toBe(25);
+    expect(results[1]).toMatchObject({ provider: "cursor", unavailableReason: "timed-out" });
+  });
+
+  it("reports missing snapshots explicitly", async () => {
+    const [tool] = makeAgentGatewayUsageTools({ loadProviderUsage: () => Effect.succeed([]) });
+    const result = await Effect.runPromise(tool!.handler({}, context));
+    expect(resultJson(result).usage).toMatchObject({
+      provider: "codex",
+      availability: "unavailable",
+      unavailableReason: "missing-snapshot",
+    });
   });
 
   it("returns an error result when the load fails", async () => {

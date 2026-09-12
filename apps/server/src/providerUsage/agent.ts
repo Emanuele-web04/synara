@@ -56,7 +56,7 @@ export function summarizeProviderUsageForAgent(input: {
   enabled: boolean;
   snapshot: ServerProviderUsageSnapshot | null;
   checkedAtMs?: number;
-  timedOut?: boolean;
+  unavailableReason?: "timed-out" | "provider-error";
 }): ServerAgentProviderUsage {
   const checkedAtMs = input.checkedAtMs ?? Date.now();
   const checkedAt = new Date(checkedAtMs).toISOString();
@@ -68,11 +68,11 @@ export function summarizeProviderUsageForAgent(input: {
       snapshot: null,
     });
   }
-  if (input.timedOut) {
+  if (input.unavailableReason) {
     return unavailableResult({
       provider: input.provider,
       checkedAt,
-      reason: "timed-out",
+      reason: input.unavailableReason,
       snapshot: null,
     });
   }
@@ -109,6 +109,7 @@ export function summarizeProviderUsageForAgent(input: {
   if (
     snapshot.stale === true ||
     !Number.isFinite(observedAtMs) ||
+    observedAtMs > checkedAtMs ||
     ageMs > AGENT_PROVIDER_USAGE_MAX_AGE_MS
   ) {
     return unavailableResult({
@@ -170,21 +171,4 @@ export function summarizeProviderUsageForAgent(input: {
     snapshot,
     quotaWindows,
   };
-}
-
-export function summarizeProviderUsageListForAgent(input: {
-  providers: ReadonlyArray<ProviderKind>;
-  enabledProviders: ReadonlySet<ProviderKind>;
-  snapshots: ReadonlyArray<ServerProviderUsageSnapshot>;
-  checkedAtMs?: number;
-}): ServerAgentProviderUsage[] {
-  const byProvider = new Map(input.snapshots.map((snapshot) => [snapshot.provider, snapshot]));
-  return input.providers.map((provider) =>
-    summarizeProviderUsageForAgent({
-      provider,
-      enabled: input.enabledProviders.has(provider),
-      snapshot: byProvider.get(provider) ?? null,
-      ...(input.checkedAtMs === undefined ? {} : { checkedAtMs: input.checkedAtMs }),
-    }),
-  );
 }

@@ -1,11 +1,7 @@
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  AGENT_PROVIDER_USAGE_MAX_AGE_MS,
-  summarizeProviderUsageForAgent,
-  summarizeProviderUsageListForAgent,
-} from "./agent";
+import { AGENT_PROVIDER_USAGE_MAX_AGE_MS, summarizeProviderUsageForAgent } from "./agent";
 
 const NOW_MS = Date.parse("2026-09-08T18:00:00.000Z");
 
@@ -140,6 +136,20 @@ describe("summarizeProviderUsageForAgent", () => {
     expect(result.quotaWindows).toEqual([]);
   });
 
+  it("rejects future observations after a backward clock change", () => {
+    const result = summarizeProviderUsageForAgent({
+      provider: "codex",
+      enabled: true,
+      snapshot: snapshot(),
+      checkedAtMs: NOW_MS - 1,
+    });
+
+    expect(result.availability).toBe("unavailable");
+    expect(result.unavailableReason).toBe("stale");
+    expect(result.freshness).toMatchObject({ stale: true, ageMs: 0 });
+    expect(result.quotaWindows).toEqual([]);
+  });
+
   it("reports disabled, missing, and timed-out reads explicitly", () => {
     expect(
       summarizeProviderUsageForAgent({
@@ -162,28 +172,9 @@ describe("summarizeProviderUsageForAgent", () => {
         provider: "codex",
         enabled: true,
         snapshot: null,
-        timedOut: true,
+        unavailableReason: "timed-out",
         checkedAtMs: NOW_MS,
       }).unavailableReason,
     ).toBe("timed-out");
-  });
-});
-
-describe("summarizeProviderUsageListForAgent", () => {
-  it("preserves requested provider order and missing coverage", () => {
-    const providers: ProviderKind[] = ["codex", "claudeAgent", "cursor"];
-    const result = summarizeProviderUsageListForAgent({
-      providers,
-      enabledProviders: new Set(providers),
-      snapshots: [snapshot()],
-      checkedAtMs: NOW_MS,
-    });
-
-    expect(result.map((entry) => entry.provider)).toEqual(providers);
-    expect(result.map((entry) => entry.unavailableReason ?? "available")).toEqual([
-      "available",
-      "missing-snapshot",
-      "missing-snapshot",
-    ]);
   });
 });

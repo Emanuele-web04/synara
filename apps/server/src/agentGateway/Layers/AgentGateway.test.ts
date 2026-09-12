@@ -31,6 +31,8 @@ import { homedir } from "node:os";
 
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { vi } from "vitest";
+import { collectProviderUsageSnapshots } from "../../providerUsage/index.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -74,6 +76,11 @@ import {
 import { AgentGatewayLive } from "./AgentGateway.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
+
+// Gateway tests exercise authorization and conversion without reading local account credentials.
+vi.mock("../../providerUsage/index.ts", () => ({
+  collectProviderUsageSnapshots: vi.fn(async () => []),
+}));
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -1738,6 +1745,16 @@ describe("AgentGateway", () => {
   it.effect("scopes usage reads and context summaries to caller authority", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
+      vi.mocked(collectProviderUsageSnapshots).mockResolvedValue([
+        {
+          provider: "codex",
+          updatedAt: new Date().toISOString(),
+          limits: [{ window: "Weekly", usedPercent: 75 }],
+          usageLines: [],
+          source: "codex-usage-api",
+          status: "ok",
+        },
+      ]);
       const harness = yield* makeHarness;
       const usageResponse = yield* harness.callTool({
         token: "token-parent",
@@ -1752,7 +1769,10 @@ describe("AgentGateway", () => {
         quotaWindows: unknown[];
       };
       assert.equal(usage.provider, "codex");
-      assert.include(["available", "partial", "unavailable"], usage.availability);
+      assert.equal(usage.availability, "available");
+      assert.deepEqual(vi.mocked(collectProviderUsageSnapshots).mock.lastCall?.[1], {
+        providers: ["codex"],
+      });
       assert.isArray(usage.quotaWindows);
       assert.notProperty(usage, "credential");
       assert.notProperty(usage, "token");
@@ -1780,7 +1800,10 @@ describe("AgentGateway", () => {
       };
       assert.isFalse(readonlyContext.capabilities.usageRead);
       assert.equal(readonlyContext.usage.unavailableReason, "not-authorized");
-    }).pipe(Effect.provide(gatewayLayer));
+    }).pipe(
+      Effect.provide(gatewayLayer),
+      Effect.ensuring(Effect.sync(() => vi.mocked(collectProviderUsageSnapshots).mockReset())),
+    );
   });
 
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {

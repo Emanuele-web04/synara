@@ -47,10 +47,7 @@ import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts"
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
-import {
-  summarizeProviderUsageForAgent,
-  summarizeProviderUsageListForAgent,
-} from "../../providerUsage/agent.ts";
+import { readProviderUsageForAgents } from "../../providerUsage/agentReader.ts";
 import { collectProviderUsageSnapshots } from "../../providerUsage/index.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
@@ -168,45 +165,26 @@ export const makeAgentGateway = Effect.gen(function* () {
   });
   const loadProviderUsage = (provider?: ProviderKind) =>
     Effect.gen(function* () {
-      const settings = yield* serverSettings.getSettings;
-      const nowMs = Date.now();
+      const settings = yield* serverSettings.getSettings.pipe(Effect.timeout("3 seconds"));
       const enabledProviders = new Set(
         PROVIDER_USAGE_PROVIDERS.filter((kind) => settings.providers[kind].enabled),
       );
-      const requestedProviders = provider
-        ? [provider]
-        : PROVIDER_USAGE_PROVIDERS.filter((kind) => enabledProviders.has(kind));
-      const providersToFetch = requestedProviders.filter((kind) => enabledProviders.has(kind));
-      const snapshots =
-        providersToFetch.length === 0
-          ? []
-          : yield* Effect.promise(() =>
-              collectProviderUsageSnapshots(
-                {
-                  homeDir: serverConfig.homeDir,
-                  env: process.env,
-                  platform: process.platform,
-                  nowMs,
-                  claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
-                },
-                { providers: providersToFetch },
-              ),
-            );
-      if (provider) {
-        return [
-          summarizeProviderUsageForAgent({
-            provider,
-            enabled: enabledProviders.has(provider),
-            snapshot: snapshots[0] ?? null,
-            checkedAtMs: nowMs,
-          }),
-        ];
-      }
-      return summarizeProviderUsageListForAgent({
-        providers: requestedProviders,
+      return yield* readProviderUsageForAgents({
+        providers: provider ? [provider] : [...enabledProviders],
         enabledProviders,
-        snapshots,
-        checkedAtMs: nowMs,
+        loadSnapshot: (kind) =>
+          Effect.promise(() =>
+            collectProviderUsageSnapshots(
+              {
+                homeDir: serverConfig.homeDir,
+                env: process.env,
+                platform: process.platform,
+                nowMs: Date.now(),
+                claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+              },
+              { providers: [kind] },
+            ),
+          ).pipe(Effect.map((snapshots) => snapshots[0] ?? null)),
       });
     });
 

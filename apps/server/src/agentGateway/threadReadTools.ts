@@ -15,7 +15,7 @@ import {
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
-import { AGENT_PROVIDER_USAGE_MAX_AGE_MS } from "../providerUsage/agent.ts";
+import { summarizeProviderUsageForAgent } from "../providerUsage/agent.ts";
 import { SYNARA_HARNESS_POLICY_VERSION } from "./harnessPolicy.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
 import {
@@ -87,7 +87,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_context",
       description:
-        "Inspect the current Synara harness identity, caller thread/turn, and authorized coordination capabilities.",
+        "Inspect the current Synara harness identity, caller thread/turn, authorized coordination capabilities, and caller provider quota. Only fresh, available quotaWindows represent actionable remaining account quota.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: {
         title: "Synara context",
@@ -104,21 +104,14 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const usageRead = context.callerCapabilities.has("usage:read");
         const usage = usageRead
           ? yield* loadProviderUsage(context.callerProvider).pipe(
-              Effect.timeout("3 seconds"),
               Effect.match({
-                onFailure: () => ({
-                  provider: context.callerProvider,
-                  availability: "unavailable" as const,
-                  unavailableReason: "timed-out" as const,
-                  checkedAt: new Date().toISOString(),
-                  freshness: {
-                    stale: true,
-                    ageMs: 0,
-                    maxAgeMs: AGENT_PROVIDER_USAGE_MAX_AGE_MS,
-                  },
-                  snapshot: null,
-                  quotaWindows: [],
-                }),
+                onFailure: () =>
+                  summarizeProviderUsageForAgent({
+                    provider: context.callerProvider,
+                    enabled: true,
+                    snapshot: null,
+                    unavailableReason: "provider-error",
+                  }),
                 onSuccess: (results) => results[0] ?? null,
               }),
             )
