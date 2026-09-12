@@ -9172,7 +9172,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("enables plan mode from the composer extras menu", async () => {
+  it("enables plan mode from the composer extras panel", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -9183,8 +9183,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Mode").click();
-      await page.getByRole("menuitemradio", { name: "Plan" }).click();
+      await page.getByText("Plan the work before changing files").click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
