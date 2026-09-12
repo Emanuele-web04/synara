@@ -134,7 +134,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
         defaultProvider: "codex",
         assistantDeliveryMode: "buffered",
       });
-      expect(deferred).toEqual({ kind: "dispatched" });
+      expect(deferred).toEqual({ kind: "dispatched", deferred: true });
       expect(
         nativeApiMocks.dispatchCommand.mock.calls.filter(
           ([command]) => commandType(command) === "thread.turn.start",

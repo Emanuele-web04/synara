@@ -62,7 +62,7 @@ import { newCommandId, newMessageId } from "./utils";
 
 export type KanbanDraftDispatchResult =
   /** The drafted prompt is on its way; runtime events move the card to In Progress. */
-  | { kind: "dispatched"; warning?: string | undefined }
+  | { kind: "dispatched"; warning?: string | undefined; deferred?: true | undefined }
   /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
@@ -172,12 +172,13 @@ function dispatchKanbanDraftThreadInternal(
   }
   if (hasPendingTurnDispatch(input.threadId)) {
     // A chat send for this thread is already in flight — defer to it instead
-    // of queueing a second turn.
+    // of queueing a second turn. Marked deferred so callers never report this
+    // as their own dispatch: the chat send owns the turn (and its failure).
     const raced = inFlightDispatchByThreadId.get(input.threadId);
     if (raced) {
       return raced;
     }
-    return Promise.resolve<KanbanDraftDispatchResult>({ kind: "dispatched" });
+    return Promise.resolve<KanbanDraftDispatchResult>({ kind: "dispatched", deferred: true });
   }
   const dispatchPromise = dispatchKanbanDraftThreadOnce(input, mode).finally(() => {
     inFlightDispatchByThreadId.delete(input.threadId);

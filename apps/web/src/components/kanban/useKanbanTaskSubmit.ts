@@ -163,10 +163,19 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {
+          if (result.deferred) {
+            toastManager.add({
+              type: "info",
+              title: "Chat send in progress",
+              description: "The board stood down; the running chat send owns this turn.",
+            });
+            onOpenChange(false);
+            return;
+          }
           toastManager.add({
-            type: "success",
+            type: result.warning ? "warning" : "success",
             title: "Task started",
-            description: truncatedPrompt,
+            description: result.warning ?? truncatedPrompt,
           });
           onOpenChange(false);
           return;

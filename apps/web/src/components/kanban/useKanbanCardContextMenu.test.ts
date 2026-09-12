@@ -61,14 +61,19 @@ vi.mock("~/lib/kanbanDispatch", () => ({
     description: "mock",
   }),
 }));
-vi.mock("../../composerDraftStore", () => ({
-  useComposerDraftStore: (selector: (state: unknown) => unknown) =>
+vi.mock("../../composerDraftStore", () => {
+  const hook = (selector: (state: unknown) => unknown) =>
     selector({
       clearComposerContent: harness.clearComposerContent,
       clearDraftThread: harness.clearDraftThread,
       clearProjectDraftThreadById: harness.clearProjectDraftThreadById,
+    });
+  return {
+    useComposerDraftStore: Object.assign(hook, {
+      getState: () => ({ draftsByThreadId: {} }),
     }),
-}));
+  };
+});
 vi.mock("../../kanbanUiStore", () => ({
   useKanbanUiStore: {
     getState: () => ({ clearOptimisticDispatch: harness.clearOptimisticDispatch }),
@@ -229,6 +234,29 @@ describe("useKanbanCardContextMenu", () => {
     });
     expect(harness.dispatchCommand).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "thread.turn.start" }),
+    );
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "Goal set" }),
+    );
+  });
+
+  it("sends a dispatchable draft as goal from the menu", async () => {
+    harness.clicked = "send-as-goal";
+    const draftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      thread: null,
+      draftPrompt: "Write the goal down",
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(draftCard, EVENT);
+    await vi.waitFor(() => expect(harness.sendAsGoal).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
+    expect(menu.some((item) => item.id === "send-as-goal")).toBe(true);
+    expect(harness.sendAsGoal).toHaveBeenCalledWith(
+      expect.objectContaining({ card: expect.objectContaining({ threadId: THREAD_ID }) }),
     );
     expect(harness.toast).toHaveBeenCalledWith(
       expect.objectContaining({ type: "success", title: "Goal set" }),

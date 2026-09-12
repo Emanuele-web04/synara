@@ -747,6 +747,35 @@ export function reorderDraftCardIds(
   return next;
 }
 
+/**
+ * Reorders within the full persisted draft order while the user only sees a
+ * capped/filtered slice: hidden cards keep their slots, the visible move is
+ * replayed onto them. Falls back to the visible-only order when no stored
+ * order exists. Returns null when nothing moved.
+ */
+export function reorderDraftCardIdsInFullOrder(
+  storedOrder: readonly string[] | undefined,
+  visibleCardIds: readonly string[],
+  activeCardId: string,
+  overCardId: string,
+): string[] | null {
+  const nextVisible = reorderDraftCardIds(visibleCardIds, activeCardId, overCardId);
+  if (nextVisible === null) {
+    return null;
+  }
+  if (storedOrder === undefined || storedOrder.length === 0) {
+    return nextVisible;
+  }
+  const visibleSet = new Set(visibleCardIds);
+  const slots = storedOrder.filter((cardId) => visibleSet.has(cardId));
+  // Stored order drifted from the render (stale ids): fall back to visible.
+  if (slots.length !== visibleCardIds.length) {
+    return nextVisible;
+  }
+  const moved = new Map(nextVisible.map((cardId, index) => [slots[index]!, cardId]));
+  return storedOrder.map((cardId) => moved.get(cardId) ?? cardId);
+}
+
 interface KanbanProjectBuckets {
   draft: KanbanCard[];
   inProgress: KanbanCard[];

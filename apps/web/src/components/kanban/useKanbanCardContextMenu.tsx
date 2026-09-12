@@ -216,7 +216,13 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           providerOptions: getProviderStartOptions(settings),
         });
         if (result.kind === "dispatched") {
-          if (result.warning) {
+          if (result.deferred) {
+            toastManager.add({
+              type: "info",
+              title: "Chat send in progress",
+              description: "The board stood down; the running chat send owns this turn.",
+            });
+          } else if (result.warning) {
             toastManager.add({
               type: "warning",
               title: "Task started",
@@ -240,12 +246,16 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       }
       if (clicked === "set-as-goal") {
         if (!isSettableGoalCard) return;
-        const goal = card.title.trim();
+        // Prefer the live composer prompt (what Send-as-goal would send) over
+        // the card title, which can be a fallback like "New thread".
+        const livePrompt =
+          useComposerDraftStore.getState().draftsByThreadId[card.threadId]?.prompt.trim() ?? "";
+        const goal = (livePrompt.length > 0 ? livePrompt : card.title).trim();
         if (goal.length === 0) {
           toastManager.add({
             type: "error",
             title: "Could not set goal",
-            description: "The thread has no title to save as its goal.",
+            description: "The thread has no prompt or title to save as its goal.",
           });
           return;
         }

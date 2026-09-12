@@ -17,6 +17,7 @@ import {
   orderDraftCards,
   overviewVisibleKanbanCards,
   reorderDraftCardIds,
+  reorderDraftCardIdsInFullOrder,
   resolveDraftDropAction,
   resolveOptimisticDispatchOutcome,
   type BuildKanbanBoardInput,
@@ -818,6 +819,20 @@ describe("reorderDraftCardIds", () => {
   it("returns null when nothing moved or ids are unknown", () => {
     expect(reorderDraftCardIds(["a", "b"], "a", "a")).toBeNull();
     expect(reorderDraftCardIds(["a", "b"], "missing", "a")).toBeNull();
+  });
+});
+
+describe("reorderDraftCardIdsInFullOrder", () => {
+  it("replays a visible move onto stored slots, keeping hidden cards", () => {
+    expect(reorderDraftCardIdsInFullOrder(["h", "a", "b", "c"], ["a", "b", "c"], "a", "c")).toEqual(
+      ["h", "b", "c", "a"],
+    );
+  });
+
+  it("falls back to the visible order when stored order drifted", () => {
+    expect(reorderDraftCardIdsInFullOrder(["x"], ["a", "b"], "a", "b")).toEqual(["b", "a"]);
+    expect(reorderDraftCardIdsInFullOrder(undefined, ["a", "b"], "a", "b")).toEqual(["b", "a"]);
+    expect(reorderDraftCardIdsInFullOrder(["a", "b", "c"], ["a", "b"], "a", "a")).toBeNull();
   });
 });
 

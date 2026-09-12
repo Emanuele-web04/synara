@@ -7,7 +7,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ProjectId } from "@synara/contracts";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { PlusIcon } from "~/lib/icons";
@@ -18,6 +18,9 @@ import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { resolveDraftDropAction, type KanbanCard, type KanbanColumnKey } from "./kanban.logic";
 
 const COLUMN_DROP_ID_PREFIX = "kanban-column";
+const DONE_RENDER_CAP = 30;
+// Done columns grow unbounded; cap the initial render so opening the board
+// stays cheap for long-lived projects.
 
 export function kanbanColumnDropId(projectId: ProjectId, column: KanbanColumnKey): string {
   return `${COLUMN_DROP_ID_PREFIX}|${column}|${projectId}`;
@@ -122,13 +125,20 @@ function KanbanColumnComponent({
   const { isOver, setNodeRef } = useDroppable({ id: dropId, disabled: !droppable });
 
   const sortableItems = useMemo(() => cards.map((card) => card.cardId), [cards]);
+  const [showAll, setShowAll] = useState(false);
+
+  const cappedCards =
+    columnKey === "done" && !showAll && cards.length > DONE_RENDER_CAP
+      ? cards.slice(0, DONE_RENDER_CAP)
+      : cards;
+  const hiddenCount = cards.length - cappedCards.length;
 
   const dispatchTarget =
     columnKey === "inProgress" &&
     activeCard !== null &&
     resolveDraftDropAction(activeCard) === "dispatch";
 
-  const cardElements = cards.map((card) =>
+  const cardElements = cappedCards.map((card) =>
     sortable ? (
       <SortableKanbanCard
         key={card.cardId}
@@ -197,6 +207,17 @@ function KanbanColumnComponent({
         {cards.length === 0 ? (
           <li className="list-none rounded-lg border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground/60">
             No cards
+          </li>
+        ) : null}
+        {hiddenCount > 0 ? (
+          <li className="list-none">
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="w-full rounded-lg px-3 py-1.5 text-center text-xs text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
+            >
+              Show {hiddenCount} more
+            </button>
           </li>
         ) : null}
       </ul>

@@ -36,7 +36,7 @@ import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import { NeedsReviewFilter } from "./NeedsReviewFilter";
 import {
-  reorderDraftCardIds,
+  reorderDraftCardIdsInFullOrder,
   resolveReviewFoldToggleLabel,
   shouldShowReviewFoldToggle,
   type KanbanCard,
@@ -91,6 +91,26 @@ export function KanbanProjectBoardView({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
+  // Reorder against the full persisted order so hidden (filtered-out) cards
+  // keep their slots instead of being dropped from the stored order.
+  const storedDraftOrder = useKanbanUiStore(
+    (state) => state.draftOrderByProjectId[board.projectId],
+  );
+  const persistVisibleMove = (
+    visibleCardIds: readonly string[],
+    activeId: string,
+    overId: string,
+  ) => {
+    const nextOrder = reorderDraftCardIdsInFullOrder(
+      storedDraftOrder,
+      visibleCardIds,
+      activeId,
+      overId,
+    );
+    if (nextOrder) {
+      setDraftOrder(board.projectId, nextOrder);
+    }
+  };
   const hasRevealedReviewFold = useKanbanUiStore((state) => state.hasRevealedReviewFold);
   const setHasRevealedReviewFold = useKanbanUiStore((state) => state.setHasRevealedReviewFold);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
@@ -136,6 +156,22 @@ export function KanbanProjectBoardView({
       providerOptions: providerOptionsForDispatch,
     });
     if (result.kind === "dispatched") {
+      if (result.deferred) {
+        toastManager.add({
+          type: "info",
+          title: "Chat send in progress",
+          description: "The board stood down; the running chat send owns this turn.",
+        });
+        return;
+      }
+      if (result.warning) {
+        toastManager.add({
+          type: "warning",
+          title: "Draft sent",
+          description: result.warning,
+        });
+        return;
+      }
       toastManager.add({
         type: "success",
         title: "Draft sent",
@@ -169,10 +205,7 @@ export function KanbanProjectBoardView({
     if (index === -1 || neighbor === undefined) {
       return;
     }
-    const nextOrder = reorderDraftCardIds(visibleCardIds, card.cardId, neighbor);
-    if (nextOrder) {
-      setDraftOrder(board.projectId, nextOrder);
-    }
+    persistVisibleMove(visibleCardIds, card.cardId, neighbor);
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -210,15 +243,13 @@ export function KanbanProjectBoardView({
     const targetColumn = resolveDropColumn(board, overId);
     if (targetColumn === "draft") {
       const visibleCardIds = board.draft.map((draftCard) => draftCard.cardId);
-      const nextOrder =
-        overId === activeId
-          ? null
-          : board.draft.some((draftCard) => draftCard.cardId === overId)
-            ? reorderDraftCardIds(visibleCardIds, activeId, overId)
-            : // Dropped on the column body itself: move to the end.
-              reorderDraftCardIds(visibleCardIds, activeId, visibleCardIds.at(-1) ?? activeId);
-      if (nextOrder) {
-        setDraftOrder(board.projectId, nextOrder);
+      if (overId !== activeId) {
+        if (board.draft.some((draftCard) => draftCard.cardId === overId)) {
+          persistVisibleMove(visibleCardIds, activeId, overId);
+        } else {
+          // Dropped on the column body itself: move to the end.
+          persistVisibleMove(visibleCardIds, activeId, visibleCardIds.at(-1) ?? activeId);
+        }
       }
       return;
     }
@@ -330,12 +361,7 @@ export function KanbanProjectBoardView({
       </div>
       <DragOverlay dropAnimation={null}>
         {activeCard ? (
-          <KanbanCardView
-            card={activeCard}
-            isOverlay
-            prByThreadId={prByThreadId}
-            {...nowMsProps}
-          />
+          <KanbanCardView card={activeCard} isOverlay prByThreadId={prByThreadId} {...nowMsProps} />
         ) : null}
       </DragOverlay>
     </DndContext>
