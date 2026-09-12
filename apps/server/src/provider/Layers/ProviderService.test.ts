@@ -47,6 +47,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
@@ -153,6 +154,10 @@ function makeFakeCodexAdapter(
   },
 ) {
   const sessions = new Map<ThreadId, ProviderSession>();
+  // Retained-stopped sessions stay registered: the faithful fake models the
+  // production state where an interrupted stop marked the context stopped but
+  // never reached the map deletion.
+  const stoppedSessions = new Set<ThreadId>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
   const startSession = vi.fn(
@@ -170,6 +175,7 @@ function makeFakeCodexAdapter(
           updatedAt: now,
         };
         sessions.set(session.threadId, session);
+        stoppedSessions.delete(session.threadId);
         return session;
       }),
   );
@@ -181,6 +187,14 @@ function makeFakeCodexAdapter(
       if (!sessions.has(input.threadId)) {
         return Effect.fail(
           new ProviderAdapterSessionNotFoundError({
+            provider,
+            threadId: input.threadId,
+          }),
+        );
+      }
+      if (stoppedSessions.has(input.threadId)) {
+        return Effect.fail(
+          new ProviderAdapterSessionClosedError({
             provider,
             threadId: input.threadId,
           }),
@@ -240,6 +254,7 @@ function makeFakeCodexAdapter(
     (threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
         sessions.delete(threadId);
+        stoppedSessions.delete(threadId);
       }),
   );
 
@@ -249,7 +264,8 @@ function makeFakeCodexAdapter(
   );
 
   const hasSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
+    (threadId: ThreadId): Effect.Effect<boolean> =>
+      Effect.succeed(sessions.has(threadId) && !stoppedSessions.has(threadId)),
   );
 
   const readThread = vi.fn(
@@ -297,6 +313,7 @@ function makeFakeCodexAdapter(
     (): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
         sessions.clear();
+        stoppedSessions.clear();
       }),
   );
 
@@ -371,6 +388,11 @@ function makeFakeCodexAdapter(
     compactThread,
     forkThread,
     stopAll,
+    retainStopped: (threadId: ThreadId): void => {
+      if (sessions.has(threadId)) {
+        stoppedSessions.add(threadId);
+      }
+    },
   };
 }
 
@@ -416,6 +438,7 @@ function makeProviderServiceLayer(
   providers?: {
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
+    readonly includeOpenCode?: boolean;
     readonly codexDidResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -430,6 +453,7 @@ function makeProviderServiceLayer(
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
   const pi = makeFakeCodexAdapter("pi");
+  const openCode = makeFakeCodexAdapter("opencode");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
       provider === "codex"
@@ -442,7 +466,9 @@ function makeProviderServiceLayer(
               ? Effect.succeed(droid.adapter)
               : provider === "pi" && providers?.includePi === true
                 ? Effect.succeed(pi.adapter)
-                : Effect.fail(new ProviderUnsupportedError({ provider })),
+                : provider === "opencode" && providers?.includeOpenCode === true
+                  ? Effect.succeed(openCode.adapter)
+                  : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
       Effect.succeed([
         "codex",
@@ -450,6 +476,7 @@ function makeProviderServiceLayer(
         "antigravity",
         ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
         ...(providers?.includePi === true ? (["pi"] as const) : []),
+        ...(providers?.includeOpenCode === true ? (["opencode"] as const) : []),
       ] as const),
   };
 
@@ -476,6 +503,7 @@ function makeProviderServiceLayer(
     antigravity,
     droid,
     pi,
+    openCode,
     layer,
     rawLayer,
   };
@@ -505,6 +533,11 @@ const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: tr
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
   codexDidResumeSession: () => false,
 });
+const stoppedOpenCodeRouting = makeProviderServiceLayer(undefined, { includeOpenCode: true });
+const stoppedOpenCodeDisabledRouting = makeProviderServiceLayer(
+  { providerIsEnabled: (provider) => Effect.succeed(provider !== "opencode") },
+  { includeOpenCode: true },
+);
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-"));
@@ -6485,5 +6518,157 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
     }),
+  );
+});
+
+stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (it) => {
+  it.effect("PR1160 TASK-06 recovers a stopped-retained OpenCode session for sendTurn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-opencode-stopped-retained");
+
+      const initial = yield* provider.startSession(threadId, {
+        provider: "opencode",
+        threadId,
+        cwd: "/tmp/opencode-stopped-retained",
+        runtimeMode: "full-access",
+      });
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), true);
+
+      stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), false);
+      const retained = yield* stoppedOpenCodeRouting.openCode.listSessions();
+      assert.equal(retained.length, 1);
+      assert.equal(retained[0]?.threadId, threadId);
+
+      stoppedOpenCodeRouting.openCode.startSession.mockClear();
+      stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+      const turn = yield* provider.sendTurn({ threadId, input: "recover", attachments: [] });
+
+      assert.equal(turn.threadId, threadId);
+      assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 1);
+      const resumeInput = stoppedOpenCodeRouting.openCode.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(resumeInput?.resumeCursor, initial.resumeCursor);
+      assert.equal(stoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 1);
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), true);
+    }),
+  );
+
+  it.effect(
+    "PR1160 TASK-06 fails explicitly when a stopped-retained OpenCode session has no resume state",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-no-resume");
+
+        yield* stoppedOpenCodeRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+        yield* directory.upsert({ threadId, provider: "opencode" });
+        stoppedOpenCodeRouting.openCode.startSession.mockClear();
+        stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(
+          provider.sendTurn({ threadId, input: "recover", attachments: [] }),
+        );
+        assertFailure(
+          result,
+          new ProviderValidationError({
+            operation: "ProviderService.sendTurn",
+            issue: `Cannot recover thread '${threadId}' because no provider resume state is persisted.`,
+          }),
+        );
+        assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
+  );
+
+  it.effect(
+    "PR1160 TASK-07 rejects inactive control-plane calls for a stopped-retained OpenCode session",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-control-plane");
+
+        yield* provider.startSession(threadId, {
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+
+        const interruptResult = yield* Effect.result(provider.interruptTurn({ threadId }));
+        assertFailure(
+          interruptResult,
+          new ProviderValidationError({
+            operation: "ProviderService.interruptTurn",
+            issue: `Cannot interrupt thread '${threadId}' because its provider runtime is not active.`,
+          }),
+        );
+
+        const approvalResult = yield* Effect.result(
+          provider.respondToRequest({
+            threadId,
+            requestId: asRequestId("opencode-stopped-approval"),
+            decision: "accept",
+          }),
+        );
+        assertFailure(
+          approvalResult,
+          new ProviderValidationError({
+            operation: "ProviderService.respondToRequest",
+            issue:
+              "Cannot respond to request 'opencode-stopped-approval' because the provider runtime is not active.",
+            reason: "runtime-unavailable",
+          }),
+        );
+        assert.equal(stoppedOpenCodeRouting.openCode.interruptTurn.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeRouting.openCode.respondToRequest.mock.calls.length, 0);
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(binding?.provider, "opencode");
+      }),
+  );
+});
+
+stoppedOpenCodeDisabledRouting.layer("ProviderServiceLive OpenCode disabled provider", (it) => {
+  it.effect(
+    "PR1160 TASK-06 rejects recovery of a stopped-retained OpenCode session while disabled",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-disabled");
+
+        yield* stoppedOpenCodeDisabledRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeDisabledRouting.openCode.retainStopped(threadId);
+        yield* directory.upsert({
+          threadId,
+          provider: "opencode",
+          resumeCursor: { opaque: "resume-disabled-opencode" },
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeDisabledRouting.openCode.startSession.mockClear();
+        stoppedOpenCodeDisabledRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(
+          provider.sendTurn({ threadId, input: "recover", attachments: [] }),
+        );
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure._tag, "ProviderValidationError");
+        assert.equal(result.failure.message.includes("disabled"), true);
+        assert.equal(stoppedOpenCodeDisabledRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeDisabledRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
   );
 });
