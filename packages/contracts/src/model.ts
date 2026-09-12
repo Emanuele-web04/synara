@@ -237,6 +237,20 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
+// GPT-6 Astra is the Codex app-server default. Its ladder extends past xhigh with
+// max/ultra and defaults to medium, mirroring `model/list`.
+const CODEX_GPT_6_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_GPT_5_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium", isDefault: true },
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultra", label: "Ultra" },
+  ],
+};
+
 const GROK_CLI_EFFORT_DESCRIPTIONS = {
   low: "Quick, fast implementations",
   medium: "Balanced effort with standard implementation and testing",
@@ -564,6 +578,11 @@ export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" 
 
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
+    {
+      slug: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      capabilities: CODEX_GPT_6_CAPABILITIES,
+    },
     {
       slug: "gpt-5.5",
       name: "GPT-5.5",
@@ -1117,7 +1136,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
-  codex: "gpt-5.5",
+  codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   devin: "adaptive",
@@ -1149,6 +1168,9 @@ export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[n
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
+    astra: "gpt-6-astra",
+    "6": "gpt-6-astra",
+    "gpt-6": "gpt-6-astra",
     "5.5": "gpt-5.5",
     "5.4": "gpt-5.4",
     "5.3": "gpt-5.3-codex",
