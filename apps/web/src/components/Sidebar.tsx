@@ -302,6 +302,8 @@ import {
   SidebarTrigger,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { useSidebarThreadOrderStore } from "../sidebarThreadOrderStore";
+import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import {
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
@@ -380,6 +382,12 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
+import {
+  SidebarSortableThreadItem,
+  SidebarSortableThreadList,
+  SidebarThreadReorderHandle,
+  type SidebarSortableThreadRenderProps,
+} from "./SidebarSortableThreadList";
 import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
@@ -465,6 +473,7 @@ const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
 const SIDEBAR_THREAD_SORT_LABELS: Record<SidebarThreadSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
+  manual: "Manual",
 };
 const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
@@ -1455,6 +1464,10 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
+  const manualThreadIds = useSidebarThreadOrderStore((state) => state.orderedThreadIds);
+  const moveThreadInManualOrder = useSidebarThreadOrderStore((state) => state.moveThread);
+  const pruneManualThreadOrder = useSidebarThreadOrderStore((state) => state.pruneThreads);
+  const movePinnedThread = usePinnedThreadsStore((state) => state.movePinnedThread);
   // Projects is always available; Studio and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -1661,6 +1674,7 @@ export default function Sidebar() {
     timestamp: number;
   } | null>(null);
   const dragInProgressRef = useRef(false);
+  const reorderPointerThreadIdRef = useRef<ThreadId | null>(null);
   const suppressProjectClickAfterDragRef = useRef(false);
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
@@ -1690,6 +1704,29 @@ export default function Sidebar() {
   );
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
+  useEffect(() => {
+    if (!threadsHydrated) return;
+    pruneManualThreadOrder(
+      Object.keys(sidebarThreadSummaryById).map((threadId) => ThreadId.makeUnsafe(threadId)),
+    );
+  }, [pruneManualThreadOrder, sidebarThreadSummaryById, threadsHydrated]);
+
+  const finishThreadReorder = useCallback(() => {
+    reorderPointerThreadIdRef.current = null;
+  }, []);
+  const moveSidebarThread = useCallback(
+    (input: {
+      scopeThreadIds: readonly ThreadId[];
+      activeThreadId: ThreadId;
+      overThreadId: ThreadId;
+    }) => {
+      const changed = moveThreadInManualOrder(input);
+      if (changed && appSettings.sidebarThreadSortOrder !== "manual") {
+        updateSettings({ sidebarThreadSortOrder: "manual" });
+      }
+    },
+    [appSettings.sidebarThreadSortOrder, moveThreadInManualOrder, updateSettings],
+  );
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const studioProjectIdSet = useMemo(
@@ -1838,6 +1875,7 @@ export default function Sidebar() {
     appSettings,
     clearTerminalState,
     handleNewChat,
+    manualThreadIds,
     projectById,
     routeSplitViewId: routeSearch.splitViewId ?? null,
     routeThreadId,
@@ -1926,6 +1964,10 @@ export default function Sidebar() {
         pinnedThreadIds,
       ),
     [activeSpaceNonStudioSidebarTreeThreads, isOnStudio, pinnedThreadIds, studioSidebarTreeThreads],
+  );
+  const pinnedSortableThreads = useMemo(
+    () => pinnedThreads.filter((thread) => !thread.parentThreadId),
+    [pinnedThreads],
   );
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -2106,6 +2148,7 @@ export default function Sidebar() {
             isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
         ),
         appSettings.sidebarThreadSortOrder,
+        manualThreadIds,
       )[0];
       if (!latestThread) return;
 
@@ -2114,7 +2157,13 @@ export default function Sidebar() {
         params: { threadId: latestThread.id },
       });
     },
-    [appSettings.sidebarThreadSortOrder, hideAutomationRunThreads, navigate, sidebarThreads],
+    [
+      appSettings.sidebarThreadSortOrder,
+      hideAutomationRunThreads,
+      manualThreadIds,
+      navigate,
+      sidebarThreads,
+    ],
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
@@ -2134,6 +2183,7 @@ export default function Sidebar() {
             latestUserMessageAt: thread.latestUserMessageAt,
           })),
         appSettings.sidebarThreadSortOrder,
+        manualThreadIds,
       )[0];
       if (latestThread) {
         await navigate({
@@ -2145,7 +2195,7 @@ export default function Sidebar() {
 
       return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate],
+    [appSettings.sidebarThreadSortOrder, handleNewThread, manualThreadIds, navigate],
   );
 
   const openExistingProjectFromSnapshot = useCallback(
@@ -2168,6 +2218,7 @@ export default function Sidebar() {
             latestUserMessageAt: thread.latestUserMessageAt,
           })),
         appSettings.sidebarThreadSortOrder,
+        manualThreadIds,
       )[0];
       if (latestThread) {
         await navigate({
@@ -2180,7 +2231,13 @@ export default function Sidebar() {
       setProjectExpanded(projectId, true);
       return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate, setProjectExpanded],
+    [
+      appSettings.sidebarThreadSortOrder,
+      handleNewThread,
+      manualThreadIds,
+      navigate,
+      setProjectExpanded,
+    ],
   );
 
   // Poll the server read model briefly after project.create so we only recover from fresh state.
@@ -2310,7 +2367,8 @@ export default function Sidebar() {
   const resolveBackTargetForThreads = useCallback(
     (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
       const latestThread =
-        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder, manualThreadIds)[0] ??
+        null;
       const availableThreadIds = new Set<string>(threads.map((thread) => thread.id));
       if (extraAvailableThreadIds) {
         for (const threadId of extraAvailableThreadIds) {
@@ -2326,7 +2384,7 @@ export default function Sidebar() {
         latestThreadId: latestThread?.id ?? null,
       });
     },
-    [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
+    [appSettings.sidebarThreadSortOrder, lastThreadRoute, manualThreadIds, splitViewsById],
   );
 
   // Fresh unsent chats have a route id but no persisted sidebar summary yet. Keep those draft
@@ -3365,6 +3423,7 @@ export default function Sidebar() {
     projectById,
     sidebarThreads,
     sidebarThreadSortOrder: appSettings.sidebarThreadSortOrder,
+    manualThreadIds,
     routeThreadId,
     routeProjectId,
     isOnKanban,
@@ -3825,11 +3884,11 @@ export default function Sidebar() {
     for (const [projectId, projectThreads] of sidebarThreadsByProjectId) {
       byProjectId.set(
         projectId,
-        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder),
+        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder, manualThreadIds),
       );
     }
     return byProjectId;
-  }, [appSettings.sidebarThreadSortOrder, sidebarThreadsByProjectId]);
+  }, [appSettings.sidebarThreadSortOrder, manualThreadIds, sidebarThreadsByProjectId]);
   const handleProjectTitlePointerDownCapture = useCallback(() => {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
@@ -3872,6 +3931,7 @@ export default function Sidebar() {
       threads: sortThreadsForSidebar(
         chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
         appSettings.sidebarThreadSortOrder,
+        manualThreadIds,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
     });
@@ -3880,10 +3940,16 @@ export default function Sidebar() {
     appSettings.sidebarThreadSortOrder,
     chatSectionExpanded,
     chatProjects,
+    manualThreadIds,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
     () => visibleChatThreadRows.map((row) => row.thread.id),
+    [visibleChatThreadRows],
+  );
+  const chatReorderScopeThreadIds = useMemo(
+    () =>
+      visibleChatThreadRows.filter((row) => !row.thread.parentThreadId).map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
   // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
@@ -3903,6 +3969,7 @@ export default function Sidebar() {
           pinnedThreadIds,
         ),
         appSettings.sidebarThreadSortOrder,
+        manualThreadIds,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
     });
@@ -3910,12 +3977,20 @@ export default function Sidebar() {
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
     isOnStudio,
+    manualThreadIds,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
     studioProjects,
   ]);
   const studioChatThreadIds = useMemo(
     () => studioChatThreadRows.map((row) => row.thread.id),
+    [studioChatThreadRows],
+  );
+  const studioSortableThreads = useMemo(
+    () =>
+      studioChatThreadRows
+        .filter((row) => !row.thread.parentThreadId)
+        .map((row) => ({ id: row.thread.id, title: row.thread.title })),
     [studioChatThreadRows],
   );
   const visibleChatPreviewEntries = useMemo(
@@ -3958,6 +4033,14 @@ export default function Sidebar() {
       renderedChatEntries: visibleEntries,
     };
   }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
+  const chatSortableThreads = useMemo(
+    () =>
+      renderedChatEntries
+        .map((entry) => entry.row.thread)
+        .filter((thread) => !thread.parentThreadId)
+        .map((thread) => ({ id: thread.id, title: thread.title })),
+    [renderedChatEntries],
+  );
   const allStandardProjectsBase = useMemo(
     () =>
       sortedProjects.filter((project) =>
@@ -4335,6 +4418,7 @@ export default function Sidebar() {
     threadId: ThreadId;
     toneClassName: string;
     isPinned: boolean;
+    reorderHandle?: ReactNode;
     includePinToggle?: boolean;
     compact?: boolean;
   }) {
@@ -4344,6 +4428,7 @@ export default function Sidebar() {
     return (
       <SidebarRowHoverActions threadId={input.threadId}>
         <div className="pointer-events-auto inline-flex items-center gap-2">
+          {input.reorderHandle}
           {includePinToggle ? (
             <ThreadPinToggleButton
               pinned={input.isPinned}
@@ -4442,9 +4527,27 @@ export default function Sidebar() {
         <div className="my-1 flex items-center justify-between px-2 py-1">
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
         </div>
-        <div className="flex flex-col gap-0.5">
-          {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
-        </div>
+        <SidebarSortableThreadList
+          items={pinnedSortableThreads.map((thread) => ({
+            id: thread.id,
+            title: thread.title,
+          }))}
+          onDragStart={(threadId) => {
+            reorderPointerThreadIdRef.current = threadId;
+          }}
+          onDragFinish={finishThreadReorder}
+          onMove={({ activeThreadId, overThreadId }) => {
+            movePinnedThread({
+              scopeThreadIds: pinnedSortableThreads.map((thread) => thread.id),
+              activeThreadId,
+              overThreadId,
+            });
+          }}
+        >
+          <div className="flex flex-col gap-0.5">
+            {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+          </div>
+        </SidebarSortableThreadList>
       </div>
     );
   }
@@ -4515,6 +4618,42 @@ export default function Sidebar() {
     );
   }
 
+  function renderSortableThread(
+    thread: SidebarThreadSummary,
+    reorderable: boolean,
+    render: (sortable: SidebarSortableThreadRenderProps | null) => ReactNode,
+  ) {
+    if (!reorderable || thread.parentThreadId) return render(null);
+    return (
+      <SidebarSortableThreadItem key={thread.id} threadId={thread.id}>
+        {render}
+      </SidebarSortableThreadItem>
+    );
+  }
+
+  function renderThreadReorderHandle(
+    thread: SidebarThreadSummary,
+    sortable: SidebarSortableThreadRenderProps | null,
+  ) {
+    if (!sortable) return undefined;
+    return (
+      <SidebarThreadReorderHandle
+        threadId={thread.id}
+        title={thread.title}
+        manualOrder={appSettings.sidebarThreadSortOrder === "manual"}
+        sortable={sortable}
+        onPointerIntent={() => {
+          reorderPointerThreadIdRef.current = thread.id;
+        }}
+        onPointerRelease={() => {
+          if (reorderPointerThreadIdRef.current === thread.id) {
+            reorderPointerThreadIdRef.current = null;
+          }
+        }}
+      />
+    );
+  }
+
   function renderPinnedThreadRow(thread: SidebarThreadSummary) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -4550,14 +4689,16 @@ export default function Sidebar() {
       scope: "pinned",
       threadId: thread.id,
     });
-    return (
+    return renderSortableThread(thread, true, (sortable) => (
       <Tooltip key={thread.id}>
         <TooltipTrigger
           {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
           render={
             <div
+              ref={sortable?.setNodeRef}
+              style={sortable?.style}
               data-thread-hover-anchor={hoverAnchorId}
-              className="group/thread-row relative w-full"
+              className={cn("group/thread-row relative w-full", sortable?.sortableClassName)}
             />
           }
         >
@@ -4597,6 +4738,7 @@ export default function Sidebar() {
             }}
             onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
             onKeyDown={(event) => {
+              if ((event.target as Element).closest("[data-thread-reorder-handle]")) return;
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activateThreadFromSidebarIntent(thread.id);
@@ -4652,6 +4794,7 @@ export default function Sidebar() {
                   threadId: thread.id,
                   toneClassName: "text-muted-foreground/42",
                   isPinned: true,
+                  reorderHandle: renderThreadReorderHandle(thread, sortable),
                   compact: isSubagentThread,
                 }),
               })}
@@ -4660,7 +4803,7 @@ export default function Sidebar() {
         </TooltipTrigger>
         {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
       </Tooltip>
-    );
+    ));
   }
 
   function renderThreadRow(
@@ -4671,6 +4814,7 @@ export default function Sidebar() {
     // their top-level rows align flush like pinned rows instead of the indented
     // column used for project-nested threads.
     topLevel = false,
+    reorderable = false,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -4713,11 +4857,13 @@ export default function Sidebar() {
       threadId: thread.id,
     });
 
-    return (
+    return renderSortableThread(thread, reorderable, (sortable) => (
       <SidebarMenuSubItem
         key={thread.id}
+        ref={sortable?.setNodeRef}
+        style={sortable?.style}
         data-thread-hover-anchor={hoverAnchorId}
-        className="group/thread-row w-full"
+        className={cn("group/thread-row w-full", sortable?.sortableClassName)}
         data-thread-item
       >
         {leadingPr ? (
@@ -4751,6 +4897,10 @@ export default function Sidebar() {
                 )}
                 draggable
                 onDragStart={(event) => {
+                  if (reorderPointerThreadIdRef.current === thread.id) {
+                    event.preventDefault();
+                    return;
+                  }
                   const dragImage = event.currentTarget as HTMLElement | null;
                   event.dataTransfer.effectAllowed = "move";
                   event.dataTransfer.setData(
@@ -4777,6 +4927,7 @@ export default function Sidebar() {
                 }}
                 onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
                 onKeyDown={(event) => {
+                  if ((event.target as Element).closest("[data-thread-reorder-handle]")) return;
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
                   activateThreadFromSidebarIntent(thread.id);
@@ -4847,6 +4998,7 @@ export default function Sidebar() {
                   threadId: thread.id,
                   toneClassName: secondaryMetaClass,
                   isPinned,
+                  reorderHandle: renderThreadReorderHandle(thread, sortable),
                   compact: isSubagentThread,
                 }),
               })}
@@ -4855,7 +5007,7 @@ export default function Sidebar() {
           {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
         </Tooltip>
       </SidebarMenuSubItem>
-    );
+    ));
   }
 
   function renderProjectItem(
@@ -4869,6 +5021,7 @@ export default function Sidebar() {
     }
     const {
       orderedProjectThreadIds,
+      projectThreads,
       allProjectThreadCount,
       projectStatus,
       visibleEntries,
@@ -5084,9 +5237,28 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
-              {visibleEntries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
-              )}
+              <SidebarSortableThreadList
+                items={visibleEntries
+                  .filter((entry) => !entry.thread.parentThreadId)
+                  .map((entry) => ({ id: entry.thread.id, title: entry.thread.title }))}
+                onDragStart={(threadId) => {
+                  reorderPointerThreadIdRef.current = threadId;
+                }}
+                onDragFinish={finishThreadReorder}
+                onMove={({ activeThreadId, overThreadId }) => {
+                  moveSidebarThread({
+                    scopeThreadIds: projectThreads
+                      .filter((thread) => !thread.parentThreadId)
+                      .map((thread) => thread.id),
+                    activeThreadId,
+                    overThreadId,
+                  });
+                }}
+              >
+                {visibleEntries.map((entry) =>
+                  renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false, true),
+                )}
+              </SidebarSortableThreadList>
 
               {(canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
@@ -6105,17 +6277,32 @@ export default function Sidebar() {
                       />
                     </>,
                   )}
-                  <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
-                    {studioChatThreadRows.length > 0 ? (
-                      studioChatThreadRows.map((row) =>
-                        renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
-                      )
-                    ) : (
-                      <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                        {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
-                      </div>
-                    )}
-                  </SidebarMenu>
+                  <SidebarSortableThreadList
+                    items={studioSortableThreads}
+                    onDragStart={(threadId) => {
+                      reorderPointerThreadIdRef.current = threadId;
+                    }}
+                    onDragFinish={finishThreadReorder}
+                    onMove={({ activeThreadId, overThreadId }) => {
+                      moveSidebarThread({
+                        scopeThreadIds: studioSortableThreads.map((thread) => thread.id),
+                        activeThreadId,
+                        overThreadId,
+                      });
+                    }}
+                  >
+                    <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
+                      {studioChatThreadRows.length > 0 ? (
+                        studioChatThreadRows.map((row) =>
+                          renderThreadRow(row.thread, studioChatThreadIds, row.depth, true, true),
+                        )
+                      ) : (
+                        <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                          {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
+                        </div>
+                      )}
+                    </SidebarMenu>
+                  </SidebarSortableThreadList>
                 </SidebarGroup>
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">
@@ -6339,62 +6526,78 @@ export default function Sidebar() {
 
               <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
                 <div className={DISCLOSURE_INNER_CLASS}>
-                  <SidebarMenu
-                    className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
+                  <SidebarSortableThreadList
+                    items={chatSortableThreads}
+                    onDragStart={(threadId) => {
+                      reorderPointerThreadIdRef.current = threadId;
+                    }}
+                    onDragFinish={finishThreadReorder}
+                    onMove={({ activeThreadId, overThreadId }) => {
+                      moveSidebarThread({
+                        scopeThreadIds: chatReorderScopeThreadIds,
+                        activeThreadId,
+                        overThreadId,
+                      });
+                    }}
                   >
-                    {visibleChatThreadRows.length > 0 ? (
-                      renderedChatEntries.map((entry) =>
-                        renderThreadRow(
-                          entry.row.thread,
-                          visibleChatThreadIds,
-                          entry.row.depth,
-                          true,
-                        ),
-                      )
-                    ) : (
-                      <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                        No chats yet
-                      </div>
-                    )}
-                    {canShowMoreChatThreads || canShowLessChatThreads ? (
-                      <SidebarMenuItem className="w-full">
-                        <div className="flex w-full items-center gap-1">
-                          {canShowMoreChatThreads ? (
-                            <SidebarMenuButton
-                              size="sm"
-                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
-                              onMouseDown={preventFocusOnMouseDown}
-                              onClick={() =>
-                                setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
-                              }
-                            >
-                              <span>Show more</span>
-                            </SidebarMenuButton>
-                          ) : null}
-                          {canShowLessChatThreads ? (
-                            <SidebarMenuButton
-                              size="sm"
-                              className={cn(
-                                "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
-                                // Keep the left indent when "Show less" is the only affordance left.
-                                canShowMoreChatThreads
-                                  ? "w-auto flex-none px-2"
-                                  : "flex-1 pr-2 pl-8",
-                              )}
-                              onMouseDown={preventFocusOnMouseDown}
-                              onClick={() =>
-                                setChatThreadListExtraPages(
-                                  Math.max(0, chatThreadListEffectiveExtraPages - 1),
-                                )
-                              }
-                            >
-                              <span>Show less</span>
-                            </SidebarMenuButton>
-                          ) : null}
+                    <SidebarMenu
+                      className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
+                    >
+                      {visibleChatThreadRows.length > 0 ? (
+                        renderedChatEntries.map((entry) =>
+                          renderThreadRow(
+                            entry.row.thread,
+                            visibleChatThreadIds,
+                            entry.row.depth,
+                            true,
+                            true,
+                          ),
+                        )
+                      ) : (
+                        <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+                          No chats yet
                         </div>
-                      </SidebarMenuItem>
-                    ) : null}
-                  </SidebarMenu>
+                      )}
+                      {canShowMoreChatThreads || canShowLessChatThreads ? (
+                        <SidebarMenuItem className="w-full">
+                          <div className="flex w-full items-center gap-1">
+                            {canShowMoreChatThreads ? (
+                              <SidebarMenuButton
+                                size="sm"
+                                className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                                onMouseDown={preventFocusOnMouseDown}
+                                onClick={() =>
+                                  setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
+                                }
+                              >
+                                <span>Show more</span>
+                              </SidebarMenuButton>
+                            ) : null}
+                            {canShowLessChatThreads ? (
+                              <SidebarMenuButton
+                                size="sm"
+                                className={cn(
+                                  "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                  // Keep the left indent when "Show less" is the only affordance left.
+                                  canShowMoreChatThreads
+                                    ? "w-auto flex-none px-2"
+                                    : "flex-1 pr-2 pl-8",
+                                )}
+                                onMouseDown={preventFocusOnMouseDown}
+                                onClick={() =>
+                                  setChatThreadListExtraPages(
+                                    Math.max(0, chatThreadListEffectiveExtraPages - 1),
+                                  )
+                                }
+                              >
+                                <span>Show less</span>
+                              </SidebarMenuButton>
+                            ) : null}
+                          </div>
+                        </SidebarMenuItem>
+                      ) : null}
+                    </SidebarMenu>
+                  </SidebarSortableThreadList>
                 </div>
               </div>
             </div>

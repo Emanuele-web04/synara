@@ -44,6 +44,7 @@ import {
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
 import { useLatestProjectStore } from "../latestProjectStore";
+import { useSidebarThreadOrderStore } from "../sidebarThreadOrderStore";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -79,6 +80,7 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -180,6 +182,54 @@ interface ChatLayoutMeasurement {
 
 function isoAt(offsetSeconds: number): string {
   return new Date(BASE_TIME_MS + offsetSeconds * 1_000).toISOString();
+}
+
+async function dragSidebarThreadHandle(sourceId: ThreadId, targetId: ThreadId): Promise<void> {
+  const source = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${sourceId}"]`);
+  const target = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${targetId}"]`);
+  if (!source || !target) throw new Error("Expected sidebar reorder handles to be rendered");
+  const sourceRect = source.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const pointer = {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 41,
+    pointerType: "mouse",
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+  } as const;
+  source.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      ...pointer,
+      clientX: sourceRect.left + sourceRect.width / 2,
+      clientY: sourceRect.top + sourceRect.height / 2,
+    }),
+  );
+  document.dispatchEvent(
+    new PointerEvent("pointermove", {
+      ...pointer,
+      clientX: sourceRect.left + sourceRect.width / 2,
+      clientY: sourceRect.top + sourceRect.height / 2 + 8,
+    }),
+  );
+  await nextFrame();
+  document.dispatchEvent(
+    new PointerEvent("pointermove", {
+      ...pointer,
+      clientX: targetRect.left + targetRect.width / 2,
+      clientY: targetRect.top + targetRect.height / 2,
+    }),
+  );
+  await nextFrame();
+  document.dispatchEvent(
+    new PointerEvent("pointerup", {
+      ...pointer,
+      buttons: 0,
+      clientX: targetRect.left + targetRect.width / 2,
+      clientY: targetRect.top + targetRect.height / 2,
+    }),
+  );
 }
 
 function createBaseServerConfig(): ServerConfig {
@@ -2135,6 +2185,7 @@ describe("ChatView transcript geometry (full app)", () => {
     localStorage.clear();
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
+    useSidebarThreadOrderStore.setState({ orderedThreadIds: [] });
     useWorkspacePathsStore.setState({
       homeDir: null,
       chatWorkspaceRoot: null,
@@ -6546,6 +6597,64 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // The empty thread view and composer should still be visible.
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("reorders sidebar conversations, switches to manual order, and preserves split dragging", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sidebar-reorder" as MessageId,
+        targetText: "sidebar reorder test",
+      }),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(`[data-thread-reorder-handle="${OTHER_THREAD_ID}"]`),
+        ).not.toBeNull();
+        expect(
+          document.querySelector(`[data-thread-reorder-handle="${THREAD_ID}"]`),
+        ).not.toBeNull();
+      });
+
+      await dragSidebarThreadHandle(OTHER_THREAD_ID, THREAD_ID);
+
+      await vi.waitFor(() => {
+        expect(useSidebarThreadOrderStore.getState().orderedThreadIds).toEqual([
+          THREAD_ID,
+          OTHER_THREAD_ID,
+        ]);
+        expect(localStorage.getItem("synara:app-settings:v1")).toContain(
+          '"sidebarThreadSortOrder":"manual"',
+        );
+      });
+
+      const orderedHandles = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-thread-reorder-handle]"),
+      ).map((handle) => handle.dataset.threadReorderHandle);
+      expect(orderedHandles).toEqual([THREAD_ID, OTHER_THREAD_ID]);
+
+      const reorderedHandle = document.querySelector<HTMLElement>(
+        `[data-thread-reorder-handle="${THREAD_ID}"]`,
+      );
+      const draggableRow = reorderedHandle
+        ?.closest("[data-thread-item]")
+        ?.querySelector<HTMLElement>("[draggable='true']");
+      expect(draggableRow).not.toBeNull();
+      const splitDragData = new DataTransfer();
+      draggableRow?.dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: splitDragData,
+        }),
+      );
+      expect(JSON.parse(splitDragData.getData(THREAD_DRAG_MIME))).toEqual({ threadId: THREAD_ID });
     } finally {
       await mounted.cleanup();
     }

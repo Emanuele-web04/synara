@@ -588,6 +588,13 @@ describe("sidebar sort defaults", () => {
   it("defaults thread sorting to updated_at", () => {
     expect(DEFAULT_SIDEBAR_THREAD_SORT_ORDER).toBe("updated_at");
   });
+
+  it("decodes manual thread sorting", () => {
+    const decoded = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({ sidebarThreadSortOrder: "manual" }),
+    );
+    expect(decoded.sidebarThreadSortOrder).toBe("manual");
+  });
 });
 
 describe("normalizeStoredAppSettings", () => {

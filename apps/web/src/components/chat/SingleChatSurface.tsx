@@ -83,6 +83,7 @@ import {
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
+import { useSidebarThreadOrderStore } from "../../sidebarThreadOrderStore";
 import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import {
   ChatMountLoader,
@@ -249,6 +250,7 @@ export function SingleChatSurface(props: {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings: appSettings } = useAppSettings();
+  const manualThreadIds = useSidebarThreadOrderStore((state) => state.orderedThreadIds);
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
@@ -812,6 +814,7 @@ export function SingleChatSurface(props: {
     const latestThread = sortThreadsForSidebar(
       threadSummaries.filter((thread) => thread.projectId === projectId),
       appSettings.sidebarThreadSortOrder,
+      manualThreadIds,
     )[0];
 
     if (latestThread) {
