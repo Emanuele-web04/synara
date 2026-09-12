@@ -15,7 +15,7 @@ import {
 } from "@synara/contracts";
 import { COMPUTER_PERMISSION_LABELS, listComputerPermissions } from "@synara/shared/computerGrants";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
@@ -109,7 +109,21 @@ export function ComputerSettingsPanel({
   // The native permission surface is the AppSnap helper: the same coach that
   // AppSnap's own settings drive, asked about the computer-use grant set.
   const hasNativePermissionSetup = typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
-  useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }), active);
+  // Returning from System Settings must re-pull both the server status and the
+  // native grant snapshot — the toggle the user just flipped lives in the
+  // second one.
+  const refreshPermissionState = useCallback(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    void bridge
+      .getState(COMPUTER_PERMISSION_KINDS)
+      .then((next) => setAppSnapState(next))
+      .catch(() => undefined);
+  }, []);
+  useRefreshOnWindowReturn(() => {
+    void statusQuery.refetch({ cancelRefetch: false });
+    refreshPermissionState();
+  }, active);
 
   // Panel-level on purpose: hooks above the `!active` return stay mounted while
   // the surface is hidden, so a dismissed coach still clears the remembered
@@ -235,7 +249,10 @@ export function ComputerSettingsPanel({
               size="xs"
               variant="outline"
               disabled={statusQuery.isFetching || setup.isPending}
-              onClick={() => void statusQuery.refetch()}
+              onClick={() => {
+                void statusQuery.refetch();
+                refreshPermissionState();
+              }}
             >
               {statusQuery.isFetching ? "Checking…" : "Refresh"}
             </Button>

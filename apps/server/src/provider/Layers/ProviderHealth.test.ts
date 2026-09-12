@@ -124,7 +124,7 @@ function hangingSpawnerLayer(input: {
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(2),
+    pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
     exitCode: Effect.never,
     isRunning: Effect.succeed(true),
     kill: () => Effect.sync(input.onKill),

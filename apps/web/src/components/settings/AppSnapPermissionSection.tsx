@@ -251,7 +251,9 @@ export function AppSnapPermissionSection({
     const requestId = requestGuard.begin();
     setRecheckPending(true);
     try {
-      const next = await bridge.requestPermissions(permissionKinds);
+      // getState runs the helper's preflight only: a recheck must re-read TCC,
+      // not raise the macOS permission prompts again.
+      const next = await bridge.getState(permissionKinds);
       if (!requestGuard.isCurrent(requestId)) return;
       onStateChangeRef.current(next);
       if (next.status === "permission-required") {
@@ -259,7 +261,7 @@ export function AppSnapPermissionSection({
           type: "info",
           title: "Permissions unchanged",
           description:
-            "Use Grant next to a permission to walk through setup. If you just granted, restart Synara to apply it.",
+            "Use Grant next to a permission to walk through setup.",
         });
       }
     } catch (error) {
@@ -330,7 +332,7 @@ export function AppSnapPermissionSection({
       })}
       <SettingsRow
         title="Permission status"
-        description="Grant each permission with the steps above. macOS applies changes after a restart."
+        description="Grant each permission with the steps above."
         control={
           <Button
             type="button"

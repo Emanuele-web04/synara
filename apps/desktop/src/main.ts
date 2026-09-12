@@ -372,6 +372,10 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+// The OS key store can pend forever on an unanswered securityd prompt (locked
+// keychain, signature change, wedged SecurityAgent). Startup must not wait on
+// it: session cookies are disposable, a bricked launch is not.
+const BROWSER_SESSION_RESTORE_TIMEOUT_MS = 5_000;
 // User-driven like the menu and renderer reasons, so it must not be filtered
 // out by the automatic-activity suppression a previous install failure arms.
 const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
@@ -5357,7 +5361,15 @@ async function bootstrap(): Promise<void> {
     browserOsKeyStore,
   );
   try {
-    await browserSessionRestore.initialize();
+    await Promise.race([
+      browserSessionRestore.initialize(),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Browser session restoration timed out.")),
+          BROWSER_SESSION_RESTORE_TIMEOUT_MS,
+        ),
+      ),
+    ]);
   } catch {
     console.warn(
       "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",

@@ -434,6 +434,15 @@ function isLegacyPermissionSet(permissions: readonly DesktopAppSnapPermissionKin
   );
 }
 
+const APP_SNAP_GUIDE_PANE_PERMISSION_KINDS: Record<
+  DesktopAppSnapSettingsPane,
+  DesktopAppSnapPermissionKind
+> = {
+  accessibility: "accessibility",
+  "input-monitoring": "inputMonitoring",
+  "screen-recording": "screenRecording",
+};
+
 function isPermissionErrorCode(code: string): boolean {
   return (
     code === "input-monitoring-required" ||
@@ -485,6 +494,12 @@ export class DesktopAppSnapManager {
   #guideProcess: AppSnapHelperProcess | null = null;
   #guideOutputLines: Readline.Interface | null = null;
   #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
+  // The coach's own grant check runs inside the long-lived guide helper, and
+  // macOS never lets a running process observe a fresh Accessibility grant —
+  // so the manager re-checks through a newly spawned helper on a timer and
+  // closes the coach itself when the pane flips.
+  #activeGuidePane: DesktopAppSnapSettingsPane | null = null;
+  #guideGrantWatch: { child: AppSnapHelperProcess; timer: NodeJS.Timeout } | null = null;
   // A setup session guides each missing pane in turn. A renderer-driven guide
   // leaves this queue empty, so its close never spawns a follow-on coach.
   #guidePaneQueue: DesktopAppSnapSettingsPane[] = [];
@@ -634,7 +649,9 @@ export class DesktopAppSnapManager {
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
     if (permissions.length === 0) return this.getState();
-    if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
+    // Check only — the OS prompt for each missing pane fires when its guide
+    // step begins, so setup never raises every macOS dialog at once.
+    if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
       return this.getState();
     }
     this.#guidePaneQueue = permissions.map((kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]);
@@ -734,13 +751,17 @@ export class DesktopAppSnapManager {
       // A helper that dies mid-write must not surface as an unhandled stream error.
       child.stdin?.on("error", () => undefined);
       this.#guideProcess = child;
+      this.#activeGuidePane = pane;
       this.#lastGuideState = null;
+      this.#startGuideGrantWatch(child);
       this.#guideOutputLines = this.#wireHelperOutput(child, (message) =>
         this.#handleGuideMessage(child, message),
       );
       child.once("exit", () => {
         if (this.#guideProcess !== child) return;
         this.#guideProcess = null;
+        this.#activeGuidePane = null;
+        this.#stopGuideGrantWatch(child);
         this.#guideOutputLines?.close();
         this.#guideOutputLines = null;
         const finalState = this.#lastGuideState;
@@ -803,6 +824,11 @@ export class DesktopAppSnapManager {
         // The coach still follows System Settings when it opens by itself.
       }
     }
+    // Raise this pane's own macOS prompt as its step begins: the request adds
+    // the app to the pane's list, and at most one OS dialog is ever on screen.
+    void this.#runPermissionCommand("--request-permissions", [
+      APP_SNAP_GUIDE_PANE_PERMISSION_KINDS[pane],
+    ]);
     this.#spawnPermissionGuide(pane);
   }
 
@@ -817,6 +843,8 @@ export class DesktopAppSnapManager {
     const child = this.#guideProcess;
     if (!child) return;
     this.#guideProcess = null;
+    this.#activeGuidePane = null;
+    this.#stopGuideGrantWatch(child);
     this.#guideOutputLines?.close();
     this.#guideOutputLines = null;
     try {
@@ -827,6 +855,66 @@ export class DesktopAppSnapManager {
     setTimeout(() => {
       child.kill("SIGTERM");
     }, 500).unref();
+  }
+
+  /**
+   * Polls the guide pane's grant through a freshly spawned helper on each tick:
+   * the coach's own in-process check can never see a new Accessibility grant,
+   * so without this the coach would stay up after the user flips the toggle.
+   * Every tick also re-emits the permission snapshot, which keeps the renderer
+   * badges live while a guide is on screen.
+   */
+  #startGuideGrantWatch(child: AppSnapHelperProcess): void {
+    this.#stopGuideGrantWatch();
+    const timer = setInterval(() => {
+      if (this.#guideProcess !== child) {
+        this.#stopGuideGrantWatch(child);
+        return;
+      }
+      const pane = this.#activeGuidePane;
+      if (!pane) return;
+      const kinds =
+        this.#guideSessionKinds.length > 0
+          ? this.#guideSessionKinds
+          : [APP_SNAP_GUIDE_PANE_PERMISSION_KINDS[pane]];
+      void this.#runPermissionCommand("--check-permissions", kinds)
+        .then(() => {
+          if (this.#guideProcess !== child || this.#activeGuidePane !== pane) return;
+          if (this.#panePermission(pane) !== "granted") return;
+          this.#onGuidePaneGranted(child);
+        })
+        .catch(() => undefined);
+    }, 800);
+    timer.unref();
+    this.#guideGrantWatch = { child, timer };
+  }
+
+  #stopGuideGrantWatch(child?: AppSnapHelperProcess): void {
+    const watch = this.#guideGrantWatch;
+    if (!watch) return;
+    if (child && watch.child !== child) return;
+    clearInterval(watch.timer);
+    this.#guideGrantWatch = null;
+  }
+
+  /**
+   * The watch saw the active pane grant while the coach was still up: report
+   * the grant, retire the coach, and carry a setup session to its next pane.
+   * `#stopGuideProcess` nulls `#guideProcess` before the child exits, so the
+   * exit handler will not advance the session — this method does it instead.
+   */
+  #onGuidePaneGranted(child: AppSnapHelperProcess): void {
+    if (this.#guideProcess !== child) return;
+    this.#stopGuideGrantWatch(child);
+    this.#lastGuideState = "granted";
+    this.#options.onPermissionGuideState("granted");
+    this.#stopGuideProcess();
+    if (this.#guidePaneQueue.length === 0) return;
+    void this.#runPermissionCommand("--check-permissions", this.#guideSessionKinds)
+      .then(() => this.#advancePermissionGuide())
+      .catch(() => {
+        this.#guidePaneQueue = [];
+      });
   }
 
   #handleGuideMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
