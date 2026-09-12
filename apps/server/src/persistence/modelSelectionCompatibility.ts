@@ -49,18 +49,20 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
 // Imported instance ids may be runtime names rather than Synara provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
-  if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
-    return "pi";
-  }
-  if (lowerLabel.includes("devin")) {
-    return "devin";
-  }
+  // OMP must win over the `pi` token check: "Oh My Pi" and "OMP" labels would
+  // otherwise attribute to Pi.
   if (
     /(^|[^a-z0-9])omp([^a-z0-9]|$)/u.test(lowerLabel) ||
     lowerLabel.includes("oh-my-pi") ||
     lowerLabel.includes("oh my pi")
   ) {
     return "omp";
+  }
+  if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
+    return "pi";
+  }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
   }
   if (lowerLabel.includes("opencode")) {
     return "opencode";

@@ -65,6 +65,7 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { resolveOmpCliBinaryPath } from "../acp/OmpAcpSupport";
 import {
   hasDevinApiKeyEnv,
   readDevinStoredCredentials,
@@ -1513,7 +1514,7 @@ export const checkOmpProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "omp";
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
 
     const versionProbe = yield* probeProviderCliVersion(
       runOmpCommand(["--version"], executable),
@@ -1524,8 +1525,8 @@ export const checkOmpProviderStatus = (
       const error = versionProbe.cause;
       return {
         provider: OMP_PROVIDER,
-        status: "warning" as const,
-        available: true,
+        status: "error" as const,
+        available: false,
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1538,8 +1539,8 @@ export const checkOmpProviderStatus = (
     if (versionProbe.outcome === "timeout") {
       return {
         provider: OMP_PROVIDER,
-        status: "warning" as const,
-        available: true,
+        status: "error" as const,
+        available: false,
         authStatus: "unknown" as const,
         checkedAt,
         message: "OMP CLI health check timed out before Synara could verify the installed version.",
@@ -1551,8 +1552,8 @@ export const checkOmpProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: OMP_PROVIDER,
-        status: "warning" as const,
-        available: true,
+        status: "error" as const,
+        available: false,
         authStatus: "unknown" as const,
         checkedAt,
         message: detail ? `OMP CLI health check failed. ${detail}` : "OMP CLI health check failed.",

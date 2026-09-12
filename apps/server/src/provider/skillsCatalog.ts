@@ -602,6 +602,7 @@ export async function discoverSkillsCatalog(
     input.provider ?? "",
     input.homeDir,
     input.synaraBaseDir,
+    input.agentDir?.trim() ?? "",
     input.includeDuplicateOrigins ? "all-origins" : "deduped",
   ].join("\u0000");
 
