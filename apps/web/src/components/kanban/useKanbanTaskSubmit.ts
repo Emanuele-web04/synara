@@ -39,6 +39,8 @@ interface UseKanbanTaskSubmitInput {
   readonly interactionMode: ProviderInteractionMode;
   readonly envMode: DraftThreadEnvMode;
   readonly sendAsDraft: boolean;
+  /** New-task dialog "send as goal" toggle (off by default; dialog-owned state). */
+  readonly sendAsGoal?: boolean | undefined;
   readonly defaultProvider: ProviderKind;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
@@ -62,6 +64,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     interactionMode,
     envMode,
     sendAsDraft,
+    sendAsGoal = false,
     defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
@@ -156,6 +159,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
+      ...(sendAsGoal ? { sendAsGoal: true as const } : {}),
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {

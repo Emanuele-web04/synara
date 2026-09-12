@@ -167,6 +167,10 @@ export function KanbanNewTaskDialog({
   // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
   // the task parks in Draft — matching where the user clicked.
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
+  // Off by default: create-and-send starts the task with its prompt as the
+  // agent goal. Disabled while "Send as draft" is on (a parked draft has no
+  // turn to carry a goal).
+  const [sendAsGoal, setSendAsGoal] = useState(false);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -272,6 +276,7 @@ export function KanbanNewTaskDialog({
     interactionMode,
     envMode,
     sendAsDraft,
+    sendAsGoal,
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
@@ -662,6 +667,17 @@ export function KanbanNewTaskDialog({
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}
                 />
                 Send as draft
+              </label>
+              <label
+                className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
+                title={sendAsDraft ? "Turn off Send as draft to send as goal." : undefined}
+              >
+                <Switch
+                  checked={sendAsGoal && !sendAsDraft}
+                  disabled={sendAsDraft}
+                  onCheckedChange={(checked) => setSendAsGoal(checked === true)}
+                />
+                Send as goal
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
                 {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}
