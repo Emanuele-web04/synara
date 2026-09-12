@@ -3981,15 +3981,33 @@ describe("ChatView transcript geometry (full app)", () => {
             expect(bounds.bottom).toBeLessThanOrEqual(viewport.bottom);
           });
           await new Promise<void>((resolve) => setTimeout(resolve, 350));
+        } else if (action === "wheel near end") {
+          // A tiny upward wheel must detach follow, but the list recovers a
+          // no-op gesture after two animation frames. Wait that recovery out
+          // and keep the gesture near the end until takeover actually sticks.
+          const initialTop = container.scrollTop;
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            await userEvent.wheel(container, { delta: { y: -16 } });
+            await waitForLayout();
+            if (
+              container.scrollTop < initialTop - 1 &&
+              getScrollContainerDistanceFromBottom(container) >= 10
+            ) {
+              break;
+            }
+          }
         } else {
           await userEvent.wheel(container, {
-            delta: { y: action === "wheel near end" ? -12 : -350 },
+            delta: { y: -350 },
           });
         }
         await vi.waitFor(() =>
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
+        if (action === "wheel near end") {
+          expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10);
+        }
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
