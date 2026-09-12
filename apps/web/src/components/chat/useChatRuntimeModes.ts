@@ -1,3 +1,5 @@
+import { useMutation } from "@tanstack/react-query";
+import { changeComputerPermission } from "../../lib/changeComputerPermission";
 import {
   ProviderInteractionMode,
   RuntimeMode,
@@ -8,7 +10,7 @@ import {
 } from "@synara/contracts";
 import { useCallback, useEffect, useRef } from "react";
 import { newCommandId } from "~/lib/utils";
-import { readNativeApi } from "~/nativeApi";
+import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { providerModelSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
@@ -46,6 +48,9 @@ export function useChatRuntimeModes({
   activeProviderStatus,
   scheduleComposerFocus,
 }: ChatRuntimeModesInput) {
+  const setComposerDraftComputerControl = useComposerDraftStore(
+    (state) => state.setEnableComputerControl,
+  );
   const setComposerDraftRuntimeMode = useComposerDraftStore((state) => state.setRuntimeMode);
   const setDraftThreadContext = useComposerDraftStore((state) => state.setDraftThreadContext);
   const setComposerDraftInteractionMode = useComposerDraftStore(
@@ -141,6 +146,36 @@ export function useChatRuntimeModes({
     },
     [persistRuntimeModeChange],
   );
+  const computerPermissionChange = useMutation({
+    mutationFn: (enabled: boolean) =>
+      changeComputerPermission({
+        threadId,
+        enabled,
+        establishedThread: serverThread !== undefined,
+        change: (input) => ensureNativeApi().computer.changePermission(input),
+        persist: setComposerDraftComputerControl,
+      }),
+    onSuccess: () => scheduleComposerFocus(),
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: "Computer permission change failed",
+        description: `${error.message} Access may remain blocked. Retry the change.`,
+      }),
+  });
+  const handleComputerControlChange = useCallback(
+    (enabled: boolean) => {
+      if (!computerPermissionChange.isPending) computerPermissionChange.mutate(enabled);
+    },
+    [computerPermissionChange],
+  );
+  // "Enable" on a computer-control denial card: switch control on for this chat
+  // and suggest a retry message when the composer is empty, so the user can just
+  // hit send. Deliberately not auto-sent: the user should see and approve what
+  // goes back to the agent.
+  const handleEnableComputerControlFromDenial = useCallback(() => {
+    handleComputerControlChange(true);
+  }, [handleComputerControlChange]);
 
   useEffect(() => {
     if (
@@ -261,6 +296,9 @@ export function useChatRuntimeModes({
     [serverThread],
   );
   return {
+    computerPermissionChange,
+    handleComputerControlChange,
+    handleEnableComputerControlFromDenial,
     persistRuntimeModeChange,
     handleRuntimeModeChange,
     handleInteractionModeChange,

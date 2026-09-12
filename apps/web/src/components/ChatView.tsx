@@ -1,3 +1,11 @@
+import { useThreadComputerStateSeed } from "../hooks/useThreadComputerStateSeed";
+import { useThreadComputerAvailability } from "../computerStateStore";
+import { resolveEffectiveComputerControl, type TurnDispatchSettings } from "./ChatView.logic";
+import {
+  COMPUTER_CONTROL_HINT_EFFORT,
+  shouldShowComputerControlEffortHint,
+} from "./chat/composerComputerControlHint";
+import { ComposerComputerControlEffortHint } from "./chat/ComposerComputerControlEffortHint";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   MessageId,
@@ -552,6 +560,7 @@ export default function ChatView({
     restoreComposerDraftPromptHistorySavedDraft,
     setComposerDraftModelSelection,
     setComposerDraftProviderModelOptions,
+    setComposerDraftComputerControl,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
     enqueueQueuedComposerTurn,
@@ -793,6 +802,30 @@ export default function ChatView({
     [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  // The computer-control toggle needs availability before the Computer pane has
+  // ever been opened, so the composer seeds the snapshot itself.
+  useThreadComputerStateSeed(threadId);
+  const computerAvailability = useThreadComputerAvailability(threadId);
+  const computerControlAvailable = computerAvailability?.kind === "available";
+  // New chats follow the default even while permission setup is pending.
+  // First send records the choice; existing chats keep their saved override.
+  // `latestTurn` is in the shell, so this does not wait for message hydration.
+  const chatHasTurns =
+    activeThread !== undefined &&
+    (activeThread.latestTurn !== null || activeThread.messages.length > 0);
+  const enableComputerControl = resolveEffectiveComputerControl({
+    draftOverride: composerDraft.enableComputerControl,
+    availability: computerAvailability,
+    allowInNewChats: settings.allowComputerControlInNewChats,
+    chatHasTurns,
+  });
+  const computerControlDisabledReason = computerAvailability
+    ? computerAvailability.kind === "unsupported-platform"
+      ? "No computer backend is available on this server."
+      : computerAvailability.kind === "backend-unavailable"
+        ? computerAvailability.message
+        : undefined
+    : "Checking computer availability.";
   // Local threads reconcile their stored branch to the shared checkout as soon as the
   // branch query resolves. Keep the branch seen when a thread becomes active so a settled
   // thread can explain that change before the user's first resumed message.
@@ -2721,6 +2754,9 @@ export default function ChatView({
   });
 
   const {
+    computerPermissionChange,
+    handleComputerControlChange,
+    handleEnableComputerControlFromDenial,
     persistRuntimeModeChange,
     handleRuntimeModeChange,
     handleInteractionModeChange,
@@ -3707,6 +3743,7 @@ export default function ChatView({
     updateSelectedComposerMentions,
     setRestoredQueuedSourceProposedPlan,
     setComposerDraftModelSelection,
+    setComposerDraftComputerControl,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
     setComposerCursor,
@@ -3727,7 +3764,34 @@ export default function ChatView({
     sendPreflightInFlightRef,
   });
 
+  // Every turn this view dispatches carries the same settings block. Assemble it
+  // once here so each dispatch site spreads a projection of one object instead of
+  // re-deriving the fields inline, and so the send callbacks depend on one value
+  // instead of listing six that are easy to forget (see commit ca0e72f3e).
+  const turnDispatchSettings = useMemo<TurnDispatchSettings>(
+    () => ({
+      modelSelection: selectedModelSelection,
+      providerOptions: providerOptionsForDispatch,
+      enableComputerControl,
+      assistantDeliveryMode,
+      runtimeMode,
+      interactionMode,
+      envMode,
+    }),
+    [
+      assistantDeliveryMode,
+      enableComputerControl,
+      envMode,
+      interactionMode,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModelSelection,
+    ],
+  );
+
   const { onSend } = useChatTurnSubmission({
+    turnDispatchSettings,
+    setComposerDraftComputerControl,
     threadId,
     hasLiveTurn,
     lateComposerSendHandlersRef,
@@ -3868,6 +3932,7 @@ export default function ChatView({
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
+    turnDispatchSettings,
     threadId,
     activeThread,
     isServerThread,
@@ -4123,6 +4188,35 @@ export default function ChatView({
     setComposerDraftProviderModelOptions,
     threadId,
   ]);
+  // Applies the computer-control hint through the picker's own commit path, so the
+  // trigger label and the Effort radio group reflect it immediately. Applying also
+  // records the dismissal: the user has answered the question once, everywhere.
+  const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
+  const applyComputerControlEffortHint = useCallback(() => {
+    setComposerDraftProviderModelOptions(
+      threadId,
+      selectedProvider,
+      buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
+        [composerEffortOptionId]: COMPUTER_CONTROL_HINT_EFFORT,
+      }),
+      { model: selectedModelForPickerWithCustomFallback, persistSticky: true },
+    );
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [
+    composerEffortOptionId,
+    scheduleComposerFocus,
+    selectedModelForPickerWithCustomFallback,
+    selectedProvider,
+    selectedProviderModelOptions,
+    setComposerDraftProviderModelOptions,
+    threadId,
+    updateSettings,
+  ]);
+  const dismissComputerControlEffortHint = useCallback(() => {
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [scheduleComposerFocus, updateSettings]);
   const {
     onEnvModeChange,
     handleResetWorkspaceToHome,
@@ -4591,6 +4685,12 @@ export default function ChatView({
     providerStatus: activeProviderStatus,
     runtimeMode,
     onRuntimeModeChange: handleRuntimeModeChange,
+    computerControlEnabled: enableComputerControl,
+    computerControlAvailable,
+    computerControlSupported: computerAvailability?.kind !== "unsupported-platform",
+    computerControlPending: computerPermissionChange.isPending,
+    computerControlDisabledReason,
+    onComputerControlChange: handleComputerControlChange,
     contextWindow: runtimeUsageContextWindow,
     cumulativeCostUsd: activeCumulativeCostUsd,
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
@@ -4846,6 +4946,13 @@ export default function ChatView({
   const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
+  const showComposerComputerControlEffortHint = shouldShowComputerControlEffortHint({
+    enableComputerControl,
+    computerControlAvailable,
+    dismissed: settings.dismissedComputerControlEffortHint,
+    provider: selectedProvider,
+    traits: composerTraitSelection,
+  });
   const startReplacementSidechat = () => {
     const sourceThreadId = activeThread?.sidechatSourceThreadId;
     if (!sourceThreadId) return;
@@ -4985,6 +5092,20 @@ export default function ChatView({
                     showComposerWorkflowRunCard ||
                     showComposerSubagentStrip ||
                     queuedComposerTurns.length > 0
+                  }
+                />
+              ) : null}
+              {showComposerComputerControlEffortHint ? (
+                <ComposerComputerControlEffortHint
+                  onApply={applyComputerControlEffortHint}
+                  onDismiss={dismissComputerControlEffortHint}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard ||
+                    showComposerSubagentStrip ||
+                    queuedComposerTurns.length > 0 ||
+                    showComposerGoalHeader
                   }
                 />
               ) : null}
@@ -5620,6 +5741,8 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    computerControlEnabled={enableComputerControl}
+                    onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}

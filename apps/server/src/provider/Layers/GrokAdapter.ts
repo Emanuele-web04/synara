@@ -1018,6 +1018,7 @@ export function makeGrokAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
+            input,
           );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),

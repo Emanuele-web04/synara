@@ -19,6 +19,7 @@ import {
 import { remoteAccessPolicyError, ServerConfig } from "./config";
 import { resolveListeningPort } from "./startupAccess";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
+import { ComputerLeaseReactor } from "./computer/Services/ComputerLeaseReactor";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
 import {
@@ -31,6 +32,7 @@ import {
 } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import {
   claimQuitResumeRecordAtStartup,
@@ -67,10 +69,12 @@ export interface ServerShape {
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
+    | ComputerLeaseReactor
     | AutomationService
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
@@ -127,6 +131,7 @@ export const createEffectServer = Effect.fn(function* (
   const agentGatewayCredentials = yield* AgentGatewayCredentials;
   const automationRunReactor = yield* AutomationRunReactor;
   const automationScheduler = yield* AutomationScheduler;
+  const computerLeaseReactor = yield* ComputerLeaseReactor;
   const keybindings = yield* Keybindings;
   const managedAttachmentCleanup = yield* ManagedAttachmentCleanup;
   const lifecycleEvents = yield* ServerLifecycleEvents;
@@ -206,17 +211,10 @@ export const createEffectServer = Effect.fn(function* (
       subscriptionsScope,
     }),
   );
-  yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
-  yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
-  yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
-  yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
-  yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
-  yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
-  yield* readiness.markOrchestrationSubscriptionsReady;
-  yield* readiness.markTerminalSubscriptionsReady;
-  // Heal turns orphaned by the previous process exit (their in-memory runtimes
-  // died, so they can never complete on their own) before clients can observe
-  // the stale "Working" state.
+  // Heal turns and human requests orphaned by the previous process exit (their
+  // in-memory runtimes died, so they can never complete or be answered on their
+  // own) before clients can observe the stale "Working" state or an
+  // unanswerable question card.
   yield* reconcileRestartStuckTurns.pipe(
     Effect.provide(ProjectionPendingInteractionRepositoryLive),
   );
@@ -225,6 +223,17 @@ export const createEffectServer = Effect.fn(function* (
   // process start cannot replay state-dependent commands against the terminal
   // projection.
   yield* orchestrationReactor.reconcileSettledOpenTurns;
+  // Restart cleanup must finish before any subscriber can replay commands or
+  // start new turns whose live interactions would otherwise look orphaned.
+  yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Scope.provide(computerLeaseReactor.start(), subscriptionsScope);
+  yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
+  yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
+  yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
+  yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
+  yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
+  yield* readiness.markOrchestrationSubscriptionsReady;
+  yield* readiness.markTerminalSubscriptionsReady;
   yield* recoverGitHandoffOperations((command) => orchestrationEngine.dispatch(command)).pipe(
     Effect.mapError(
       (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),

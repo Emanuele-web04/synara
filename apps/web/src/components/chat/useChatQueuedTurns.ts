@@ -31,6 +31,9 @@ import { useComposerReferences } from "./useComposerReferences";
 import type { LateComposerSendHandlers } from "./chatSendTypes";
 const EMPTY_MESSAGES: ChatMessage[] = [];
 interface ChatQueuedTurnsInput {
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   threadId: ThreadId;
   queuedComposerTurns: ReturnType<typeof useChatComposerDraft>["queuedComposerTurns"];
   activeThread: Thread | undefined;
@@ -116,6 +119,7 @@ export function useChatQueuedTurns({
   updateSelectedComposerMentions,
   setRestoredQueuedSourceProposedPlan,
   setComposerDraftModelSelection,
+  setComposerDraftComputerControl,
   setComposerDraftRuntimeMode,
   setComposerDraftInteractionMode,
   setComposerCursor,
@@ -232,6 +236,7 @@ export function useChatQueuedTurns({
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
+      setComposerDraftComputerControl(activeThread.id, queuedTurn.enableComputerControl === true);
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
@@ -253,6 +258,7 @@ export function useChatQueuedTurns({
       scheduleComposerFocus,
       setDraftThreadContext,
       setRestoredQueuedSourceProposedPlan,
+      setComposerDraftComputerControl,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
       setComposerDraftPrompt,

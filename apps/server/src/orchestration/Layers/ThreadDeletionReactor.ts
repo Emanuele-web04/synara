@@ -5,6 +5,7 @@ import { Cause, Effect, Layer, Option, Stream } from "effect";
 
 import { ServerConfig } from "../../config";
 import { DeviceService } from "../../device/Services/DeviceService";
+import { ComputerService } from "../../computer/Services/ComputerService";
 import { GitCore } from "../../git/Services/GitCore";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
@@ -81,6 +82,18 @@ export const detachThreadDevice = (threadId: ThreadId) =>
         ),
       ),
     ),
+  );
+
+export const detachThreadComputer = (threadId: ThreadId) =>
+  Effect.service(ComputerService).pipe(
+    Effect.flatMap((service) =>
+      cleanupSucceededUnlessInterrupted({
+        effect: Effect.promise(() => service.manager.handleThreadRemoved(threadId)),
+        message: "thread deletion cleanup skipped computer detach",
+        threadId,
+      }),
+    ),
+    Effect.asVoid,
   );
 
 export const closeThreadTerminalScopes = (
@@ -267,6 +280,7 @@ const make = Effect.gen(function* () {
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
     const { threadId } = event.payload;
+    yield* detachThreadComputer(threadId);
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
     // Reclaim while the soft-deleted projection row still names the worktree.

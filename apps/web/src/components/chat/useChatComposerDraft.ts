@@ -88,6 +88,9 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     (store) => store.setProviderModelOptions,
   );
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftComputerControl = useComposerDraftStore(
+    (store) => store.setEnableComputerControl,
+  );
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
@@ -479,6 +482,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     restoreComposerDraftPromptHistorySavedDraft,
     setComposerDraftModelSelection,
     setComposerDraftProviderModelOptions,
+    setComposerDraftComputerControl,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
     enqueueQueuedComposerTurn,

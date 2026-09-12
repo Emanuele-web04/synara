@@ -21,11 +21,19 @@ export interface PendingApproval {
   lifecycleGeneration?: string;
   /** Changes only when the durable retryable response attempt changes. */
   responseAttemptKey?: string;
-  requestKind: "command" | "file-read" | "file-change" | "permissions";
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool";
   createdAt: string;
   detail?: string;
   permissionProfile?: Record<string, unknown>;
   sessionApprovalAvailable?: boolean;
+  toolName?: string;
+  toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
+}
+
+export interface PendingToolParamDisplay {
+  name: string;
+  value: unknown;
+  displayName?: string;
 }
 
 export interface PendingUserInput {
@@ -306,7 +314,8 @@ export function derivePendingApprovals(
           payload?.requestKind === "command" ||
           payload?.requestKind === "file-read" ||
           payload?.requestKind === "file-change" ||
-          payload?.requestKind === "permissions"
+          payload?.requestKind === "permissions" ||
+          payload?.requestKind === "tool"
             ? payload.requestKind
             : approvalRequestKindFromRequestType(payload?.requestType);
         if (!requestKind) {
@@ -323,6 +332,8 @@ export function derivePendingApprovals(
           typeof payload?.sessionApprovalAvailable === "boolean"
             ? payload.sessionApprovalAvailable
             : undefined;
+        const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
+        const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
         return {
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
@@ -331,6 +342,8 @@ export function derivePendingApprovals(
           ...(detail ? { detail } : {}),
           ...(permissionProfile ? { permissionProfile } : {}),
           ...(sessionApprovalAvailable !== undefined ? { sessionApprovalAvailable } : {}),
+          ...(toolName ? { toolName } : {}),
+          ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
         };
       },
     },
@@ -357,6 +370,37 @@ export function derivePendingApprovals(
     );
     return responseAttemptKey === undefined ? approval : { ...approval, responseAttemptKey };
   });
+}
+
+function parseToolParamsDisplay(
+  value: unknown,
+): ReadonlyArray<PendingToolParamDisplay> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.flatMap<PendingToolParamDisplay>((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== "string" || !Object.hasOwn(record, "value")) {
+      return [];
+    }
+    const displayName =
+      typeof record.displayName === "string"
+        ? record.displayName
+        : typeof record.display_name === "string"
+          ? record.display_name
+          : undefined;
+    return [
+      {
+        name: record.name,
+        value: record.value,
+        ...(displayName ? { displayName } : {}),
+      },
+    ];
+  });
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function derivePendingUserInputs(

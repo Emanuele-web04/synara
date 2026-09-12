@@ -8,7 +8,7 @@ import type {
   ThreadId,
   RuntimeMode,
 } from "@synara/contracts";
-import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
+import { ChevronDownIcon, MonitorIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -23,6 +23,7 @@ import {
   RUNTIME_MODE_PRESENTATION,
   providerModelSupportsAutoRuntimeMode,
 } from "../lib/runtimeMode";
+import { Badge } from "./ui/badge";
 import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
@@ -44,7 +45,6 @@ import {
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -60,6 +60,7 @@ import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -137,6 +138,12 @@ export interface RuntimeUsageControlsProps {
   providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
+  computerControlEnabled?: boolean | undefined;
+  computerControlAvailable?: boolean | undefined;
+  computerControlSupported?: boolean | undefined;
+  computerControlPending?: boolean | undefined;
+  computerControlDisabledReason?: string | undefined;
+  onComputerControlChange?: ((enabled: boolean) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
   cumulativeCostUsd?: number | null | undefined;
   activeContextWindowLabel?: string | null | undefined;
@@ -154,6 +161,12 @@ export function RuntimeUsageControls({
   providerStatus,
   runtimeMode,
   onRuntimeModeChange,
+  computerControlEnabled = false,
+  computerControlAvailable = false,
+  computerControlSupported = computerControlAvailable,
+  computerControlPending = false,
+  computerControlDisabledReason = "Checking computer availability.",
+  onComputerControlChange,
   className,
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
@@ -182,7 +195,7 @@ export function RuntimeUsageControls({
                   runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
+                title={`${runtimePresentation.label}: ${runtimePresentation.description}.${computerControlEnabled ? " Computer control is on." : ""} Click to change permissions.`}
               />
             }
           >
@@ -197,6 +210,12 @@ export function RuntimeUsageControls({
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
                 {runtimePresentation.label}
               </span>
+              {computerControlEnabled ? (
+                <>
+                  <MonitorIcon className="size-3.5 shrink-0" aria-hidden />
+                  <span className="sr-only">Computer control is on.</span>
+                </>
+              ) : null}
               <ChevronDownIcon
                 className={cn(
                   "size-3 shrink-0 opacity-70",
@@ -241,6 +260,34 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
+            {onComputerControlChange ? (
+              <>
+                <MenuSeparator />
+                <MenuCheckboxItem
+                  variant="switch"
+                  checked={computerControlEnabled}
+                  disabled={!computerControlSupported || computerControlPending}
+                  onCheckedChange={(checked) => onComputerControlChange(checked === true)}
+                  title={computerControlAvailable ? undefined : computerControlDisabledReason}
+                >
+                  <span className="flex min-w-0 flex-col gap-0.5 py-0.5">
+                    <span className="flex items-center gap-1.5">
+                      <span className="font-medium text-xs">Computer control</span>
+                      <Badge variant="warning" size="sm">
+                        Beta
+                      </Badge>
+                    </span>
+                    <span className="text-[11px] leading-4 text-muted-foreground">
+                      {computerControlPending
+                        ? "Stopping the previous session and changing its desktop permission…"
+                        : computerControlAvailable
+                          ? "Lets the agent see and control the desktop. Changing this stops the current session."
+                          : computerControlDisabledReason}
+                    </span>
+                  </span>
+                </MenuCheckboxItem>
+              </>
+            ) : null}
           </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
