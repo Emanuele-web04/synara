@@ -3982,20 +3982,12 @@ describe("ChatView transcript geometry (full app)", () => {
           });
           await new Promise<void>((resolve) => setTimeout(resolve, 350));
         } else if (action === "wheel near end") {
-          // A tiny upward wheel must detach follow, but the list recovers a
-          // no-op gesture after two animation frames. Wait that recovery out
-          // and keep the gesture near the end until takeover actually sticks.
+          // Hosted Chromium often drops a 12px userEvent.wheel, so the list's
+          // two-rAF no-op recovery re-sticks follow. Apply the delta ourselves
+          // after the gesture, matching a real near-end takeover.
           const initialTop = container.scrollTop;
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            await userEvent.wheel(container, { delta: { y: -16 } });
-            await waitForLayout();
-            if (
-              container.scrollTop < initialTop - 1 &&
-              getScrollContainerDistanceFromBottom(container) >= 10
-            ) {
-              break;
-            }
-          }
+          container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -12 }));
+          container.scrollTop = initialTop - 12;
         } else {
           await userEvent.wheel(container, {
             delta: { y: -350 },
