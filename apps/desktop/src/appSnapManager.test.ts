@@ -1533,6 +1533,56 @@ describe("AppSnap permission guide", () => {
     }
   });
 
+  it("raises the accessibility prompt when its guide opens", async () => {
+    // Accessibility entries cannot be dragged into the pane's list, so opening
+    // the accessibility guide must fire the pane's own macOS request for the
+    // app to show up there at all.
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-ax-"));
+    const guideChild = createFakeChildProcess();
+    const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
+      if (args.includes("--permission-guide")) return guideChild;
+      const requestChild = createFakeChildProcess();
+      setImmediate(() => {
+        requestChild.stdout.end(
+          `${JSON.stringify({ type: "permissions", accessibility: "denied" })}\n`,
+        );
+        requestChild.stderr.end();
+        requestChild.emit("close", 0, null);
+      });
+      return requestChild;
+    });
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara Test",
+      appBundlePath: "/Applications/Synara Test.app",
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      onPermissionGuideState: vi.fn(),
+    });
+    try {
+      manager.showPermissionGuide("accessibility");
+      await flushPromises();
+      expect(spawn).toHaveBeenCalledWith(
+        process.execPath,
+        ["--request-permissions", "--permission", "accessibility"],
+        expect.any(Object),
+      );
+      expect(spawn).toHaveBeenCalledWith(
+        process.execPath,
+        expect.arrayContaining(["--permission-guide", "--pane", "accessibility"]),
+        expect.any(Object),
+      );
+    } finally {
+      manager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("closes the guide when a fresh check sees the grant the coach cannot", async () => {
     // Accessibility grants never reach an already-running process, so the
     // coach's own poll stays false; the manager's fresh-helper watch must

@@ -727,6 +727,12 @@ export class DesktopAppSnapManager {
     this.#guidePaneQueue = [];
     this.#guideSessionKinds = [];
     this.#guideSessionOpensSettings = false;
+    // Accessibility entries cannot be dragged into the list, so raise the
+    // pane's own macOS prompt: it adds the app and lets the user allow the
+    // grant while the coach is already on screen.
+    if (pane === "accessibility") {
+      void this.#runPermissionCommand("--request-permissions", ["accessibility"]);
+    }
     this.#spawnPermissionGuide(pane);
   }
 
