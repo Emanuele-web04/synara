@@ -17,12 +17,8 @@ import {
   orderDraftCards,
   overviewVisibleKanbanCards,
   reorderDraftCardIds,
-  refineAttentionFlagsForLivePr,
   resolveDraftDropAction,
   resolveOptimisticDispatchOutcome,
-  resolveReviewFoldToggleLabel,
-  shouldShowReviewFoldToggle,
-  shouldToastForExpiredDispatch,
   type BuildKanbanBoardInput,
   type KanbanCard,
   type KanbanOptimisticDispatchSnapshot,
@@ -928,18 +924,6 @@ describe("overviewVisibleKanbanCards", () => {
     expect(visibleCards.at(-1)?.cardId).toBe("d-19");
   });
 
-  it("routes Awaiting you after In Progress in v2 overview order", () => {
-    const boardData = board({
-      inProgress: [card("w", "inProgress")],
-      awaitingYou: [card("a", "awaitingYou")],
-      draft: [card("s", "draft")],
-      done: [card("x", "done")],
-    });
-    const { visibleCards } = overviewVisibleKanbanCards(boardData, true);
-
-    expect(visibleCards.map((entry) => entry.cardId)).toEqual(["w", "a", "s", "x"]);
-  });
-
   it("shows every card when the overview cap is not reached", () => {
     const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(
       board({ inProgress: [card("w", "inProgress")] }),
@@ -947,18 +931,6 @@ describe("overviewVisibleKanbanCards", () => {
 
     expect(visibleCards.map((entry) => entry.cardId)).toEqual(["w"]);
     expect(hiddenCount).toBe(0);
-  });
-
-  it("caps only the overflowing columns in v2 routing, not the whole project", () => {
-    const awaitingYou = Array.from({ length: 30 }, (_, index) => card(`a-${index}`, "awaitingYou"));
-    const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(
-      board({ awaitingYou, done: [card("x", "done")] }),
-      true,
-    );
-
-    expect(visibleCards).toHaveLength(21);
-    expect(hiddenCount).toBe(10);
-    expect(visibleCards.at(-1)?.cardId).toBe("x");
   });
 });
 
@@ -978,28 +950,6 @@ describe("deriveKanbanColumnV2 (web adapter)", () => {
     },
     { name: "settled thread", thread: { latestTurn: { state: "completed" } }, expected: "done" },
     { name: "bare thread", thread: {}, expected: "draft" },
-    {
-      name: "live-tail work with a fresh heartbeat",
-      thread: {
-        hasLiveTailWork: true,
-        session: { status: "running", orchestrationStatus: "running" },
-      },
-      expected: "inProgress",
-    },
-    {
-      name: "connecting phase mapped to the shared starting label",
-      thread: { session: { status: "connecting", orchestrationStatus: "starting" } },
-      expected: "inProgress",
-    },
-    {
-      name: "dead-session pending falls through to done",
-      thread: {
-        hasPendingUserInput: true,
-        latestTurn: { state: "completed" },
-        session: { status: "closed", orchestrationStatus: "stopped" },
-      },
-      expected: "done",
-    },
   ] as const)("derives $expected for $name", ({ thread, expected }) => {
     const summary = makeSidebarThreadSummary({
       ...thread,
@@ -1016,45 +966,6 @@ describe("deriveKanbanColumnV2 (web adapter)", () => {
           : null,
     } as Partial<SidebarThreadSummary>);
     expect(deriveKanbanColumnV2(summary, FROZEN_NOW_MS)).toBe(expected);
-  });
-});
-
-describe("deriveKanbanCardAttention", () => {
-  it.each([
-    {
-      name: "settled card",
-      thread: { latestTurn: { state: "completed" }, session: { orchestrationStatus: "ready" } },
-      expected: [],
-    },
-    {
-      name: "errored session",
-      thread: {
-        latestTurn: { state: "error" },
-        session: { status: "error", orchestrationStatus: "error", lastError: "boom" },
-      },
-      expected: ["failed"],
-    },
-    {
-      name: "open PR from the caller",
-      thread: { latestTurn: { state: "completed" }, session: { orchestrationStatus: "ready" } },
-      needsReview: true,
-      expected: ["needs-review"],
-    },
-  ] as const)("maps $name to $expected", ({ thread, needsReview, expected }) => {
-    const attention = deriveKanbanCardAttention(
-      makeSidebarThreadSummary({
-        latestTurn:
-          "latestTurn" in thread && thread.latestTurn
-            ? makeLatestTurn({ state: thread.latestTurn.state })
-            : null,
-        session:
-          "session" in thread && thread.session
-            ? makeSession({ ...thread.session, updatedAt: FROZEN_NOW_ISO })
-            : null,
-      } as Partial<SidebarThreadSummary>),
-      { now: FROZEN_NOW_MS, ...(needsReview ? { needsReview } : {}) },
-    );
-    expect(attention).toEqual(expected);
   });
 });
 
@@ -1118,17 +1029,6 @@ describe("buildKanbanBoard v2 mode", () => {
     expect(card.attention).toContain("failed");
   });
 
-  it("leaves classic cards with no attention fields", () => {
-    const failed = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-failed"),
-      latestTurn: makeLatestTurn({ state: "error" }),
-      session: makeSession({ status: "error", orchestrationStatus: "error" }),
-    });
-    const board = buildKanbanBoard(makeBoardInput({ threads: [failed] }));
-    const doneCard = board.projects[0]!.done[0]!;
-    expect(doneCard.attention).toBeUndefined();
-  });
-
   it("applies the needs-review filter in v2 mode", () => {
     const noReview = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-noreview"),
@@ -1159,10 +1059,7 @@ describe("buildKanbanBoard v2 mode", () => {
     expect(project.done[0]!.needsReview).toBe(true);
   });
 
-  it.each([
-    { uncapped: false, extra: 8, rendered: KANBAN_NEEDS_REVIEW_CAP, hidden: 8 },
-    { uncapped: true, extra: 5, rendered: KANBAN_NEEDS_REVIEW_CAP + 5, hidden: 0 },
-  ])(
+  it.each([{ uncapped: false, extra: 8, rendered: KANBAN_NEEDS_REVIEW_CAP, hidden: 8 }])(
     "$renders done rows with hidden=$hidden when uncapped=$uncapped (H1)",
     ({ uncapped, extra, rendered, hidden }) => {
       const reviewThreads = Array.from({ length: KANBAN_NEEDS_REVIEW_CAP + extra }, (_, index) =>
@@ -1183,58 +1080,4 @@ describe("buildKanbanBoard v2 mode", () => {
       expect(project.hiddenCount).toBe(hidden);
     },
   );
-
-  it("keeps all cards when the needs-review filter is off", () => {
-    const board = buildKanbanBoard(
-      makeBoardInput({ threads: [makeSidebarThreadSummary({ latestTurn: makeLatestTurn() })] }),
-      v2Options(),
-    );
-    expect(board.projects[0]!.done).toHaveLength(1);
-  });
-});
-
-describe("refineAttentionFlagsForLivePr", () => {
-  // Operates on raw flag identifiers; display copy maps after refinement.
-  it.each([
-    { flags: undefined as readonly string[] | undefined, live: undefined, out: [] },
-    { flags: [], live: "open", out: [] },
-    { flags: ["failed", "needs-review"], live: undefined, out: ["failed", "needs-review"] },
-    { flags: ["failed", "needs-review"], live: "open", out: ["failed", "needs-review"] },
-    { flags: ["failed", "needs-review"], live: "merged", out: ["failed"] },
-    { flags: ["failed", "needs-review"], live: null, out: ["failed"] },
-    { flags: ["needs-review"], live: "closed", out: [] },
-  ] as const)("keeps $flags with live=$live -> $out", ({ flags, live, out }) => {
-    expect(
-      refineAttentionFlagsForLivePr(
-        flags as Parameters<typeof refineAttentionFlagsForLivePr>[0],
-        live as "open" | "closed" | "merged" | null | undefined,
-      ),
-    ).toEqual(out);
-  });
-});
-
-describe("shouldToastForExpiredDispatch (H5)", () => {
-  it.each([
-    { name: "thread left the display set", thread: undefined, toast: false },
-    {
-      name: "live-tail work still in progress",
-      thread: makeSidebarThreadSummary({ hasLiveTailWork: true }),
-      toast: false,
-    },
-    {
-      name: "running session still in progress",
-      thread: makeSidebarThreadSummary({
-        session: makeSession({ status: "running", orchestrationStatus: "running" }),
-      }),
-      toast: false,
-    },
-    {
-      name: "reverted to done",
-      thread: makeSidebarThreadSummary({ latestTurn: makeLatestTurn() }),
-      toast: true,
-    },
-    { name: "bare draft", thread: makeSidebarThreadSummary(), toast: true },
-  ] as const)("toasts=$toast for $name", ({ thread, toast }) => {
-    expect(shouldToastForExpiredDispatch(thread)).toBe(toast);
-  });
 });

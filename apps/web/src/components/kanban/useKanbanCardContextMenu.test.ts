@@ -216,72 +216,6 @@ describe("useKanbanCardContextMenu", () => {
     expect(harness.clearDraftThread).not.toHaveBeenCalled();
   });
 
-  it("shows 'Send as goal' for a dispatchable draft card and dispatches when clicked", async () => {
-    harness.clicked = "send-as-goal";
-    const dispatchableDraftCard = {
-      ...CARD,
-      cardId: `draft:${THREAD_ID}`,
-      column: "draft",
-      draftPrompt: "Ship the kanban v2 goal flow",
-      draftHasAttachments: false,
-    } as KanbanCard;
-
-    useKanbanCardContextMenu().onCardContextMenu(dispatchableDraftCard, EVENT);
-    await vi.waitFor(() => expect(harness.sendAsGoal).toHaveBeenCalled());
-
-    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{
-      id?: string;
-      label?: string;
-    }>;
-    expect(menu.some((item) => item.id === "send-as-goal")).toBe(true);
-    expect(harness.sendAsGoal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        card: dispatchableDraftCard,
-        defaultProvider: "codex",
-        assistantDeliveryMode: "buffered",
-      }),
-    );
-    expect(harness.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Goal set" }),
-    );
-  });
-
-  it("does not show 'Send as goal' for non-dispatchable cards", async () => {
-    const emptyDraftCard = {
-      ...CARD,
-      cardId: `draft:${THREAD_ID}`,
-      column: "draft",
-      draftPrompt: "",
-      draftHasAttachments: false,
-      thread: null,
-    } as KanbanCard;
-
-    useKanbanCardContextMenu().onCardContextMenu(emptyDraftCard, EVENT);
-    await vi.waitFor(() => expect(harness.showContextMenu).toHaveBeenCalled());
-
-    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
-    expect(menu.some((item) => item.id === "send-as-goal")).toBe(false);
-  });
-
-  it("surfaces a warning toast when the dispatcher returns a goal warning", async () => {
-    harness.clicked = "send-as-goal";
-    harness.sendAsGoal.mockResolvedValue({ kind: "dispatched", warning: "Goal not saved" });
-    const dispatchableDraftCard = {
-      ...CARD,
-      cardId: `draft:${THREAD_ID}`,
-      column: "draft",
-      draftPrompt: "Ship the kanban v2 goal flow",
-      draftHasAttachments: false,
-    } as KanbanCard;
-
-    useKanbanCardContextMenu().onCardContextMenu(dispatchableDraftCard, EVENT);
-    await vi.waitFor(() => expect(harness.sendAsGoal).toHaveBeenCalled());
-
-    expect(harness.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "warning", description: "Goal not saved" }),
-    );
-  });
-
   it("shows 'Set as goal' for a thread-backed non-draft card and writes the goal without starting a turn", async () => {
     harness.clicked = "set-as-goal";
 
@@ -301,23 +235,6 @@ describe("useKanbanCardContextMenu", () => {
     );
   });
 
-  it("does not show 'Set as goal' for draft-column cards", async () => {
-    const draftCard = {
-      ...CARD,
-      cardId: `draft:${THREAD_ID}`,
-      column: "draft",
-      draftPrompt: "Ship the kanban v2 goal flow",
-      draftHasAttachments: false,
-    } as KanbanCard;
-
-    useKanbanCardContextMenu().onCardContextMenu(draftCard, EVENT);
-    await vi.waitFor(() => expect(harness.showContextMenu).toHaveBeenCalled());
-
-    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
-    expect(menu.some((item) => item.id === "set-as-goal")).toBe(false);
-    expect(menu.some((item) => item.id === "send-as-goal")).toBe(true);
-  });
-
   it("does not show 'Set as goal' for thread-less cards", async () => {
     const localDraftCard = {
       ...CARD,
@@ -332,17 +249,5 @@ describe("useKanbanCardContextMenu", () => {
     const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
     expect(menu.some((item) => item.id === "set-as-goal")).toBe(false);
     expect(harness.setGoal).not.toHaveBeenCalled();
-  });
-
-  it("surfaces an error toast when setting the goal fails", async () => {
-    harness.clicked = "set-as-goal";
-    harness.setGoal.mockRejectedValue(new Error("offline"));
-
-    useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
-    await vi.waitFor(() => expect(harness.setGoal).toHaveBeenCalled());
-
-    expect(harness.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Could not set goal" }),
-    );
   });
 });

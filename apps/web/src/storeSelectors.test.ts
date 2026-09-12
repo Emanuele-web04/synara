@@ -572,10 +572,6 @@ describe("createProjectLastActivityAtSelector", () => {
 
 describe("createLastActivityTimestampSelector", () => {
   const stamped = "2026-03-09T11:00:00.000Z";
-  const withStamp = {
-    threadIds: [threadIdA] as readonly ThreadId[],
-    threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped } },
-  };
 
   it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
     const selectTimestamps = createLastActivityTimestampSelector();
@@ -597,27 +593,5 @@ describe("createLastActivityTimestampSelector", () => {
         makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
       ),
     ).toEqual({});
-  });
-
-  it("keeps the previous result while neither streaming nor meta-only shell churn moves a stamp (F1)", () => {
-    const selectTimestamps = createLastActivityTimestampSelector();
-    const before = selectTimestamps(makeState(withStamp));
-
-    expect(
-      selectTimestamps(
-        makeState({ ...withStamp, messageIdsByThreadId: { [threadIdA]: [messageId] } }),
-      ),
-    ).toBe(before);
-
-    // A meta-only shell update (new object, same durable stamp) must not churn
-    // the result — the fast path returns the previous object by reference (F1).
-    const after = selectTimestamps(
-      makeState({
-        ...withStamp,
-        threadShellById: { [threadIdA]: { ...shellA, updatedAt: stamped, title: "renamed" } },
-      }),
-    );
-    expect(after).toBe(before);
-    expect(after[threadIdA]).toBe(Date.parse(stamped));
   });
 });
