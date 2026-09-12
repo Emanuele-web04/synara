@@ -1,5 +1,6 @@
 import {
   CheckpointRef,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ThreadId,
@@ -2990,7 +2991,7 @@ describe("resolveDraftFallbackModelSelection", () => {
         projectDefault: null,
         settingsDefaultProvider: "pi",
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 
   it("uses the settings provider default model when no project default exists", () => {

@@ -21,6 +21,7 @@ import {
   type ProviderSkillReference,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
+  DEFAULT_MODEL_BY_PROVIDER,
   ThreadId,
   TurnId,
   type ProviderApprovalDecision,
@@ -321,7 +322,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "unknown thread",
   "does not exist",
 ];
-const CODEX_DEFAULT_MODEL = "gpt-5.5";
+const CODEX_DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 // Discovery results live in the bounded caches below, so keeping a dedicated

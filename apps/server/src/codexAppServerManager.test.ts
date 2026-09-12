@@ -17,6 +17,7 @@ import { PassThrough } from "node:stream";
 import {
   ApprovalRequestId,
   BROWSER_TOOL_NAMES,
+  DEFAULT_MODEL_BY_PROVIDER,
   ThreadId,
   TurnId,
   type RuntimeMode,
@@ -1597,7 +1598,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: "plus",
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.5");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 
   it("keeps spark for supported plans", () => {
