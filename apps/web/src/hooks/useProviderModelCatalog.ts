@@ -193,7 +193,6 @@ export function useProviderModelCatalog(input: {
       provider: "omp",
       binaryPath: settings.ompBinaryPath || null,
       agentDir: settings.ompAgentDir || null,
-      cwd: discoveryCwd,
       // Eager-warmed at app startup (ProviderModelDiscoveryWarmer in __root); this observer
       // shares the warmed cwd-agnostic cache entry (React Query dedupes by query key).
       enabled: ompModelDiscoveryEnabled,

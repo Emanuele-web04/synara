@@ -732,7 +732,10 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       )
     : null;
-  const unlistedDraftModel = input.selectedProvider === "pi" ? selectedDraftModel : null;
+  // pi and omp serve fully dynamic catalogs, so a draft model can be absent
+  // from the option list; keep it ahead of the first-catalog-entry fallback.
+  const unlistedDraftModel =
+    input.selectedProvider === "pi" || input.selectedProvider === "omp" ? selectedDraftModel : null;
   const selectedModel =
     resolveAvailableModel(activeSelection?.model) ??
     resolveAvailableModel(

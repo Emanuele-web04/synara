@@ -488,7 +488,6 @@ describe("accounting activity retention", () => {
   });
 });
 
-<<<<<<< HEAD
 it("keeps the source-message signal stable for equivalent snapshots and work-only changes", () => {
   const incoming = makeReadModelThread({
     messages: [

@@ -325,6 +325,7 @@ export function KanbanNewTaskDialog({
     hiddenProviders: settings.hiddenProviders,
     providerOrder: settings.providerOrder,
     piAgentDir: settings.piAgentDir || null,
+    ompAgentDir: settings.ompAgentDir || null,
     handleProviderModelChange,
     setInteractionMode,
     onCreate: handleCreateRequest,

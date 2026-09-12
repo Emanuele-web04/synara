@@ -187,7 +187,7 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "omp",
         binaryPath: settings.ompBinaryPath || null,
         agentDir: settings.ompAgentDir || null,
-        cwd,
+        priority,
       });
   }
 }
