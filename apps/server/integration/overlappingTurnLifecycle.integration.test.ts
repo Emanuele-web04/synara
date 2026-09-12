@@ -104,7 +104,17 @@ it.each([false, true])(
                 createdAt: new Date().toISOString(),
               });
             yield* start("manual-message", "user");
-            yield* harness.waitForThread(
+            // Model refresh stderr can arrive before a provider turn ID exists.
+            // It must remain visible without failing or retrying the first start.
+            yield* harness.waitForDomainEvent(
+              (event) =>
+                event.type === "thread.activity-appended" &&
+                event.payload.activity.kind === "runtime.warning" &&
+                JSON.stringify(event.payload.activity.payload).includes(
+                  "failed to refresh available models: timeout waiting for child process to exit",
+                ),
+            );
+            const manual = yield* harness.waitForThread(
               threadId,
               (thread) =>
                 thread.latestTurn?.state === "running" &&
@@ -113,6 +123,7 @@ it.each([false, true])(
                   message.text.includes("Working on fixture-turn-1"),
                 ),
             );
+            expect(manual.session?.lastError).toBeNull();
 
             // Advance only reconciliation's observation clock. The live adapter
             // and its activity watchdog continue using real time.
