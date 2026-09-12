@@ -57,6 +57,7 @@ function makeComposerDraftState(
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -256,6 +257,38 @@ describe("threadBootstrap", () => {
       runtimeMode: "full-access",
       entryPoint: "terminal",
     });
+  });
+
+  it.each(["local", "worktree"] as const)(
+    "starts fresh chats in the preferred %s mode without inheriting a worktree",
+    (defaultEnvMode) => {
+      expect(
+        createFreshDraftThreadSeed({
+          createdAt: "2026-04-05T10:00:00.000Z",
+          entryPoint: "chat",
+          options: undefined,
+          defaultEnvMode,
+        }),
+      ).toMatchObject({ envMode: defaultEnvMode, branch: null, worktreePath: null });
+    },
+  );
+
+  it("keeps explicit workspace targets ahead of the preferred mode", () => {
+    const input = {
+      createdAt: "2026-04-05T10:00:00.000Z",
+      entryPoint: "chat" as const,
+      defaultEnvMode: "worktree" as const,
+    };
+    expect(createFreshDraftThreadSeed({ ...input, options: { envMode: "local" } }).envMode).toBe(
+      "local",
+    );
+    expect(
+      createFreshDraftThreadSeed({
+        ...input,
+        defaultEnvMode: "local",
+        options: { worktreePath: "/repo/.worktrees/explicit" },
+      }),
+    ).toMatchObject({ envMode: "worktree", worktreePath: "/repo/.worktrees/explicit" });
   });
 
   it("marks fresh draft seeds as temporary when requested", () => {
