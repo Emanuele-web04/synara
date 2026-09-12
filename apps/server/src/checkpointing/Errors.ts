@@ -35,8 +35,29 @@ export class CheckpointInvariantError extends Schema.TaggedErrorClass<Checkpoint
   }
 }
 
+/**
+ * CheckpointCaptureBudgetExceededError - Advisory capture exceeded its resource policy.
+ *
+ * Intentionally excludes workspace paths and subprocess output so a skipped
+ * pre-turn checkpoint can be logged without exposing filenames.
+ */
+export class CheckpointCaptureBudgetExceededError extends Schema.TaggedErrorClass<CheckpointCaptureBudgetExceededError>()(
+  "CheckpointCaptureBudgetExceededError",
+  {
+    operation: Schema.String,
+    reason: Schema.Literals(["timeout", "unseeded-scan", "cooldown"]),
+    timeoutMs: Schema.Number,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Checkpoint capture skipped (${this.reason}): ${this.detail}`;
+  }
+}
+
 export type CheckpointStoreError =
   | GitCommandError
+  | CheckpointCaptureBudgetExceededError
   | CheckpointInvariantError
   | CheckpointUnavailableError;
 

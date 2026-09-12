@@ -11,9 +11,24 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Cause, Deferred, Effect, Exit, Layer, FileSystem, Option, Path, Semaphore } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  FileSystem,
+  Option,
+  Path,
+  Semaphore,
+} from "effect";
 
-import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.ts";
+import {
+  CheckpointCaptureBudgetExceededError,
+  CheckpointInvariantError,
+  type CheckpointStoreError,
+} from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
@@ -27,6 +42,7 @@ const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 // the worst per-command-capped chain, so it never truncates a capture the
 // per-command timeouts would allow.
 const CHECKPOINT_CAPTURE_TIMEOUT_MS = 180_000;
+const MAX_CAPTURE_COOLDOWNS = 128;
 
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -34,11 +50,32 @@ const makeCheckpointStore = Effect.gen(function* () {
   const git = yield* GitCore;
   const captureLock = yield* Semaphore.make(1);
   const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
+  const captureFailureCooldowns = new Map<string, number>();
 
   // Normalize the cwd so captures for the same repo reached via differently
   // written paths (trailing slash, relative segments) share one in-flight slot.
   const captureKey = (input: { readonly cwd: string; readonly checkpointRef: CheckpointRef }) =>
     `${path.resolve(input.cwd)}\0${input.checkpointRef}`;
+  const captureCooldownKey = (cwd: string) => path.resolve(cwd);
+
+  const pruneCaptureCooldowns = (now: number) => {
+    for (const [key, expiresAt] of captureFailureCooldowns) {
+      if (expiresAt <= now) {
+        captureFailureCooldowns.delete(key);
+      }
+    }
+  };
+
+  const recordCaptureCooldown = (key: string, now: number, cooldownMs: number) => {
+    pruneCaptureCooldowns(now);
+    captureFailureCooldowns.delete(key);
+    while (captureFailureCooldowns.size >= MAX_CAPTURE_COOLDOWNS) {
+      const oldestKey = captureFailureCooldowns.keys().next().value;
+      if (oldestKey === undefined) break;
+      captureFailureCooldowns.delete(oldestKey);
+    }
+    captureFailureCooldowns.set(key, now + cooldownMs);
+  };
 
   const resolveHeadCommit = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
     git
@@ -160,6 +197,36 @@ const makeCheckpointStore = Effect.gen(function* () {
             };
 
             const workingIndexInfo = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
+            const capturePolicy = input.policy;
+            if (
+              workingIndexInfo === null &&
+              capturePolicy?.unseededScanMaxOutputBytes !== undefined
+            ) {
+              // An unseeded index forces Git to enumerate every tracked and
+              // untracked path. Prove that enumeration fits the advisory
+              // budget before starting the more expensive add/hash pass.
+              yield* git
+                .execute({
+                  operation: "CheckpointStore.preflightUnseededCapture",
+                  cwd: input.cwd,
+                  args: ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                  maxOutputBytes: capturePolicy.unseededScanMaxOutputBytes,
+                  outputMode: "error",
+                })
+                .pipe(
+                  Effect.asVoid,
+                  Effect.catch(() =>
+                    Effect.fail(
+                      new CheckpointCaptureBudgetExceededError({
+                        operation,
+                        reason: "unseeded-scan",
+                        timeoutMs: capturePolicy.timeoutMs,
+                        detail: "The unseeded workspace scan exceeded its advisory budget.",
+                      }),
+                    ),
+                  ),
+                );
+            }
             if (workingIndexInfo === null && (yield* hasHeadCommit(input.cwd))) {
               yield* git.execute({
                 operation,
@@ -202,6 +269,12 @@ const makeCheckpointStore = Effect.gen(function* () {
               cwd: input.cwd,
               args: ["add", "-A", "--", "."],
               env: commitEnv,
+              ...(input.policy
+                ? {
+                    maxOutputBytes: input.policy.maxOutputBytes,
+                    outputMode: "truncate" as const,
+                  }
+                : {}),
             });
 
             const writeTreeResult = yield* git.execute({
@@ -258,7 +331,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
     });
 
-  const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+  const captureCheckpointShared: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const key = captureKey(input);
       const registration = yield* captureLock.withPermits(1)(
@@ -282,21 +355,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const exit = yield* Effect.exit(
-            restore(
-              captureCheckpointOnce(input).pipe(
-                Effect.timeoutOption(CHECKPOINT_CAPTURE_TIMEOUT_MS),
-                Effect.flatMap((completed) =>
-                  Option.isSome(completed)
-                    ? Effect.void
-                    : Effect.fail(
-                        new CheckpointInvariantError({
-                          operation: "CheckpointStore.captureCheckpoint",
-                          detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
-                        }),
-                      ),
-                ),
-              ),
-            ),
+            restore(git.withMutation(input.cwd, captureCheckpointOnce(input))),
           );
           // Waiters joined an in-flight capture they do not control; replaying the
           // owner's raw interrupt cause would make callers treat it as their own
@@ -318,6 +377,64 @@ const makeCheckpointStore = Effect.gen(function* () {
         }),
       );
     });
+
+  const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) => {
+    const policy = input.policy;
+    const failureCooldownMs = policy?.failureCooldownMs;
+    const cooldownKey = captureCooldownKey(input.cwd);
+    const timeoutMs = policy?.timeoutMs ?? CHECKPOINT_CAPTURE_TIMEOUT_MS;
+
+    return Effect.gen(function* () {
+      if (failureCooldownMs !== undefined && failureCooldownMs > 0) {
+        const now = yield* Clock.currentTimeMillis;
+        pruneCaptureCooldowns(now);
+        const cooldownExpiresAt = captureFailureCooldowns.get(cooldownKey);
+        if (cooldownExpiresAt !== undefined && cooldownExpiresAt > now) {
+          return yield* new CheckpointCaptureBudgetExceededError({
+            operation: "CheckpointStore.captureCheckpoint",
+            reason: "cooldown",
+            timeoutMs,
+            detail:
+              "A recent advisory capture exceeded its budget; retry is temporarily suppressed.",
+          });
+        }
+      }
+
+      const completed = yield* captureCheckpointShared(input).pipe(Effect.timeoutOption(timeoutMs));
+      if (Option.isNone(completed)) {
+        if (policy) {
+          return yield* new CheckpointCaptureBudgetExceededError({
+            operation: "CheckpointStore.captureCheckpoint",
+            reason: "timeout",
+            timeoutMs,
+            detail: `The advisory capture exceeded its ${timeoutMs}ms deadline.`,
+          });
+        }
+        return yield* new CheckpointInvariantError({
+          operation: "CheckpointStore.captureCheckpoint",
+          detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
+        });
+      }
+
+      captureFailureCooldowns.delete(cooldownKey);
+    }).pipe(
+      Effect.tapError((error) => {
+        if (
+          failureCooldownMs === undefined ||
+          failureCooldownMs <= 0 ||
+          error._tag !== "CheckpointCaptureBudgetExceededError" ||
+          error.reason === "cooldown"
+        ) {
+          return Effect.void;
+        }
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            Effect.sync(() => recordCaptureCooldown(cooldownKey, now, failureCooldownMs)),
+          ),
+        );
+      }),
+    );
+  };
 
   const hasCheckpointRef: CheckpointStoreShape["hasCheckpointRef"] = (input) =>
     resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
