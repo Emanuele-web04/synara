@@ -59,11 +59,19 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  createBrowserTestServerConfig,
+  createBrowserTestServerSettings,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
 import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
+// Pre-transform the compiler-heavy component before the first hydration deadline.
+// This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
+import "./ChatView";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
@@ -276,6 +284,9 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
       typeof request?.fromSequenceExclusive === "number" ? request.fromSequenceExclusive : 0;
     replayRequestCursors.push(fromSequenceExclusive);
     return replayEvents.filter((event) => event.sequence > fromSequenceExclusive);
+  }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return createBrowserTestServerSettings(NOW_ISO);
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -568,6 +579,8 @@ describe("EventRouter scoped orchestration sync", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       sidebarThreadSummaryById: {},
+      deletedThreadIdsById: {},
+      deletedProjectIdsById: {},
       threadsHydrated: false,
     });
     useWorkspacePathsStore.setState({
@@ -589,6 +602,72 @@ describe("EventRouter scoped orchestration sync", () => {
 
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it.each(["archive", "thread removal", "project removal"])(
+    "prunes terminal runtimes after live %s",
+    async (operation) => {
+      const mounted = await mountApp();
+      const cleanup = vi.fn();
+      const unregister = registerTerminalRuntimeCleanup(cleanup);
+      try {
+        const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+        sendShellEventPush(
+          operation === "archive"
+            ? {
+                kind: "thread-upserted",
+                sequence: 2,
+                thread: { ...shell.threads[0]!, archivedAt: NOW_ISO },
+              }
+            : operation === "thread removal"
+              ? { kind: "thread-removed", sequence: 2, threadId: THREAD_ID }
+              : { kind: "project-removed", sequence: 2, projectId: PROJECT_ID },
+        );
+        await vi.waitFor(() => {
+          expect(cleanup).toHaveBeenCalled();
+          const scopes = cleanup.mock.calls.at(-1)?.[0] as ReadonlySet<string>;
+          expect(scopes.has(THREAD_ID)).toBe(false);
+          expect(scopes.has(`dock-terminal:${THREAD_ID}`)).toBe(false);
+        });
+      } finally {
+        unregister();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("retains terminal runtimes when a buffered unarchive is newer than the reconnect snapshot", async () => {
+    const mounted = await mountApp();
+    const cleanup = vi.fn();
+    const unregister = registerTerminalRuntimeCleanup(cleanup);
+    try {
+      suppressNextShellSnapshot = true;
+      sendServerWelcomePush();
+      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      cleanup.mockClear();
+      const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 3,
+        thread: { ...shell.threads[0]!, archivedAt: null },
+      });
+      sendShellEventPush({
+        kind: "snapshot",
+        snapshot: {
+          ...shell,
+          snapshotSequence: 2,
+          threads: [{ ...shell.threads[0]!, archivedAt: NOW_ISO }],
+        },
+      });
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalled());
+      for (const [scopes] of cleanup.mock.calls as [ReadonlySet<string>][]) {
+        expect(scopes.has(THREAD_ID)).toBe(true);
+        expect(scopes.has(`dock-terminal:${THREAD_ID}`)).toBe(true);
+      }
+    } finally {
+      unregister();
+      await mounted.cleanup();
+    }
   });
 
   it("coalesces the replayed welcome with the initial subscription bootstrap", async () => {

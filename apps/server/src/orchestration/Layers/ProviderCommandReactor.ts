@@ -73,6 +73,7 @@ import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
+  type ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderServiceError,
@@ -111,6 +112,7 @@ import { ProjectionPendingInteractionRepository } from "../../persistence/Servic
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
+  type ProviderBlockingDeliveryEvidence,
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
@@ -176,6 +178,9 @@ export function classifyProviderAttemptOutcome(
 ): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
+  // A finalizer may add a failed cleanup/restoration after a safe rejection.
+  // Evidence for the first failure cannot establish the entire attempt's outcome.
+  if (exit.cause.reasons.length !== 1) return { _tag: "uncertain", detail };
   const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) return { _tag: "uncertain", detail };
 
@@ -188,6 +193,10 @@ export function classifyProviderAttemptOutcome(
     case "ProviderUnsupportedError":
     case "ProviderSessionNotFoundError":
       return { _tag: "rejected", detail };
+    case "ProviderAdapterProcessError":
+      return (failure.value as ProviderAdapterProcessError).reason === "startup-failed"
+        ? { _tag: "rejected", detail }
+        : { _tag: "uncertain", detail };
     case "PersistenceSqlError":
     case "PersistenceDecodeError":
       return { _tag: "safe_retry", detail };
@@ -306,6 +315,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
   | "fresh-session"
+  | "interrupt-escalation"
   | "native-history-unavailable"
   | "native-resume-failed";
 
@@ -350,18 +360,23 @@ function recapTailPreview(recapText: string): string {
 }
 
 function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvidence): string {
+  if (evidence.reason === "interrupt-escalation") {
+    return evidence.recapText !== null
+      ? "The turn could not be stopped cleanly, so the session was restarted and your message included a summary."
+      : "The turn could not be stopped cleanly, so the session was restarted.";
+  }
   if (evidence.recapText !== null && evidence.nativeHistory === "unavailable") {
-    return "Native session history was unavailable, so the model continued from a recap.";
+    return "The session's history was lost, so the model continues from a summary.";
   }
   if (evidence.recapText !== null && evidence.sessionRestarted) {
-    return "The session restarted, so the model received a recap.";
+    return "The session was restarted, so your message included a summary.";
   }
   if (evidence.recapText !== null) {
-    return "The model received a recap while recovering its session context.";
+    return "Your message included a summary while the session recovered its context.";
   }
   return evidence.sessionRestarted
-    ? "The session restarted without its native history."
-    : "Native session history was unavailable for this turn.";
+    ? "The session restarted without its previous history."
+    : "The session's history was unavailable for this turn.";
 }
 
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
@@ -506,6 +521,16 @@ function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
   return goalPromptOverheadChars > 0
     ? "The latest message is too long to include the persistent thread goal. Shorten the message and retry."
     : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
+}
+
+function isUnavailableInteractionRuntime(cause: Cause.Cause<ProviderServiceError>): boolean {
+  return Option.match(Cause.findErrorOption(cause), {
+    onNone: () => false,
+    onSome: (error) =>
+      (error._tag === "ProviderValidationError" && error.reason !== undefined) ||
+      error._tag === "ProviderAdapterSessionNotFoundError" ||
+      error._tag === "ProviderAdapterSessionClosedError",
+  });
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -809,6 +834,18 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
+  // Keep observed context loss until recovery is accepted: a failed dispatch
+  // can leave a replacement runtime alive without its previous history.
+  type PendingInterruptEscalation = { evidence: ProviderContextLifecycleEvidence | null };
+  const pendingInterruptEscalations = new Map<string, PendingInterruptEscalation>();
+  const completeInterruptEscalation = (
+    threadId: string,
+    escalation: PendingInterruptEscalation | undefined,
+  ) => {
+    if (escalation && pendingInterruptEscalations.get(threadId) === escalation) {
+      pendingInterruptEscalations.delete(threadId);
+    }
+  };
   // Retry state keeps only the bounded derived record; the full recap text is
   // never retained here after the provider turn has been accepted.
   const pendingProviderContextLifecycleActivities = new Map<
@@ -994,8 +1031,9 @@ const make = Effect.gen(function* () {
     readonly clearFreshSessionTranscript: boolean;
     readonly clearRollbackTranscript: boolean;
     readonly completeDurablePriorTranscript: boolean;
-    readonly lifecycleEvidence: ProviderContextLifecycleEvidence | null;
+    lifecycleEvidence: ProviderContextLifecycleEvidence | null;
     readonly lifecycleEvidenceCreatedAt: string;
+    readonly interruptEscalation?: PendingInterruptEscalation;
   };
   const pendingContextBootstrapAttempts = new Map<string, PendingContextBootstrapAttempt>();
   // Explicit stop resets context once: the next successful session start must
@@ -1064,6 +1102,7 @@ const make = Effect.gen(function* () {
     if (event.type !== "turn.completed" || event.payload.state !== "completed") {
       return;
     }
+    completeInterruptEscalation(threadId, attempt.interruptEscalation);
     // Retain the bounded, idempotent evidence before retiring bootstrap state.
     // Persistence retries independently so a marker write cannot block queue
     // draining after the provider has already accepted this turn.
@@ -1390,6 +1429,7 @@ const make = Effect.gen(function* () {
       // thread while the first is still running.
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
       clearPendingContextBootstraps(threadId);
+      pendingInterruptEscalations.delete(threadId);
       const lifecyclePrefix = `${threadId}:`;
       for (const activityKey of pendingProviderContextLifecycleActivities.keys()) {
         if (activityKey.startsWith(lifecyclePrefix)) {
@@ -1807,6 +1847,7 @@ const make = Effect.gen(function* () {
       };
     }
 
+    let bootstrapTranscriptIfResumeFails = false;
     if (providerService.forkThread && thread.forkSourceThreadId) {
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
@@ -1846,9 +1887,10 @@ const make = Effect.gen(function* () {
           nativeSessionRestarted: false,
         };
       }
-      if (shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId) {
-        freshSessionContextBootstrapThreadIds.add(threadId);
-      }
+      // An existing fork also returns null: wait for its native resume result
+      // before treating the conversation as missing provider history.
+      bootstrapTranscriptIfResumeFails =
+        shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId;
     }
 
     if (
@@ -1894,6 +1936,9 @@ const make = Effect.gen(function* () {
         });
       }),
     );
+    if (bootstrapTranscriptIfResumeFails && !startOutcome.nativeResumeSucceeded) {
+      freshSessionContextBootstrapThreadIds.add(threadId);
+    }
     let retainContextBootstrapSuppression = false;
     if (startOutcome.priorTranscriptBootstrapPending) {
       if (shouldRegisterContextBootstrap) {
@@ -2116,6 +2161,8 @@ const make = Effect.gen(function* () {
         issue: providerPromptOverflowIssue(goalPromptOverheadChars),
       });
     }
+    const interruptEscalation = pendingInterruptEscalations.get(input.threadId);
+    const priorEscalationEvidence = interruptEscalation?.evidence;
     const hasPendingFreshSessionTranscriptBootstrap = freshSessionContextBootstrapThreadIds.has(
       input.threadId,
     );
@@ -2123,7 +2170,9 @@ const make = Effect.gen(function* () {
       input.threadId,
     );
     const hasPendingPriorTranscriptBootstrap =
-      hasPendingFreshSessionTranscriptBootstrap || hasPendingRollbackTranscriptBootstrap;
+      hasPendingFreshSessionTranscriptBootstrap ||
+      hasPendingRollbackTranscriptBootstrap ||
+      (input.dispatchMode !== "steer" && priorEscalationEvidence?.recapText != null);
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
@@ -2196,27 +2245,37 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
-    const restartReason: ProviderContextLifecycleReason = nativeResumeFailed
-      ? "native-resume-failed"
-      : rollbackContextBootstrapThreadIds.has(input.threadId)
-        ? "conversation-rebuilt"
-        : freshSessionContextBootstrapThreadIds.has(input.threadId)
-          ? "fresh-session"
-          : "native-history-unavailable";
+    const restartReason: ProviderContextLifecycleReason = interruptEscalation
+      ? "interrupt-escalation"
+      : nativeResumeFailed
+        ? "native-resume-failed"
+        : rollbackContextBootstrapThreadIds.has(input.threadId)
+          ? "conversation-rebuilt"
+          : freshSessionContextBootstrapThreadIds.has(input.threadId)
+            ? "fresh-session"
+            : "native-history-unavailable";
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
       input.reviewTarget === undefined &&
       input.dispatchMode !== "steer" &&
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext &&
       priorTranscriptMessages.length > 0 &&
-      (priorTranscriptBootstrapText !== null || (nativeSessionRestarted && !nativeResumeSucceeded))
+      (priorTranscriptBootstrapText !== null ||
+        (nativeSessionRestarted && !nativeResumeSucceeded) ||
+        priorEscalationEvidence != null)
         ? {
-            nativeHistory: nativeResumeSucceeded ? "available" : "unavailable",
+            nativeHistory:
+              priorEscalationEvidence?.nativeHistory ??
+              (nativeResumeSucceeded ? "available" : "unavailable"),
             recapText: priorTranscriptBootstrapText,
             reason: restartReason,
-            sessionRestarted: nativeSessionRestarted,
+            sessionRestarted:
+              nativeSessionRestarted || priorEscalationEvidence?.sessionRestarted === true,
           }
         : null;
+    if (interruptEscalation && providerContextLifecycleEvidence !== null) {
+      interruptEscalation.evidence = providerContextLifecycleEvidence;
+    }
     // The guards above make the three bootstrap flavors mutually exclusive, so
     // a turn carries at most one context block.
     const selectedBootstrapContext: BootstrapContextSelection | null =
@@ -2402,8 +2461,13 @@ const make = Effect.gen(function* () {
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
+      // Only Codex awaits a provider turn/start acknowledgement. The other
+      // adapters enqueue/fork prompts or launch a process before acceptance;
+      // their matching terminal success confirms that recovery was consumed.
+      const tracksEscalationAcceptance =
+        interruptEscalation !== undefined && selectedProvider !== "codex";
       pendingContextBootstrapAttempt =
-        tracksDroidContextAcceptance || tracksDurableContextAcceptance
+        tracksDroidContextAcceptance || tracksDurableContextAcceptance || tracksEscalationAcceptance
           ? {
               clearSidechat:
                 sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
@@ -2417,6 +2481,7 @@ const make = Effect.gen(function* () {
                 tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap,
               lifecycleEvidence: providerContextLifecycleEvidence,
               lifecycleEvidenceCreatedAt: input.createdAt,
+              ...(interruptEscalation ? { interruptEscalation } : {}),
             }
           : undefined;
       if (pendingContextBootstrapAttempt) {
@@ -2452,9 +2517,12 @@ const make = Effect.gen(function* () {
           providerContextLifecycleEvidence = {
             nativeHistory: "unavailable",
             recapText: retryBootstrapText,
-            reason: "native-resume-failed",
+            reason: interruptEscalation ? "interrupt-escalation" : "native-resume-failed",
             sessionRestarted: !preserveActiveRuntime,
           };
+          if (interruptEscalation) {
+            interruptEscalation.evidence = providerContextLifecycleEvidence;
+          }
           const retryNormalizedInput = finalizeProviderInput(
             retryBootstrapText !== null
               ? {
@@ -2541,7 +2609,13 @@ const make = Effect.gen(function* () {
         ),
       );
       startedTurn = sentTurn;
+      if (!pendingContextBootstrapAttempt) {
+        completeInterruptEscalation(input.threadId, interruptEscalation);
+      }
       if (pendingContextBootstrapAttempt) {
+        // Claude can replace recovery evidence while retrying a stale resume.
+        // Refresh it before reconciling a terminal event that preceded send's return.
+        pendingContextBootstrapAttempt.lifecycleEvidence = providerContextLifecycleEvidence;
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
         if (terminalEvent?.turnId === sentTurn.turnId) {
@@ -2573,6 +2647,11 @@ const make = Effect.gen(function* () {
           }),
         );
       }
+    }
+    // A native steer belongs to the still-pending recovery turn; its terminal
+    // event, not the steering acknowledgement, retires escalation evidence.
+    if (input.reviewTarget !== undefined) {
+      completeInterruptEscalation(input.threadId, interruptEscalation);
     }
     if (handoffBootstrapText && thread.handoff !== null && input.reviewTarget === undefined) {
       yield* orchestrationEngine.dispatch({
@@ -2968,6 +3047,21 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
         hasLiveTurn;
+      if (event.payload.dispatchMode === "steer") {
+        // The decider records its projected decision on the message immediately,
+        // then this runtime check corrects either race direction before delivery:
+        // only a genuinely live native steer continues the current turn.
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.set-turn-boundary",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-boundary:${event.eventId}:${isNativeSteer ? "continuation" : "new-turn"}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          startsNewTurn: !isNativeSteer,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (!isNativeSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event);
         // The promotion raced another live turn and was re-queued. Release
@@ -3109,6 +3203,22 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      // A requested steer can still become a separate queued turn (for
+      // providers without native steering, or if the live turn already
+      // settled). Persist that effective boundary while leaving native steer
+      // continuations unbound to a new turn.
+      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.user.bind-turn",
+          commandId: CommandId.makeUnsafe(
+            `server:message-turn-bind:${event.eventId}:${startedTurn.turnId}`,
+          ),
+          threadId: event.payload.threadId,
+          messageId: message.id,
+          turnId: startedTurn.turnId,
+          createdAt: event.payload.createdAt,
+        });
+      }
       if (startedTurn && isPendingQueuedDispatch) {
         yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
       }
@@ -3600,6 +3710,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly turnId?: TurnId | undefined;
     readonly createdAt: string;
+    readonly intentionalQuit?: boolean;
   }) {
     const thread = yield* resolveThread(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -3619,6 +3730,14 @@ const make = Effect.gen(function* () {
       });
 
     if (!providerThread || !providerThread.session || providerThread.session.status === "stopped") {
+      if (
+        input.intentionalQuit &&
+        providerThread?.session?.status === "stopped" &&
+        providerThread.session.activeTurnId === null &&
+        providerThread.session.lastError === null
+      ) {
+        return;
+      }
       yield* reportInterruptFailure("No active provider session is bound to this thread.");
       // Nothing is left that could ever emit a terminal event for this turn.
       return yield* settleInterruptedProviderTurn({
@@ -3645,6 +3764,19 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Desktop quit also closes the provider. If that closure already settled
+    // successfully, a late interrupt rejection is an intentional stop, not a failure.
+    if (input.intentionalQuit) {
+      const settled = (yield* resolveProviderSessionThread(input.threadId))?.session;
+      if (
+        settled?.status === "stopped" &&
+        settled.activeTurnId === null &&
+        settled.lastError === null
+      ) {
+        return;
+      }
+    }
+
     // An interrupt that timed out or failed uncertainly is escalated to a full
     // session stop rather than propagated: propagating would quarantine the
     // thread, which suppresses every later side effect while still leaving the
@@ -3658,6 +3790,7 @@ const make = Effect.gen(function* () {
       return yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,
+        interruptEscalated: true,
       });
     }
 
@@ -3683,6 +3816,7 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       createdAt: event.payload.createdAt,
+      intentionalQuit: event.commandId?.startsWith("quit-resume-interrupt:") === true,
     });
   });
 
@@ -3821,6 +3955,20 @@ const make = Effect.gen(function* () {
         // outcome and needs no user-visible settlement.
         return null;
       }
+      if (
+        pendingRow?.lifecycleGeneration != null &&
+        event.payload.lifecycleGeneration === undefined
+      ) {
+        // An old client must refresh the request identity. A generation-less stale
+        // marker would also invalidate the replacement callback it never addressed.
+        yield* appendInteractionResponseFailure(event, {
+          interactionKind: input.interactionKind,
+          detail:
+            "Refresh this thread before answering: the provider lifecycle generation is missing.",
+          settlementStatus: "retryable",
+        });
+        return null;
+      }
       // No durable row, or a row this command can never claim (e.g. a lifecycle
       // generation mismatch). Silence here permanently stranded the prompt: the
       // client saw neither a resolution nor a failure, so every retry was
@@ -3850,16 +3998,22 @@ const make = Effect.gen(function* () {
       // settlement would orphan it and silently swallow every future response.
       yield* appendInteractionResponseFailure(event, {
         interactionKind: input.interactionKind,
-        detail: "No provider session thread is bound to this thread.",
-        settlementStatus: "retryable",
+        detail: buildStalePendingRequestFailureDetail(
+          input.interactionKind === "approval" ? "approval" : "user-input",
+          event.payload.requestId,
+        ),
+        settlementStatus: "uncertain",
       });
       return null;
     }
     if (providerThread.session?.status !== "stopped") return providerThread.id;
     yield* appendInteractionResponseFailure(event, {
       interactionKind: input.interactionKind,
-      detail: "No active provider session is bound to this thread.",
-      settlementStatus: "retryable",
+      detail: buildStalePendingRequestFailureDetail(
+        input.interactionKind === "approval" ? "approval" : "user-input",
+        event.payload.requestId,
+      ),
+      settlementStatus: "uncertain",
     });
     return null;
   });
@@ -3886,7 +4040,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingApprovalRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingApprovalRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "approval",
             detail: unknownPendingRequest
@@ -3920,7 +4075,8 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => {
-          const unknownPendingRequest = isUnknownPendingUserInputRequestError(cause);
+          const unknownPendingRequest =
+            isUnavailableInteractionRuntime(cause) || isUnknownPendingUserInputRequestError(cause);
           return appendInteractionResponseFailure(event, {
             interactionKind: "userInput",
             detail: unknownPendingRequest
@@ -4206,6 +4362,7 @@ const make = Effect.gen(function* () {
   const processThreadSessionStop = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
+    readonly interruptEscalated?: boolean;
   }) {
     const thread = yield* resolveThread(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -4245,6 +4402,11 @@ const make = Effect.gen(function* () {
       }
     }
     clearPendingContextBootstraps(thread.id);
+    if (input.interruptEscalated) {
+      pendingInterruptEscalations.set(thread.id, { evidence: null });
+    } else {
+      pendingInterruptEscalations.delete(thread.id);
+    }
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
@@ -4717,15 +4879,9 @@ const make = Effect.gen(function* () {
   // serially in the same source but do not acquire delivery claims yet.
   const startProviderIntentSource = Effect.gen(function* () {
     const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
-    // Detach the engine from this reactor's processing latency. The engine
-    // publishes committed events into a bounded PubSub from an uninterruptible
-    // section of its single command worker, so a subscriber that stalls (a hung
-    // provider call, or just slow boot replay below) back-pressures the worker
-    // and then fails every dispatched command with a dispatch timeout. Draining
-    // into an unbounded queue immediately after subscribing keeps the engine
-    // free while boot work runs; ordering is preserved because the queue is FIFO
-    // and `processOrderedEvent` skips anything at or below the durable cursor.
-    const liveEventQueue = yield* Queue.unbounded<OrchestrationEvent, Cause.Done>();
+    // Preserve the source/consumer handoff without retaining an unbounded event
+    // mirror while startup or a provider call runs. The engine replays overflow.
+    const liveEventQueue = yield* Queue.bounded<OrchestrationEvent, Cause.Done>(1);
     yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
     const liveEvents = Stream.fromQueue(liveEventQueue);
     const consumerState = yield* deliveryRepository.getConsumerState(
@@ -5243,9 +5399,57 @@ const make = Effect.gen(function* () {
       );
     };
 
-    // Self-heal only legacy quarantines whose recorded details prove the
-    // command frame was never written. Exit-unproven process failures remain
-    // quarantined because the old provider may still be running.
+    const isSettledQuitInterruptBlocker = Effect.fnUntraced(function* (
+      blocker: ProviderBlockingDeliveryEvidence,
+    ) {
+      if (
+        !blocker.lastError?.startsWith(
+          "Error: Orchestration command admission is stopped (thread.activity.append, server:provider-failure-activity:",
+        )
+      ) {
+        return false;
+      }
+      const intent = yield* readProviderIntentEvent(blocker.eventSequence);
+      if (
+        intent.type !== "thread.turn-interrupt-requested" ||
+        !intent.commandId?.startsWith("quit-resume-interrupt:")
+      ) {
+        return false;
+      }
+
+      // Require durable stop evidence before the failed diagnostic, not a stop
+      // from some later session. Never infer provider exit from admission alone.
+      const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
+      return yield* orchestrationEngine
+        .readThreadEventsThrough(blocker.threadId, blocker.eventSequence, highWater, [
+          "thread.session-set",
+        ])
+        .pipe(
+          Stream.runFold(
+            () => false,
+            (settled, event) => {
+              if (event.type !== "thread.session-set") return settled;
+              const session = event.payload.session;
+              if (
+                session.activeTurnId !== null ||
+                session.status === "running" ||
+                session.status === "ready"
+              ) {
+                return false;
+              }
+              return (
+                settled ||
+                (event.occurredAt <= blocker.updatedAt &&
+                  session.status === "stopped" &&
+                  session.lastError === null)
+              );
+            },
+          ),
+        );
+    });
+
+    // Recover only proven pre-write failures or quit interrupts whose provider
+    // had already stopped. Exit-unproven failures remain quarantined.
     // Skipped prompts are not replayed at startup; instead, surface a durable
     // activity asking the user to resend them.
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
@@ -5259,7 +5463,8 @@ const make = Effect.gen(function* () {
           limit: pageSize,
         });
         for (const blocker of startupBlockers) {
-          if (!isSafeLegacyProviderBlocker(blocker.lastError)) continue;
+          const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
+          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) continue;
           const reconciled = yield* deliveryRepository.reconcile({
             reconciliationId: crypto.randomUUID(),
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -5268,12 +5473,36 @@ const make = Effect.gen(function* () {
             expectedState: blocker.state,
             outcome: "abandon",
             reconciledBy: "system:provider-command-reactor",
-            note: "Recorded failure proves the provider never executed this command; settled at startup.",
+            note: settledQuit
+              ? "Intentional quit interrupt: provider stop was recorded before shutdown rejected its diagnostic; settled without replay."
+              : "Recorded failure proves the provider never executed this command; settled at startup.",
             reconciledAt: new Date().toISOString(),
           });
           if (Option.isNone(reconciled)) continue;
 
           quarantinedThreads.delete(blocker.threadId);
+          if (settledQuit) {
+            const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId: blocker.threadId,
+            });
+            const session = (yield* resolveThread(blocker.threadId))?.session;
+            if (
+              Option.isNone(remaining) &&
+              session?.status === "error" &&
+              session.activeTurnId === null &&
+              blocker.lastError !== null &&
+              session.lastError === formatProviderDeliveryBlockDetail(blocker.lastError)
+            ) {
+              const createdAt = new Date().toISOString();
+              yield* setThreadSession({
+                threadId: blocker.threadId,
+                expectedSession: session,
+                session: { ...session, status: "stopped", lastError: null, updatedAt: createdAt },
+                createdAt,
+              });
+            }
+          }
           if (!startupRecoveryNotifiedThreads.has(blocker.threadId)) {
             const skippedPromptCount = yield* countSkippedPrompts({
               threadId: blocker.threadId,

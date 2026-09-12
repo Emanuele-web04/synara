@@ -1,6 +1,7 @@
 import {
   formatModelDisplayName,
   humanizeModelSlug,
+  normalizeModelDisplayName,
   normalizeModelSlug,
 } from "@synara/shared/model";
 import {
@@ -46,13 +47,10 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-// Normalize only known families, keeping the provider's variant wording and casing.
+// Normalize known families to their canonical casing, keeping the provider's
+// variant wording. Unknown or freeform names pass through unchanged.
 function normalizeCatalogModelName(name: string): string {
-  return name.replace(
-    /^(glm|deepseek)([-_\s]+)([^()]*)/iu,
-    (_, family: string, _separator: string, suffix: string) =>
-      `${family.toLowerCase() === "glm" ? "GLM" : "DeepSeek"} ${suffix.replace(/[-_]+/gu, " ")}`,
-  );
+  return normalizeModelDisplayName(name);
 }
 
 /**

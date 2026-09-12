@@ -945,6 +945,46 @@ describe("Devin adapter lifecycle", () => {
     );
   });
 
+  it("preserves all prompt history and earlier snapshots when another turn settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const firstPrompt = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+    const secondPrompt = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+    const prompts = [Deferred.await(firstPrompt), Deferred.await(secondPrompt)];
+    const { runtime, completeProcessedEvent } = makeEventAcpRuntime(
+      () => prompts.shift() ?? Effect.never,
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-retained-turn-items");
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+        });
+        const first = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
+        yield* Deferred.succeed(firstPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
+        yield* advanceTimers(1);
+        const afterFirst = yield* adapter.readThread(threadId);
+        expect(afterFirst.turns.map((turn) => turn.id)).toEqual([first.turnId]);
+        expect(afterFirst.turns[0]?.items.length).toBeGreaterThan(0);
+
+        const second = yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
+        yield* Deferred.succeed(secondPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
+        yield* advanceTimers(1);
+        const afterSecond = yield* adapter.readThread(threadId);
+        expect(afterSecond.turns.map((turn) => turn.id)).toEqual([first.turnId, second.turnId]);
+        expect(afterSecond.turns[0]?.items).toEqual(afterFirst.turns[0]?.items);
+        expect(afterFirst.turns.map((turn) => turn.id)).toEqual([first.turnId]);
+        expect(afterFirst.turns[0]?.items.length).toBeGreaterThan(0);
+        expect(afterSecond.turns[1]?.items.length).toBeGreaterThan(0);
+        yield* adapter.stopSession(threadId);
+      }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
+    );
+  });
+
   it("resets the ordinary clock for other valid progress events", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -1575,6 +1615,29 @@ describe("Devin CLI model discovery", () => {
         { model: "swe-1-7-lightning", fastMode: true },
       ],
     });
+  });
+
+  it("humanizes family slugs when the CLI omits labels", () => {
+    const models = mergeDevinModelDescriptors([
+      parseDevinCliModelList(
+        JSON.stringify({
+          families: [
+            {
+              family_uid: "swe-1-7",
+              slug: "swe-1-7",
+              variants: [{ model_uid: "swe-1-7" }],
+            },
+            {
+              family_uid: "claude-opus-4-9-20260715",
+              slug: "claude-opus-4-9-20260715",
+              variants: [{ model_uid: "claude-opus-4-9-20260715" }],
+            },
+          ],
+        }),
+      ),
+    ]);
+
+    expect(models.map(({ name }) => name)).toEqual(["SWE 1.7", "Claude Opus 4.9 20260715"]);
   });
 
   it("exposes thinking and long-context toggles for Claude-style variants", () => {

@@ -146,7 +146,6 @@ function makeThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread 
     ...shell,
     deletedAt: null,
     pinnedMessages: [],
-    threadMarkers: [],
     messages: [],
     proposedPlans: [],
     activities: [],
