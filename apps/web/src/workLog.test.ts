@@ -4271,10 +4271,11 @@ describe("deriveTimelineEntries", () => {
       })),
     };
     const other: ChatMessage = {
-      ...message,
       id: MessageId.makeUnsafe("assistant-other"),
+      role: "assistant",
+      text: message.text,
+      streaming: false,
       createdAt: "2026-02-23T00:00:02.000Z",
-      textSegments: undefined,
     };
     const entries = deriveTimelineEntries(
       [message, other],
