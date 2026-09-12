@@ -1020,12 +1020,28 @@ describe("AppSnap window picker requests", () => {
 
   it("captures a specific window and keeps a pending record until acknowledged", async () => {
     const { manager, watchChild, captureDirectory, dispose } = await createEnabledManager();
+    const capturePath = join(captureDirectory, "req-capture.png");
+    const originalUnlink = FS.promises.unlink;
+    let markHelperUnlinkStarted!: () => void;
+    const helperUnlinkStarted = new Promise<void>((resolve) => {
+      markHelperUnlinkStarted = resolve;
+    });
+    let releaseHelperUnlink!: () => void;
+    const helperUnlinkRelease = new Promise<void>((resolve) => {
+      releaseHelperUnlink = resolve;
+    });
+    const unlinkSpy = vi.spyOn(FS.promises, "unlink").mockImplementation(async (path) => {
+      if (path.toString() === capturePath) {
+        markHelperUnlinkStarted();
+        await helperUnlinkRelease;
+      }
+      return originalUnlink(path);
+    });
     try {
       const capturing = manager.captureWindow(77);
       await flushPromises();
       const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
       expect(requestId).toMatch(/^picker-[a-f0-9-]+$/);
-      const capturePath = join(captureDirectory, "req-capture.png");
       const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
       writeFileSync(capturePath, captureBytes);
       watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
@@ -1038,6 +1054,19 @@ describe("AppSnap window picker requests", () => {
           sourceAppName: "Safari",
         })}\n`,
       );
+      await helperUnlinkStarted;
+      let requestSettled = false;
+      void capturing.then(
+        () => {
+          requestSettled = true;
+        },
+        () => {
+          requestSettled = true;
+        },
+      );
+      await flushPromises();
+      expect(requestSettled).toBe(false);
+      releaseHelperUnlink();
       const capture = await capturing;
       expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
       expect(FS.existsSync(capturePath)).toBe(false);
@@ -1045,6 +1074,8 @@ describe("AppSnap window picker requests", () => {
       await manager.acknowledgeCapture(capture.id);
       expect(await manager.listPendingCaptures()).toHaveLength(0);
     } finally {
+      releaseHelperUnlink();
+      unlinkSpy.mockRestore();
       dispose();
     }
   });
