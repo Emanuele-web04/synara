@@ -30,6 +30,10 @@ export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
  * the desktop host, the composer's setup entry, and the settings panel asking
  * for exactly these grants — Input Monitoring belongs to the AppSnap picker
  * chord, which computer control never engages.
+ *
+ * Kept as an alias, not a second list: the desktop shell and the web settings
+ * import this AppSnap vocabulary directly and live outside this slice, so the
+ * alias stays until those callers move to COMPUTER_PERMISSIONS.
  */
 export const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] =
   COMPUTER_PERMISSIONS;
@@ -43,12 +47,15 @@ export const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] 
  * only takes away the pictures — the window list, the accessibility tree, and
  * every input still work. Telling an agent to stop because it cannot take a
  * screenshot costs the user the whole task for a grant that blocked none of it.
+ *
+ * Retained for existing callers; the canonical check is inline in
+ * computerGrantsBlockControl below.
  */
 export const COMPUTER_BLOCKING_PERMISSIONS: readonly ComputerPermission[] = ["accessibility"];
 
 /** Whether any of these missing grants stops the desktop being driven at all. */
 export function computerGrantsBlockControl(permissions: readonly ComputerPermission[]): boolean {
-  return permissions.some((permission) => COMPUTER_BLOCKING_PERMISSIONS.includes(permission));
+  return permissions.includes("accessibility");
 }
 
 /** Exactly what System Settings › Privacy & Security calls each grant. */

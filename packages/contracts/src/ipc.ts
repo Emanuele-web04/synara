@@ -476,7 +476,7 @@ export type DesktopAppSnapSettingsPane = "accessibility" | "input-monitoring" | 
 /** A macOS privacy grant the AppSnap helper can check or request. */
 export type DesktopAppSnapPermissionKind = "accessibility" | "inputMonitoring" | "screenRecording";
 
-export type DesktopAppSnapPermissionGuideState = "shown" | "closed" | "granted";
+export type DesktopAppSnapPermissionGuideState = "closed" | "granted";
 
 export interface DesktopAppSnapState {
   platform: DesktopAppSnapPlatform;
