@@ -419,6 +419,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         decodeModelSelection(JSON.parse(pagedProjectRows[0]!.modelSelection) as unknown),
         {
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.5",
           options: { reasoningEffort: "high" },
         },
@@ -427,6 +428,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         decodeModelSelection(JSON.parse(pagedThreadRows[0]!.modelSelection) as unknown),
         {
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.5",
           options: { reasoningEffort: "high" },
         },
@@ -436,6 +438,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
       };
       assert.deepStrictEqual(decodeModelSelection(pagedEventPayload.modelSelection), {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.5",
         options: { reasoningEffort: "high" },
       });

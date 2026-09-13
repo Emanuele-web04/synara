@@ -256,14 +256,21 @@ interface GatewayHarness {
   readonly automationCreates: Array<AutomationCreateInput>;
   readonly automationUpdates: Array<AutomationUpdateInput>;
   readonly automationDeletes: Array<{ id: string }>;
-  readonly automationMemoryUpdates: Array<{ automationId: string | null; content: string }>;
+  readonly automationMemoryUpdates: Array<{
+    automationId: string | null;
+    content: string;
+  }>;
   readonly worktreeCreates: Array<{
     ref?: string;
     newBranch?: string;
     path?: string;
     copyChangesFrom?: string;
   }>;
-  readonly gitExecutions: Array<{ operation: string; cwd: string; args: ReadonlyArray<string> }>;
+  readonly gitExecutions: Array<{
+    operation: string;
+    cwd: string;
+    args: ReadonlyArray<string>;
+  }>;
   readonly fetchedPullRequests: number[];
   readonly fetchedPullRequestRepositories: Array<string | undefined>;
   readonly worktreeRemoves: Array<{ path: string }>;
@@ -288,7 +295,10 @@ interface GatewayHarness {
     readonly token: string;
     readonly name: string;
     readonly args: Record<string, unknown>;
-  }) => Effect.Effect<{ status: number; result: Record<string, unknown> | undefined }>;
+  }) => Effect.Effect<{
+    status: number;
+    result: Record<string, unknown> | undefined;
+  }>;
   readonly postRaw: (input: {
     readonly authorizationHeader: string | undefined;
     readonly body: unknown;
@@ -421,7 +431,10 @@ function makeHarnessLayer(
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
-  const automationMemoryUpdates: Array<{ automationId: string | null; content: string }> = [];
+  const automationMemoryUpdates: Array<{
+    automationId: string | null;
+    content: string;
+  }> = [];
   const automationUpdates: Array<AutomationUpdateInput> = [];
   const automationDeletes: Array<{ id: string }> = [];
   const worktreeCreates: Array<{
@@ -793,7 +806,10 @@ function makeHarnessLayer(
     getMemory: () => Effect.succeed(null),
     updateMemory: (input: { automationId: string | null; content: string }) =>
       Effect.sync(() => {
-        automationMemoryUpdates.push({ automationId: input.automationId, content: input.content });
+        automationMemoryUpdates.push({
+          automationId: input.automationId,
+          content: input.content,
+        });
         return {
           automationId: input.automationId ?? "automation-1",
           content: input.content,
@@ -988,6 +1004,8 @@ function makeHarnessLayer(
     providerKinds.map(
       (provider): ServerProviderStatus => ({
         provider,
+        driver: provider,
+        instanceId: provider,
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -1062,7 +1080,11 @@ function makeHarnessLayer(
       Effect.sync(() => {
         for (const [key, operation] of operationsByScope) {
           if (operation.operationId !== operationId || operation.status !== "reserved") continue;
-          operationsByScope.set(key, { ...operation, status: "dispatching", updatedAt: now });
+          operationsByScope.set(key, {
+            ...operation,
+            status: "dispatching",
+            updatedAt: now,
+          });
           return true;
         }
         return false;
@@ -1486,7 +1508,9 @@ function makeClaudeGatewayRuntime(models: ModelInfo[]) {
 describe("AgentGateway", () => {
   const baseThreads = [
     makeThreadShell("thread-parent"),
-    makeThreadShell("thread-child", { parentThreadId: ThreadId.makeUnsafe("thread-parent") }),
+    makeThreadShell("thread-child", {
+      parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+    }),
     makeThreadShell("thread-archived", { archivedAt: NOW }),
   ];
 
@@ -1504,7 +1528,11 @@ describe("AgentGateway", () => {
       `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
       () => {
         const runtime = makeClaudeGatewayRuntime([
-          { ...model, displayName: model.value, description: "SDK-discovered model" },
+          {
+            ...model,
+            displayName: model.value,
+            description: "SDK-discovered model",
+          },
         ]);
         return Effect.gen(function* () {
           const adapter = yield* ClaudeAdapter;
@@ -1641,7 +1669,9 @@ describe("AgentGateway", () => {
                   ? `${expectedModel}[1m]`
                   : expectedModel,
               );
-              const settings = query.options.settings as { autoCompactWindow?: number };
+              const settings = query.options.settings as {
+                autoCompactWindow?: number;
+              };
               assert.equal(
                 settings.autoCompactWindow,
                 window === "1m" ? 1_000_000 : window === "200k" ? 200_000 : undefined,
@@ -1675,7 +1705,11 @@ describe("AgentGateway", () => {
       `does not advertise or accept unsupported discovered Claude windows: ${model.value}`,
       () => {
         const runtime = makeClaudeGatewayRuntime([
-          { ...model, displayName: model.value, description: "SDK-discovered model" },
+          {
+            ...model,
+            displayName: model.value,
+            description: "SDK-discovered model",
+          },
         ]);
         return Effect.gen(function* () {
           const discovery = yield* ProviderDiscoveryService;
@@ -1785,7 +1819,10 @@ describe("AgentGateway", () => {
           jsonrpc: "2.0",
           id: true,
           method: "tools/call",
-          params: { name: "synara_set_thread_title", arguments: { title: "Must not run" } },
+          params: {
+            name: "synara_set_thread_title",
+            arguments: { title: "Must not run" },
+          },
         },
       });
       assert.equal((response.body as { error?: { code: number } }).error?.code, -32600);
@@ -2088,7 +2125,10 @@ describe("AgentGateway", () => {
             tools: Array<{
               name: string;
               description?: string;
-              inputSchema: { properties?: Record<string, unknown>; required?: string[] };
+              inputSchema: {
+                properties?: Record<string, unknown>;
+                required?: string[];
+              };
             }>;
           };
         }
@@ -2178,7 +2218,9 @@ describe("AgentGateway", () => {
         minimum: 0,
       });
       assert.deepInclude(readThreadProperties?.messageId, { type: "string" });
-      assert.deepInclude(readThreadProperties?.messageVersion, { type: "string" });
+      assert.deepInclude(readThreadProperties?.messageVersion, {
+        type: "string",
+      });
 
       const setThreadGoal = tools.find((tool) => tool.name === "synara_set_thread_goal");
       assert.include(
@@ -2361,7 +2403,9 @@ describe("AgentGateway", () => {
           }>
         >;
       };
-      assert.deepEqual(antigravity.exampleTarget.options, { reasoningEffort: "low" });
+      assert.deepEqual(antigravity.exampleTarget.options, {
+        reasoningEffort: "low",
+      });
       assert.deepEqual(
         antigravity.providerOptions.find((option) => option.key === "reasoningEffort"),
         {
@@ -2514,7 +2558,11 @@ describe("AgentGateway", () => {
         (yield* harness.callTool({
           token: "token-parent",
           name: "synara_read_thread_activity",
-          args: { threadId: "thread-parent", limit: 1, cursor: first.nextCursor },
+          args: {
+            threadId: "thread-parent",
+            limit: 1,
+            cursor: first.nextCursor,
+          },
         })).result,
       );
       assert.equal((second.activities as Array<{ sequence: number }>)[0]?.sequence, 2);
@@ -2700,7 +2748,11 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_thread",
-        args: { requestId: "create-grok", prompt: "analyze the feature", provider: "grok" },
+        args: {
+          requestId: "create-grok",
+          prompt: "analyze the feature",
+          provider: "grok",
+        },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const payload = toolResultJson(response.result);
@@ -2938,7 +2990,11 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_thread",
-        args: { requestId: "create-crowded", prompt: "one more", provider: "codex" },
+        args: {
+          requestId: "create-crowded",
+          prompt: "one more",
+          provider: "codex",
+        },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.equal(harness.dispatched.length, 3);
@@ -3436,7 +3492,9 @@ describe("AgentGateway", () => {
         ],
       });
 
-      const results = response.body as Array<{ result?: Record<string, unknown> }>;
+      const results = response.body as Array<{
+        result?: Record<string, unknown>;
+      }>;
       assert.equal(response.status, 200);
       assert.equal(
         (toolResultJson(results[0]?.result).error as { code: string }).code,
@@ -3489,18 +3547,30 @@ describe("AgentGateway", () => {
           name: "synara_create_threads",
           args: {
             requestId: "late-batch",
-            threads: [{ prompt: "late", target: { provider: "codex", model: "gpt-5.5" } }],
+            threads: [
+              {
+                prompt: "late",
+                target: { provider: "codex", model: "gpt-5.5" },
+              },
+            ],
           },
         },
         {
           name: "synara_create_thread",
-          args: { requestId: "late-single", prompt: "late", provider: "codex" },
+          args: {
+            requestId: "late-single",
+            prompt: "late",
+            provider: "codex",
+          },
         },
         {
           name: "synara_send_message",
           args: { threadId: "thread-child", message: "late" },
         },
-        { name: "synara_interrupt_thread", args: { threadId: "thread-child" } },
+        {
+          name: "synara_interrupt_thread",
+          args: { threadId: "thread-child" },
+        },
         {
           name: "synara_set_thread_title",
           args: { threadId: "thread-child", title: "Late rename" },
@@ -3524,7 +3594,10 @@ describe("AgentGateway", () => {
       ];
 
       for (const attempt of attempts) {
-        const response = yield* harness.callTool({ token: "token-parent", ...attempt });
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          ...attempt,
+        });
         assert.equal(
           (toolResultJson(response.result).error as { code: string }).code,
           "caller_turn_inactive",
@@ -3552,7 +3625,10 @@ describe("AgentGateway", () => {
       const args = {
         requestId: "two-workers",
         threads: [
-          { prompt: "worker one", target: { provider: "codex", model: "gpt-5.5" } },
+          {
+            prompt: "worker one",
+            target: { provider: "codex", model: "gpt-5.5" },
+          },
           {
             prompt: "worker two",
             target: { provider: "claudeAgent", model: "claude-sonnet-5" },
@@ -3810,6 +3886,7 @@ describe("AgentGateway", () => {
       if (create?.type === "thread.create") {
         assert.deepEqual(create.modelSelection, {
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.6-terra",
           options: { reasoningEffort: "low" },
         });
@@ -3827,7 +3904,10 @@ describe("AgentGateway", () => {
         args: {
           requestId: "atomic-preflight",
           threads: [
-            { prompt: "valid", target: { provider: "codex", model: "gpt-5.5" } },
+            {
+              prompt: "valid",
+              target: { provider: "codex", model: "gpt-5.5" },
+            },
             {
               prompt: "invalid",
               target: { provider: "claudeAgent", model: "made-up-claude" },
@@ -4407,7 +4487,10 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_wait_for_threads",
-        args: { threadIds: ["thread-result-a", "thread-result-b"], timeoutMs: 0 },
+        args: {
+          threadIds: ["thread-result-a", "thread-result-b"],
+          timeoutMs: 0,
+        },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const payload = toolResultJson(response.result);
@@ -4417,7 +4500,10 @@ describe("AgentGateway", () => {
         (payload.threads as Array<{ summary: string }>).map((entry) => entry.summary),
         ["First result", "Second result"],
       );
-      assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 2, batchTurnReads: 1 });
+      assert.deepEqual(harness.getWaitReadCounts(), {
+        detailReads: 2,
+        batchTurnReads: 1,
+      });
       assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -4508,7 +4594,10 @@ describe("AgentGateway", () => {
           args: { threadIds: pending.map((thread) => thread.id), timeoutMs: 0 },
         });
         assert.equal(toolResultJson(response.result).timedOut, true);
-        assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 0, batchTurnReads: 1 });
+        assert.deepEqual(harness.getWaitReadCounts(), {
+          detailReads: 0,
+          batchTurnReads: 1,
+        });
       }).pipe(Effect.provide(gatewayLayer));
     },
   );
@@ -4534,7 +4623,10 @@ describe("AgentGateway", () => {
         .callTool({
           token: "token-parent",
           name: "synara_wait_for_threads",
-          args: { threadIds: ["thread-deleted-during-wait"], timeoutMs: 5_000 },
+          args: {
+            threadIds: ["thread-deleted-during-wait"],
+            timeoutMs: 5_000,
+          },
         })
         .pipe(Effect.forkChild);
       yield* Effect.yieldNow;
@@ -4675,10 +4767,15 @@ describe("AgentGateway", () => {
         [
           {
             provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.6-terra",
             options: { reasoningEffort: "low" },
           },
-          { provider: "claudeAgent", model: "claude-sonnet-5" },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-sonnet-5",
+          },
         ],
       );
     }).pipe(Effect.provide(gatewayLayer));
@@ -4820,7 +4917,11 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_send_message",
-        args: { threadId: "thread-child", message: "status check please", mode: "steer" },
+        args: {
+          threadId: "thread-child",
+          message: "status check please",
+          mode: "steer",
+        },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       // The projection snapshot can lag the runtime in both directions, so
@@ -4846,7 +4947,10 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_send_message",
-        args: { threadId: "thread-full-access", message: "run something dangerous" },
+        args: {
+          threadId: "thread-full-access",
+          message: "run something dangerous",
+        },
       });
       assert.isTrue(isToolError(response.result));
       assert.include(toolErrorText(response.result), "full-access");
@@ -4957,7 +5061,11 @@ describe("AgentGateway", () => {
       const defaulted = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_thread",
-        args: { requestId: "create-isolated", prompt: "do isolated work", provider: "codex" },
+        args: {
+          requestId: "create-isolated",
+          prompt: "do isolated work",
+          provider: "codex",
+        },
       });
       assert.isFalse(isToolError(defaulted.result), toolErrorText(defaulted.result));
       assert.equal(toolResultJson(defaulted.result).environment, "worktree");
@@ -4996,14 +5104,21 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_automation",
-        args: { name: "monitor children", prompt: "check the child threads", everyMinutes: 5 },
+        args: {
+          name: "monitor children",
+          prompt: "check the child threads",
+          everyMinutes: 5,
+        },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.equal(harness.automationCreates.length, 1);
       const created = harness.automationCreates[0]!;
       assert.equal(created.mode, "heartbeat");
       assert.equal(created.targetThreadId, "thread-parent");
-      assert.deepEqual(created.schedule, { type: "interval", everySeconds: 300 });
+      assert.deepEqual(created.schedule, {
+        type: "interval",
+        everySeconds: 300,
+      });
       assert.equal(created.maxIterations, 50);
       assert.equal(created.stopAfterConsecutiveFailures, 3);
       // Omitting target keeps the legacy behavior: the heartbeat inherits the
@@ -5029,7 +5144,11 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_automation",
-        args: { name: "monitor children", prompt: "check the child threads", everyMinutes: 5 },
+        args: {
+          name: "monitor children",
+          prompt: "check the child threads",
+          everyMinutes: 5,
+        },
       });
 
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
@@ -5085,7 +5204,10 @@ describe("AgentGateway", () => {
           mode: "dedicated",
           schedule: { type: "interval", everySeconds: 3600 },
           worktreeMode: "worktree",
-          completionPolicy: { type: "ai-evaluated", stopWhen: "the release is out" },
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "the release is out",
+          },
         },
       });
 
@@ -5326,7 +5448,10 @@ describe("AgentGateway", () => {
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.deepEqual(harness.automationUpdates, [
-        { id: AutomationId.makeUnsafe("automation-standalone"), enabled: false },
+        {
+          id: AutomationId.makeUnsafe("automation-standalone"),
+          enabled: false,
+        },
       ]);
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -5374,7 +5499,10 @@ describe("AgentGateway", () => {
           prompt: "Watch PR 142 and report when CI finishes.",
           mode: "standalone",
           schedule: { type: "interval", everySeconds: 300 },
-          completionPolicy: { type: "ai-evaluated", stopWhen: "PR 142 is merged" },
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "PR 142 is merged",
+          },
         },
       });
 
@@ -5827,7 +5955,9 @@ describe("AgentGateway", () => {
       const response = yield* harness.callTool({
         token: "token-parent",
         name: "synara_set_thread_pull_request",
-        args: { reference: "https://github.com/Emanuele-web04/synara/pull/841" },
+        args: {
+          reference: "https://github.com/Emanuele-web04/synara/pull/841",
+        },
       });
 
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));

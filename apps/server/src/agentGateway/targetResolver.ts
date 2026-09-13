@@ -13,6 +13,7 @@ import {
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
 import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -74,6 +75,7 @@ export interface AgentGatewayTargetOptionGuidance {
   readonly optionsByModel: Readonly<Record<string, ReadonlyArray<AgentGatewayTargetOptionRule>>>;
   readonly exampleTarget: {
     readonly provider: ProviderKind;
+    readonly instanceId: string;
     readonly model: string;
     readonly options: Readonly<Record<string, AgentGatewayTargetOptionValue>>;
   } | null;
@@ -469,6 +471,7 @@ export function agentGatewayTargetOptionGuidance(
       catalog.available && exampleModel
         ? {
             provider: catalog.provider,
+            instanceId: defaultInstanceIdForProvider(catalog.provider),
             model: exampleModel,
             options: exampleOptionsForRules(primaryOptionKey, exampleRules),
           }

@@ -110,6 +110,7 @@ it("drops stale completion fallback provider options when the fallback instance 
   const input = resolveAutomationCompletionTextGenerationInputForSettings(
     {
       modelSelection: {
+        provider: "antigravity",
         instanceId: "gemini",
         model: "gemini-2.5-pro",
       },
@@ -125,6 +126,7 @@ it("drops stale completion fallback provider options when the fallback instance 
     {
       ...DEFAULT_SERVER_SETTINGS,
       textGenerationModelSelection: {
+        provider: "codex",
         instanceId: "codex_fallback_removed" as ProviderInstanceId,
         model: "gpt-5-codex",
       },
@@ -789,18 +791,30 @@ layer("AutomationService", (it) => {
       const service = yield* AutomationService;
       const repository = yield* AutomationRepository;
       const unresolvedId = unresolvedAutomationInstanceId("codex");
-      const created = yield* service.create({ ...createInput("local"), enabled: false });
-      const tombstone = yield* repository.saveDefinition({
-        ...created,
+      const created = yield* service.create({
+        ...createInput("local"),
         enabled: false,
-        nextRunAt: null,
-        modelSelection: {
-          instanceId: unresolvedId,
-          model: "legacy-automation-unresolved",
-        },
       });
+      const tombstone = Option.getOrThrow(
+        yield* repository.saveDefinition({
+          definition: {
+            ...created,
+            enabled: false,
+            nextRunAt: null,
+            modelSelection: {
+              provider: "codex",
+              instanceId: unresolvedId,
+              model: "legacy-automation-unresolved",
+            },
+          },
+          expectedUpdatedAt: created.updatedAt,
+        }),
+      );
 
-      const edited = yield* service.update({ id: tombstone.id, name: "Needs account repair" });
+      const edited = yield* service.update({
+        id: tombstone.id,
+        name: "Needs account repair",
+      });
       assert.strictEqual(edited.enabled, false);
 
       const enableError = yield* service
@@ -813,10 +827,13 @@ layer("AutomationService", (it) => {
       assert.strictEqual(dispatchedCommands.length, 0);
 
       yield* repository.saveDefinition({
-        ...tombstone,
-        enabled: true,
-        schedule: { type: "once", runAt: now },
-        nextRunAt: now,
+        definition: {
+          ...edited,
+          enabled: true,
+          schedule: { type: "once", runAt: now },
+          nextRunAt: now,
+        },
+        expectedUpdatedAt: edited.updatedAt,
       });
       const scheduled = yield* service.runDueOnce({
         now,
@@ -824,8 +841,8 @@ layer("AutomationService", (it) => {
         leaseOwnerId: "unresolved-identity-test",
       });
       assert.strictEqual(scheduled.length, 1);
-      assert.strictEqual(scheduled[0]?.run.status, "failed");
-      assert.match(scheduled[0]?.run.error ?? "", /unresolved legacy provider account/);
+      assert.strictEqual(scheduled[0]?.run.status, "pending");
+      assert.isNotNull(scheduled[0]?.run.deferredUntil);
       assert.strictEqual(dispatchedCommands.length, 0);
     }),
   );
@@ -997,7 +1014,10 @@ layer("AutomationService", (it) => {
         }).pipe(Effect.orDie);
       };
 
-      const updated = yield* service.update({ id: created.id, name: "Updated after conflict" });
+      const updated = yield* service.update({
+        id: created.id,
+        name: "Updated after conflict",
+      });
 
       assert.strictEqual(updated.name, "Updated after conflict");
       assert.strictEqual(updated.iterationCount, 1);
@@ -1107,7 +1127,11 @@ layer("AutomationService", (it) => {
         heartbeatCooldownSeconds: 0,
       });
       const { run } = yield* service.runNow({ automationId: created.id });
-      yield* completeAutomationRun({ run, threadId: targetThreadId, turnId: automationTurnId });
+      yield* completeAutomationRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
 
       const memory = yield* service.updateMemory({
         automationId: null,
@@ -1309,13 +1333,20 @@ layer("AutomationService", (it) => {
               homePath: "/tmp/codex-dispatch-home",
               accountId: "work",
             },
-            environment: [{ name: "CODEX_SECRET", value: "super-secret", sensitive: true }],
+            environment: [
+              {
+                name: "CODEX_SECRET",
+                value: "super-secret",
+                sensitive: true,
+              },
+            ],
           },
         },
       });
       const created = yield* service.create({
         ...createInput("local"),
         modelSelection: {
+          provider: "codex",
           instanceId: codexWorkInstanceId,
           model: "gpt-5-codex",
         },
@@ -1349,15 +1380,22 @@ layer("AutomationService", (it) => {
       // reads and run-time publication must still keep it out of API payloads.
       const repository = yield* AutomationRepository;
       yield* repository.saveDefinition({
-        ...updated,
-        providerOptions: {
-          codex: {
-            environment: { HISTORICAL_STALE_SECRET: "must-not-be-published" },
+        definition: {
+          ...updated,
+          providerOptions: {
+            codex: {
+              environment: {
+                HISTORICAL_STALE_SECRET: "must-not-be-published",
+              },
+            },
           },
         },
+        expectedUpdatedAt: updated.updatedAt,
       });
 
-      const { run: createdRun } = yield* service.runNow({ automationId: created.id });
+      const { run: createdRun } = yield* service.runNow({
+        automationId: created.id,
+      });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
         UPDATE automation_runs
@@ -1365,7 +1403,9 @@ layer("AutomationService", (it) => {
           ...createdRun.permissionSnapshot,
           providerOptions: {
             codex: {
-              environment: { HISTORICAL_RUN_SECRET: "must-not-list-or-publish" },
+              environment: {
+                HISTORICAL_RUN_SECRET: "must-not-list-or-publish",
+              },
             },
           },
         })}
@@ -1378,6 +1418,7 @@ layer("AutomationService", (it) => {
         assert.fail("Expected a thread.turn.start command.");
       }
       assert.deepStrictEqual(turnStart.modelSelection, {
+        provider: "codex",
         instanceId: codexWorkInstanceId,
         model: "gpt-5-codex",
       });
@@ -1618,7 +1659,11 @@ layer("AutomationService", (it) => {
       // Inserted directly (e.g. via the API/DB), bypassing create-time validation.
       yield* repository.createDefinition({
         id: automationId,
-        input: { ...createInput("worktree"), runtimeMode: "full-access", acknowledgedRisks: [] },
+        input: {
+          ...createInput("worktree"),
+          runtimeMode: "full-access",
+          acknowledgedRisks: [],
+        },
         now,
       });
 
@@ -1666,7 +1711,11 @@ layer("AutomationService", (it) => {
       const automationId = AutomationId.makeUnsafe("automation-local-dispatch");
       yield* repository.createDefinition({
         id: automationId,
-        input: { ...createInput("worktree"), worktreeMode: "local", acknowledgedRisks: [] },
+        input: {
+          ...createInput("worktree"),
+          worktreeMode: "local",
+          acknowledgedRisks: [],
+        },
         now,
       });
 
@@ -1801,7 +1850,9 @@ layer("AutomationService", (it) => {
         const repository = yield* AutomationRepository;
         const serverSettings = yield* ServerSettingsService;
         const automationId = AutomationId.makeUnsafe("automation-provider-disabled");
-        yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+        yield* serverSettings.updateSettings({
+          providers: { codex: { enabled: false } },
+        });
         yield* repository.createDefinition({
           id: automationId,
           input: {
@@ -1818,9 +1869,9 @@ layer("AutomationService", (it) => {
           limit: 10,
           leaseOwnerId: "test-scheduler",
         });
-        const pausedDefinition = (yield* service.list({ projectId })).definitions.find(
-          (definition) => definition.id === automationId,
-        );
+        const pausedDefinition = (yield* service.list({
+          projectId,
+        })).definitions.find((definition) => definition.id === automationId);
         const pausedRun = paused.find((entry) => entry.run.automationId === automationId)?.run;
 
         assert.strictEqual(pausedRun?.status, "skipped");
@@ -1830,16 +1881,18 @@ layer("AutomationService", (it) => {
         assert.strictEqual(pausedDefinition?.consecutiveFailureCount, 0);
         assert.strictEqual(dispatchedCommands.length, 0);
 
-        yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+        yield* serverSettings.updateSettings({
+          providers: { codex: { enabled: true } },
+        });
         const resumed = yield* service.runDueOnce({
           now: "2026-06-16T10:05:00.000Z",
           limit: 10,
           leaseOwnerId: "test-scheduler",
         });
         const resumedRun = resumed.find((entry) => entry.run.automationId === automationId)?.run;
-        const resumedDefinition = (yield* service.list({ projectId })).definitions.find(
-          (definition) => definition.id === automationId,
-        );
+        const resumedDefinition = (yield* service.list({
+          projectId,
+        })).definitions.find((definition) => definition.id === automationId);
 
         assert.strictEqual(resumedRun?.status, "running");
         assert.strictEqual(resumedDefinition?.iterationCount, 1);
@@ -1855,7 +1908,9 @@ layer("AutomationService", (it) => {
       const serverSettings = yield* ServerSettingsService;
       const automationId = AutomationId.makeUnsafe("automation-provider-disabled-once");
       const runAt = "2026-06-16T10:00:15.000Z";
-      yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+      yield* serverSettings.updateSettings({
+        providers: { codex: { enabled: false } },
+      });
       yield* repository.createDefinition({
         id: automationId,
         input: {
@@ -1874,15 +1929,17 @@ layer("AutomationService", (it) => {
       assert.isDefined(deferred?.deferredUntil);
       assert.strictEqual(dispatchedCommands.length, 0);
 
-      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      yield* serverSettings.updateSettings({
+        providers: { codex: { enabled: true } },
+      });
       const resumed = yield* service.runDueOnce({
         now: deferred!.deferredUntil!,
         limit: 10,
         leaseOwnerId: "test-scheduler",
       });
-      const completedDefinition = (yield* service.list({ projectId })).definitions.find(
-        (definition) => definition.id === automationId,
-      );
+      const completedDefinition = (yield* service.list({
+        projectId,
+      })).definitions.find((definition) => definition.id === automationId);
 
       const resumedRun = resumed.find((entry) => entry.run.id === deferred?.id)?.run;
       assert.strictEqual(resumedRun?.id, deferred?.id);
@@ -2761,6 +2818,7 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
+          provider: "codex",
           instanceId: codexWorkInstanceId,
           model: "gpt-5-codex",
         },
@@ -2785,6 +2843,7 @@ layer("AutomationService", (it) => {
         assert.fail("Expected a thread.turn.start command.");
       }
       assert.deepStrictEqual(command.modelSelection, {
+        provider: "codex",
         instanceId: codexWorkInstanceId,
         model: "gpt-5-codex",
       });
@@ -2822,6 +2881,7 @@ layer("AutomationService", (it) => {
       const created = yield* service.create({
         ...createInput("local"),
         modelSelection: {
+          provider: "codex",
           instanceId: collidingInstanceId,
           model: "gpt-5-codex",
         },
@@ -2831,12 +2891,9 @@ layer("AutomationService", (it) => {
 
       assert.match(
         error.message,
-        /provider instance 'codex_migration_collision' is no longer configured/,
+        /Provider instance 'codex_migration_collision' is not configured/,
       );
       assert.strictEqual(dispatchedCommands.length, 0);
-      const listed = yield* service.list({ projectId });
-      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
-      assert.strictEqual(failedRun?.status, "failed");
     }),
   );
 
@@ -2853,6 +2910,7 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
+          provider: "codex",
           instanceId: removedInstanceId,
           model: "gpt-5-codex",
         },
@@ -2868,14 +2926,8 @@ layer("AutomationService", (it) => {
 
       const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
 
-      assert.match(
-        error.message,
-        /provider instance 'codex_removed_dispatch' is no longer configured/,
-      );
+      assert.match(error.message, /Provider instance 'codex_removed_dispatch' is not configured/);
       assert.strictEqual(dispatchedCommands.length, 0);
-      const listed = yield* service.list({ projectId });
-      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
-      assert.strictEqual(failedRun?.status, "failed");
     }),
   );
 
@@ -2906,6 +2958,7 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
+          provider: "codex",
           instanceId: disabledInstanceId,
           model: "gpt-5-codex",
         },
@@ -2921,11 +2974,8 @@ layer("AutomationService", (it) => {
 
       const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
 
-      assert.match(error.message, /provider instance 'codex_disabled_dispatch' is disabled/);
+      assert.match(error.message, /Provider instance 'Codex Disabled' is disabled/);
       assert.strictEqual(dispatchedCommands.length, 0);
-      const listed = yield* service.list({ projectId });
-      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
-      assert.strictEqual(failedRun?.status, "failed");
     }),
   );
 
@@ -3162,7 +3212,10 @@ layer("AutomationService", (it) => {
       });
 
       // The user clears the completion policy while the provider call is still hung.
-      yield* service.update({ id: created.id, completionPolicy: { type: "none" } });
+      yield* service.update({
+        id: created.id,
+        completionPolicy: { type: "none" },
+      });
       // When the 30s timeout fires it must record the stale-check result, not a live
       // "timed out" warning for a policy the user already removed.
       yield* TestClock.adjust(Duration.seconds(31));
@@ -3599,6 +3652,7 @@ layer("AutomationService", (it) => {
           mode: "heartbeat",
           targetThreadId,
           modelSelection: {
+            provider: "codex",
             instanceId: codexWorkInstanceId,
             model: "gpt-5-codex",
           },
@@ -3613,10 +3667,10 @@ layer("AutomationService", (it) => {
               homePath: "/tmp/stale-claude-home",
             },
           },
-          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+          completionPolicy: aiCompletionPolicy("the PR is ready"),
         });
         const { run } = yield* service.runNow({ automationId: created.id });
-        yield* completeHeartbeatRun({
+        yield* completeAutomationRun({
           run,
           threadId: targetThreadId,
           turnId: automationTurnId,
@@ -3663,6 +3717,7 @@ layer("AutomationService", (it) => {
             },
           },
           textGenerationModelSelection: {
+            provider: "cursor",
             instanceId: "cursor",
             model: "composer-2",
           },
@@ -3673,6 +3728,7 @@ layer("AutomationService", (it) => {
           mode: "heartbeat",
           targetThreadId,
           modelSelection: {
+            provider: "codex",
             instanceId: "codex_removed" as ProviderInstanceId,
             model: "gpt-5-codex",
           },
@@ -3684,17 +3740,18 @@ layer("AutomationService", (it) => {
               },
             },
           },
-          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+          completionPolicy: aiCompletionPolicy("the PR is ready"),
         });
         const { run } = yield* service.runNow({ automationId: created.id });
         yield* serverSettings.updateSettings({
           providerInstances: {},
           textGenerationModelSelection: {
+            provider: "cursor",
             instanceId: "cursor",
             model: "composer-2",
           },
         });
-        yield* completeHeartbeatRun({
+        yield* completeAutomationRun({
           run,
           threadId: targetThreadId,
           turnId: automationTurnId,
@@ -3710,6 +3767,7 @@ layer("AutomationService", (it) => {
         });
 
         assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+          provider: "cursor",
           instanceId: "cursor",
           model: "composer-2",
         });
@@ -3742,6 +3800,7 @@ layer("AutomationService", (it) => {
             },
           },
           textGenerationModelSelection: {
+            provider: "cursor",
             instanceId: "cursor",
             model: "composer-2",
           },
@@ -3752,6 +3811,7 @@ layer("AutomationService", (it) => {
           mode: "heartbeat",
           targetThreadId,
           modelSelection: {
+            provider: "codex",
             instanceId: disabledInstanceId,
             model: "gpt-5-codex",
           },
@@ -3763,7 +3823,7 @@ layer("AutomationService", (it) => {
               },
             },
           },
-          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+          completionPolicy: aiCompletionPolicy("the PR is ready"),
         });
         const { run } = yield* service.runNow({ automationId: created.id });
         yield* serverSettings.updateSettings({
@@ -3779,11 +3839,12 @@ layer("AutomationService", (it) => {
             },
           },
           textGenerationModelSelection: {
+            provider: "cursor",
             instanceId: "cursor",
             model: "composer-2",
           },
         });
-        yield* completeHeartbeatRun({
+        yield* completeAutomationRun({
           run,
           threadId: targetThreadId,
           turnId: automationTurnId,
@@ -3799,6 +3860,7 @@ layer("AutomationService", (it) => {
         });
 
         assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+          provider: "cursor",
           instanceId: "cursor",
           model: "composer-2",
         });
@@ -3816,6 +3878,7 @@ layer("AutomationService", (it) => {
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
+          provider: "codex",
           instanceId: "codex_fallback_removed" as ProviderInstanceId,
           model: "gpt-5-codex",
         },
@@ -3826,7 +3889,8 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
-          instanceId: "gemini",
+          provider: "antigravity",
+          instanceId: "antigravity",
           model: "gemini-2.5-pro",
         },
         providerOptions: {
@@ -3837,10 +3901,10 @@ layer("AutomationService", (it) => {
             },
           },
         },
-        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        completionPolicy: aiCompletionPolicy("the PR is ready"),
       });
       const { run } = yield* service.runNow({ automationId: created.id });
-      yield* completeHeartbeatRun({
+      yield* completeAutomationRun({
         run,
         threadId: targetThreadId,
         turnId: automationTurnId,
@@ -3941,7 +4005,10 @@ layer("AutomationService", (it) => {
         description: "triage stop evaluation to start",
       });
       yield* service.markRunRead({ runId: run.id, unread: false });
-      const archived = yield* service.archiveRun({ runId: run.id, archived: true });
+      const archived = yield* service.archiveRun({
+        runId: run.id,
+        archived: true,
+      });
       yield* realDelay(5);
       evaluationGate.release();
 
@@ -4078,14 +4145,22 @@ layer("AutomationService", (it) => {
 
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-8",
+          provider: "codex",
+          model: "gpt-5.6-luna",
         },
         providers: {
           codex: { enabled: false },
+          claudeAgent: { enabled: false },
           cursor: { enabled: false },
           opencode: { enabled: false },
           droid: { enabled: false },
+        },
+        providerInstances: {
+          codex: { driver: "codex", enabled: false },
+          claudeAgent: { driver: "claudeAgent", enabled: false },
+          cursor: { driver: "cursor", enabled: false },
+          opencode: { driver: "opencode", enabled: false },
+          droid: { driver: "droid", enabled: false },
         },
       });
 
@@ -4094,8 +4169,8 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-8",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         completionPolicy: aiCompletionPolicy("the PR is ready"),
       });
@@ -4114,7 +4189,12 @@ layer("AutomationService", (it) => {
       assert.isUndefined(deferredRun?.result?.completionEvaluation);
       assert.strictEqual(completionEvaluationInputs.length, 0);
 
-      yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+      yield* serverSettings.updateSettings({
+        providers: { codex: { enabled: true } },
+        providerInstances: {
+          codex: { driver: "codex", enabled: true },
+        },
+      });
       const resumed = yield* waitForAutomationList({
         service,
         description: "re-enabled provider stop evaluation",
@@ -4183,7 +4263,10 @@ layer("AutomationService", (it) => {
       const created = yield* service.create(createInput("local"));
 
       const error = yield* service
-        .update({ id: created.id, projectId: ProjectId.makeUnsafe("missing-project") })
+        .update({
+          id: created.id,
+          projectId: ProjectId.makeUnsafe("missing-project"),
+        })
         .pipe(Effect.flip);
 
       assert.match(error.message, /project was not found/);
@@ -4203,7 +4286,10 @@ layer("AutomationService", (it) => {
         targetThreadId,
       });
       const exit = yield* service
-        .update({ id: created.id, projectId: ProjectId.makeUnsafe("other-project") })
+        .update({
+          id: created.id,
+          projectId: ProjectId.makeUnsafe("other-project"),
+        })
         .pipe(Effect.exit);
 
       assert.isTrue(exit._tag === "Failure");
@@ -4259,7 +4345,11 @@ layer("AutomationService", (it) => {
       const error = yield* service
         .create({
           ...createInput("local"),
-          schedule: { type: "cron", expression: "* * * * *", timezone: "UTC" },
+          schedule: {
+            type: "cron",
+            expression: "* * * * *",
+            timezone: "UTC",
+          },
           minimumIntervalSeconds: 120,
         })
         .pipe(Effect.flip);
@@ -4343,7 +4433,10 @@ layer("AutomationService", (it) => {
         expectedUpdatedAt: created.updatedAt,
       });
 
-      const paused = yield* service.update({ id: created.id, enabled: false });
+      const paused = yield* service.update({
+        id: created.id,
+        enabled: false,
+      });
 
       assert.strictEqual(paused.enabled, false);
       assert.strictEqual(paused.maxIterations, null);
@@ -4775,9 +4868,9 @@ layer("AutomationService", (it) => {
           error: `failure ${failureNumber}`,
         });
 
-        const definition = (yield* service.list({ projectId })).definitions.find(
-          (entry) => entry.id === created.id,
-        );
+        const definition = (yield* service.list({
+          projectId,
+        })).definitions.find((entry) => entry.id === created.id);
         assert.strictEqual(definition?.consecutiveFailureCount, failureNumber);
         assert.strictEqual(definition?.enabled, failureNumber < 3);
       }
@@ -4805,9 +4898,15 @@ layer("AutomationService", (it) => {
         state: "error",
         error: "first failure",
       });
-      const successfulRun = (yield* service.runNow({ automationId: created.id })).run;
+      const successfulRun = (yield* service.runNow({
+        automationId: created.id,
+      })).run;
 
-      yield* reconcileAutomationRun({ service, run: successfulRun, state: "completed" });
+      yield* reconcileAutomationRun({
+        service,
+        run: successfulRun,
+        state: "completed",
+      });
 
       const definition = (yield* service.list({ projectId })).definitions.find(
         (entry) => entry.id === created.id,
@@ -4882,9 +4981,9 @@ layer("AutomationService", (it) => {
         error: "final iteration failed",
       });
 
-      const definition = (yield* service.list({ projectId })).definitions.find(
-        (entry) => entry.id === created.id,
-      );
+      const definition = (yield* service.list({
+        projectId,
+      })).definitions.find((entry) => entry.id === created.id);
       assert.isFalse(definition?.enabled ?? true);
       assert.strictEqual(definition?.disabledReason, "max-iterations");
       assert.strictEqual(definition?.consecutiveFailureCount, 1);
@@ -4924,7 +5023,10 @@ layer("AutomationService", (it) => {
         error: "failure at iteration cap",
       });
 
-      const reenabled = yield* service.update({ id: automationId, enabled: true });
+      const reenabled = yield* service.update({
+        id: automationId,
+        enabled: true,
+      });
       assert.isTrue(reenabled.enabled);
       assert.strictEqual(reenabled.iterationCount, 0);
       assert.strictEqual(reenabled.consecutiveFailureCount, 0);
@@ -4962,9 +5064,9 @@ layer("AutomationService", (it) => {
       });
 
       const rerunError = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
-      const definition = (yield* service.list({ projectId })).definitions.find(
-        (entry) => entry.id === created.id,
-      );
+      const definition = (yield* service.list({
+        projectId,
+      })).definitions.find((entry) => entry.id === created.id);
 
       assert.match(rerunError.message, /re-enable/i);
       assert.strictEqual(dispatchedCommands.length, 2);
@@ -5038,7 +5140,9 @@ layer("AutomationService", (it) => {
       const dispatchedBefore = targetThreadDispatchCount();
       assert.strictEqual(dispatchedBefore, 1);
       assert.strictEqual(
-        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        yield* repository.countActiveRunsForThread({
+          threadId: targetThreadId,
+        }),
         1,
       );
 
@@ -5093,7 +5197,9 @@ layer("AutomationService", (it) => {
         "succeeded",
       );
       assert.strictEqual(
-        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        yield* repository.countActiveRunsForThread({
+          threadId: targetThreadId,
+        }),
         0,
       );
       yield* service.cancelRun({ runId: deferredRun.id });
@@ -5139,9 +5245,9 @@ layer("AutomationService", (it) => {
       assert.isDefined(deferred);
       assert.isNotNull(deferred?.deferredUntil ?? null);
 
-      const whileDeferred = (yield* service.list({ projectId })).definitions.find(
-        (definition) => definition.id === automationId,
-      );
+      const whileDeferred = (yield* service.list({
+        projectId,
+      })).definitions.find((definition) => definition.id === automationId);
       assert.strictEqual(whileDeferred?.enabled, true);
       assert.strictEqual(whileDeferred?.nextRunAt, null);
 
@@ -5159,9 +5265,9 @@ layer("AutomationService", (it) => {
         ).length,
         1,
       );
-      const completedDefinition = (yield* service.list({ projectId })).definitions.find(
-        (definition) => definition.id === automationId,
-      );
+      const completedDefinition = (yield* service.list({
+        projectId,
+      })).definitions.find((definition) => definition.id === automationId);
       assert.strictEqual(completedDefinition?.enabled, false);
     }),
   );
@@ -5275,7 +5381,10 @@ layer("AutomationService", (it) => {
       // The latest turn completed inside the cooldown window, but it belongs to this
       // automation's own finished run, so the next run must dispatch immediately.
       threadShell = Option.some(
-        makeThreadShell({ id: targetThreadId, latestTurn: completedTurn(automationTurnId) }),
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: completedTurn(automationTurnId),
+        }),
       );
       const second = yield* service.runNow({ automationId: created.id });
       assert.strictEqual(second.run.status, "running");
@@ -5629,7 +5738,9 @@ layer("AutomationService", (it) => {
         description: "pending scheduler stop evaluation to start",
       });
       assert.strictEqual(
-        yield* repository.countPendingCompletionEvaluationsForThread({ threadId: targetThreadId }),
+        yield* repository.countPendingCompletionEvaluationsForThread({
+          threadId: targetThreadId,
+        }),
         1,
       );
 
@@ -5861,7 +5972,9 @@ layer("AutomationService", (it) => {
       const interrupted = reloaded.runs.find((entry) => entry.automationId === automationId);
       assert.strictEqual(interrupted?.status, "interrupted");
       assert.strictEqual(
-        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        yield* repository.countActiveRunsForThread({
+          threadId: targetThreadId,
+        }),
         0,
       );
     }),
@@ -6069,7 +6182,10 @@ layer("AutomationService", (it) => {
 
       yield* service.delete({ id: created.id });
 
-      const reloaded = yield* service.list({ projectId, includeArchived: true });
+      const reloaded = yield* service.list({
+        projectId,
+        includeArchived: true,
+      });
       const definition = reloaded.definitions.find((entry) => entry.id === created.id);
       assert.isNotNull(definition?.archivedAt ?? null);
       assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "cancelled");

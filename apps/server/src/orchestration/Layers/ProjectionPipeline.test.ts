@@ -398,6 +398,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             threadId: ThreadId.makeUnsafe("thread-turn-settings"),
             status: "ready",
             providerName: "pi",
+            providerInstanceId: "pi",
             runtimeMode: "approval-required",
             activeTurnId: null,
             lastError: null,
@@ -470,6 +471,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       `;
       assert.deepEqual(JSON.parse(providerRows[0]!.modelSelectionJson), {
         provider: "pi",
+        instanceId: "pi",
         model: "openai/gpt-5.5",
       });
       assert.equal(providerRows[0]!.providerName, "pi");
@@ -604,6 +606,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             threadId,
             status: "running",
             providerName: "codex",
+            providerInstanceId: "codex",
             runtimeMode: "full-access",
             activeTurnId: turnId,
             lastError: null,
@@ -627,6 +630,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             threadId,
             status: "error",
             providerName: "codex",
+            providerInstanceId: "codex",
             runtimeMode: "full-access",
             activeTurnId: turnId,
             lastError: "provider failed",
@@ -686,7 +690,10 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const threadId = ThreadId.makeUnsafe("thread-stale-session-updated-at");
       const turnId = TurnId.makeUnsafe("turn-stale-session-updated-at");
       const projectId = ProjectId.makeUnsafe("project-stale-session-updated");
-      const modelSelection = { provider: "codex", model: "gpt-5.6-sol" } as const;
+      const modelSelection = {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+      } as const;
       const createdAt = "2026-09-01T00:00:00.000Z";
       const requestedAt = "2026-09-01T00:00:01.000Z";
       const startedAt = "2026-09-01T00:00:02.000Z";
@@ -700,6 +707,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         threadId,
         status,
         providerName: "codex",
+        providerInstanceId: "codex",
         runtimeMode: "full-access" as const,
         activeTurnId,
         lastError: null,
@@ -782,7 +790,10 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         FROM projection_threads
         WHERE thread_id = ${threadId}
       `;
-      const readTurn = sql<{ readonly state: string; readonly completedAt: string | null }>`
+      const readTurn = sql<{
+        readonly state: string;
+        readonly completedAt: string | null;
+      }>`
         SELECT state, completed_at AS "completedAt"
         FROM projection_turns
         WHERE thread_id = ${threadId} AND turn_id = ${turnId}
@@ -995,6 +1006,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             projectId: ProjectId.makeUnsafe("project-terminal-account"),
             title: `Thread ${status}`,
             modelSelection: {
+              provider: "codex",
               instanceId: "codex_personal",
               model: "gpt-5.4",
             },
@@ -1045,6 +1057,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             threadId,
             messageId: MessageId.makeUnsafe(`message-terminal-account-${status}`),
             modelSelection: {
+              provider: "codex",
               instanceId: "codex_work",
               model: "gpt-5.4",
             },
@@ -1077,11 +1090,19 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         [
           {
             threadId: "thread-terminal-account-error",
-            modelSelection: { instanceId: "codex_work", model: "gpt-5.4" },
+            modelSelection: {
+              provider: "codex",
+              instanceId: "codex_work",
+              model: "gpt-5.4",
+            },
           },
           {
             threadId: "thread-terminal-account-stopped",
-            modelSelection: { instanceId: "codex_work", model: "gpt-5.4" },
+            modelSelection: {
+              provider: "codex",
+              instanceId: "codex_work",
+              model: "gpt-5.4",
+            },
           },
         ],
       );
@@ -1173,7 +1194,11 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-ide
         });
 
         const readRows = () =>
-          sql<{ readonly threadId: string; readonly text: string; readonly attachments: string }>`
+          sql<{
+            readonly threadId: string;
+            readonly text: string;
+            readonly attachments: string;
+          }>`
           SELECT
             thread_id AS "threadId",
             text,
@@ -1544,7 +1569,11 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-id
                 tone: "approval" as const,
                 kind: "approval.requested" as const,
                 summary: "Approval requested",
-                payload: { requestId, requestKind: "command", lifecycleGeneration: generation },
+                payload: {
+                  requestId,
+                  requestKind: "command",
+                  lifecycleGeneration: generation,
+                },
                 turnId: null,
                 createdAt: occurredAt,
               },
@@ -1591,13 +1620,21 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-id
         yield* appendResponse("generation-a", "stale-a", "2026-07-14T13:00:02.000Z");
         yield* projectionPipeline.bootstrap;
         assert.deepEqual(yield* readRow(), [
-          { lifecycleGeneration: "generation-b", status: "pending", decision: null },
+          {
+            lifecycleGeneration: "generation-b",
+            status: "pending",
+            decision: null,
+          },
         ]);
 
         yield* appendResponse("generation-b", "current-b", "2026-07-14T13:00:03.000Z");
         yield* projectionPipeline.bootstrap;
         assert.deepEqual(yield* readRow(), [
-          { lifecycleGeneration: "generation-b", status: "responding", decision: "accept" },
+          {
+            lifecycleGeneration: "generation-b",
+            status: "responding",
+            decision: "accept",
+          },
         ]);
 
         yield* eventStore.append({
@@ -1629,7 +1666,11 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-id
         });
         yield* projectionPipeline.bootstrap;
         assert.deepEqual(yield* readRow(), [
-          { lifecycleGeneration: "generation-b", status: "confirmed", decision: "accept" },
+          {
+            lifecycleGeneration: "generation-b",
+            status: "confirmed",
+            decision: "accept",
+          },
         ]);
       }),
     );
@@ -1655,6 +1696,7 @@ it.effect("restores a sessionless imported thread's routed model selection after
     const createdAt = "2026-07-11T08:00:00.000Z";
     const routedAt = "2026-07-11T08:00:05.000Z";
     const expectedModelSelection = {
+      provider: "claudeAgent",
       instanceId: "claude_work",
       model: "claude-sonnet-4-6",
     } as const;
@@ -1698,7 +1740,11 @@ it.effect("restores a sessionless imported thread's routed model selection after
           threadId,
           projectId,
           title: "Imported thread",
-          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+          modelSelection: {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+          },
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -1889,7 +1935,10 @@ it.effect("fast-forwards lagging hot projector cursors before restart replay", (
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const sql = yield* SqlClient.SqlClient;
       yield* projectionPipeline.bootstrap;
-      return yield* sql<{ readonly projector: string; readonly lastAppliedSequence: number }>`
+      return yield* sql<{
+        readonly projector: string;
+        readonly lastAppliedSequence: number;
+      }>`
         SELECT
           projector,
           last_applied_sequence AS "lastAppliedSequence"
@@ -2188,7 +2237,11 @@ it.effect("replays a backlog larger than one commit batch without losing rows or
         SELECT COUNT(*) AS "projectedCount" FROM projection_thread_messages
       `;
       const highWater = yield* eventStore.getHighWaterSequence();
-      return { stateRows, projectedCount: countRow?.projectedCount ?? 0, highWater };
+      return {
+        stateRows,
+        projectedCount: countRow?.projectedCount ?? 0,
+        highWater,
+      };
     }).pipe(Effect.provide(projectionLayer));
 
     assert.equal(projectedCount, messageCount);
@@ -2797,7 +2850,11 @@ it.layer(
         ORDER BY interaction_kind
       `;
       assert.deepEqual(interactionRowsAfterRespond, [
-        { interactionKind: "approval", status: "pending", responseCommandId: null },
+        {
+          interactionKind: "approval",
+          status: "pending",
+          responseCommandId: null,
+        },
         {
           interactionKind: "userInput",
           status: "responding",
@@ -3670,7 +3727,9 @@ it.layer(
         SELECT sequence FROM orchestration_events
         WHERE event_id = ${`evt-stream-append-delta-${deltas.length - 1}`}
       `;
-      const shellCursor = yield* sql<{ readonly lastAppliedSequence: number }>`
+      const shellCursor = yield* sql<{
+        readonly lastAppliedSequence: number;
+      }>`
         SELECT last_applied_sequence AS "lastAppliedSequence"
         FROM projection_state
         WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
@@ -4101,8 +4160,12 @@ it.layer(
       const keepManagedPath = path.join(attachmentsDir, keepManagedRelativePath);
       const removeManagedPath = path.join(attachmentsDir, removeManagedRelativePath);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
-      yield* fileSystem.makeDirectory(path.dirname(keepManagedPath), { recursive: true });
-      yield* fileSystem.makeDirectory(path.dirname(removeManagedPath), { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(keepManagedPath), {
+        recursive: true,
+      });
+      yield* fileSystem.makeDirectory(path.dirname(removeManagedPath), {
+        recursive: true,
+      });
       yield* fileSystem.writeFileString(keepPath, "keep");
       yield* fileSystem.writeFileString(removePath, "remove");
       yield* fileSystem.writeFileString(removeFilePath, "remove-file");
@@ -4617,7 +4680,11 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           requested_at ASC
       `;
         assert.deepEqual(turnRows, [
-          { turnId: "turn-completed", checkpointTurnCount: 1, status: "completed" },
+          {
+            turnId: "turn-completed",
+            checkpointTurnCount: 1,
+            status: "completed",
+          },
         ]);
       }),
   );
@@ -4901,6 +4968,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
             threadId,
             status: "running",
             providerName: "codex",
+            providerInstanceId: "codex",
             runtimeMode: "approval-required",
             activeTurnId: turnId,
             lastError: null,
@@ -4999,7 +5067,10 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         createdAt,
       });
 
-      const projectRows = yield* sql<{ readonly title: string; readonly scriptsJson: string }>`
+      const projectRows = yield* sql<{
+        readonly title: string;
+        readonly scriptsJson: string;
+      }>`
         SELECT
           title,
           scripts_json AS "scriptsJson"
@@ -5008,7 +5079,9 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       `;
       assert.deepEqual(projectRows, [{ title: "Live Project", scriptsJson: "[]" }]);
 
-      const projectorRows = yield* sql<{ readonly lastAppliedSequence: number }>`
+      const projectorRows = yield* sql<{
+        readonly lastAppliedSequence: number;
+      }>`
         SELECT
           last_applied_sequence AS "lastAppliedSequence"
         FROM projection_state
@@ -5040,7 +5113,10 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         { projector: "projection.projects", lastAppliedSequence: 1 },
         { projector: "projection.thread-activities", lastAppliedSequence: 1 },
         { projector: "projection.thread-messages", lastAppliedSequence: 1 },
-        { projector: "projection.thread-proposed-plans", lastAppliedSequence: 1 },
+        {
+          projector: "projection.thread-proposed-plans",
+          lastAppliedSequence: 1,
+        },
         { projector: "projection.thread-sessions", lastAppliedSequence: 1 },
         { projector: "projection.threads", lastAppliedSequence: 1 },
       ]);
@@ -5238,6 +5314,7 @@ it.layer(
             threadId,
             status: "running",
             providerName: "codex",
+            providerInstanceId: "codex",
             runtimeMode: "full-access",
             activeTurnId: turnId,
             lastError: null,
@@ -5307,6 +5384,7 @@ it.layer(
             threadId,
             status: "ready",
             providerName: "codex",
+            providerInstanceId: "codex",
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: null,
@@ -5409,6 +5487,7 @@ it.layer(
               threadId,
               status: "running",
               providerName: "codex",
+              providerInstanceId: "codex",
               runtimeMode: "full-access",
               activeTurnId: turnId,
               lastError: null,
@@ -5435,6 +5514,7 @@ it.layer(
               threadId,
               status: scenario.status,
               providerName: "codex",
+              providerInstanceId: "codex",
               runtimeMode: "full-access",
               activeTurnId: scenario.retainsActiveTurn ? turnId : null,
               lastError: scenario.status === "error" ? "provider crashed" : null,
@@ -5660,7 +5740,9 @@ it.layer(
         retainedLegacyPath,
         prunedLegacyPath,
       ]) {
-        yield* fileSystem.makeDirectory(path.dirname(filePath), { recursive: true });
+        yield* fileSystem.makeDirectory(path.dirname(filePath), {
+          recursive: true,
+        });
         yield* fileSystem.writeFileString(filePath, "data");
       }
 
@@ -5681,7 +5763,10 @@ it.layer(
       `;
       assert.deepStrictEqual(messages, [{ messageId: retainedMessageId }]);
 
-      const blobs = yield* sql<{ readonly attachmentId: string; readonly state: string }>`
+      const blobs = yield* sql<{
+        readonly attachmentId: string;
+        readonly state: string;
+      }>`
         SELECT attachment_id AS "attachmentId", state
         FROM managed_attachment_blobs
         WHERE owner_thread_id = ${threadId}
@@ -5705,7 +5790,9 @@ it.layer(
         { attachmentId: prunedAttachmentId, reason: "projection-pruned" },
       ]);
 
-      const projectorState = yield* sql<{ readonly lastAppliedSequence: number }>`
+      const projectorState = yield* sql<{
+        readonly lastAppliedSequence: number;
+      }>`
         SELECT last_applied_sequence AS "lastAppliedSequence"
         FROM projection_state
         WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}

@@ -68,10 +68,7 @@ import {
 } from "~/lib/gitReactQuery";
 import { LoaderCircleIcon, RefreshCwIcon, TemporaryThreadIcon } from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
-import {
-  findProviderStatus,
-  resolveVoiceTranscriptionTarget,
-} from "~/lib/providerAvailability";
+import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { serverSettingsQueryOptions } from "~/lib/serverReactQuery";

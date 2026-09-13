@@ -200,6 +200,7 @@ describe("useComposerVoiceController", () => {
       threadId: THREAD_A,
       selectedProvider: "codex",
       selectedProviderInstanceId: "codex",
+      voiceProviderInstanceId: "codex",
       activeProviderStatus: null,
       pendingUserInputCount: 0,
       onTranscriptReady: vi.fn(),
@@ -355,6 +356,8 @@ describe("useComposerVoiceController", () => {
     render({
       activeProviderStatus: {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "error",
         available: false,
         authStatus: "unauthenticated",

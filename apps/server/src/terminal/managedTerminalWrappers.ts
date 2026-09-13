@@ -323,8 +323,9 @@ function readProviderProfileManifest(rootDir: string): string[] {
       fs.readFileSync(path.join(rootDir, PROVIDER_PROFILE_MANIFEST_FILENAME), "utf8"),
     );
     return Array.isArray(parsed)
-      ? parsed.filter((value): value is string =>
-          typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value),
+      ? parsed.filter(
+          (value): value is string =>
+            typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value),
         )
       : [];
   } catch {

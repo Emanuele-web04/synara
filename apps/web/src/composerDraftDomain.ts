@@ -119,9 +119,7 @@ export interface ComposerPromptHistorySavedDraft {
 
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
 
-export type ModelSelectionByProviderInstance = Partial<
-  Record<ProviderInstanceId, ModelSelection>
->;
+export type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
 
 export interface QueuedComposerChatTurn {
   id: string;

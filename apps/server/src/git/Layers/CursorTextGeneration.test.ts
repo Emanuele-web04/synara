@@ -266,6 +266,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
           cwd: process.cwd(),
           patch: "diff --git a/file.ts b/file.ts",
           modelSelection: {
+            provider: "cursor",
             instanceId: "cursor_work",
             model: "composer-2",
           },
@@ -273,7 +274,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cursor: {
               binaryPath: agentPath,
               environment: {
-                T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+                ACP_MOCK_PROMPT_RESPONSE_TEXT: JSON.stringify({
                   summary: "## Summary\n- Used the provider instance env.",
                 }),
               },

@@ -444,9 +444,7 @@ export async function runAntigravityHelperProcess(
       cwd: options.cwd,
       env: buildProviderChildEnvironment({
         provider: PROVIDER,
-        ...(options.environment
-          ? { baseEnv: { ...process.env, ...options.environment } }
-          : {}),
+        ...(options.environment ? { baseEnv: { ...process.env, ...options.environment } } : {}),
       }),
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,

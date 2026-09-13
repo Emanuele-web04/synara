@@ -169,12 +169,15 @@ function validateAutoRuntimeMode(
   provider: ProviderSession["provider"],
   runtimeMode: ProviderSession["runtimeMode"],
 ) {
-  return runtimeMode !== "auto" || providerSupportsAutoRuntimeMode(provider)
+  return runtimeMode !== "auto" ||
+    (Schema.is(ProviderKind)(provider) && providerSupportsAutoRuntimeMode(provider))
     ? Effect.void
     : Effect.fail(
         new ProviderValidationError({
           operation,
-          issue: unsupportedAutoRuntimeModeMessage(provider),
+          issue: Schema.is(ProviderKind)(provider)
+            ? unsupportedAutoRuntimeModeMessage(provider)
+            : `Provider '${provider}' does not support Auto mode.`,
         }),
       );
 }
@@ -312,13 +315,14 @@ function toRuntimePayloadFromSession(
       ? redactProviderOptionsForPersistence(extra.providerOptions)
       : undefined;
   const hasPersistableProviderOptions = Schema.is(ProviderStartOptions)(extra?.providerOptions);
-  const credentialsFingerprint = hasPersistableProviderOptions
-    ? credentialsFingerprintForProvider(
-        session.provider,
-        extra.providerOptions,
-        credentialsFingerprintKey,
-      )
-    : undefined;
+  const credentialsFingerprint =
+    hasPersistableProviderOptions && Schema.is(ProviderKind)(session.provider)
+      ? credentialsFingerprintForProvider(
+          session.provider,
+          extra.providerOptions,
+          credentialsFingerprintKey,
+        )
+      : undefined;
   const continuationIdentity =
     Schema.is(ProviderKind)(session.provider) &&
     (extra?.launchOptionsAuthoritative === true || extra?.providerOptions !== undefined)
@@ -381,9 +385,7 @@ function redactProviderOptionsForPersistence(value: unknown): unknown {
     ...(value.claudeAgent ? { claudeAgent: redactRuntimeEnvironment(value.claudeAgent) } : {}),
     ...(value.cursor ? { cursor: redactRuntimeEnvironment(value.cursor) } : {}),
     ...(value.devin ? { devin: redactRuntimeEnvironment(value.devin) } : {}),
-    ...(value.antigravity
-      ? { antigravity: redactRuntimeEnvironment(value.antigravity) }
-      : {}),
+    ...(value.antigravity ? { antigravity: redactRuntimeEnvironment(value.antigravity) } : {}),
     ...(value.grok ? { grok: redactRuntimeEnvironment(value.grok) } : {}),
     ...(value.droid ? { droid: redactRuntimeEnvironment(value.droid) } : {}),
     ...(value.opencode
@@ -397,7 +399,7 @@ function redactRuntimeEnvironment<T extends { readonly environment?: unknown }>(
   value: T,
 ): Omit<T, "environment"> & { readonly environment?: Record<string, never> } {
   if (!Object.hasOwn(value, "environment")) {
-    return value;
+    return value as Omit<T, "environment"> & { readonly environment?: Record<string, never> };
   }
   return { ...value, environment: {} };
 }
@@ -413,7 +415,7 @@ function readPersistedModelSelection(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): ModelSelection | undefined {
   const raw = runtimePayloadRecord(runtimePayload).modelSelection;
-  return Schema.is(ModelSelection)(raw) ? raw : undefined;
+  return Option.getOrUndefined(Schema.decodeUnknownOption(ModelSelection)(raw));
 }
 
 function readPersistedProviderOptions(
@@ -1500,9 +1502,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     threadId,
                     provider: binding.provider,
                     providerInstanceId: binding.providerInstanceId,
-                    ...(binding.adapterKey !== undefined
-                      ? { adapterKey: binding.adapterKey }
-                      : {}),
+                    ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
                     ...(binding.runtimeMode !== undefined
                       ? { runtimeMode: binding.runtimeMode }
                       : {}),
@@ -1535,6 +1535,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
 
       return Effect.gen(function* () {
+        if (!Schema.is(ProviderKind)(event.provider)) {
+          return undefined;
+        }
         const adapter = yield* registry.getByProvider(event.provider);
         const sessions = yield* adapter.listSessions();
         const activeSession = sessions.find(
@@ -1726,7 +1729,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* directory.upsert({
               threadId: input.threadId,
               provider: input.provider,
-              providerInstanceId: input.providerInstanceId,
+              ...(input.providerInstanceId !== undefined
+                ? { providerInstanceId: input.providerInstanceId }
+                : {}),
               status: "stopped",
               ...(dispatchLifecycleGeneration !== undefined
                 ? { lifecycleGeneration: dispatchLifecycleGeneration }
@@ -1754,7 +1759,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           yield* directory.upsert({
             threadId: input.threadId,
             provider: input.provider,
-            providerInstanceId: input.providerInstanceId,
+            ...(input.providerInstanceId !== undefined
+              ? { providerInstanceId: input.providerInstanceId }
+              : {}),
             status: "running",
             ...(dispatchLifecycleGeneration !== undefined
               ? { lifecycleGeneration: dispatchLifecycleGeneration }
@@ -2551,13 +2558,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               return;
             }
             yield* adapter.stopSession(input.threadId).pipe(
-              Effect.tap(() =>
-                analytics.record("provider.session.stopped", {
-                  provider: adapter.provider,
-                  providerInstanceId: staleSession.providerInstanceId,
-                  reason: "stale-provider-instance",
-                }),
-              ),
               Effect.catchCause((cause) =>
                 Effect.logWarning("provider.session.stop-stale-failed", {
                   threadId: input.threadId,
@@ -2781,11 +2781,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             "startSession requires an explicit provider or modelSelection with a provider",
           );
         }
+        if (!Schema.is(ProviderKind)(resolvedProvider)) {
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            `Unknown provider '${resolvedProvider}'.`,
+          );
+        }
         const input = {
           ...parsed,
           threadId,
           provider: resolvedProvider,
         };
+        // Reject disabled providers before waiting on lifecycle work, then
+        // check again immediately before spawning in case settings changed.
+        yield* ensureProviderEnabled(resolvedProvider, "ProviderService.startSession");
         // An explicit start is the recovery authority for a failed retirement,
         // but it must never interleave with one still in progress. Capture the
         // exact settled fence so this replacement cannot delete a newer fence
@@ -2805,7 +2814,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ? readPersistedInstanceId(binding)
               : undefined;
             const persistedBindingMatchesRequest =
-              (parsed.provider === undefined || binding?.provider === parsed.provider) &&
+              binding !== undefined &&
+              (parsed.provider === undefined || binding.provider === parsed.provider) &&
               persistedProviderInstanceId === requestedProviderInstanceId;
             const persistedProviderOptions = persistedBindingMatchesRequest
               ? readPersistedProviderOptions(binding.runtimePayload)
@@ -3466,9 +3476,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ...(canReuseSourceResumeCursor
               ? { sourceResumeCursor: sourceBinding.resumeCursor }
               : {}),
-            ...(expectedCodexContinuationGeneration
-              ? { expectedCodexContinuationGeneration }
-              : {}),
+            ...(expectedCodexContinuationGeneration ? { expectedCodexContinuationGeneration } : {}),
             ...(sourceCwd ? { sourceCwd } : {}),
             runtimeMode: input.runtimeMode,
           })
@@ -3554,10 +3562,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             lease.commit();
           }),
         );
-        yield* analytics.record("provider.thread.forked", {
-          provider: adapter.provider,
-          providerInstanceId: resolvedSource.instance.instanceId,
-        });
         return forked;
       });
 

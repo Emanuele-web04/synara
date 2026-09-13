@@ -105,7 +105,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         'thread-keep',
         'project-archive',
         'Kept Thread',
-        '{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}',
+        '{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}',
         'full-access', 'default', 'local',
         '2026-06-13T08:00:00.000Z', '2026-06-13T08:00:00.000Z', NULL
       ),
@@ -152,7 +152,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
       (
         'event-keep-1', 'thread', 'thread-keep', 1, 'thread.turn-start-requested',
         '2026-06-13T08:05:00.000Z', 'cmd-keep-turn', 'client',
-        '{"threadId":"thread-keep","modelSelection":{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}}',
+        '{"threadId":"thread-keep","modelSelection":{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}}',
         '{}'
       ),
       (

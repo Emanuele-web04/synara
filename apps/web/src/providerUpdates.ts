@@ -117,9 +117,7 @@ function isProviderEnabled(
     return instance.enabled !== false && configEnabled !== false;
   }
   const driver = provider.driver ?? provider.provider;
-  return isProviderKind(driver)
-    ? serverSettings.providers[driver]?.enabled !== false
-    : false;
+  return isProviderKind(driver) ? serverSettings.providers[driver]?.enabled !== false : false;
 }
 
 // Central visibility gate used by both global toasts and Settings update rows.

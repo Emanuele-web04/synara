@@ -81,10 +81,12 @@ function createStartupHarness(
   });
   const internals = manager as unknown as {
     assertSupportedCodexCliVersion: () => Promise<void>;
-    buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
+    buildSessionProcessEnv: () => Promise<{ env: NodeJS.ProcessEnv }>;
   };
   vi.spyOn(internals, "assertSupportedCodexCliVersion").mockResolvedValue(undefined);
-  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({});
+  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({
+    env: { CODEX_SQLITE_HOME: process.cwd() },
+  });
   const input = {
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),

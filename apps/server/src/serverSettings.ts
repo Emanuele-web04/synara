@@ -11,6 +11,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  type GitTextGenerationProvider,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   ServerSettings,
@@ -213,10 +214,7 @@ export function gateBetaOnlyProviders(
 export function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   const selectedInstance = findTextGenerationSelectionInstance(settings, selection);
-  if (
-    selectedInstance?.enabled &&
-    hasDedicatedTextGenerationProvider(selectedInstance.driver)
-  ) {
+  if (selectedInstance?.enabled && hasDedicatedTextGenerationProvider(selectedInstance.driver)) {
     return selectedInstance.driver === selection.provider &&
       selectedInstance.instanceId === selection.instanceId
       ? settings
@@ -260,14 +258,14 @@ function findTextGenerationSelectionInstance(
 
 function findFallbackTextGenerationInstance(
   settings: ServerSettings,
-): ResolvedProviderInstance | null {
+): (ResolvedProviderInstance & { readonly driver: GitTextGenerationProvider }) | null {
   const instances = deriveProviderInstances(settings);
   for (const provider of GIT_TEXT_GENERATION_PROVIDER_ORDER) {
     const instance = instances.find(
       (candidate) => candidate.enabled && candidate.driver === provider,
     );
     if (instance) {
-      return instance;
+      return { ...instance, driver: provider };
     }
   }
   return null;
@@ -712,9 +710,11 @@ const makeServerSettings = Effect.gen(function* () {
   ): Effect.Effect<void, ServerSettingsError> =>
     Effect.gen(function* () {
       if (!snapshots.has(name)) {
-        const previous = yield* secretStore.get(name).pipe(
-          Effect.mapError((cause) => secretStoreError(`failed to snapshot ${detail}`, cause)),
-        );
+        const previous = yield* secretStore
+          .get(name)
+          .pipe(
+            Effect.mapError((cause) => secretStoreError(`failed to snapshot ${detail}`, cause)),
+          );
         snapshots.set(name, previous === null ? null : Uint8Array.from(previous));
       }
       yield* secretStore
@@ -759,7 +759,9 @@ const makeServerSettings = Effect.gen(function* () {
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       for (const [name, previous] of [...providerSecrets].reverse()) {
-        yield* (previous === null ? secretStore.remove(name) : secretStore.set(name, previous)).pipe(
+        yield* (
+          previous === null ? secretStore.remove(name) : secretStore.set(name, previous)
+        ).pipe(
           Effect.catch((error) =>
             Effect.logWarning("failed to roll back provider instance secret", {
               path: settingsPath,
@@ -1165,12 +1167,11 @@ const makeServerSettings = Effect.gen(function* () {
             );
             const next = yield* withCredentialState(normalized);
             const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
-            const { settings: persistedSettings, liveSecretNames, obsoleteSecretNames } =
-              yield* persistProviderEnvironmentSecrets(
-                current,
-                next,
-                providerSecretSnapshots,
-              );
+            const {
+              settings: persistedSettings,
+              liveSecretNames,
+              obsoleteSecretNames,
+            } = yield* persistProviderEnvironmentSecrets(current, next, providerSecretSnapshots);
             yield* writeSettingsAtomically({
               revision: nextRevision,
               migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,

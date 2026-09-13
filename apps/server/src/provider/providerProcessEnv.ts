@@ -3,19 +3,12 @@
 // Layer: Provider runtime utility
 // Exports: provider environment driver types, key mappings, and buildProviderProcessEnv
 
-import {
-  defaultInstanceIdForDriver,
-  type ProviderInstanceId,
-  type ProviderKind,
-} from "@synara/contracts";
+import { defaultInstanceIdForDriver, type ProviderInstanceId } from "@synara/contracts";
 import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import NodePath from "node:path";
 
-export type ProviderProcessEnvDriver = Extract<
-  ProviderKind,
-  "cursor" | "gemini" | "grok" | "kilo" | "opencode" | "pi"
->;
+export type ProviderProcessEnvDriver = "cursor" | "gemini" | "grok" | "kilo" | "opencode" | "pi";
 
 export const MODEL_PROVIDER_API_KEY_ENV_MAPPINGS: ReadonlyArray<{
   readonly provider: string;

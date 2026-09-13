@@ -1311,27 +1311,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
-          const currentSessionRow = Option.getOrNull(currentSession);
+          const providerInstanceId =
+            Option.getOrNull(thread)?.modelSelection.instanceId ??
+            Option.getOrNull(currentSession)?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            Option.getOrNull(thread)?.modelSelection.provider ??
+            event.payload.modelSelection?.provider;
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
-            currentSession:
-              currentSessionRow === null
-                ? null
-                : (({ providerInstanceId, ...row }) => ({
-                    ...row,
-                    ...(providerInstanceId != null ? { providerInstanceId } : {}),
-                  }))(currentSessionRow),
+            currentSession: Option.getOrNull(currentSession),
             providerName:
               Option.getOrNull(thread)?.modelSelection.provider ??
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
-            ...((providerInstanceId) =>
-              providerInstanceId != null ? { providerInstanceId } : {})(
-              Option.getOrNull(thread)?.modelSelection.instanceId ??
-                currentSessionRow?.providerInstanceId ??
-                event.payload.modelSelection?.instanceId,
-            ),
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
@@ -1340,6 +1334,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...turnStartSession,
               lastActivityAt: event.payload.createdAt,
               lastProgressAt: event.payload.createdAt,
+              providerInstanceId: turnStartSession.providerInstanceId ?? null,
             });
           }
           return;

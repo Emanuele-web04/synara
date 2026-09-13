@@ -864,13 +864,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private async refreshManagedProfileWrappers(): Promise<void> {
     if (!this.managedProfileResolver || !this.managedWrapperRootDir) return;
     if (this.managedProfileRefresh) return this.managedProfileRefresh;
+    const targetDir = this.managedWrapperRootDir;
     const refresh = (async () => {
       try {
         const profiles = await this.managedProfileResolver!();
         const preparedWrappers = prepareManagedTerminalAgentWrappers({
           baseEnv: process.env,
           profiles,
-          targetDir: this.managedWrapperRootDir,
+          targetDir,
           zshDir:
             this.managedWrapperZshRootDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
         });

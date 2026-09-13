@@ -416,12 +416,7 @@ function droidDiscoveryCacheKey(input: {
           return [name, (hash >>> 0).toString(36)] as const;
         })
     : null;
-  return JSON.stringify([
-    input.instanceId ?? null,
-    input.binaryPath,
-    input.cwd,
-    environment,
-  ]);
+  return JSON.stringify([input.instanceId ?? null, input.binaryPath, input.cwd, environment]);
 }
 
 export function makeDroidAdapter(
@@ -1042,9 +1037,7 @@ export function makeDroidAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
-            ...(input.providerInstanceId
-              ? { providerInstanceId: input.providerInstanceId }
-              : {}),
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,

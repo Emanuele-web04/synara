@@ -177,12 +177,10 @@ export function resolveAvailableProviderPreference(input: {
     const normalizedRight = rightIndex >= 0 ? rightIndex : Number.MAX_SAFE_INTEGER;
     return normalizedLeft - normalizedRight;
   });
-  const visibleInstalled = orderedStatuses.filter(
-    (status) => {
-      const provider = providerForStatus(status);
-      return status.available && provider !== null && !hiddenProviders.has(provider);
-    },
-  );
+  const visibleInstalled = orderedStatuses.filter((status) => {
+    const provider = providerForStatus(status);
+    return status.available && provider !== null && !hiddenProviders.has(provider);
+  });
   const installed =
     visibleInstalled.length > 0
       ? visibleInstalled

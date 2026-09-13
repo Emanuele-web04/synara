@@ -2129,9 +2129,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
-        ...(input.providerInstanceId
-          ? { providerInstanceId: input.providerInstanceId }
-          : {}),
+        ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
           : {}),

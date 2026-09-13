@@ -263,7 +263,7 @@ describe("threadHandoff", () => {
     ).toEqual({
       provider: "claudeAgent",
       instanceId: "claude_work",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-6",
     });
   });
 

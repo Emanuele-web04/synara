@@ -461,9 +461,12 @@ function assertLogicalHomeMatchesPreparedSource(input: {
       lstatSync(input.logicalHomePath, { bigint: true });
     } catch (cause) {
       if (filesystemErrorCode(cause) === "ENOENT") return;
-      throw new Error(`${input.label} at ${input.logicalHomePath} could not be revalidated safely.`, {
-        cause,
-      });
+      throw new Error(
+        `${input.label} at ${input.logicalHomePath} could not be revalidated safely.`,
+        {
+          cause,
+        },
+      );
     }
     throw new Error(
       `${input.label} at ${input.logicalHomePath} appeared while account identities were being prepared; retry the request.`,
@@ -577,7 +580,10 @@ export function readCodexPreparedHomeFileSnapshot(
     }
     const content = readFileSync(descriptor);
     const after = fstatSync(descriptor, { bigint: true });
-    if (!preparedHomeFileIdentityMatches(before, after) || BigInt(content.byteLength) !== after.size) {
+    if (
+      !preparedHomeFileIdentityMatches(before, after) ||
+      BigInt(content.byteLength) !== after.size
+    ) {
       throw new CodexPreparedHomeFileSnapshotError(
         "file-changed",
         fileName,
@@ -717,10 +723,7 @@ function preparedEffectiveAuthMatchesAuthoritative(
   const effectiveAuthPath = path.join(effectiveHomePath, "auth.json");
   try {
     if (lstatSync(effectiveAuthPath).isSymbolicLink()) {
-      return codexPathsReferenceSameLocation(
-        effectiveAuthPath,
-        tracking.authoritativeAuthFilePath,
-      );
+      return codexPathsReferenceSameLocation(effectiveAuthPath, tracking.authoritativeAuthFilePath);
     }
   } catch {
     return false;
@@ -980,13 +983,16 @@ export function prioritizeCodexOverlayEntries(entries: readonly string[]): strin
   return [...sharedStateEntries, ...otherEntries];
 }
 
-async function ensureCodexOverlaySymlink(input: {
-  readonly entryName: string;
-  readonly sourcePath: string;
-  readonly targetPath: string;
-  readonly type: "dir" | "file";
-  readonly force?: boolean;
-}, linker?: CodexOverlayEntryLinker): Promise<void> {
+async function ensureCodexOverlaySymlink(
+  input: {
+    readonly entryName: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly type: "dir" | "file";
+    readonly force?: boolean;
+  },
+  linker?: CodexOverlayEntryLinker,
+): Promise<void> {
   let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
   try {
     targetStat = await fs.lstat(input.targetPath);
@@ -1542,67 +1548,71 @@ async function prepareSharedCodexContinuationState(input: {
     );
   }
   let preparedMetadata: SharedContinuationGenerationMetadata | undefined;
-  await withSharedContinuationLock(input.sourceHomePath, async () => {
-    const initialState = readSharedContinuationGenerationState(input.sourceHomePath);
-    const mayCreateSourceEntries =
-      sourcePolicy === "create-if-missing" && initialState.kind === "absent";
-    if (!mayCreateSourceEntries) {
-      assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
-    }
-    if (sourcePolicy === "require-prepared") {
-      preparedMetadata = await requireSharedContinuationGenerationMetadata(
-        input.sourceHomePath,
-        input.sourceRequirements,
-      );
-    }
-    await fs.mkdir(input.overlayHomePath, { recursive: true });
-    const [sourceEntries, overlayEntries] = await Promise.all([
-      readDirectoryEntries(input.sourceHomePath),
-      readDirectoryEntries(input.overlayHomePath),
-    ]);
-    const entryNames = new Set<string>([
-      ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
-      ...REQUIRED_SHARED_CONTINUATION_FILES,
-      ...sourceEntries.filter(isSharedContinuationEntry),
-      ...overlayEntries.filter(isSharedContinuationEntry),
-    ]);
-    const migrations = (
-      await Promise.all(
-        [...entryNames].toSorted().map((entryName) =>
-          planSharedContinuationMigration({
-            entryName,
-            sourceHomePath: input.sourceHomePath,
-            overlayHomePath: input.overlayHomePath,
-          }),
-        ),
-      )
-    ).filter((migration): migration is SharedContinuationMigration => migration !== undefined);
-
-    for (const migration of migrations) {
-      if (!mayCreateSourceEntries && migration.action === "create-source") {
-        throw new Error(
-          `Codex shared continuation source at ${input.sourceHomePath} became incomplete while preparing '${migration.entryName}'; refusing to recreate persisted session state.`,
+  await withSharedContinuationLock(
+    input.sourceHomePath,
+    async () => {
+      const initialState = readSharedContinuationGenerationState(input.sourceHomePath);
+      const mayCreateSourceEntries =
+        sourcePolicy === "create-if-missing" && initialState.kind === "absent";
+      if (!mayCreateSourceEntries) {
+        assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
+      }
+      if (sourcePolicy === "require-prepared") {
+        preparedMetadata = await requireSharedContinuationGenerationMetadata(
+          input.sourceHomePath,
+          input.sourceRequirements,
         );
       }
-      await executeSharedContinuationMigration(migration, input.overlayEntryLinker);
-    }
-    assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
-    preparedMetadata ??= await ensureSharedContinuationGenerationMetadata(input.sourceHomePath);
-    assertSharedCodexContinuationGenerationPrepared(
-      input.sourceHomePath,
-      preparedMetadata.generation,
-    );
-    if (
-      !selectedCodexOverlaySharesContinuationState({
-        sourceHomePath: input.sourceHomePath,
-        overlayHomePath: input.overlayHomePath,
-      })
-    ) {
-      throw new Error(
-        `Codex continuation state at ${input.overlayHomePath} is not fully linked to ${input.sourceHomePath}.`,
+      await fs.mkdir(input.overlayHomePath, { recursive: true });
+      const [sourceEntries, overlayEntries] = await Promise.all([
+        readDirectoryEntries(input.sourceHomePath),
+        readDirectoryEntries(input.overlayHomePath),
+      ]);
+      const entryNames = new Set<string>([
+        ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
+        ...REQUIRED_SHARED_CONTINUATION_FILES,
+        ...sourceEntries.filter(isSharedContinuationEntry),
+        ...overlayEntries.filter(isSharedContinuationEntry),
+      ]);
+      const migrations = (
+        await Promise.all(
+          [...entryNames].toSorted().map((entryName) =>
+            planSharedContinuationMigration({
+              entryName,
+              sourceHomePath: input.sourceHomePath,
+              overlayHomePath: input.overlayHomePath,
+            }),
+          ),
+        )
+      ).filter((migration): migration is SharedContinuationMigration => migration !== undefined);
+
+      for (const migration of migrations) {
+        if (!mayCreateSourceEntries && migration.action === "create-source") {
+          throw new Error(
+            `Codex shared continuation source at ${input.sourceHomePath} became incomplete while preparing '${migration.entryName}'; refusing to recreate persisted session state.`,
+          );
+        }
+        await executeSharedContinuationMigration(migration, input.overlayEntryLinker);
+      }
+      assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
+      preparedMetadata ??= await ensureSharedContinuationGenerationMetadata(input.sourceHomePath);
+      assertSharedCodexContinuationGenerationPrepared(
+        input.sourceHomePath,
+        preparedMetadata.generation,
       );
-    }
-  }, { createSourceHome: sourcePolicy === "create-if-missing" });
+      if (
+        !selectedCodexOverlaySharesContinuationState({
+          sourceHomePath: input.sourceHomePath,
+          overlayHomePath: input.overlayHomePath,
+        })
+      ) {
+        throw new Error(
+          `Codex continuation state at ${input.overlayHomePath} is not fully linked to ${input.sourceHomePath}.`,
+        );
+      }
+    },
+    { createSourceHome: sourcePolicy === "create-if-missing" },
+  );
   if (!preparedMetadata) {
     throw new Error(`Codex shared continuation generation was not prepared safely.`);
   }
@@ -1886,8 +1896,7 @@ function selectedCodexOverlaySharesContinuationState(input: {
     const sourceStat = lstatSyncIfExists(sourcePath);
     const targetStat = lstatSyncIfExists(targetPath);
     const sourceMatchesExpectedType =
-      sourceStat !== undefined &&
-      (kind === "dir" ? sourceStat.isDirectory() : sourceStat.isFile());
+      sourceStat !== undefined && (kind === "dir" ? sourceStat.isDirectory() : sourceStat.isFile());
     if (!sourceMatchesExpectedType) {
       return false;
     }
@@ -1898,12 +1907,14 @@ function selectedCodexOverlaySharesContinuationState(input: {
   });
 }
 
-export function readCodexSharedContinuationGeneration(input: {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly homePath?: string;
-  readonly shadowHomePath?: string;
-  readonly accountId?: string;
-} = {}): string | undefined {
+export function readCodexSharedContinuationGeneration(
+  input: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
+  } = {},
+): string | undefined {
   const env = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
   const shadowHomePath = input.shadowHomePath
@@ -1939,12 +1950,14 @@ export function readCodexSharedContinuationGeneration(input: {
   }
 }
 
-export function isCodexSharedContinuationStatePrepared(input: {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly homePath?: string;
-  readonly shadowHomePath?: string;
-  readonly accountId?: string;
-} = {}): boolean {
+export function isCodexSharedContinuationStatePrepared(
+  input: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
+  } = {},
+): boolean {
   return readCodexSharedContinuationGeneration(input) !== undefined;
 }
 
@@ -2451,9 +2464,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
     sourceHomePath,
     overlayHomePath,
     ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
-    ...(input.continuationSourcePolicy
-      ? { sourcePolicy: input.continuationSourcePolicy }
-      : {}),
+    ...(input.continuationSourcePolicy ? { sourcePolicy: input.continuationSourcePolicy } : {}),
     ...(input.continuationSourceRequirements
       ? { sourceRequirements: input.continuationSourceRequirements }
       : {}),
@@ -2489,12 +2500,15 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       const sourcePath = path.join(sourceHomePath, entry);
       const targetPath = path.join(overlayHomePath, entry);
       const stat = await fs.lstat(sourcePath);
-      await ensureCodexOverlaySymlink({
-        entryName: entry,
-        sourcePath,
-        targetPath,
-        type: stat.isDirectory() ? "dir" : "file",
-      });
+      await ensureCodexOverlaySymlink(
+        {
+          entryName: entry,
+          sourcePath,
+          targetPath,
+          type: stat.isDirectory() ? "dir" : "file",
+        },
+        input.overlayEntryLinker,
+      );
     }
   } catch {
     // If the source home is partially missing, Codex can still start with the
@@ -2535,13 +2549,16 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
         );
       }
       const targetPath = path.join(overlayHomePath, entry);
-      await ensureCodexOverlaySymlink({
-        entryName: entry,
-        sourcePath,
-        targetPath,
-        type: sourceStat.isDirectory() ? "dir" : "file",
-        force: true,
-      });
+      await ensureCodexOverlaySymlink(
+        {
+          entryName: entry,
+          sourcePath,
+          targetPath,
+          type: sourceStat.isDirectory() ? "dir" : "file",
+          force: true,
+        },
+        input.overlayEntryLinker,
+      );
     }
   }
 
@@ -2576,10 +2593,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   await writeCodexOverlayConfigAtomically(overlayConfigPath, overlayConfig);
   await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
-  assertSharedCodexContinuationGenerationPrepared(
-    sourceHomePath,
-    continuationMetadata.generation,
-  );
+  assertSharedCodexContinuationGenerationPrepared(sourceHomePath, continuationMetadata.generation);
 
   return overlayHomePath;
 }
@@ -2690,21 +2704,19 @@ export async function buildCodexProcessEnv(
   const baseEnv = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
   const overlayPreparationInput: CodexHomeOverlayPreparationInput = {
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-        ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
-        ...(input.accountId ? { accountId: input.accountId } : {}),
-        ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
-        ...(input.overlayEntryLinker
-          ? { overlayEntryLinker: input.overlayEntryLinker }
-          : {}),
-        ...(input.expectedSharedContinuationGeneration
-          ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
-          : {}),
-        ...(input.allowLegacySharedContinuationMigration
-          ? { allowLegacySharedContinuationMigration: true }
-          : {}),
-      };
+    env: baseEnv,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
+    ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
+    ...(input.expectedSharedContinuationGeneration
+      ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
+      : {}),
+    ...(input.allowLegacySharedContinuationMigration
+      ? { allowLegacySharedContinuationMigration: true }
+      : {}),
+  };
   const overlayHomePath = input.skipHomeOverlay
     ? undefined
     : input.expectedSharedContinuationGeneration || input.allowLegacySharedContinuationMigration

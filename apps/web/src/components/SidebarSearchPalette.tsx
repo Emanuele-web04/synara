@@ -513,9 +513,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         ? "Paste a Cursor session id"
         : importProvider === "droid"
           ? "Paste a Droid session id"
-        : importProvider === "opencode"
-          ? "Paste an OpenCode session id"
-          : "Paste a Codex thread id";
+          : importProvider === "opencode"
+            ? "Paste an OpenCode session id"
+            : "Paste a Codex thread id";
 
   const hasHighlightedFolderItem =
     highlightedItemValue !== null && highlightedItemValue.startsWith("folder:");
@@ -789,9 +789,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </Button>
                 <Button
                   disabled={
-                    props.importTargets.length === 0 ||
-                    importId.trim().length === 0 ||
-                    isImporting
+                    props.importTargets.length === 0 || importId.trim().length === 0 || isImporting
                   }
                   onClick={submitImport}
                 >

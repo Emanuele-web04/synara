@@ -140,6 +140,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
         cwd: "/repo",
         message: "Add provider instances",
         modelSelection: {
+          provider: "claudeAgent",
           instanceId: "claudeAgent",
           model: "claude-sonnet-4-5",
         },
@@ -333,6 +334,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
         cwd: hostileRepo,
         message: "Add provider instances",
         modelSelection: {
+          provider: "claudeAgent",
           instanceId: "claude_work",
           model: "claude-sonnet-4-5",
         },
@@ -417,7 +419,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
           "trap '' TERM",
           "(trap '' TERM; while :; do sleep 1; done) &",
           "descendant_pid=$!",
-          `printf '%s\\n%s\\n%s\\n' "$PWD" "$$" "$descendant_pid" > "$SYNARA_CLAUDE_STARTED_FILE"`,
+          `printf '%s\\n%s\\n%s\\n' "$PWD" "$$" "$descendant_pid" > "$CLAUDE_TEST_STARTED_FILE"`,
           'wait "$descendant_pid"',
           "",
         ].join("\n"),
@@ -430,13 +432,14 @@ describe("ClaudeTextGenerationServiceLive", () => {
           cwd: "/hostile-repo",
           message: "Add provider instances",
           modelSelection: {
+            provider: "claudeAgent",
             instanceId: "claudeAgent",
             model: "claude-sonnet-4-5",
           },
           providerOptions: {
             claudeAgent: {
               binaryPath,
-              environment: { SYNARA_CLAUDE_STARTED_FILE: startedPath },
+              environment: { CLAUDE_TEST_STARTED_FILE: startedPath },
             },
           },
         })
@@ -536,6 +539,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
           cwd: "/hostile-repo",
           message: "Add provider instances",
           modelSelection: {
+            provider: "claudeAgent",
             instanceId: "claudeAgent",
             model: "claude-sonnet-4-5",
           },

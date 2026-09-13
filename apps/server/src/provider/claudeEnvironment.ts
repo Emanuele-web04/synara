@@ -9,10 +9,7 @@ import { homedir } from "node:os";
 import { defaultInstanceIdForDriver } from "@synara/contracts";
 
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
-import {
-  buildClaudeProcessEnv,
-  isClaudeAccountIsolationEnvKey,
-} from "./claudeProcessEnv.ts";
+import { buildClaudeProcessEnv, isClaudeAccountIsolationEnvKey } from "./claudeProcessEnv.ts";
 
 const DEFAULT_CLAUDE_INSTANCE_ID = defaultInstanceIdForDriver("claudeAgent");
 const FALLBACK_CLAUDE_INSTANCE_SCOPE = "environment-only";
@@ -157,10 +154,7 @@ export function buildClaudeInstanceProcessEnv(
           if (!(key in selectedEnvironment)) continue;
           const profileValue = selectedEnvironment[key];
           if (key === "USERPROFILE" && profileValue?.trim()) {
-            env[key] = expandProviderAccountHomePath(
-              profileValue,
-              options?.homeDir ?? homedir(),
-            );
+            env[key] = expandProviderAccountHomePath(profileValue, options?.homeDir ?? homedir());
           } else {
             env[key] = profileValue;
           }

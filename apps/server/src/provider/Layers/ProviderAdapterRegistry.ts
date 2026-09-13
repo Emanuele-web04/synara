@@ -7,11 +7,7 @@
  *
  * @module ProviderAdapterRegistryLive
  */
-import type {
-  ProviderInstanceId,
-  ProviderRuntimeEvent,
-  ProviderSession,
-} from "@synara/contracts";
+import type { ProviderInstanceId, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { Effect, Layer, Stream } from "effect";
 
@@ -121,13 +117,15 @@ function adapterFacadeForInstance(
     });
 
   const listSessions: ProviderAdapterShape<ProviderAdapterError>["listSessions"] = () =>
-    adapter.listSessions().pipe(
-      Effect.map((sessions) =>
-        sessions
-          .filter((session) => sessionBelongsToInstance(session, instanceId, untaggedClaims))
-          .map((session) => stampSessionForInstance(session, instanceId)),
-      ),
-    );
+    adapter
+      .listSessions()
+      .pipe(
+        Effect.map((sessions) =>
+          sessions
+            .filter((session) => sessionBelongsToInstance(session, instanceId, untaggedClaims))
+            .map((session) => stampSessionForInstance(session, instanceId)),
+        ),
+      );
 
   const hasSession: ProviderAdapterShape<ProviderAdapterError>["hasSession"] = (threadId) =>
     listSessions().pipe(
@@ -269,9 +267,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             ),
           );
         }),
-        Effect.mapError(
-          (cause) => new ProviderUnsupportedError({ provider: instanceId, cause }),
-        ),
+        Effect.mapError((cause) => new ProviderUnsupportedError({ provider: instanceId, cause })),
       );
 
     const listInstances: NonNullable<ProviderAdapterRegistryShape["listInstances"]> = () =>

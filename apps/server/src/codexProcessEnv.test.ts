@@ -387,6 +387,7 @@ describe("buildCodexProcessEnv", () => {
 
   it("registers the active custom provider env key for diagnostic redaction", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-provider-key-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     writeFileSync(
       path.join(codexHome, "config.toml"),
       [
@@ -399,10 +400,14 @@ describe("buildCodexProcessEnv", () => {
     );
 
     try {
-      await buildCodexProcessEnv({ env: { CODEX_HOME: codexHome }, platform: "win32" });
+      await buildCodexProcessEnv({
+        env: { CODEX_HOME: codexHome, SYNARA_HOME: runtimeHome },
+        platform: "win32",
+      });
       expect(isProviderCredentialKey("ACME-LICENSE.INTEGRATION")).toBe(true);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 

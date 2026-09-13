@@ -166,7 +166,7 @@ layer("reconcileMigrationLineage", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 48 });
+      yield* runMigrations({ toMigrationInclusive: 103 });
       const now = new Date().toISOString();
       yield* sql`
         ALTER TABLE projection_thread_sessions
@@ -283,10 +283,10 @@ layer("reconcileMigrationLineage", (it) => {
           )
       `;
 
-      const executed = yield* runMigrations({ toMigrationInclusive: 50 });
+      const executed = yield* runMigrations({ toMigrationInclusive: 105 });
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [49, 50],
+        [104, 105],
       );
 
       const projectionSessionColumns = yield* tableColumnNames(sql, "projection_thread_sessions");
@@ -339,7 +339,7 @@ layer("reconcileMigrationLineage", (it) => {
       const sql = yield* SqlClient.SqlClient;
       const now = new Date().toISOString();
 
-      yield* runMigrations({ toMigrationInclusive: 48 });
+      yield* runMigrations({ toMigrationInclusive: 103 });
       yield* sql`
         INSERT INTO projection_threads (
           thread_id,
@@ -446,7 +446,7 @@ layer("reconcileMigrationLineage", (it) => {
           )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 54 });
+      yield* runMigrations({ toMigrationInclusive: 105 });
 
       const [projectionSession] = yield* sql<{
         readonly providerInstanceId: string | null;
@@ -617,6 +617,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [117, "WorkerMonitoringLiveness"],
         [118, "ProjectionThreadSessionProviderInstance"],
         [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -688,6 +692,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 117, name: "WorkerMonitoringLiveness" },
           { migration_id: 118, name: "ProjectionThreadSessionProviderInstance" },
           { migration_id: 119, name: "ProviderSessionRuntimeInstanceId" },
+          { migration_id: 120, name: "ProfileStatsDeletedProviderInstances" },
+          { migration_id: 121, name: "ClearAutomationDefinitionProviderOptions" },
+          { migration_id: 122, name: "ClearAutomationRunProviderOptions" },
+          { migration_id: 123, name: "ScrubOrchestrationEventProviderOptions" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -839,6 +847,10 @@ agentGatewayRetentionLegacyLayer(
           [117, "WorkerMonitoringLiveness"],
           [118, "ProjectionThreadSessionProviderInstance"],
           [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -953,6 +965,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [117, "WorkerMonitoringLiveness"],
         [118, "ProjectionThreadSessionProviderInstance"],
         [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1008,6 +1024,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [117, "WorkerMonitoringLiveness"],
           [118, "ProjectionThreadSessionProviderInstance"],
           [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
         ],
       );
 
@@ -1117,6 +1137,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [117, "WorkerMonitoringLiveness"],
         [118, "ProjectionThreadSessionProviderInstance"],
         [119, "ProviderSessionRuntimeInstanceId"],
+        [120, "ProfileStatsDeletedProviderInstances"],
+        [121, "ClearAutomationDefinitionProviderOptions"],
+        [122, "ClearAutomationRunProviderOptions"],
+        [123, "ScrubOrchestrationEventProviderOptions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1168,6 +1192,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [117, "WorkerMonitoringLiveness"],
           [118, "ProjectionThreadSessionProviderInstance"],
           [119, "ProviderSessionRuntimeInstanceId"],
+          [120, "ProfileStatsDeletedProviderInstances"],
+          [121, "ClearAutomationDefinitionProviderOptions"],
+          [122, "ClearAutomationRunProviderOptions"],
+          [123, "ScrubOrchestrationEventProviderOptions"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

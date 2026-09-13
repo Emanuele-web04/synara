@@ -7,17 +7,14 @@ describe("resolveProviderSessionInstanceId", () => {
   it.each([
     ["grok", "grok_work"],
     ["pi", "pi_work"],
-  ] as const)(
-    "routes %s modelSelection-only starts before launch",
-    (provider, rawInstanceId) => {
-      const instanceId = ProviderInstanceId.makeUnsafe(rawInstanceId);
-      expect(
-        resolveProviderSessionInstanceId({
-          modelSelection: { provider, instanceId, model: "provider/model" },
-        }),
-      ).toBe(instanceId);
-    },
-  );
+  ] as const)("routes %s modelSelection-only starts before launch", (provider, rawInstanceId) => {
+    const instanceId = ProviderInstanceId.makeUnsafe(rawInstanceId);
+    expect(
+      resolveProviderSessionInstanceId({
+        modelSelection: { provider, instanceId, model: "provider/model" },
+      }),
+    ).toBe(instanceId);
+  });
 
   it("prefers the explicitly resolved provider instance", () => {
     const explicit = ProviderInstanceId.makeUnsafe("pi_explicit");

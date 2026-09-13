@@ -135,9 +135,9 @@ export function ProviderInstanceEnvironmentEditor({
                 }
                 replaceEntry(index, { ...entry, name: trimmed });
               }}
-              title={
-                redacted ? "Replace or remove the saved secret before renaming it." : undefined
-              }
+              {...(redacted
+                ? { title: "Replace or remove the saved secret before renaming it." }
+                : {})}
             />
             <DebouncedSettingTextInput
               id={`provider-instance-${instanceId}-env-${index}-value`}

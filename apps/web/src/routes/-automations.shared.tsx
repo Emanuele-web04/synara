@@ -943,13 +943,9 @@ export function AutomationModelPicker({
           runtimeModels: runtimeModelsByProvider[provider],
         });
         onChange(
-          buildModelSelection(
-            provider,
-            model,
-            undefined,
-            runtimeModel?.supportsAutoMode,
-            { instanceId: instanceId ?? provider },
-          ),
+          buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode, {
+            instanceId: instanceId ?? provider,
+          }),
         );
       }}
       providerInstances={providerInstances}

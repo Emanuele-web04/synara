@@ -498,12 +498,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readDevinProviderStartOptions(
-  providerOptions: unknown,
-): {
-  readonly binaryPath?: string;
-  readonly environment?: Readonly<Record<string, string>>;
-} | undefined {
+function readDevinProviderStartOptions(providerOptions: unknown):
+  | {
+      readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
+    }
+  | undefined {
   if (!isRecord(providerOptions) || !isRecord(providerOptions.devin)) {
     return undefined;
   }
@@ -2345,9 +2345,7 @@ export function makeDevinAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
-            ...(input.providerInstanceId
-              ? { providerInstanceId: input.providerInstanceId }
-              : {}),
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -3433,8 +3431,7 @@ export function makeDevinAdapter(
         cwd === undefined
           ? undefined
           : devinDiscoveryCacheKey({
-              binaryPath:
-                input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin",
+              binaryPath: input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin",
               cwd,
               ...(input.instanceId ? { instanceId: input.instanceId } : {}),
               ...(input.environment ? { environment: input.environment } : {}),

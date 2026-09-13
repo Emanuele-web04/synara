@@ -133,6 +133,7 @@ const fakeOpenCodeAdapter: OpenCodeAdapterShape = {
   hasSession: vi.fn(),
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
+  forkThread: vi.fn(),
   stopAll: vi.fn(),
   streamEvents: Stream.empty,
 };

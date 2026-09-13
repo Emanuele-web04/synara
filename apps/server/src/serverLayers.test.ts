@@ -19,6 +19,7 @@ describe("makeServerRuntimeServicesLayer", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
     );
 
     const counts = await Effect.runPromise(

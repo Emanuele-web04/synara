@@ -1,12 +1,10 @@
 import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { spawnSync } from "node:child_process";
-import * as NodePath from "node:path";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 import { getModelSelectionStringOptionValue, resolveApiModelId } from "@synara/shared/model";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -34,6 +32,8 @@ import {
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
 import { ServerConfig } from "../../config.ts";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
+import { forceTeardownEffectProcessTree } from "../../platform/supervisedProcessTeardown.ts";
 import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
@@ -74,44 +74,6 @@ function normalizeClaudeError(
   return new TextGenerationError({ operation, detail: fallback, cause: error });
 }
 
-function forceKillClaudeProcessGroup(pid: ChildProcessSpawner.ProcessId): void {
-  const numericPid = Number(pid);
-  if (process.platform === "win32") {
-    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-    try {
-      spawnSync(
-        NodePath.win32.join(systemRoot, "System32", "taskkill.exe"),
-        ["/pid", String(numericPid), "/T", "/F"],
-        {
-          stdio: "ignore",
-          timeout: 2_000,
-          windowsHide: true,
-        },
-      );
-    } catch {
-      // Continue to the direct-process fallback below.
-    }
-    try {
-      process.kill(numericPid, "SIGKILL");
-    } catch {
-      // The process tree is already gone or the platform rejected the fallback.
-    }
-    return;
-  }
-
-  try {
-    process.kill(-numericPid, "SIGKILL");
-    return;
-  } catch {
-    // The process may not be its own group; still attempt the individual PID.
-  }
-  try {
-    process.kill(numericPid, "SIGKILL");
-  } catch {
-    // Best-effort cleanup must not replace the original timeout/interruption.
-  }
-}
-
 function collectClaudeChildWithInterruptKill<A, E>(
   effect: Effect.Effect<A, E>,
   child: ChildProcessSpawner.ChildProcessHandle,
@@ -121,7 +83,7 @@ function collectClaudeChildWithInterruptKill<A, E>(
       if (exit._tag === "Failure") {
         // The detached collector is not interrupted with its caller. Kill the
         // tree first so pipe-holding descendants cannot block reader teardown.
-        yield* Effect.sync(() => forceKillClaudeProcessGroup(child.pid));
+        yield* Effect.tryPromise(() => forceTeardownEffectProcessTree(child)).pipe(Effect.ignore);
       }
       yield* Fiber.interrupt(fiber).pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
     }).pipe(Effect.ignore),
@@ -145,15 +107,11 @@ function resolveClaudeEnvironment(input: {
   readonly providerInstanceId?: string;
 }): NodeJS.ProcessEnv {
   const claudeOptions = input.providerOptions?.claudeAgent;
-  return buildClaudeInstanceProcessEnv(
-    claudeOptions?.homePath,
-    claudeOptions?.environment,
-    {
-      homeDir: input.homeDir,
-      isolationRootDir: input.isolationRootDir,
-      ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
-    },
-  );
+  return buildClaudeInstanceProcessEnv(claudeOptions?.homePath, claudeOptions?.environment, {
+    homeDir: input.homeDir,
+    isolationRootDir: input.isolationRootDir,
+    ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+  });
 }
 
 function resolveClaudeEffort(
@@ -223,7 +181,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
         .makeTempDirectoryScoped({ prefix: "synara-claude-text-" })
         .pipe(
           Effect.tap((directory) =>
-            process.platform === "win32" ? Effect.void : fileSystem.chmod(directory, 0o700),
+            supportsPosixPermissions() ? fileSystem.chmod(directory, 0o700) : Effect.void,
           ),
           Effect.mapError(
             (cause) =>
@@ -259,14 +217,12 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
         "--tools",
         "",
       ];
-      const prepared = prepareWindowsSafeProcess(binaryPath, args, { cwd: isolatedCwd, env });
-      const command = ChildProcess.make(prepared.command, prepared.args, {
+      const command = makeEffectProcessCommand(binaryPath, args, {
         cwd: isolatedCwd,
         env,
         // Auxiliary generation has no state to preserve. A hard scoped kill
         // avoids waiting forever when a CLI or descendant ignores SIGTERM.
         killSignal: "SIGKILL",
-        shell: prepared.shell,
         stdin: { stream: Stream.make(new TextEncoder().encode(prompt)) },
       });
 

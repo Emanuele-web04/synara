@@ -50,6 +50,8 @@ describe("createProviderInstallResetPatch", () => {
         "openCodeServerUrl",
         "piAgentDir",
         "piBinaryPath",
+        "providerInstances",
+        "selectedCodexAccountId",
       ].sort(),
     );
     expect(patch.openCodeServerPassword).toBe("");

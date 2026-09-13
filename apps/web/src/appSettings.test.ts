@@ -317,6 +317,24 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
   });
 
+
+  it("includes Git text-generation providers and omits chat-only providers", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customClaudeModels: ["claude-opus-4-8"],
+      customGrokModels: ["grok-4.6"],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
+    expect(options.some((option) => option.provider === "grok")).toBe(false);
+    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
+    expect(options.some((option) => option.provider === "pi")).toBe(false);
+    expect(options.some((option) => option.provider === "devin")).toBe(false);
+  });
+
   it("omits chat-only providers that have no Git text-generation backend", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
@@ -327,7 +345,7 @@ describe("getGitTextGenerationModelOptions", () => {
       textGenerationProvider: "codex",
     });
 
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(false);
+    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
     expect(options.some((option) => option.provider === "grok")).toBe(false);
     expect(options.some((option) => option.provider === "antigravity")).toBe(false);
     expect(options.some((option) => option.provider === "pi")).toBe(false);
@@ -1406,7 +1424,6 @@ describe("provider-indexed custom model settings", () => {
       providerInstances: {
         claudeAgent: {
           driver: "claudeAgent",
-          enabled: true,
           config: { customModels: ["claude/default-instance"] },
         },
       },

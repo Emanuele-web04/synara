@@ -156,8 +156,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     const previousProviderInstanceId =
       compatibleRuntime?.providerInstanceId ??
       readProviderInstanceId(binding.provider, compatibleRuntime?.runtimePayload);
-    const providerInstanceId =
-      binding.providerInstanceId ?? previousProviderInstanceId;
+    const providerInstanceId = binding.providerInstanceId ?? previousProviderInstanceId;
     const providerInstanceChanged =
       compatibleRuntime !== undefined && previousProviderInstanceId !== providerInstanceId;
     yield* repository
@@ -238,11 +237,14 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               }),
             ),
             Effect.catchTag("ProviderSessionDirectoryPersistenceError", (error) =>
-              Effect.logDebug("provider session directory skipped invalid persisted provider driver", {
-                threadId: row.threadId,
-                providerName: row.providerName,
-                detail: error.detail,
-              }).pipe(Effect.as(Option.none<ProviderRuntimeBinding>())),
+              Effect.logDebug(
+                "provider session directory skipped invalid persisted provider driver",
+                {
+                  threadId: row.threadId,
+                  providerName: row.providerName,
+                  detail: error.detail,
+                },
+              ).pipe(Effect.as(Option.none<ProviderRuntimeBinding>())),
             ),
           ),
         ),

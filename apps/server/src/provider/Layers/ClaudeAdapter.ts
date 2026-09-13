@@ -3506,6 +3506,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         taskId: undefined,
         context: {
           session: context.session,
+          commandDiscoveryKey: context.commandDiscoveryKey,
+          accountDiscoveryKey: context.accountDiscoveryKey,
           ...(context.lifecycleGeneration === undefined
             ? {}
             : { lifecycleGeneration: context.lifecycleGeneration }),

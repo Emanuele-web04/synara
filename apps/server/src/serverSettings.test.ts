@@ -228,14 +228,14 @@ describe("ServerSettingsService", () => {
           opencode: { enabled: true },
         },
       },
-      expectedProvider: "opencode" as const,
+      expectedProvider: "claudeAgent" as const,
     },
     {
       name: "normalizes enabled but unsupported Git text generation selections",
       overrides: {
         textGenerationModelSelection: {
-          provider: "claudeAgent" as const,
-          model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+          provider: "antigravity" as const,
+          model: DEFAULT_MODEL_BY_PROVIDER.antigravity,
         },
       },
       expectedProvider: "codex" as const,
@@ -249,6 +249,7 @@ describe("ServerSettingsService", () => {
         },
         providers: {
           codex: { enabled: false },
+          claudeAgent: { enabled: false },
           cursor: { enabled: false },
           opencode: { enabled: false },
           droid: { enabled: true },
@@ -557,9 +558,7 @@ describe("ServerSettingsService", () => {
       settings: {
         providerInstances: {
           grok_work: {
-            environment: [
-              { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
-            ],
+            environment: [{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }],
           },
         },
       },
@@ -669,7 +668,7 @@ describe("ServerSettingsService", () => {
       serverUrl: "http://127.0.0.1:4096",
       serverPassword: "opencode-secret",
     });
-    expect(result.parsed.providerInstances.opencode_work.config).toEqual({
+    expect(result.parsed.settings.providerInstances.opencode_work.config).toEqual({
       serverUrl: "http://127.0.0.1:4096",
       serverPassword: "",
       serverPasswordRedacted: true,
@@ -723,10 +722,10 @@ describe("ServerSettingsService", () => {
     });
     expect(result.raw).not.toContain("secret-token");
     expect(result.raw).not.toContain("opencode-secret");
-    expect(result.parsed.providerInstances.grok_work.environment).toEqual([
+    expect(result.parsed.settings.providerInstances.grok_work.environment).toEqual([
       { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
     ]);
-    expect(result.parsed.providerInstances.opencode_work.config).toEqual({
+    expect(result.parsed.settings.providerInstances.opencode_work.config).toEqual({
       serverUrl: "http://127.0.0.1:4096",
       serverPassword: "",
       serverPasswordRedacted: true,

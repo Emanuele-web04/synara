@@ -1807,9 +1807,7 @@ export function patchCustomModels(
 
 export function patchCustomModelsForProviderInstance(
   settings: Pick<AppSettings, "providerInstances"> &
-    Partial<
-      Pick<AppSettings, "codexAccounts" | "codexHomePath" | "selectedCodexAccountId">
-    >,
+    Partial<Pick<AppSettings, "codexAccounts" | "codexHomePath" | "selectedCodexAccountId">>,
   instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
   models: string[],
 ): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
@@ -1832,7 +1830,7 @@ export function patchCustomModelsForProviderInstance(
         // No enabled flag here: forcing it on would re-enable a disabled
         // derived provider/account through the key-by-key derivation merge.
         ...(existing ?? {
-          driver: providerDriverKind(instance.provider),
+          driver: instance.provider,
           ...(codexAccount?.label.trim() ? { displayName: codexAccount.label.trim() } : {}),
         }),
         config: mergeProviderInstanceConfigPatch(existing?.config, { customModels: models }),

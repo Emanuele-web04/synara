@@ -1560,12 +1560,7 @@ export const makeCheckGrokProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
-    const probeEnvResult = tryMakeProviderProbeEnv(
-      GROK_PROVIDER,
-      environment,
-      instanceId,
-      paths,
-    );
+    const probeEnvResult = tryMakeProviderProbeEnv(GROK_PROVIDER, environment, instanceId, paths);
     if (!probeEnvResult.ok) {
       return providerHomePreparationFailure(GROK_PROVIDER, checkedAt, probeEnvResult.cause);
     }
@@ -1895,12 +1890,7 @@ export const checkPiProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
-    const probeEnvResult = tryMakeProviderProbeEnv(
-      PI_PROVIDER,
-      environment,
-      instanceId,
-      paths,
-    );
+    const probeEnvResult = tryMakeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
     if (!probeEnvResult.ok) {
       return providerHomePreparationFailure(PI_PROVIDER, checkedAt, probeEnvResult.cause);
     }
@@ -2056,7 +2046,10 @@ export const checkAntigravityProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "agy";
-    const probeEnv = makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment);
+    const probeEnv = {
+      ...makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment),
+      NO_BROWSER: "true",
+    };
     const versionProbe = yield* probeProviderCliVersion(
       runAntigravityCommand(["--version"], executable, probeEnv),
       DEFAULT_TIMEOUT_MS,
@@ -2165,16 +2158,11 @@ export const makeCheckCursorProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = resolveCursorAgentBinaryPath(nonEmptyTrimmed(binaryPath));
-    const probeEnvResult = tryMakeProviderProbeEnv(
-      CURSOR_PROVIDER,
-      environment,
-      instanceId,
-      paths,
-    );
+    const probeEnvResult = tryMakeProviderProbeEnv(CURSOR_PROVIDER, environment, instanceId, paths);
     if (!probeEnvResult.ok) {
       return providerHomePreparationFailure(CURSOR_PROVIDER, checkedAt, probeEnvResult.cause);
     }
-    const probeEnv = probeEnvResult.env;
+    const probeEnv = buildCursorAgentHeadlessEnv(probeEnvResult.env);
 
     const versionProbe = yield* probeProviderCliVersion(
       runCursorCommand(["--version"], executable, probeEnv),
@@ -2819,7 +2807,9 @@ export function projectProviderStatusesForSettings(
           ),
           ...(updateState ? { updateState } : {}),
         } satisfies ServerProviderStatus;
-        projected.push(projectStatusForProviderInstance(disabledStatusWithAdvisory, instance, false));
+        projected.push(
+          projectStatusForProviderInstance(disabledStatusWithAdvisory, instance, false),
+        );
         continue;
       }
       if (status && !isDisabledProviderStatusOverlay(status)) {
@@ -2866,6 +2856,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       );
       const refreshScope = yield* Scope.make("sequential");
       yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
+
+      // Provider health is part of the server layer graph, which is acquired
+      // before Server.start can run. Initialize settings here so waiting for
+      // readiness below cannot deadlock layer acquisition. The start effect is
+      // idempotent, so the server lifecycle can still call it explicitly.
+      yield* serverSettings.start;
 
       const cachePathForProviderTarget = (input: {
         readonly provider: ServerProviderStatus["provider"];
@@ -2972,9 +2968,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           (instance) => instance.driver === target.provider,
         );
         if (target.instanceId !== undefined) {
-          return (
-            instances.find((instance) => instance.instanceId === target.instanceId) ?? null
-          );
+          return instances.find((instance) => instance.instanceId === target.instanceId) ?? null;
         }
         return (
           instances.find((instance) => instance.instanceId === target.provider) ??
@@ -3581,7 +3575,9 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             provider,
             ...(instanceId ? { instanceId } : {}),
             reason: instance
-              ? "Provider instance is disabled in Synara settings."
+              ? instanceId
+                ? "Provider instance is disabled in Synara settings."
+                : "Provider is disabled in Synara settings."
               : "Provider instance is not configured.",
           });
         const initialInstance = yield* resolveEnabledInstance;
@@ -3610,7 +3606,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 status: "failed",
                 startedAt: null,
                 finishedAt,
-                message: "Provider instance was disabled or removed before its queued update could start.",
+                message:
+                  "Provider instance was disabled or removed before its queued update could start.",
               }),
             );
             return yield* unavailableError(currentInstance);
@@ -3658,7 +3655,9 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 status: "failed",
                 startedAt,
                 finishedAt,
-                message: "Update stopped because the provider instance was disabled or removed.",
+                message: instanceId
+                  ? "Update stopped because the provider instance was disabled or removed."
+                  : "Update stopped because the provider was disabled.",
               }),
             );
             return { providers };

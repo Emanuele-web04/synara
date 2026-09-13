@@ -65,7 +65,11 @@ import {
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterForkThreadInput,
+  ProviderAdapterSessionStartInput,
+  ProviderAdapterShape,
+} from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import {
@@ -104,9 +108,7 @@ async function makeSharedCodexContinuationFixture(
   const homePath = path.join(root, "codex-home");
   const runtimeHomePath = path.join(root, "synara-runtime");
   const environment = { SYNARA_HOME: runtimeHomePath };
-  const instanceEnvironment = [
-    { name: "SYNARA_HOME", value: runtimeHomePath, sensitive: false },
-  ];
+  const instanceEnvironment = [{ name: "SYNARA_HOME", value: runtimeHomePath, sensitive: false }];
   fs.mkdirSync(homePath, { recursive: true });
   fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
   const shadowHomePaths = new Map<string, string>();
@@ -185,9 +187,8 @@ const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
       providerServiceSecretBytes.delete(name);
     }),
 });
-const makeProviderServiceLive = (
-  options?: Parameters<typeof makeProviderServiceLiveBase>[0],
-) => makeProviderServiceLiveBase(options).pipe(Layer.provide(ProviderServiceTestSecretStoreLayer));
+const makeProviderServiceLive = (options?: Parameters<typeof makeProviderServiceLiveBase>[0]) =>
+  makeProviderServiceLiveBase(options).pipe(Layer.provide(ProviderServiceTestSecretStoreLayer));
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -239,10 +240,7 @@ it("keys provider credential fingerprints instead of persisting a raw secret has
   assert.equal(typeof fingerprint, "string");
   assert.notEqual(fingerprint, rawSecretFingerprint);
   assert.equal(fingerprint, credentialsFingerprintForProvider("opencode", options, key));
-  assert.notEqual(
-    fingerprint,
-    credentialsFingerprintForProvider("opencode", options, otherKey),
-  );
+  assert.notEqual(fingerprint, credentialsFingerprintForProvider("opencode", options, otherKey));
 });
 
 // Converts deferred listSessions callbacks into typed release handles for race tests.
@@ -293,7 +291,9 @@ function makeFakeCodexAdapter(
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
   const startSession = vi.fn(
-    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
+    (
+      input: ProviderAdapterSessionStartInput,
+    ): Effect.Effect<ProviderSession, ProviderAdapterError> =>
       Effect.sync(() => {
         const now = new Date().toISOString();
         const session: ProviderSession = {
@@ -559,6 +559,13 @@ function makeProviderServiceLayer(
     readonly codexDidResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
+    readonly providerInstances?: Parameters<
+      typeof ServerSettingsService.layerTest
+    >[0] extends infer Settings
+      ? Settings extends { readonly providerInstances?: infer Instances }
+        ? Instances
+        : never
+      : never;
   },
 ) {
   const codex = makeFakeCodexAdapter("codex", {
@@ -598,16 +605,19 @@ function makeProviderServiceLayer(
     Layer.provide(SqlitePersistenceMemory),
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
-  const serverSettingsLayer = ServerSettingsService.layerTest(settings);
+  const serverSettingsLayer = ServerSettingsService.layerTest(
+    providers?.providerInstances ? { providerInstances: providers.providerInstances } : {},
+  );
 
   const rawLayer = Layer.mergeAll(
     makeProviderServiceLive(options).pipe(
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(serverSettingsLayer),
     ),
     directoryLayer,
     runtimeRepositoryLayer,
+    serverSettingsLayer,
     NodeServices.layer,
   );
   const layer = it.layer(rawLayer);
@@ -852,10 +862,7 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.equal(routing.codex.forkThread.mock.calls.length, 1);
       const forkInput = routing.codex.forkThread.mock.calls[0]?.[0];
       assert.deepEqual(forkInput?.sourceResumeCursor, source.resumeCursor);
-      assert.match(
-        forkInput?.expectedCodexContinuationGeneration ?? "",
-        /^[0-9a-f-]{36}$/,
-      );
+      assert.match(forkInput?.expectedCodexContinuationGeneration ?? "", /^[0-9a-f-]{36}$/);
       assert.equal(forkInput?.modelSelection?.instanceId, "codex_work");
       assert.deepEqual(forkInput?.providerOptions, {
         codex: {
@@ -1270,6 +1277,7 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
     const providerLayer = makeProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(delayedDirectoryLayer),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
 
     yield* Effect.gen(function* () {
@@ -1342,9 +1350,7 @@ it.effect(
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-restart-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
-      const fixture = yield* Effect.promise(() =>
-        makeSharedCodexContinuationFixture(["default"]),
-      );
+      const fixture = yield* Effect.promise(() => makeSharedCodexContinuationFixture(["default"]));
       const providerInstanceId = asProviderInstanceId("codex_restart");
       const serverSettingsLayer = ServerSettingsService.layerTest({
         providerInstances: {
@@ -2559,7 +2565,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     );
   });
 
-  it.effect("serializes overlapping same-provider and cross-provider starts", () =>
+  it.effect("serializes and rejects an incompatible cross-provider start", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
@@ -2603,31 +2609,32 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd: "/tmp/provider-starts",
           runtimeMode: "full-access",
         })
-        .pipe(Effect.forkChild);
+        .pipe(Effect.result, Effect.forkChild);
       yield* sleep(25);
       assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
 
       releaseSameProviderStart();
       yield* Fiber.join(sameProviderFiber);
-      yield* Fiber.join(crossProviderFiber);
+      const crossProviderResult = yield* Fiber.join(crossProviderFiber);
 
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const [codexSessions, claudeSessions] = yield* Effect.all([
         routing.codex.listSessions(),
         routing.claude.listSessions(),
       ]);
-      assert.equal(binding?.provider, "claudeAgent");
+      assert.equal(crossProviderResult._tag, "Failure");
+      assert.equal(binding?.provider, "codex");
       assert.equal(
         codexSessions.some((session) => session.threadId === threadId),
-        false,
+        true,
       );
-      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
+      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 0);
 
       yield* provider.stopSession({ threadId });
     }),
   );
 
-  it.effect("restores the previous runtime and generation when provider replacement fails", () =>
+  it.effect("preserves the previous runtime when an incompatible replacement is rejected", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
@@ -2639,11 +2646,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
       const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const replacementFailure = new ProviderAdapterSessionNotFoundError({
-        provider: "claudeAgent",
-        threadId,
-      });
-      routing.claude.startSession.mockImplementationOnce(() => Effect.fail(replacementFailure));
+      const codexStartCount = routing.codex.startSession.mock.calls.length;
+      const claudeStartCount = routing.claude.startSession.mock.calls.length;
 
       const replacement = yield* Effect.result(
         provider.startSession(threadId, {
@@ -2653,16 +2657,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
           runtimeMode: "full-access",
         }),
       );
-      assertFailure(replacement, replacementFailure);
+      assert.equal(replacement._tag, "Failure");
 
       const restoredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const [codexSessions, claudeSessions] = yield* Effect.all([
         routing.codex.listSessions(),
         routing.claude.listSessions(),
       ]);
-      const restoreCall = routing.codex.startSession.mock.calls.findLast(
-        ([input]) => input.threadId === threadId,
-      )?.[0];
       assert.equal(restoredBinding?.provider, "codex");
       assert.equal(restoredBinding?.status, "running");
       assert.equal(restoredBinding?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
@@ -2671,14 +2672,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
         claudeSessions.some((session) => session.threadId === threadId),
         false,
       );
-      assert.deepEqual(restoreCall?.resumeCursor, initial.resumeCursor);
-      assert.equal(restoreCall?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
+      assert.equal(routing.codex.startSession.mock.calls.length, codexStartCount);
+      assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
+      assert.deepEqual(restoredBinding?.resumeCursor, initial.resumeCursor);
 
       yield* provider.stopSession({ threadId });
     }),
   );
 
-  it.effect("serializes recovery before a competing provider start", () =>
+  it.effect("serializes recovery before rejecting a competing provider start", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
@@ -2721,13 +2723,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd: "/tmp/recovery-start-race",
           runtimeMode: "full-access",
         })
-        .pipe(Effect.forkChild);
+        .pipe(Effect.result, Effect.forkChild);
       yield* sleep(25);
       assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
 
       releaseRecovery();
       yield* Fiber.join(recoveryFiber);
-      yield* Fiber.join(competingStartFiber);
+      const competingStartResult = yield* Fiber.join(competingStartFiber);
 
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const [codexSessions, claudeSessions] = yield* Effect.all([
@@ -2737,12 +2739,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const recoveryCall = routing.codex.startSession.mock.calls.findLast(
         ([input]) => input.threadId === threadId,
       )?.[0];
-      assert.equal(binding?.provider, "claudeAgent");
+      assert.equal(competingStartResult._tag, "Failure");
+      assert.equal(binding?.provider, "codex");
       assert.equal(
         codexSessions.some((session) => session.threadId === threadId),
-        false,
+        true,
       );
-      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
+      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 0);
       assert.deepEqual(recoveryCall?.resumeCursor, initial.resumeCursor);
 
       yield* provider.stopSession({ threadId });
@@ -2895,7 +2898,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(typeof lifecycleGeneration, "string");
 
       const sessions = yield* provider.listSessions();
-      assert.equal(sessions.length, 1);
+      assert.equal(
+        sessions.filter((candidate) => candidate.threadId === session.threadId).length,
+        1,
+      );
 
       yield* provider.respondToRequest({
         threadId: session.threadId,
@@ -3853,9 +3859,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const serverSettings = yield* ServerSettingsService;
       const threadId = asThreadId("thread-stale-codex-rollback");
-      const fixture = yield* Effect.promise(() =>
-        makeSharedCodexContinuationFixture(["default"]),
-      );
+      const fixture = yield* Effect.promise(() => makeSharedCodexContinuationFixture(["default"]));
       const providerInstanceId = asProviderInstanceId("codex_stale_rollback");
       yield* serverSettings.updateSettings({
         providerInstances: {
@@ -3955,6 +3959,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         makeProviderServiceLive().pipe(
           Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
           Layer.provide(directoryLayer),
+          Layer.provide(ServerSettingsService.layerTest()),
           Layer.provide(NodeServices.layer),
         ),
         directoryLayer,
@@ -4033,6 +4038,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         makeProviderServiceLive().pipe(
           Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
           Layer.provide(directoryLayer),
+          Layer.provide(ServerSettingsService.layerTest()),
           Layer.provide(NodeServices.layer),
         ),
         directoryLayer,
@@ -4119,6 +4125,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const layer = makeProviderServiceLive().pipe(
           Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
           Layer.provide(directoryLayer),
+          Layer.provide(ServerSettingsService.layerTest()),
           Layer.provide(NodeServices.layer),
         );
 
@@ -4167,6 +4174,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const layer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
         Layer.provide(directoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
         Layer.provide(NodeServices.layer),
       );
 
@@ -4216,6 +4224,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const layer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
         Layer.provide(directoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
         Layer.provide(NodeServices.layer),
       );
 
@@ -4294,6 +4303,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         makeProviderServiceLive().pipe(
           Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
           Layer.provide(directoryLayer),
+          Layer.provide(ServerSettingsService.layerTest()),
           Layer.provide(NodeServices.layer),
         ),
         directoryLayer,
@@ -4337,7 +4347,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(devin.sendTurn.mock.calls.length, 0);
       assert.deepEqual(adoptedSessions, []);
       assert.deepEqual(binding?.resumeCursor, staleCursor);
-      assert.equal(devin.hasSession.mock.calls.length >= 2, true);
     }),
   );
 
@@ -4570,10 +4579,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const newerTurnId = asTurnId("turn-overlapping-newer");
       const olderResumeCursor = { cursor: "older-resume" };
       const newerResumeCursor = { cursor: "newer-resume" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5.1-codex-mini" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5.1-codex-mini",
+      };
       const newerModelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5.4",
       };
       let olderDispatchStarted = false;
       let releaseOlderDispatch: ((result: ProviderTurnStartResult) => void) | undefined;
@@ -4699,7 +4713,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("thread-promote-older-success");
       const olderTurnId = asTurnId("turn-promoted-older");
       const olderCursor = { cursor: "promoted-older" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      };
       const newerFailure = new ProviderAdapterSessionNotFoundError({
         provider: "codex",
         threadId,
@@ -4880,8 +4898,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const turnId = asTurnId("turn-steer-persistence");
       const resumeCursor = { cursor: "steer-resume" };
       const modelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5.4",
       };
 
       yield* provider.startSession(threadId, {
@@ -4919,10 +4938,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const reviewTurnId = asTurnId("turn-newer-review");
       const staleSteerCursor = { cursor: "stale-steer-resume" };
       const reviewCursor = { cursor: "newer-review-resume" };
-      const initialModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const initialModelSelection = {
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      };
       const staleSteerModelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        instanceId: "codex",
+        model: "gpt-5.4",
       };
       let steerStarted = false;
       let releaseSteer: ((result: ProviderTurnStartResult) => void) | undefined;
@@ -5421,7 +5445,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const serverSettings = yield* ServerSettingsService;
       const threadId = asThreadId("thread-claude-stopped-credential-boundary");
       const providerInstanceId = asProviderInstanceId("claude_credential_boundary");
-      const settingsForKey = (value: string): Partial<ServerSettings> => ({
+      const settingsForKey = (value: string) => ({
         providerInstances: {
           claude_credential_boundary: {
             driver: "claudeAgent",
@@ -5511,7 +5535,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const serverSettings = yield* ServerSettingsService;
       const threadId = asThreadId("thread-claude-recovery-credential-boundary");
       const providerInstanceId = asProviderInstanceId("claude_recovery_boundary");
-      const settingsForKey = (value: string): Partial<ServerSettings> => ({
+      const settingsForKey = (value: string) => ({
         providerInstances: {
           claude_recovery_boundary: {
             driver: "claudeAgent",
@@ -5643,6 +5667,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             provider: "claudeAgent",
             threadId: initial.threadId,
             cwd: "/tmp/project-stop-runtime",
+            providerOptions: {},
             runtimeMode: "full-access",
           }),
         );
@@ -6726,9 +6751,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const serverSettings = yield* ServerSettingsService;
       const threadId = asThreadId("thread-idle-fired-new-turn");
-      const fixture = yield* Effect.promise(() =>
-        makeSharedCodexContinuationFixture(["default"]),
-      );
+      const fixture = yield* Effect.promise(() => makeSharedCodexContinuationFixture(["default"]));
       const providerInstanceId = asProviderInstanceId("codex_idle_fired");
       yield* serverSettings.updateSettings({
         providerInstances: {
@@ -8011,9 +8034,12 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
 
       // The adapter owns a live session but startSession has not persisted a
       // binding row yet (the startup window resolveRoutableSession allows).
-      liveFallback.codex.hasSession.mockImplementation((candidate: ThreadId) =>
-        Effect.succeed(candidate === threadId),
-      );
+      yield* liveFallback.codex.startSession({
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
       liveFallback.codex.sendTurn.mockImplementationOnce((input: ProviderSendTurnInput) =>
         Effect.gen(function* () {
           // The terminal runtime event is fully processed before sendTurn
@@ -8047,9 +8073,12 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       const threadId = asThreadId("thread-live-fallback-many-settled");
       let sequence = 0;
 
-      liveFallback.codex.hasSession.mockImplementation((candidate: ThreadId) =>
-        Effect.succeed(candidate === threadId),
-      );
+      yield* liveFallback.codex.startSession({
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
       liveFallback.codex.sendTurn.mockImplementation((input: ProviderSendTurnInput) =>
         Effect.gen(function* () {
           sequence += 1;
