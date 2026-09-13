@@ -31,9 +31,19 @@ export function buildGenericAcpSpawnInput(
 
 export const resolveGenericAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
-): Effect.Effect<string | undefined> => {
-  const method = (initializeResult.authMethods ?? []).find((candidate) => candidate.id.trim());
-  return Effect.succeed(method?.id.trim());
+): Effect.Effect<string, AcpErrors.AcpError> => {
+  const methodId = (initializeResult.authMethods ?? [])
+    .map((method) => method.id.trim())
+    .find(Boolean);
+  return methodId
+    ? Effect.succeed(methodId)
+    : Effect.fail(
+        new AcpErrors.AcpRequestError({
+          code: -32000,
+          errorMessage:
+            "ACP agent requires authentication but advertised no authentication methods.",
+        }),
+      );
 };
 
 export function makeGenericAcpRuntime(input: {
@@ -42,7 +52,7 @@ export function makeGenericAcpRuntime(input: {
   readonly cwd: string;
   readonly options: Omit<
     AcpSessionRuntimeOptions,
-    "spawn" | "cwd" | "resolveAuthMethodId" | "authentication"
+    "spawn" | "cwd" | "resolveAuthMethodId" | "authPolicy"
   >;
 }): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> {
   return Effect.gen(function* () {
@@ -52,7 +62,7 @@ export function makeGenericAcpRuntime(input: {
         cwd: input.cwd,
         spawn: buildGenericAcpSpawnInput(input.settings, input.cwd),
         resolveAuthMethodId: resolveGenericAcpAuthMethodId,
-        authentication: "when-advertised",
+        authPolicy: "on-demand",
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

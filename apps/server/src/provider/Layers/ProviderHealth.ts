@@ -125,6 +125,7 @@ const DROID_PROVIDER = "droid" as const;
 const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
+const ACP_PROVIDER = "acp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -139,6 +140,7 @@ const PROVIDERS = [
   DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
+  ACP_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -1868,6 +1870,65 @@ export const makeCheckDevinProviderStatus = (
 
 export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
 
+// ── Generic ACP agent health check ───────────────────────────────
+
+export const makeCheckAcpProviderStatus = (
+  binaryPath?: string,
+  _args?: ReadonlyArray<string>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "cline";
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], providerCommandEnv(ACP_PROVIDER)),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing") {
+      return {
+        provider: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `ACP agent executable (${executable}) is not installed or not on PATH.`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "success") {
+      const version = versionProbe.result;
+      return {
+        provider: ACP_PROVIDER,
+        status: "ready" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`),
+        checkedAt,
+        message:
+          "ACP agent executable is installed. Authentication and capabilities are negotiated when a session starts.",
+      } satisfies ServerProviderStatus;
+    }
+    const detail =
+      versionProbe.outcome === "failure"
+        ? versionProbe.cause instanceof Error
+          ? versionProbe.cause.message
+          : String(versionProbe.cause)
+        : versionProbe.outcome === "timeout"
+          ? "The version probe timed out."
+          : detailFromResult(versionProbe.result);
+    return {
+      provider: ACP_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `ACP agent is present, but its version probe was inconclusive: ${detail}`
+        : "ACP agent is present, but its version probe was inconclusive.",
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkAcpProviderStatus = makeCheckAcpProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2153,6 +2214,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.pi.binaryPath;
           case "devin":
             return settings.providers.devin.binaryPath;
+          case "acp":
+            return settings.providers.acp.binaryPath;
         }
       };
 
@@ -2364,6 +2427,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   checkPiProviderStatus(
                     settings.providers.pi.agentDir,
                     settings.providers.pi.binaryPath,
+                  ),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  ACP_PROVIDER,
+                  makeCheckAcpProviderStatus(
+                    settings.providers.acp.binaryPath,
+                    settings.providers.acp.args,
                   ),
                 ),
               ],

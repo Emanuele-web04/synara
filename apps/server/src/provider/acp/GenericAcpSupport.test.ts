@@ -38,9 +38,9 @@ describe("GenericAcpSupport", () => {
     ).resolves.toBe("cline");
   });
 
-  it("allows an ACP agent that does not require client-driven authentication", async () => {
+  it("fails auth-method resolution when authentication is required but none is advertised", async () => {
     await expect(
       Effect.runPromise(resolveGenericAcpAuthMethodId(initializeResponse([]))),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("advertised no authentication methods");
   });
 });

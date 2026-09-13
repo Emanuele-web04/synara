@@ -123,7 +123,7 @@ function noAuthenticationRuntimeLayer(logPath: string) {
     },
     cwd: process.cwd(),
     clientInfo: { name: "synara-no-auth-test", version: "0.0.0" },
-    authentication: "when-advertised",
+    authPolicy: "on-demand",
   });
 }
 
