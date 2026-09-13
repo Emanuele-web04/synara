@@ -1,79 +1,58 @@
-# CI critical path audit — 2026-09-11
+# CI architecture and performance
 
-The target is a 20–30% reduction in pull-request CI wall time without removing required checks.
+## Evidence
 
-## Hosted baseline
+Baseline: successful main run [34754198860](https://github.com/Emanuele-web04/synara/actions/runs/34754198860), commit `939d93c35c8d748c6a52ac17bb4f7423a43c8ddb`, September 13, 2026. This is one measured sample, not a latency distribution or dollar-cost estimate.
 
-Eight successful, first-attempt code-change runs from September 10–11 had a median wall time of **10m 51s**, ranging from **9m 31s to 12m 37s**. Seven are PR runs and one is a main push. Wall time is workflow creation through completion, including runner queueing; job durations below are execution time.
+Workflow lifecycle was 513 seconds. Summed job execution was 2,334 seconds (38.9 runner-minutes), including 492 seconds on Windows. There were 16 jobs and 13 dependency installations. Queue/start overhead was generally 1-3 seconds per job.
 
-| Run                                                                              | Wall time | Longest job                |
-| -------------------------------------------------------------------------------- | --------- | -------------------------- |
-| [34601479519](https://github.com/Emanuele-web04/synara/actions/runs/34601479519) | 10m 40s   | Browser Tests (stable 3/3) |
-| [34600331685](https://github.com/Emanuele-web04/synara/actions/runs/34600331685) | 10m 03s   | Unit Tests (server)        |
-| [34598565030](https://github.com/Emanuele-web04/synara/actions/runs/34598565030) | 11m 16s   | Browser Tests (stable 3/3) |
-| [34593171942](https://github.com/Emanuele-web04/synara/actions/runs/34593171942) | 10m 54s   | Browser Tests (stable 3/3) |
-| [34589969875](https://github.com/Emanuele-web04/synara/actions/runs/34589969875) | 10m 54s   | Browser Tests (stable 3/3) |
-| [34543900804](https://github.com/Emanuele-web04/synara/actions/runs/34543900804) | 10m 48s   | Windows Process Regression |
-| [34543102075](https://github.com/Emanuele-web04/synara/actions/runs/34543102075) | 12m 37s   | Browser Tests (stable 3/3) |
-| [34599928192](https://github.com/Emanuele-web04/synara/actions/runs/34599928192) | 9m 31s    | Unit Tests (server)        |
+The Windows Bun package-cache archive was 559,235,326 bytes. Restoring it took 331.465 seconds, including about 326 seconds extracting. Commit `81c64f0ab9bd86443d0ca27bf3cb0c2da7abb080` removed only that restore. All 16 jobs passed in [34778199136](https://github.com/Emanuele-web04/synara/actions/runs/34778199136). Workflow lifecycle fell to 344 seconds (32.9% lower); Windows setup fell from 393 to 173 seconds and its complete job from 492 to 224 seconds. A cold install costs more than a warm install, but the measured net result is better.
 
-| Job                | Median  | Range          |
-| ------------------ | ------- | -------------- |
-| Browser stable 3/3 | 10m 10s | 8m 07s–10m 57s |
-| Server unit tests  | 9m 00s  | 6m 35s–9m 15s  |
-| Browser stable 1/3 | 3m 44s  | 3m 13s–3m 59s  |
-| Browser stable 2/3 | 3m 16s  | 2m 49s–3m 28s  |
-| Windows regression | 3m 39s  | 3m 05s–10m 28s |
-| Web unit tests     | 3m 12s  | 2m 58s–3m 28s  |
-| Desktop build      | 2m 56s  | 43s–3m 09s     |
-| Typecheck          | 1m 12s  | 1m 02s–1m 17s  |
-| Fast static        | 39s     | 32s–44s        |
+Linux has different evidence: the static lane's 774,322,955-byte node_modules archive restored in 15.785 seconds, followed by a 1.694-second frozen install. The Bun package cache restored in 2.069 seconds. Keep these until an equivalent cold install, including lifecycle scripts, demonstrates a win. Release smoke's 17-second `--ignore-scripts` install is not a comparable benchmark.
 
-The short jobs usually restore and install their workspace in 20–35 seconds. Faster setup alone cannot deliver the target.
+Static-fast restored an unused Turbo snapshot in 1.623 seconds and saved essentially identical content in 1.677 seconds. Windows ran no Turbo tasks and attempted to save an absent cache path. Turbo caching is now opt-in for build-producing lanes. Tests and typechecks remain non-cacheable.
 
-## What dominates
+Browser test steps took 149, 264, 149 and 230 seconds; Playwright setup took only 11-13 seconds per runner. Keep all four lanes. Server test steps took 123 and 221 seconds across two serial-worker shards. One sample does not justify replacing Vitest's deterministic sharding with a maintained timing manifest.
 
-- **Browser file imbalance.** In run 34601479519, shard 3 spent 348.2s running ChatView and 69.6s running EventRouter, plus 128.6s importing modules across its files. Other shards finished much earlier. Vitest's built-in sharding distributes files and cannot subdivide the 133-case ChatView file.
-- **Unnecessary server prerequisite.** In run 34600331685, the server test step took 518s, but Vitest itself took 370.4s. Turbo built the web production bundle first because the server declares the web workspace as a development dependency and inherited `test.dependsOn: ^build`. The desktop build job already checks that bundle.
-- **Serial server execution.** More than 400 server files run with one worker. This protects integration-test isolation, but it makes one runner responsible for the entire suite.
-- **Uncached Windows installation.** Windows installed dependencies from scratch on every run. The sampled install steps ranged from 128s to 511s.
-- **Repeated setup for tiny suites.** Four short unit suites each occupied a separate runner and restored the same workspace.
+## Graph and job decisions
 
-## Changes
+Planning and migration lineage share one full-history, Node-only checkout. The migration command is unchanged; CI additionally requires its explicit success output, so missing or unreadable release history cannot become a green warning. This cheap guard also runs on prose PRs.
 
-1. Give ChatView's parameterized streaming-follow matrix and its remaining tests separate browser projects. Two additional shards cover every other browser file. Tests stay serial within each runner.
-2. Keep the Linux geometry quarantine in every project's effective test-name pattern. The patterns for the two ChatView projects are complementary, so new stable cases automatically belong to exactly one project.
-3. Split server test files into two hosted jobs while retaining `--maxWorkers=1 --no-file-parallelism`.
-4. Replace the server test task's broad build prerequisite with the contracts build. Server tests consume web source and create their own static fixtures; production output remains covered by the required desktop build.
-5. Group contracts, shared, scripts, and desktop unit tests into one Turbo invocation. Total workflow jobs decrease from **17 to 16**, despite the extra parallelism on the critical path.
-6. Reuse the shared workspace setup on Windows, including the OS-scoped Bun package cache and the frozen dependency install. Recreate `node_modules` on each Windows runner; a restored tree failed to resolve a required dependency during postinstall.
+Static-fast remains independent of planning. It owns the single brand scan, single platform-independent Windows boundary scan, formatting, lint and release smoke. The smoke reuses the existing installation instead of another checkout/install. Formatting failures print the required diff without changing the failed outcome.
 
-The required aggregate check name, docs-only behavior, failure propagation, and separate desktop build remain intact. Neither tests nor typechecks are cached as passing results.
+Typecheck and the short core unit group share setup. The baseline's 26-second typecheck plus 35-second core suite stay off the long-test critical path. Core still includes contracts, shared, scripts and desktop, and runs for every code change, including marketing, because repository-script tests have cross-app fixtures.
 
-## Expected impact
+Web unit tests and both server shards stay separate. Linux PTY smoke runs once, on server 1/2. Package scripts and Turbo build prerequisites are preserved. Every actual Windows execution command remains; only the duplicate platform-independent source scanner leaves that lane.
 
-**About 7–8 minutes per successful code-change run is a projection**, approximately **26–35% below the 10m 51s baseline**. It is not a measured hosted result.
+The four stable browser lanes and geometry quarantine are unchanged. Playwright verifies the pinned browser and OS dependencies even on cache hits. Electron remains exclusive to desktop build. The quality job only aggregates and preserves the required name `Format, Lint, Typecheck, Test, Browser Test, Build`.
 
-The latest browser log attributes 86.8s to the streaming-follow matrix. Its other ChatView cases account for about 261.5s. Conservatively retaining the old shard's entire 128.6s import cost, plus setup and scheduling overhead, puts the heavier new ChatView lane near the upper end of that projection. EventRouter and the remaining browser files execute elsewhere.
+Structural full-run counts are 13 jobs and 11 installations, versus 16 and 13. Turbo-cache users fall from 12 to 5; nightly also stops restoring unused Turbo outputs. These are structural counts, not measured final elapsed times. PR #1172 records final candidate results.
 
-Removing the redundant ~148s frontend build and dividing server tests removes the second bottleneck. Windows cache hits should reduce install variance; a cold cache, hosted runner queueing, or a failing test can still exceed the projected range. Extra cold browser compilation is a tradeoff, partially offset by fewer setup jobs and the eliminated frontend build.
+## Dependency-aware selection
 
-## Verification
+The planner reads workspace manifests and follows reverse dependencies, including dev, optional and peer dependencies. CLI's web dependency and desktop's implicit packaged-CLI dependency propagate web edits through build and Windows validation. Contracts, shared and repository tooling always select the full graph. Unknown files/workspaces, manifests, lockfiles, patches and CI changes also select full validation.
 
-- `actionlint` validates the modified GitHub workflow.
-- The real aggregate shell step passes 51 success/failure/cancellation/docs-only scenarios.
-- `scripts/browser-ci-partitions.test.ts` resolves actual Vitest configurations, verifies complete file ownership, checks the effective runtime patterns, and preserves serial browser execution.
-- All 85 browser files are accounted for: 84 component files plus ChatView.
-- The grouped core suites pass locally: 1,779 tests across 182 passing files.
-- Both server shards pass locally: 4,902 tests across 406 passing files, with the existing skipped cases retained.
-- Both ChatView partitions pass: 105 + 16 active cases. Comparing the actual JSON results to the complete file proves no missing or duplicated active tests; the 12 quarantined cases remain excluded.
-- The complete ChatView file took 214.01s locally; the larger final partition took 161.30s and its complement took 96.22s. That is a 24.6% reduction in this local file's critical path, not a measured whole-workflow or hosted improvement.
-- Both component shards pass: 42 files / 168 tests and 42 files / 193 tests, with the existing quarantined case retained. All four browser jobs pass locally (482 active cases total).
+Git supplies a NUL-delimited merge-base diff with rename detection disabled, so both deletion and addition count. There is no API file-list truncation or shell evaluation of filenames. Missing refs and malformed metadata fail planning. Main always runs everything; affected selection is PR-only. Narrow prose exclusions never hide executable application `docs/`, `assets/` or MDX source.
 
-These test timings are local macOS results. Hosted run [34608752703](https://github.com/Emanuele-web04/synara/actions/runs/34608752703) passed all browser, unit, static, and build checks, but Windows failed during dependency setup after restoring `node_modules`: Fumadocs could not resolve its declared `tinyglobby` dependency. The preceding cold Windows install succeeded. Windows now skips the installed-tree cache; this correction still needs a hosted run. The end-to-end speedup remains unverified across successful runs.
+Every PR runs planning/lineage, static-fast/release smoke and the quality gate. Additional selected work is:
 
-## Hosted acceptance
+- Markdown-only and marketing-content-only: no heavy main-CI lanes. Marketing content still triggers its independent validation workflow.
+- Web or browser tests: typecheck/core, web unit, both server shards, all four browser lanes, desktop build and Windows.
+- Desktop only: typecheck/core, desktop build and Windows; unit matrix and browser skip.
+- Server/CLI, server process/runtime or server migration: typecheck/core, both server shards, desktop build and Windows; web unit and browser skip.
+- Shared, contracts, dependency/lockfile, CI workflow or release tooling: the entire graph.
+- Marketing executable source: typecheck/core plus the independent marketing workflow; main unit matrix, stable app browser, desktop build and Windows skip.
 
-After publication, compare at least three successful first-attempt code-change runs against the baseline. Measure creation-to-gate-completion, individual job duration, cache hits, and runner queue delay separately. Confirm both server shards, all four browser jobs, and the aggregate check succeed. Do not treat a rerun's timestamp or a warm local run as proof of the hosted improvement.
+Shared process/recovery edits use the broad shared-package rule, not the narrower server rule. Mixed changes take the union. Package-level rather than per-test pruning is intentional: browser-test-only PRs still get broad web fan-out. Runtime images remain code inputs.
 
-The sharding and project configuration use [Vitest's supported sharding](https://vitest.dev/guide/improving-performance) and [test projects](https://vitest.dev/guide/projects).
+`node --test .github/scripts/*.test.mjs` checks all 13 requested representative PR scenarios, additional workspace/dependency edges, cycles, renames, unusual filenames and missing refs. CI also checks minimum fan-out against real manifests. Tests execute the production aggregate gate verbatim, rejecting failures, cancellation, missing outputs and unexpected skips rather than treating every skipped job as success.
+
+## Boundaries and follow-up experiments
+
+Nightly keeps the existing non-blocking geometry quarantine; no stable test moves there. Release preflight, signed platform builds, provenance, packaged-startup smoke, publication and source-finalization boundaries are unchanged. These validate different artifacts and authority boundaries, not redundant PR work.
+
+The weekly/manual device-helper matrix remains distinct Xcode/OS compatibility coverage without ordinary PR cost. Marketing keeps both builds: visual tests need deterministic fixture data while performance smoke needs production data. Its deferred browser-step failures remain enforced by its final check.
+
+PR-size and PR-vouch remain trusted-event, metadata-only automation; their write-capable contexts never execute PR source. Their small configuration/label jobs are outside the CI critical path. Permission consolidation is deliberately excluded. A successful timing sample cannot establish independent defect-detection frequency, so no job was removed on that basis.
+
+Next experiments should compare matched cold/warm Linux installations and collect multi-run per-file server/browser timings. Do not add shared build-artifact barriers, reduce browser shards, enable test caching or change release publishing solely to improve elapsed time. Compare both summed runner execution and developer feedback latency.

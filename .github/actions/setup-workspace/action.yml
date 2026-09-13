@@ -5,6 +5,9 @@ inputs:
   electron:
     description: Install the Electron runtime binary.
     default: "false"
+  turbo:
+    description: Restore and save build outputs only for lanes that run Turbo build prerequisites.
+    default: "false"
 
 runs:
   using: composite
@@ -18,25 +21,20 @@ runs:
       uses: actions/setup-node@v6
       with:
         node-version-file: package.json
+        package-manager-cache: false
 
-    # Run 34754198860 spent 331 seconds restoring this cache on Windows,
-    # mostly extracting its 533 MiB archive. Install from the lockfile instead.
+    # Measured Windows setup: 393s with this archive, 173s without it.
+    # Keep Linux caches: a comparable cold lifecycle install has not proved a win.
     - name: Cache Bun install
       if: ${{ runner.os != 'Windows' }}
       uses: actions/cache@v5
       with:
         path: ~/.bun/install/cache
         key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
-    # Phase 1c/3: node_modules survives across jobs keyed on the lockfile.
-    # bun install --frozen-lockfile still runs below (correctness), but a warm
-    # cache turns resolve + download into link. The key is scoped by the
-    # electron input: Install Electron test runtime extracts the binary into
-    # apps/desktop/node_modules/electron/dist INSIDE node_modules, so the
-    # electron lane's tree differs from other lanes and must not share a blob.
-    # Windows cache restores can leave Bun's isolated dependency links missing.
-    # Recreate that tree with a frozen install instead of restoring node_modules.
+
+    # Always reconcile with the frozen lockfile. Electron's extracted binary
+    # lives inside node_modules, so its lane must retain a separate cache key.
+    # Windows restores can lose isolated dependency links; use a fresh install.
     - name: Cache node_modules
       if: ${{ runner.os != 'Windows' }}
       uses: actions/cache@v5
@@ -50,13 +48,11 @@ runs:
         restore-keys: |
           ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-
 
-    # Phase 3h: persist Turbo's local cache store so cacheable build outputs
-    # survive across jobs. Turbo verifies its own fingerprints on hit, so a
-    # broad key is safe: stale entries simply miss inside turbo. test and
-    # typecheck stay cache:false in turbo.json (inputs not proven airtight).
-    # GitHub caches are immutable: each job/shard saves new results per commit
-    # and restores its previous snapshot before falling back to other lanes.
+    # Static, browser and Windows lanes have no cacheable Turbo tasks. Avoid
+    # restoring and re-saving identical snapshots there. Tests/typechecks remain
+    # cache:false; Turbo fingerprints build prerequisites before any reuse.
     - name: Cache Turbo outputs
+      if: ${{ inputs.turbo == 'true' }}
       uses: actions/cache@v5
       with:
         path: |
