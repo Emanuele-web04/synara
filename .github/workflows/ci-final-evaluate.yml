@@ -1,0 +1,123 @@
+name: CI scoped follow-up validation
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-evidence]
+    paths: [.github/workflows/ci-final-evaluate.yml, .github/scripts/benchmark-release-installs.mjs]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-scoped-evaluate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  device:
+    name: Matched macOS installs (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Benchmark exact release/device profiles and native helper
+        run: node .github/scripts/benchmark-release-installs.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-installs-${{ matrix.runner }}
+          path: ${{ runner.temp }}/release-install-benchmark/results.json
+          retention-days: 7
+          if-no-files-found: error
+
+  stagehand:
+    name: Stagehand with Synara Chromium version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Install isolated pinned alternative
+        run: |
+          mkdir -p "$RUNNER_TEMP/stagehand"
+          cp .github/scripts/stagehand-probe.mjs "$RUNNER_TEMP/stagehand/probe.mjs"
+          cd "$RUNNER_TEMP/stagehand"
+          npm init -y
+          npm install --save-exact --ignore-scripts @browserbasehq/stagehand@4.0.0 playwright@1.62.1 zod@4.3.6
+          ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Preserve successful baseline measurements
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api 'repos/Emanuele-web04/synara/actions/runs/34781277387/jobs?per_page=100' > "$RUNNER_TEMP/stagehand/baseline-jobs.json"
+          gh api repos/Emanuele-web04/synara/actions/runs/34781277387 > "$RUNNER_TEMP/stagehand/baseline-run.json"
+      - name: Run deterministic feasibility probe
+        run: cd "$RUNNER_TEMP/stagehand" && node probe.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stagehand-current-chromium
+          path: |
+            ${{ runner.temp }}/stagehand/stagehand-results.json
+            ${{ runner.temp }}/stagehand/package-lock.json
+            ${{ runner.temp }}/stagehand/baseline-*.json
+          retention-days: 7
+          if-no-files-found: error
+
+  mac-control:
+    name: Unsigned macOS startup control
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Use original unfiltered release install
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build same unsigned native artifact
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
+          lock="$(node -p 'require("crypto").createHash("sha256").update(require("fs").readFileSync("bun.lock")).digest("hex")')"
+          bun run dist:desktop:artifact -- --platform mac --target dmg --arch arm64 --build-version "$version" --source-commit "$GITHUB_SHA" --lockfile-sha256 "$lock"
+      - name: Capture isolated startup diagnostics without changing assertions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/verify-packaged-desktop-startup.ts')
+          source = path.read_text()
+          source = source.replace('child.stdout?.resume();', 'child.stdout?.pipe(process.stdout);').replace('child.stderr?.resume();', 'child.stderr?.pipe(process.stderr);')
+          marker = '    throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);'
+          assert marker in source
+          source = source.replace(marker, '    try { console.error(readFileSync(logPath, "utf8")); } catch { console.error("No startup log exists"); }\n' + marker)
+          path.write_text(source)
+          PY
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir release --platform mac --arch arm64 --version "$version"
