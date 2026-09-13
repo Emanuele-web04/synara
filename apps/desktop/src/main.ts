@@ -4033,11 +4033,13 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ...backendEnv(),
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
+      SYNARA_DESKTOP_PARENT_STDIN: "1",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
     // pipe carries the browser-host capability and must never be inherited.
-    stdio: ["ignore", "pipe", "pipe", "pipe"],
+    // Leave stdin open: EOF lets the backend clean up if this main process dies.
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
   });
   const capabilityPipe = child.stdio[DESKTOP_BROWSER_HOST_CAPABILITY_FD];
   if (capabilityPipe && "end" in capabilityPipe) {
