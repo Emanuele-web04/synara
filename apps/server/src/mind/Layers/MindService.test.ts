@@ -30,8 +30,8 @@ const layer = it.layer(
 
 const DAY_MS = 86_400_000;
 
-// Operation receipts reference projection_projects, so tests seed the project
-// row before any service call that records a receipt.
+// Tests seed the project row before service calls — Mind rows exist only for
+// real projects, and the seed mirrors that shape (mirrors MindProfile.test.ts).
 const ensureProjectRow = (projectId: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

@@ -309,6 +309,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [105, "MindRuntimeIntegrity"],
         [106, "MindTextRevisions"],
         [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -368,6 +369,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 105, name: "MindRuntimeIntegrity" },
           { migration_id: 106, name: "MindTextRevisions" },
           { migration_id: 107, name: "MindProfiles" },
+          { migration_id: 108, name: "MindProjectionDecoupling" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -468,6 +470,7 @@ agentGatewayRetentionLegacyLayer(
           [105, "MindRuntimeIntegrity"],
           [106, "MindTextRevisions"],
           [107, "MindProfiles"],
+          [108, "MindProjectionDecoupling"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -570,6 +573,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [105, "MindRuntimeIntegrity"],
         [106, "MindTextRevisions"],
         [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -613,6 +617,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [105, "MindRuntimeIntegrity"],
           [106, "MindTextRevisions"],
           [107, "MindProfiles"],
+          [108, "MindProjectionDecoupling"],
         ],
       );
 
@@ -710,6 +715,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [105, "MindRuntimeIntegrity"],
         [106, "MindTextRevisions"],
         [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -749,6 +755,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [105, "MindRuntimeIntegrity"],
           [106, "MindTextRevisions"],
           [107, "MindProfiles"],
+          [108, "MindProjectionDecoupling"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -926,6 +933,7 @@ mindMigrationLayer("Mind migration", (it) => {
         [105, "MindRuntimeIntegrity"],
         [106, "MindTextRevisions"],
         [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
       ]);
 
       yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
@@ -966,6 +974,7 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
           [105, "MindRuntimeIntegrity"],
           [106, "MindTextRevisions"],
           [107, "MindProfiles"],
+          [108, "MindProjectionDecoupling"],
         ]);
         const rows = yield* sql<{
           readonly id: string;
@@ -999,11 +1008,14 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
         sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('receipt-p1', 'same-op', 'remember', '{}', '2026-09-01T00:00:00.000Z')`,
       );
       assert.isDefined(duplicate);
+      // Receipts are decoupled from the projection: deleting the project row
+      // (what repairState does before replay) must not take receipt state
+      // with it.
       yield* sql`DELETE FROM projection_projects WHERE project_id = 'receipt-p1'`;
       const receipts = yield* sql<{
         readonly projectId: string;
       }>`SELECT project_id AS "projectId" FROM mind_operation_receipts ORDER BY project_id`;
-      assert.deepStrictEqual(receipts, [{ projectId: "receipt-p2" }]);
+      assert.deepStrictEqual(receipts, [{ projectId: "receipt-p1" }, { projectId: "receipt-p2" }]);
     }),
   );
 
@@ -1041,6 +1053,7 @@ mindTextRevisionsLayer("Mind text revisions migration", (it) => {
       assert.deepStrictEqual(executed, [
         [106, "MindTextRevisions"],
         [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
       ]);
 
       const columns = yield* sql<{ readonly name: string }>`
@@ -1080,9 +1093,14 @@ mindProfileLayer("Mind profiles migration", (it) => {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 106 });
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed, [[107, "MindProfiles"]]);
+      assert.deepStrictEqual(executed, [
+        [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
+      ]);
 
-      // Profiles cascade with the project row; revisions carry hashes only.
+      // Profiles are decoupled from the projection: deleting the project row
+      // (what repairState does before replay) must not take the profile with
+      // it. Revisions carry hashes only.
       yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES ('profile-p1', 'One', '/one', '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
       yield* sql`INSERT INTO mind_profiles (project_id, text, opted_in, updated_at) VALUES ('profile-p1', 'likes bun', 1, '2026-09-01T00:00:00.000Z')`;
       const invalidOptIn = yield* Effect.flip(
@@ -1094,7 +1112,68 @@ mindProfileLayer("Mind profiles migration", (it) => {
       const remaining = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM mind_profiles
       `;
-      assert.strictEqual(remaining[0]?.count, 0);
+      assert.strictEqual(remaining[0]?.count, 1);
+
+      const rerun = yield* runMigrations();
+      assert.lengthOf(rerun, 0);
+    }),
+  );
+});
+
+const mindDecouplingLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+mindDecouplingLayer("Mind projection decoupling migration", (it) => {
+  it.effect("108 rebuilds cascade-coupled tables from earlier heads, preserving rows", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 106 });
+
+      // Simulate a database migrated by an earlier head of this branch, where
+      // both tables still reference projection_projects ON DELETE CASCADE.
+      yield* sql`DROP TABLE mind_operation_receipts`;
+      yield* sql`CREATE TABLE mind_operation_receipts (
+        project_id TEXT NOT NULL REFERENCES projection_projects(project_id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        op TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, operation_id)
+      )`;
+      yield* sql`CREATE TABLE mind_profiles (
+        project_id TEXT PRIMARY KEY REFERENCES projection_projects(project_id) ON DELETE CASCADE,
+        text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 500),
+        opted_in INTEGER NOT NULL DEFAULT 0 CHECK (opted_in IN (0, 1)),
+        updated_at TEXT NOT NULL
+      )`;
+      yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES ('legacy-p1', 'One', '/one', '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO mind_profiles (project_id, text, opted_in, updated_at) VALUES ('legacy-p1', 'likes bun', 1, '2026-09-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at) VALUES ('legacy-p1', 'op-1', 'remember', '{}', '2026-09-01T00:00:00.000Z')`;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [107, "MindProfiles"],
+        [108, "MindProjectionDecoupling"],
+      ]);
+
+      const profileFks = yield* sql<{ readonly referenced: string }>`
+        SELECT "table" AS referenced FROM pragma_foreign_key_list('mind_profiles')
+      `;
+      assert.deepStrictEqual(profileFks, []);
+      const receiptFks = yield* sql<{ readonly referenced: string }>`
+        SELECT "table" AS referenced FROM pragma_foreign_key_list('mind_operation_receipts')
+      `;
+      assert.deepStrictEqual(receiptFks, []);
+
+      // Rows survived the rebuild and no longer cascade.
+      yield* sql`DELETE FROM projection_projects WHERE project_id = 'legacy-p1'`;
+      const profiles = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM mind_profiles WHERE project_id = 'legacy-p1'
+      `;
+      assert.strictEqual(profiles[0]?.count, 1);
+      const receipts = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM mind_operation_receipts WHERE project_id = 'legacy-p1'
+      `;
+      assert.strictEqual(receipts[0]?.count, 1);
 
       const rerun = yield* runMigrations();
       assert.lengthOf(rerun, 0);

@@ -17,8 +17,8 @@ const layer = it.layer(
   ),
 );
 
-// Operation receipts and profiles reference projection_projects, so tests seed
-// the project row before any service call (mirrors MindService.test.ts).
+// Tests seed the project row before any service call — projects exist in the
+// projection whenever profiles do (mirrors MindService.test.ts).
 const ensureProjectRow = (projectId: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -52,6 +52,7 @@ const PROJECTS = {
   revisions: "project-mind-profile-revisions",
   excluded: "project-mind-profile-excluded",
   optedInBlank: "project-mind-profile-opted-in-blank",
+  repair: "project-mind-profile-repair",
 } as const;
 
 layer("MindProfile", (it) => {
@@ -237,6 +238,44 @@ layer("MindProfile", (it) => {
         SELECT COUNT(*) AS count FROM mind_journal
       `;
       assert.deepStrictEqual(after, before);
+    }),
+  );
+
+  it.effect("projection repair keeps profiles and receipts — no cascade delete", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.repair);
+      yield* ensureProjectRow(PROJECTS.repair);
+
+      yield* service.profileSet({
+        projectId,
+        text: "Uses bun and deploys Fridays.",
+        optedIn: true,
+      });
+      yield* sql`
+        INSERT INTO mind_operation_receipts (
+          project_id, operation_id, op, result_json, created_at
+        )
+        VALUES (
+          ${PROJECTS.repair}, 'op-1', 'remember', '{}', '2026-09-13T00:00:00.000Z'
+        )
+      `;
+
+      // This is what repairState's resetDerivedProjectionState does: the
+      // projection rows are deleted and replayed. Mind's durable tables must
+      // not cascade-delete with them.
+      yield* sql`DELETE FROM projection_projects`;
+
+      const profile = yield* service.profileGet({ projectId });
+      assert.strictEqual(profile?.text, "Uses bun and deploys Fridays.");
+      assert.strictEqual(profile?.optedIn, true);
+      const receipts = yield* sql<{ readonly operationId: string }>`
+        SELECT operation_id AS operationId FROM mind_operation_receipts
+        WHERE project_id = ${PROJECTS.repair}
+      `;
+      assert.lengthOf(receipts, 1);
     }),
   );
 });

@@ -45,6 +45,7 @@ import {
   optimisticForgetCount,
   sortMindMemories,
 } from "~/lib/mindList";
+import { rollbackOptimisticProfile } from "~/lib/mindProfileQuery";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
@@ -338,8 +339,10 @@ function MindProfileCard({
       toastManager.add({ type: "success", title: "Profile saved" });
     },
     onError: (error, _input, context) => {
-      if (context?.previous !== undefined)
-        queryClient.setQueryData(profileQueryKey, context.previous);
+      // previous === undefined means the cache held nothing before the
+      // optimistic write — restoring would leave the fabricated profile
+      // visible as if it had saved, so the entry is reset instead.
+      rollbackOptimisticProfile(queryClient, profileQueryKey, context?.previous);
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -603,11 +606,17 @@ function MindRouteView() {
     [projects],
   );
 
-  // Filter chips describe the loaded memory page and do not invent projects.
+  // Filter chips come from the project store, not the memory page: a project
+  // with zero memories must still be selectable or its profile card can never
+  // be reached. Memory rows referencing projects missing from the store merge
+  // in as orphans so their chips keep working.
   const visibleProjects = useMemo(() => {
-    const ids = [...new Set(data.memories.map((memory) => memory.projectId))];
-    return ids.map((id) => ({ id, name: projectNamesById.get(id) ?? "Unknown project" }));
-  }, [data.memories, projectNamesById]);
+    const byId = new Map(projects.map((project) => [project.id, project.name]));
+    for (const memory of data.memories) {
+      if (!byId.has(memory.projectId)) byId.set(memory.projectId, "Unknown project");
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name }));
+  }, [projects, data.memories]);
   // The profile card edits exactly one project: the chip-selected one, or the
   // only project in the project store when no filter is set.
   const profileProjectId =
@@ -661,12 +670,18 @@ function MindRouteView() {
       {filteredMemories.length === 0 ? (
         searchActive && searchQuery.isPending ? (
           <div className="px-2 py-4 text-xs text-muted-foreground">Searching…</div>
-        ) : (
+        ) : searchActive ? (
           <div className="flex flex-col items-start gap-2 px-2 py-4 text-xs text-muted-foreground">
             <span>No memories match — clear search.</span>
             <Button variant="outline" size="sm" onClick={() => setSearch("")}>
               Clear search
             </Button>
+          </div>
+        ) : (
+          <div className="px-2 py-4 text-xs text-muted-foreground">
+            {projectFilter === null
+              ? "No memories yet — agents save project memories as they work."
+              : "No memories yet for this project."}
           </div>
         )
       ) : (
@@ -761,20 +776,22 @@ function MindRouteView() {
                 Select a project to edit its profile.
               </p>
             ) : null}
-            {data.memories.length > 0 || searchActive ? (
+            {data.memories.length > 0 || searchActive || visibleProjects.length > 1 ? (
               <div className="flex flex-col gap-2 px-2">
-                <p className="text-xs text-muted-foreground">
-                  {searchActive
-                    ? searchQuery.data === undefined
-                      ? "Searching…"
-                      : `${searchQuery.data.count} ${pluralize(searchQuery.data.count, "match", "matches")}`
-                    : `${formatMindCountLabel({
-                        shown: data.memories.length,
-                        total: data.count,
-                        pinnedCount,
-                        cap: data.cap,
-                      })}${digestSuffix}`}
-                </p>
+                {data.memories.length > 0 || searchActive ? (
+                  <p className="text-xs text-muted-foreground">
+                    {searchActive
+                      ? searchQuery.data === undefined
+                        ? "Searching…"
+                        : `${searchQuery.data.count} ${pluralize(searchQuery.data.count, "match", "matches")}`
+                      : `${formatMindCountLabel({
+                          shown: data.memories.length,
+                          total: data.count,
+                          pinnedCount,
+                          cap: data.cap,
+                        })}${digestSuffix}`}
+                  </p>
+                ) : null}
                 {visibleProjects.length > 1 ? (
                   <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by project">
                     <Button

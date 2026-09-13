@@ -17,7 +17,7 @@ export default Effect.gen(function* () {
   }
   yield* sql`
     CREATE TABLE IF NOT EXISTS mind_operation_receipts (
-      project_id TEXT NOT NULL REFERENCES projection_projects(project_id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL,
       operation_id TEXT NOT NULL,
       op TEXT NOT NULL,
       result_json TEXT NOT NULL,

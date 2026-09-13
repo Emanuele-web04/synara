@@ -123,6 +123,7 @@ import Migration0104 from "./Migrations/104_Mind.ts";
 import Migration0105 from "./Migrations/105_MindRuntimeIntegrity.ts";
 import Migration0106 from "./Migrations/106_MindTextRevisions.ts";
 import Migration0107 from "./Migrations/107_MindProfiles.ts";
+import Migration0108 from "./Migrations/108_MindProjectionDecoupling.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -246,6 +247,7 @@ export const migrationEntries = [
   [105, "MindRuntimeIntegrity", Migration0105],
   [106, "MindTextRevisions", Migration0106],
   [107, "MindProfiles", Migration0107],
+  [108, "MindProjectionDecoupling", Migration0108],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
