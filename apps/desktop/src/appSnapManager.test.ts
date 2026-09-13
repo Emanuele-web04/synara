@@ -1040,7 +1040,8 @@ describe("AppSnap window picker requests", () => {
       );
       const capture = await capturing;
       expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
-      expect(FS.existsSync(capturePath)).toBe(false);
+      // The durable capture resolves before asynchronous helper-file cleanup.
+      await expect.poll(() => FS.existsSync(capturePath)).toBe(false);
       expect(await manager.listPendingCaptures()).toHaveLength(1);
       await manager.acknowledgeCapture(capture.id);
       expect(await manager.listPendingCaptures()).toHaveLength(0);
