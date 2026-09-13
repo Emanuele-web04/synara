@@ -1,0 +1,63 @@
+name: Chara fix final ACP typecheck seams
+
+on:
+  push:
+    branches: [codex/generic-acp-provider]
+    paths: [.github/workflows/chara-fix-acp-final-typecheck.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/generic-acp-provider
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: "false"
+      - name: Fix final typecheck seams
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def patch(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              found = text.count(old)
+              if found < count:
+                  raise SystemExit(f"{path}: expected {count}, found {found}: {old!r}")
+              p.write_text(text.replace(old, new, count))
+
+          patch(
+              "apps/server/src/agentGateway/targetResolver.ts",
+              '  acp: defineProviderOptionConfig<"acp">({\n    primaryOptionKey: "model",\n    options: {},\n  }),',
+              '  // Generic ACP model ids and config options are runtime-negotiated.\n  // `model` is the primary target field, not a provider option key.\n  acp: {\n    primaryOptionKey: "model",\n    options: {},\n  },',
+          )
+
+          path = "apps/server/src/provider/Layers/ProviderHealth.test.ts"
+          patch(path,
+              '    pi: { enabled: false },\n  },',
+              '    pi: { enabled: false },\n    acp: { enabled: false },\n  },')
+          patch(path,
+              '    pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },\n  },',
+              '    pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },\n    acp: { ...DEFAULT_SERVER_SETTINGS.providers.acp, enabled: false },\n  },')
+          patch(path,
+              '      assert.strictEqual(statuses.length, 9);',
+              '      assert.strictEqual(statuses.length, 10);')
+          PY
+          bunx oxfmt apps/server/src/agentGateway/targetResolver.ts apps/server/src/provider/Layers/ProviderHealth.test.ts
+          bun run typecheck
+      - name: Commit fix
+        shell: bash
+        run: |
+          rm -f .github/workflows/chara-fix-acp-final-typecheck.yml
+          git config user.name Chara
+          git config user.email legend.alkalex07@gmail.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: complete generic ACP typecheck integration"
+          git push origin HEAD:codex/generic-acp-provider
