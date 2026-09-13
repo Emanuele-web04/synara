@@ -14,6 +14,7 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
+import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -851,12 +852,9 @@ function CodexAccountsControl(props: {
   };
 
   const removeAccount = (accountId: string) => {
-    props.updateSettings({
-      codexAccounts: accounts.filter((account) => account.id !== accountId),
-      ...(props.settings.selectedCodexAccountId === accountId
-        ? { selectedCodexAccountId: DEFAULT_CODEX_ACCOUNT_ID }
-        : {}),
-    });
+    props.updateSettings(
+      removeManageableProviderInstance(props.settings, codexAccountInstanceId(accountId)),
+    );
   };
 
   return (
