@@ -1,0 +1,26 @@
+name: CI source inspection
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci-inspect.yml
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    if: github.head_ref == 'codex/ci-cross-platform'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-source
+          path: ${{ runner.temp }}/source.tar.gz
+          retention-days: 1
