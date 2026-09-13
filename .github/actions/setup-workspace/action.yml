@@ -6,6 +6,13 @@ inputs:
     description: Install the Electron runtime binary.
     default: "false"
 
+  profile:
+    description: Dependency closure to install (full or product).
+    default: "full"
+  turbo:
+    description: Persist cacheable build artifacts for this lane.
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -15,26 +22,16 @@ runs:
         bun-version-file: package.json
 
     - name: Setup Node
+      id: node
       uses: actions/setup-node@v6
       with:
         node-version-file: package.json
+        package-manager-cache: false
 
-    - name: Cache Bun install
-      uses: actions/cache@v5
-      with:
-        path: ~/.bun/install/cache
-        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
-    # Phase 1c/3: node_modules survives across jobs keyed on the lockfile.
-    # bun install --frozen-lockfile still runs below (correctness), but a warm
-    # cache turns resolve + download into link. The key is scoped by the
-    # electron input: Install Electron test runtime extracts the binary into
-    # apps/desktop/node_modules/electron/dist INSIDE node_modules, so the
-    # electron lane's tree differs from other lanes and must not share a blob.
-    # Windows cache restores can leave Bun's isolated dependency links missing.
-    # Recreate that tree from the package cache instead of restoring node_modules.
+    # Scope native dependencies by architecture, toolchain, patches and profile.
+    # Windows archive extraction cost more than a cold frozen installation.
     - name: Cache node_modules
+      id: modules
       if: ${{ runner.os != 'Windows' }}
       uses: actions/cache@v5
       with:
@@ -43,40 +40,45 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-
+        key: modules-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ inputs.profile }}-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json', 'apps/*/package.json', 'packages/*/package.json', 'scripts/package.json', 'patches/**') }}
 
-    # Phase 3h: persist Turbo's local cache store so cacheable build outputs
-    # survive across jobs. Turbo verifies its own fingerprints on hit, so a
-    # broad key is safe: stale entries simply miss inside turbo. test and
-    # typecheck stay cache:false in turbo.json (inputs not proven airtight).
-    # GitHub caches are immutable: each job/shard saves new results per commit
-    # and restores its previous snapshot before falling back to other lanes.
-    - name: Cache Turbo outputs
+    # Do not restore a second dependency archive after an exact modules hit.
+    - name: Cache Bun install
+      if: ${{ runner.os != 'Windows' && steps.modules.outputs.cache-hit != 'true' }}
       uses: actions/cache@v5
       with:
-        path: |
-          .turbo
-          node_modules/.cache/turbo
-        key: ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
+        path: ~/.bun/install/cache
+        key: bun-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'package.json') }}
+
+    # Persist only for consumers of build artifacts. Tests/typechecks are uncached.
+    # No cross-OS/architecture/toolchain/patch fallback for native build outputs.
+    - name: Cache Turbo outputs
+      if: ${{ inputs.turbo == 'true' }}
+      uses: actions/cache@v5
+      with:
+        path: .turbo
+        key: turbo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock', 'package.json', 'turbo.json', 'patches/**') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
-          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-
-          ${{ runner.os }}-turbo-
+          turbo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock', 'package.json', 'turbo.json', 'patches/**') }}-
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}
       uses: actions/cache@v5
       with:
         path: ~/.cache/electron
-        key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ hashFiles('bun.lock') }}
 
     - name: Install dependencies
       shell: bash
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      run: bun install --frozen-lockfile
+        WORKSPACE_PROFILE: ${{ inputs.profile }}
+      run: |
+        case "$WORKSPACE_PROFILE" in
+          full) bun install --frozen-lockfile ;;
+          product) node .github/scripts/install-workspace.mjs product ;;
+          *) echo "Unsupported CI install profile: $WORKSPACE_PROFILE" >&2; exit 1 ;;
+        esac
 
     - name: Install Electron test runtime
       if: ${{ inputs.electron == 'true' }}

@@ -1,8 +1,5 @@
-# Lane rule: static-fast is fast checks with no special runtime, static-typecheck is tsc,
-# unit runs Vitest through Turbo, browser owns Playwright (stable only, sharded),
-# build owns Electron and desktop output. Geometry quarantine lives in ci-nightly.yml.
-# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static-fast.
-# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
+# Independent feedback lanes; quality aggregates only. See .github/CI.md.
+# Stable browser coverage stays blocking; geometry quarantine stays nightly.
 name: CI
 
 on:
@@ -11,61 +8,51 @@ on:
     branches:
       - main
 
-# Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
+permissions:
+  contents: read
+
+# Cancel stale PR runs, never an in-flight main validation.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# Single heap ceiling for every Node lane (typecheck OOM fix): set once here
-# instead of per job so a future bump cannot miss a lane.
 env:
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
-  # Docs-only filter: PRs touching only prose, doc images, or marketing content
-  # run static-fast + gate only. outputs.code is 'true' when any code file changed.
   changes:
-    name: Detect code changes
+    name: Plan affected validation
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      code: ${{ steps.filter.outputs.code }}
-    # dorny/paths-filter lists PR files via the API: it needs pull-requests
-    # scope on top of the checkout's contents scope (repo default is tighter).
-    permissions:
-      contents: read
-      pull-requests: read
+      typecheck: ${{ steps.plan.outputs.typecheck }}
+      unit: ${{ steps.plan.outputs.unit }}
+      browser: ${{ steps.plan.outputs.browser }}
+      build: ${{ steps.plan.outputs.build }}
+      windows: ${{ steps.plan.outputs.windows }}
+      migrations: ${{ steps.plan.outputs.migrations }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - name: Checkout
+      - name: Checkout tested merge and its parents
         uses: actions/checkout@v6
-
-      - name: Filter docs-only changes
-        id: filter
-        uses: dorny/paths-filter@v3
         with:
-          # Default quantifier is 'some': any matching pattern includes the file,
-          # so '!**/*.md' style exclusions never exclude anything and every PR
-          # classifies as code. 'every' requires all patterns to match, which is
-          # what makes the include-all + exclude-docs combination work.
-          predicate-quantifier: "every"
-          filters: |
-            code:
-              # Directory exclusions stay scoped to code-free trees: marketing
-              # src ships .tsx under docs/ dirs and web ships a .ts module
-              # under assets/, so '**/docs/**' / '**/assets/**' would let real
-              # code skip the gate. Every image under .github/ is code-free
-              # (PR evidence screenshots, docs assets). Runtime images stay on
-              # the code path: browser tests validate app icon transparency
-              # and layout.
-              - '**'
-              - '!**/*.md'
-              - '!docs/**'
-              - '!**/*.mdx'
-              - '!apps/marketing/content/**'
-              - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
+          fetch-depth: 2
+          persist-credentials: false
 
-  # Phase 1b: the old static lane split. Fast checks (no special runtime) stay
-  # unblocked so docs-only PRs get a signal in ~1min.
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Test CI planning and gate contracts
+        run: node --test .github/scripts/*.test.mjs
+
+      - name: Plan affected lanes
+        id: plan
+        run: node .github/scripts/ci-plan.mjs
+
+  # Never wait for planning to report formatting/lint failures. Release smoke
+  # costs less than a second of work and shares this already-installed workspace.
   static-fast:
     name: Static Checks (fast)
     runs-on: ubuntu-24.04
@@ -84,17 +71,27 @@ jobs:
         run: bun run windows-runtime:check
 
       - name: Format
+        id: format
         run: bun run fmt:check
+
+      - name: Show required formatting changes
+        if: failure() && steps.format.outcome == 'failure'
+        run: |
+          ./node_modules/.bin/oxfmt
+          git diff --exit-code
 
       - name: Lint
         run: bun run lint
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
 
   static-typecheck:
     name: Static Checks (typecheck)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.typecheck == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -105,40 +102,26 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # Group short suites to share setup and leave runner capacity for other PRs.
-  # Server files are split across two runners, retaining their serial worker
-  # flags within each shard. Turbo still runs each package's build prerequisites.
+  # Retain both measured server shards and the shared short-suite runner.
+  # Turbo still executes build prerequisites; test results remain uncached.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.unit == 'true'
     strategy:
-      # Deliberate non-default: one shard's failure must not cancel the other
-      # shards, so every lane reports complete signal for the gate.
       fail-fast: false
-      matrix:
-        include:
-          - pkg: core
-            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop"
-            test-args: ""
-          - pkg: web
-            filters: "--filter=@synara/web"
-            test-args: ""
-          # Server lane tests the CLI package (package name @synara/cli).
-          - pkg: server 1/2
-            filters: "--filter=@synara/cli"
-            test-args: "--shard=1/2"
-          - pkg: server 2/2
-            filters: "--filter=@synara/cli"
-            test-args: "--shard=2/2"
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          turbo: "true"
+          profile: ${{ matrix.pkg == 'core' && 'full' || 'product' }}
 
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli'
@@ -147,18 +130,15 @@ jobs:
       - name: Test (${{ matrix.pkg }})
         run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
-  # File sharding cannot split the large ChatView suite. Run its follow matrix
-  # and remaining cases separately, plus two shards of all other browser files.
-  # Every runner retains the stable suite's serial execution and quarantine.
+  # Setup is small relative to testing; reducing these four runners would
+  # serialize substantial stable coverage. Do not change their partition here.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.browser == 'true'
     strategy:
-      # Deliberate non-default: one shard's failure must not cancel the other
-      # shards, so every lane reports complete signal for the gate.
       fail-fast: false
       matrix:
         include:
@@ -176,6 +156,8 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          profile: product
 
       - name: Cache Playwright browsers
         uses: actions/cache@v5
@@ -183,9 +165,8 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
 
-      # Run the workspace-local playwright binary directly: bunx stalled after
-      # the chromium download on hosted runners. The step timeout stops any
-      # remaining apt/download stalls from eating the whole job budget.
+      # Use the workspace binary: bunx previously stalled after downloading.
+      # The OS dependencies must still be installed even on a browser cache hit.
       - name: Install browser test runtime
         timeout-minutes: 15
         env:
@@ -203,7 +184,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.build == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -212,6 +193,8 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           electron: "true"
+          turbo: "true"
+          profile: product
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -221,92 +204,26 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
-  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
-  # Phase 2g: needs every required lane. Matrix jobs report one result covering
-  # all shards, so ANY failed shard fails the gate. Docs-only runs pass with
-  # heavy lanes skipped (static-fast must still succeed).
-  quality:
-    name: Format, Lint, Typecheck, Test, Browser Test, Build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    needs:
-      - changes
-      - static-fast
-      - static-typecheck
-      - unit
-      - browser
-      - build
-      - windows_process
-      - migration_lineage
-      - release_smoke
-    if: always()
-    steps:
-      - name: Aggregate lane results
-        env:
-          CHANGES: ${{ needs.changes.result }}
-          CODE: ${{ needs.changes.outputs.code }}
-          STATIC_FAST: ${{ needs.static-fast.result }}
-          TYPECHECK: ${{ needs.static-typecheck.result }}
-          UNIT: ${{ needs.unit.result }}
-          BROWSER: ${{ needs.browser.result }}
-          BUILD: ${{ needs.build.result }}
-          WINDOWS_PROCESS: ${{ needs.windows_process.result }}
-          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
-          RELEASE_SMOKE: ${{ needs.release_smoke.result }}
-        run: |
-          fail=0
-          # The docs-only filter itself must have run: without it a skip proves nothing.
-          if [ "$CHANGES" != "success" ]; then
-            echo "changes=$CHANGES (filter must succeed)"
-            fail=1
-          fi
-          if [ "$CODE" != "true" ] && [ "$CODE" != "false" ]; then
-            echo "code=$CODE (filter must return true or false)"
-            fail=1
-          fi
-          # Fast static always runs, docs-only or not.
-          if [ "$STATIC_FAST" != "success" ]; then
-            echo "static-fast=$STATIC_FAST"
-            fail=1
-          fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE" "release-smoke=$RELEASE_SMOKE"; do
-            name="${lane%%=*}"
-            result="${lane#*=}"
-            if [ "$CODE" != "true" ]; then
-              # Docs-only run: heavy lanes must be skipped, never failed.
-              if [ "$result" != "skipped" ]; then
-                echo "$name=$result (docs-only run: expected skipped)"
-                fail=1
-              fi
-            elif [ "$result" != "success" ]; then
-              echo "$name=$result"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "Open the red lane above, not this gate."
-            exit 1
-          fi
-
   windows_process:
     name: Windows Process Regression
     runs-on: windows-2022
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.windows == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          profile: product
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
 
-      - name: Verify Windows runtime boundary
-        run: bun run windows-runtime:check
-
+      # The source-only boundary scanner runs once in static-fast. These are
+      # native Windows checks, including real process trees and file recovery.
       - name: Test Windows process runtime
         run: >-
           bun run --cwd packages/shared test
@@ -336,10 +253,6 @@ jobs:
       - name: Test Windows desktop backend shutdown
         run: bun run --cwd apps/desktop test src/backendShutdown.windows.integration.test.ts
 
-      # The 0.6.0 wedge hit Windows hardest, and the repair path is built out of
-      # exactly what Windows treats differently: unlinking a marker, reclaiming
-      # stranded partials, and renaming a database file that may still be held
-      # open. Linux-only coverage cannot speak for any of that.
       - name: Test migration recovery marker
         run: bun run --cwd packages/shared test src/migrationRecovery.test.ts
 
@@ -352,21 +265,19 @@ jobs:
       - name: Test migration replay
         run: bun run --cwd apps/server test src/persistence/Migrations/MigrationReplay.test.ts
 
-  # Released (id, name) migration pairs are recorded in every user's
-  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
-  # installs. This job needs the release tags, hence the unshallow checkout; the
-  # guard itself is dependency-free and skips with a warning if tags are missing.
+  # Node only: never install the workspace just to read released migration IDs.
   migration_lineage:
     name: Migration Lineage
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.migrations == 'true'
     steps:
-      - name: Checkout
+      - name: Checkout release history
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -374,33 +285,58 @@ jobs:
           node-version-file: package.json
 
       - name: Verify released migration lineage
-        run: node scripts/check-migration-lineage.ts
+        run: |
+          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+          node scripts/check-migration-lineage.ts
 
-  release_smoke:
-    name: Release Smoke
+  # Branch protection contract. No checkout, install or validation execution.
+  # Missing/invalid plans, cancellations and unexpected skips fail closed.
+  quality:
+    name: Format, Lint, Typecheck, Test, Browser Test, Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 5
+    permissions: {}
+    needs:
+      - changes
+      - static-fast
+      - static-typecheck
+      - unit
+      - browser
+      - build
+      - windows_process
+      - migration_lineage
+    if: always()
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Verify Synara identity
-        run: bun run brand:check
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
+      - name: Aggregate lane results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS_JSON);
+          let failed = false;
+          function requireResult(name, expected) {
+            const actual = needs[name]?.result;
+            if (actual !== expected) {
+              console.error(`${name}: expected ${expected}, got ${actual ?? 'missing'}`);
+              failed = true;
+            }
+          }
+          requireResult('changes', 'success');
+          requireResult('static-fast', 'success');
+          const lanes = {
+            'static-typecheck': 'typecheck', unit: 'unit', browser: 'browser',
+            build: 'build', windows_process: 'windows', migration_lineage: 'migrations',
+          };
+          for (const [lane, flag] of Object.entries(lanes)) {
+            const required = needs.changes?.outputs?.[flag];
+            if (required !== 'true' && required !== 'false') {
+              console.error(`Invalid or missing plan flag: ${flag}=${required}`);
+              failed = true;
+            }
+            requireResult(lane, required === 'true' ? 'success' : 'skipped');
+          }
+          if (failed) {
+            console.error('Open the failing lane above. Unplanned skips are not successful validation.');
+            process.exit(1);
+          }
+          NODE
