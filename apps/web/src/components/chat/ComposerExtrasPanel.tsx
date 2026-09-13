@@ -1,10 +1,16 @@
 // FILE: ComposerExtrasPanel.tsx
-// Purpose: Composer `+` panel — attachments, window capture, and mode/speed switches rendered with
-//   the shared command-menu panel chrome above the composer instead of a nested dropdown.
+// Purpose: Composer `+` panel — one flat "Add" list (files, frontmost app window, goal, and the
+//   plan / debug / fast toggles) rendered with the shared command-menu panel chrome above the
+//   composer. The window row captures the frontmost app directly; its trailing arrow (or
+//   ArrowRight) opens the full window list as a second view.
 // Layer: Chat composer presentation
 // Depends on: ComposerMenuPanel chrome, the AppSnap window picker hook, caller-owned composer state.
 
-import type { ProviderInteractionMode, ThreadId } from "@synara/contracts";
+import type {
+  DesktopAppSnapWindowEntry,
+  ProviderInteractionMode,
+  ThreadId,
+} from "@synara/contracts";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
 import {
@@ -12,12 +18,13 @@ import {
   BugIcon,
   CheckIcon,
   ChevronRightIcon,
+  FastModeIcon,
+  GoalIcon,
   ListTodoIcon,
-  MessageCircleIcon,
   PaperclipIcon,
   WindowIcon,
-  ZapIcon,
 } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import {
   COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME,
   ComposerMenuPanel,
@@ -33,42 +40,25 @@ const GLYPH = COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME;
 
 const ROW_FILES = "extras:files";
 const ROW_WINDOW = "extras:window";
-const ROW_BACK = "extras:back";
+const ROW_GOAL = "extras:goal";
+const ROW_PLAN = "extras:mode:plan";
+const ROW_DEBUG = "extras:mode:debug";
 const ROW_FAST = "extras:fast";
+const ROW_BACK = "extras:back";
 const WINDOW_ROW_PREFIX = "extras:window:";
 
-const INTERACTION_MODE_ROWS: ReadonlyArray<{
-  mode: ProviderInteractionMode;
-  id: string;
-  title: string;
-  secondary: string;
-  icon: ReactNode;
-}> = [
-  {
-    mode: "default",
-    id: "extras:mode:default",
-    title: "Default",
-    secondary: "Chat and edit as usual",
-    icon: <MessageCircleIcon className={GLYPH} />,
-  },
-  {
-    mode: "plan",
-    id: "extras:mode:plan",
-    title: "Plan",
-    secondary: "Plan the work before changing files",
-    icon: <ListTodoIcon className={GLYPH} />,
-  },
-  {
-    mode: "debug",
-    id: "extras:mode:debug",
-    title: "Debug",
-    secondary: "Investigate before proposing a fix",
-    icon: <BugIcon className={GLYPH} />,
-  },
-];
+const CHECK = <CheckIcon className="size-3.5 text-foreground/70" />;
 
-function selectedMarker(selected: boolean): ReactNode {
-  return selected ? <CheckIcon className="size-3.5 text-foreground/70" /> : null;
+function toggleSecondary(label: string, enabled: boolean): string {
+  return `Turn ${label} ${enabled ? "off" : "on"}`;
+}
+
+function windowGlyph(entry: DesktopAppSnapWindowEntry): ReactNode {
+  return entry.appIconDataUrl ? (
+    <img src={entry.appIconDataUrl} alt="" className="size-4 shrink-0 rounded-[4px]" />
+  ) : (
+    <WindowIcon className={GLYPH} />
+  );
 }
 
 export function ComposerExtrasPanel(props: {
@@ -79,6 +69,8 @@ export function ComposerExtrasPanel(props: {
   onAddAttachments: (files: File[]) => void;
   onToggleFastMode: () => void;
   onInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  /** Turns the draft into a `/goal` command so the goal chip flow is the same as typing it. */
+  onInsertGoal: () => void;
   onClose: () => void;
   panelId: string;
 }) {
@@ -88,10 +80,22 @@ export function ComposerExtrasPanel(props: {
   const [view, setView] = useState<"root" | "windows">("root");
   const [activeRowId, setActiveRowId] = useState<string | null>(ROW_FILES);
 
+  // Listed while the panel is open (not only in the window view) so the root row can
+  // name the frontmost app and capture it in one click.
   const appSnap = useAppSnapWindows({
-    open: view === "windows",
+    open: true,
     ...(props.threadId === undefined ? {} : { threadId: props.threadId }),
   });
+  const frontmostWindow = appSnap.windows?.[0] ?? null;
+
+  const openWindows = () => {
+    setView("windows");
+    setActiveRowId(ROW_BACK);
+  };
+  const goBack = () => {
+    setView("root");
+    setActiveRowId(ROW_WINDOW);
+  };
 
   const groups: ComposerMenuPanelGroup[] =
     view === "windows"
@@ -100,11 +104,7 @@ export function ComposerExtrasPanel(props: {
             id: "windows",
             label: "Attach window",
             rows: [
-              {
-                id: ROW_BACK,
-                icon: <ArrowLeftIcon className={GLYPH} />,
-                title: "Back",
-              },
+              { id: ROW_BACK, icon: <ArrowLeftIcon className={GLYPH} />, title: "Back" },
               ...appSnapWindowRows(appSnap),
             ],
           },
@@ -118,49 +118,74 @@ export function ComposerExtrasPanel(props: {
                 id: ROW_FILES,
                 icon: <PaperclipIcon className={GLYPH} />,
                 title: "Files and folders",
-                secondary: "Attach from this computer",
               },
               ...(appSnap.available
                 ? [
+                    frontmostWindow
+                      ? {
+                          id: ROW_WINDOW,
+                          icon: windowGlyph(frontmostWindow),
+                          title: `Attach ${frontmostWindow.appName?.trim() || "window"}`,
+                          disabled: appSnap.busy,
+                          trailing: (
+                            <button
+                              type="button"
+                              aria-label="Choose another window"
+                              className={cn(
+                                "-mr-1 flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors",
+                                "hover:bg-[var(--color-background-button-secondary)] hover:text-foreground/80",
+                              )}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openWindows();
+                              }}
+                            >
+                              <ChevronRightIcon className="size-3.5" />
+                            </button>
+                          ),
+                        }
+                      : {
+                          id: ROW_WINDOW,
+                          icon: <WindowIcon className={GLYPH} />,
+                          title: "Attach window",
+                          secondary: "Capture an open app window",
+                          trailing: <ChevronRightIcon className="size-3.5" />,
+                        },
+                  ]
+                : []),
+              {
+                id: ROW_GOAL,
+                icon: <GoalIcon className={GLYPH} />,
+                title: "Goal",
+                secondary: "Set a goal to keep pursuing",
+              },
+              {
+                id: ROW_PLAN,
+                icon: <ListTodoIcon className={GLYPH} />,
+                title: "Plan mode",
+                secondary: toggleSecondary("plan mode", props.interactionMode === "plan"),
+                trailing: props.interactionMode === "plan" ? CHECK : null,
+              },
+              {
+                id: ROW_DEBUG,
+                icon: <BugIcon className={GLYPH} />,
+                title: "Debug mode",
+                secondary: toggleSecondary("debug mode", props.interactionMode === "debug"),
+                trailing: props.interactionMode === "debug" ? CHECK : null,
+              },
+              ...(props.supportsFastMode
+                ? [
                     {
-                      id: ROW_WINDOW,
-                      icon: <WindowIcon className={GLYPH} />,
-                      title: "Attach window",
-                      secondary: "Capture an open app window",
-                      trailing: <ChevronRightIcon className="size-3.5" />,
+                      id: ROW_FAST,
+                      icon: <FastModeIcon className={GLYPH} />,
+                      title: "Fast mode",
+                      secondary: toggleSecondary("fast mode", props.fastModeEnabled),
+                      trailing: props.fastModeEnabled ? CHECK : null,
                     },
                   ]
                 : []),
             ],
           },
-          {
-            id: "mode",
-            label: "Mode",
-            rows: INTERACTION_MODE_ROWS.map((entry) => ({
-              id: entry.id,
-              icon: entry.icon,
-              title: entry.title,
-              secondary: entry.secondary,
-              trailing: selectedMarker(props.interactionMode === entry.mode),
-            })),
-          },
-          ...(props.supportsFastMode
-            ? [
-                {
-                  id: "speed",
-                  label: "Speed",
-                  rows: [
-                    {
-                      id: ROW_FAST,
-                      icon: <ZapIcon className={GLYPH} />,
-                      title: "Fast mode",
-                      secondary: "Trade depth for a quicker answer",
-                      trailing: selectedMarker(props.fastModeEnabled),
-                    },
-                  ],
-                },
-              ]
-            : []),
         ];
 
   const selectableRowIds = groups.flatMap((group) =>
@@ -172,23 +197,33 @@ export function ComposerExtrasPanel(props: {
       ? activeRowId
       : (selectableRowIds[0] ?? null);
 
-  const goBack = () => {
-    setView("root");
-    setActiveRowId(ROW_WINDOW);
-  };
-
   const selectRow = (rowId: string) => {
     if (rowId === ROW_FILES) {
       fileInputRef.current?.click();
       return;
     }
     if (rowId === ROW_WINDOW) {
-      setView("windows");
-      setActiveRowId(ROW_BACK);
+      if (frontmostWindow) {
+        appSnap.captureWindow(frontmostWindow.windowId);
+        props.onClose();
+      } else {
+        openWindows();
+      }
       return;
     }
     if (rowId === ROW_BACK) {
       goBack();
+      return;
+    }
+    if (rowId === ROW_GOAL) {
+      props.onInsertGoal();
+      props.onClose();
+      return;
+    }
+    if (rowId === ROW_PLAN || rowId === ROW_DEBUG) {
+      const mode: ProviderInteractionMode = rowId === ROW_PLAN ? "plan" : "debug";
+      props.onInteractionModeChange(props.interactionMode === mode ? "default" : mode);
+      props.onClose();
       return;
     }
     if (rowId === ROW_FAST) {
@@ -202,12 +237,6 @@ export function ComposerExtrasPanel(props: {
         appSnap.captureWindow(windowId);
         props.onClose();
       }
-      return;
-    }
-    const modeEntry = INTERACTION_MODE_ROWS.find((entry) => entry.id === rowId);
-    if (modeEntry) {
-      props.onInteractionModeChange(modeEntry.mode);
-      props.onClose();
     }
   };
 
@@ -226,6 +255,19 @@ export function ComposerExtrasPanel(props: {
         } else {
           props.onClose();
         }
+        return;
+      }
+
+      if (event.key === "ArrowRight" && view === "root" && highlightedRowId === ROW_WINDOW) {
+        event.preventDefault();
+        event.stopPropagation();
+        openWindows();
+        return;
+      }
+      if (event.key === "ArrowLeft" && view === "windows") {
+        event.preventDefault();
+        event.stopPropagation();
+        goBack();
         return;
       }
 
@@ -323,19 +365,11 @@ function appSnapWindowRows(appSnap: ReturnType<typeof useAppSnapWindows>): Compo
     ];
   }
 
-  return appSnap.windows.map((entry) => {
-    const appName = entry.appName?.trim() || "Captured app";
-    const windowTitle = entry.windowTitle?.trim() || null;
-    return {
-      id: `${WINDOW_ROW_PREFIX}${entry.windowId}`,
-      icon: entry.appIconDataUrl ? (
-        <img src={entry.appIconDataUrl} alt="" className="size-4 shrink-0 rounded-[4px]" />
-      ) : (
-        <WindowIcon className={GLYPH} />
-      ),
-      title: appName,
-      secondary: windowTitle,
-      disabled: appSnap.busy,
-    };
-  });
+  return appSnap.windows.map((entry) => ({
+    id: `${WINDOW_ROW_PREFIX}${entry.windowId}`,
+    icon: windowGlyph(entry),
+    title: entry.appName?.trim() || "Captured app",
+    secondary: entry.windowTitle?.trim() || null,
+    disabled: appSnap.busy,
+  }));
 }

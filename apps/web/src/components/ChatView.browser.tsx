@@ -9195,7 +9195,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Plan the work before changing files").click();
+      await page.getByText("Turn plan mode on").click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(

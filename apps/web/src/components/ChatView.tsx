@@ -4270,6 +4270,18 @@ export default function ChatView({
     editorActions: slashEditorActions,
   });
 
+  // `+` panel Goal row: prefixes the draft with `/goal ` so it goes through the same
+  // slash-command chip and persistence path as typing the command.
+  const insertGoalSlashCommandInComposer = useCallback(() => {
+    const currentPrompt = promptRef.current;
+    if (/^\s*\/goal\b/i.test(currentPrompt)) {
+      scheduleComposerFocus();
+      return;
+    }
+    const draft = currentPrompt.trim();
+    setComposerPromptValue(draft.length > 0 ? `/goal ${draft}` : "/goal ");
+  }, [promptRef, scheduleComposerFocus, setComposerPromptValue]);
+
   // Prefills "/goal <current text>" so editing reuses the same slash-command path
   // that created the goal, mirroring how queued turns restore into the composer.
   const editThreadGoalInComposer = useCallback(() => {
@@ -5114,6 +5126,7 @@ export default function ChatView({
                           onAddAttachments={addComposerAttachments}
                           onToggleFastMode={toggleFastMode}
                           onInteractionModeChange={handleInteractionModeChange}
+                          onInsertGoal={insertGoalSlashCommandInComposer}
                           onClose={() => {
                             setIsComposerExtrasPanelOpen(false);
                             scheduleComposerFocus();
