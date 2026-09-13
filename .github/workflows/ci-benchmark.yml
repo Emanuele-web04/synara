@@ -1,9 +1,6 @@
 name: CI cross-platform benchmark
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/ci-benchmark.yml
   workflow_dispatch:
 
 permissions:
@@ -15,7 +12,6 @@ concurrency:
 
 jobs:
   benchmark:
-    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/ci-cross-platform'
     name: Benchmark (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
@@ -74,10 +70,11 @@ jobs:
               console.log(JSON.stringify(sample));
               writeFileSync(join(evidence, 'installs.json'), JSON.stringify(result, null, 2));
               if (run.status !== 0) throw new Error(`${name}: ${run.error ?? log.slice(-8000)}`);
-              // Preserve one candidate for the unchanged validation workload.
               if (index === 2) candidates[profile] = cwd;
               else {
-                const cleanup = spawnSync('git', ['worktree', 'remove', '--force', cwd], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+                // Node handles Windows long paths, unlike git worktree remove.
+                rmSync(cwd, { recursive: true, force: true, maxRetries: 3 });
+                const cleanup = spawnSync('git', ['worktree', 'prune'], { cwd: root, encoding: 'utf8' });
                 if (cleanup.status !== 0) throw new Error(cleanup.stderr);
               }
               rmSync(cache, { recursive: true, force: true, maxRetries: 3 });
