@@ -5,6 +5,10 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
 } from "@synara/contracts";
+import {
+  deriveProviderInstances,
+  providerStartOptionsFromInstance,
+} from "@synara/shared/providerInstances";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
