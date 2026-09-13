@@ -77,6 +77,12 @@ export const DevinServerProviderSettings = Schema.Struct({
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 
+export const CopilotServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "copilot")),
+});
+export type CopilotServerProviderSettings = typeof CopilotServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -109,6 +115,7 @@ export const ServerSettings = Schema.Struct({
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    copilot: CopilotServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   // When the first-run welcome tour was completed or skipped. Server-backed so a
@@ -185,6 +192,7 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      copilot: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
     }),
   ),
   skills: Schema.optionalKey(
