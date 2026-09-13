@@ -49,6 +49,14 @@ Before enabling the draft, verify:
 
 Do not accept a generated schedule merely because the natural-language interpretation looks plausible.
 
+## Agent-authored automations
+
+When an agent creates an automation through the Synara tools, it follows the same review rules:
+
+- A standalone or dedicated automation may be created against an exact provider/model target discovered from `synara_capabilities`, including its supported options. Synara validates the target against current provider availability and model discovery before saving it.
+- A heartbeat automation continues its target task's existing provider session, so its provider and model cannot be switched.
+- When the user explicitly asks for an automation, the agent may create it disabled (`enabled: false`) so it can be reviewed before its first run. A suggested automation remains a separate pending proposal, not a disabled definition.
+
 ## Choose the environment
 
 | Environment               | Use it when                                                                                 |

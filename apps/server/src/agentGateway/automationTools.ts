@@ -13,6 +13,7 @@ import {
   type AutomationNotificationPolicy,
   type AutomationSchedule as AutomationScheduleType,
   type AutomationWorktreeMode,
+  type ModelSelection,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
 import {
@@ -30,10 +31,13 @@ import {
   AUTOMATION_PROMPT_AUTHORING_GUIDANCE,
 } from "./automationAuthoringGuidance.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
+import { AgentGatewayTargetError } from "./targetResolver.ts";
 import {
+  MODEL_SELECTION_INPUT_SCHEMA,
   ToolInputError,
   errorText,
   readBooleanArg,
+  readModelSelectionArg,
   readNumberArg,
   readRecordArg,
   readStringArg,
@@ -41,8 +45,16 @@ import {
 import {
   READ_ONLY_TOOL_ANNOTATIONS,
   WRITE_TOOL_ANNOTATIONS,
+  gatewayToolErrorResult,
   type ToolEntry,
 } from "./toolRuntime.ts";
+
+// Target resolution failures keep their structured { code, details } envelope;
+// every other tool failure keeps the established plain-text result.
+const automationToolFailure = (error: unknown) =>
+  error instanceof AgentGatewayTargetError
+    ? gatewayToolErrorResult(error)
+    : mcpToolResultError(errorText(error));
 
 const HEARTBEAT_DEFAULT_INTERVAL_MINUTES = 5;
 const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 50;
@@ -133,6 +145,11 @@ interface AutomationToolDependencies {
     caller: OrchestrationThreadShell,
     target: OrchestrationThreadShell,
   ) => Effect.Effect<void, ToolInputError>;
+  /** Validate an exact target against live discovery and the automation project's workspace. */
+  readonly resolveAutomationTarget: (input: {
+    readonly target: ModelSelection;
+    readonly projectId: ProjectId;
+  }) => Effect.Effect<ModelSelection, unknown>;
   readonly surfaceAutomationProposal: (input: {
     readonly callerThreadId: ThreadId;
     readonly definition: AutomationDefinition;
@@ -247,6 +264,7 @@ export function makeAgentGatewayAutomationTools(
     automationService,
     requireThreadShell,
     assertCallerMayDriveThread,
+    resolveAutomationTarget,
     surfaceAutomationProposal,
   } = dependencies;
 
@@ -294,7 +312,7 @@ export function makeAgentGatewayAutomationTools(
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_automation",
-      description: `Create a heartbeat, standalone, or dedicated Synara automation. ${AUTOMATION_AUTHORING_GUIDANCE} Existing calls remain compatible: omitting mode/schedule creates a heartbeat on your thread using everyMinutes (default 5). Prefer suggested:true unless the user explicitly requested creation.`,
+      description: `Create a heartbeat, standalone, or dedicated Synara automation. ${AUTOMATION_AUTHORING_GUIDANCE} Existing calls remain compatible: omitting mode/schedule creates a heartbeat on your thread using everyMinutes (default 5). Prefer suggested:true unless the user explicitly requested creation. Standalone and dedicated automations may pass an exact target discovered from synara_capabilities; heartbeat automations continue their target thread's session and reject target.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -305,6 +323,11 @@ export function makeAgentGatewayAutomationTools(
             enum: ["heartbeat", "standalone", "dedicated"],
             description:
               'Where runs execute. "heartbeat" appends turns to an existing thread and waits for it to be idle — use it to drive that thread forward. "standalone" opens a fresh thread per run. "dedicated" opens one thread the automation owns and reuses it for every run, so the runs build on each other without ever writing into someone else\'s thread.',
+          },
+          target: {
+            ...MODEL_SELECTION_INPUT_SCHEMA,
+            description:
+              "Exact provider/model target for a standalone or dedicated automation, using the same schema and validation as synara_create_threads. Omitted means the caller's selection; rejected for heartbeat.",
           },
           schedule: SCHEDULE_INPUT_SCHEMA,
           everyMinutes: {
@@ -353,6 +376,11 @@ export function makeAgentGatewayAutomationTools(
             type: "boolean",
             description:
               "Persist disabled as a pending proposal and surface Accept/Dismiss actions.",
+          },
+          enabled: {
+            type: "boolean",
+            description:
+              "Create the automation enabled (the default) or disabled. enabled:false stages a normal disabled automation without proposal state; suggested:true is the separate pending-proposal flow and cannot be combined with enabled:true.",
           },
         },
         required: ["name", "prompt"],
@@ -414,6 +442,14 @@ export function makeAgentGatewayAutomationTools(
         const completionPolicy = decodeCompletionPolicy(args) ?? { type: "none" as const };
         const notificationPolicy = readNotificationPolicy(args) ?? "all";
         const suggested = readBooleanArg(args, "suggested") ?? false;
+        const requestedEnabled = readBooleanArg(args, "enabled");
+        if (suggested && requestedEnabled === true) {
+          throw new ToolInputError(
+            'Arguments "suggested" and "enabled" cannot both be true; a suggested automation is created disabled pending review.',
+          );
+        }
+        const enabled = requestedEnabled ?? !suggested;
+        const explicitTarget = readModelSelectionArg(args, "target");
         // A cooldown longer than the schedule spacing would silently degrade the
         // requested cadence to cooldown cadence, so the default is capped at the spacing.
         const defaultCooldownSeconds =
@@ -441,6 +477,11 @@ export function makeAgentGatewayAutomationTools(
           if (args.projectId !== undefined || args.worktreeMode !== undefined) {
             throw new ToolInputError(
               'Arguments "projectId" and "worktreeMode" cannot be combined with mode "heartbeat".',
+            );
+          }
+          if (explicitTarget !== undefined) {
+            throw new ToolInputError(
+              'Argument "target" cannot be combined with mode "heartbeat": a heartbeat continues its target thread and keeps that thread\'s provider and model.',
             );
           }
           const targetId = readStringArg(args, "targetThreadId") ?? context.callerThreadId;
@@ -477,6 +518,14 @@ export function makeAgentGatewayAutomationTools(
           executionThread = caller;
         }
 
+        // An explicit standalone/dedicated target is validated against live provider
+        // availability, discovery, and the automation project's workspace before create.
+        // Heartbeats already rejected an explicit target above.
+        const modelSelection =
+          explicitTarget === undefined
+            ? executionThread.modelSelection
+            : yield* resolveAutomationTarget({ target: explicitTarget, projectId });
+
         const acknowledgedRisks: Array<"full-access" | "local-checkout" | "fast-interval"> = [];
         if (executionThread.runtimeMode === "full-access") {
           acknowledgedRisks.push("full-access");
@@ -496,8 +545,8 @@ export function makeAgentGatewayAutomationTools(
             name,
             prompt,
             schedule,
-            enabled: !suggested,
-            modelSelection: executionThread.modelSelection,
+            enabled,
+            modelSelection,
             runtimeMode: executionThread.runtimeMode,
             interactionMode: executionThread.interactionMode === "plan" ? "plan" : "default",
             mode,
@@ -535,8 +584,10 @@ export function makeAgentGatewayAutomationTools(
           maxIterations: definition.maxIterations,
           stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
           proposalState: definition.proposalState ?? null,
+          enabled: definition.enabled,
+          modelSelection: definition.modelSelection,
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const listAutomations: ToolEntry = {
@@ -544,7 +595,7 @@ export function makeAgentGatewayAutomationTools(
     definition: {
       name: "synara_list_automations",
       description:
-        "List Synara automations (id, name, mode, schedule, target thread, enabled, next run).",
+        "List Synara automations (id, name, mode, schedule, exact model selection, target thread, enabled, next run).",
       inputSchema: {
         type: "object",
         properties: {
@@ -574,9 +625,10 @@ export function makeAgentGatewayAutomationTools(
             iterationCount: definition.iterationCount,
             maxIterations: definition.maxIterations,
             notificationPolicy: definition.notificationPolicy ?? "all",
+            modelSelection: definition.modelSelection,
           })),
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const viewAutomation: ToolEntry = {
@@ -628,7 +680,7 @@ export function makeAgentGatewayAutomationTools(
           memoryExcerpt: memory ? automationMemoryForEnvelope(memory.content) : "(empty)",
           memoryUpdatedAt: memory?.updatedAt ?? null,
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const updateAutomation: ToolEntry = {
@@ -636,13 +688,18 @@ export function makeAgentGatewayAutomationTools(
     requiresActiveTurn: true,
     definition: {
       name: "synara_update_automation",
-      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, stopAfterConsecutiveFailures, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected.`,
+      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, stopAfterConsecutiveFailures, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected. A standalone or dedicated automation may also pass an exact target from synara_capabilities; omitting target preserves the stored selection, and heartbeat targets cannot be switched.`,
       inputSchema: {
         type: "object",
         properties: {
           automationId: { type: "string" },
           name: { type: "string", description: AUTOMATION_NAME_AUTHORING_GUIDANCE },
           prompt: { type: "string", description: AUTOMATION_PROMPT_AUTHORING_GUIDANCE },
+          target: {
+            ...MODEL_SELECTION_INPUT_SCHEMA,
+            description:
+              "Exact replacement provider/model target for a standalone or dedicated automation, validated like synara_create_threads. Omitted preserves the stored model selection; rejected for heartbeat.",
+          },
           schedule: SCHEDULE_INPUT_SCHEMA,
           enabled: { type: "boolean" },
           maxIterations: { type: ["number", "null"], minimum: 1 },
@@ -718,6 +775,19 @@ export function makeAgentGatewayAutomationTools(
         if (notificationPolicy === undefined) {
           throw new ToolInputError('Missing required argument "notificationPolicy".');
         }
+        const explicitTarget = readModelSelectionArg(args, "target");
+        if (explicitTarget !== undefined && automationRequiresTargetThread(definition.mode)) {
+          throw new ToolInputError(
+            `Automation "${definition.id}" is a heartbeat that continues its target thread and cannot switch providers or models.`,
+          );
+        }
+        const modelSelection =
+          explicitTarget === undefined
+            ? undefined
+            : yield* resolveAutomationTarget({
+                target: explicitTarget,
+                projectId: definition.projectId,
+              });
         const updated = yield* automationService
           .update({
             id: AutomationId.makeUnsafe(automationId),
@@ -730,10 +800,11 @@ export function makeAgentGatewayAutomationTools(
             notificationPolicy,
             completionPolicy,
             acknowledgedRisks,
+            ...(modelSelection !== undefined ? { modelSelection } : {}),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson({ definition: updated });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const cancelAutomation: ToolEntry = {
@@ -775,7 +846,7 @@ export function makeAgentGatewayAutomationTools(
             .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         }
         return mcpToolResultJson({ automationId, stopped: true, mode: modeArg });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const updateMemory: ToolEntry = {
@@ -821,7 +892,7 @@ export function makeAgentGatewayAutomationTools(
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson({ memory });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   const reportResult: ToolEntry = {
@@ -867,7 +938,7 @@ export function makeAgentGatewayAutomationTools(
           runId: run.id,
           decision: run.result?.decision ?? decision,
         });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+      }).pipe(Effect.catch((error) => Effect.succeed(automationToolFailure(error)))),
   };
 
   return [
