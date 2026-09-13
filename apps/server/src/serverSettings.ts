@@ -671,6 +671,93 @@ const makeServerSettings = Effect.gen(function* () {
   // on every subsequent cleanup until removal succeeds.
   const pendingObsoleteSecretNames = new Set<string>();
 
+  type ProviderSecretSnapshots = Map<string, Uint8Array | null>;
+  type ProviderPasswordSnapshots = Map<ExternalProviderServer, string | null>;
+
+  const writeTrackedProviderSecret = (
+    snapshots: ProviderSecretSnapshots,
+    name: string,
+    value: Uint8Array,
+    detail: string,
+  ): Effect.Effect<void, ServerSettingsError> =>
+    Effect.gen(function* () {
+      if (!snapshots.has(name)) {
+        const previous = yield* secretStore.get(name).pipe(
+          Effect.mapError((cause) => secretStoreError(`failed to snapshot ${detail}`, cause)),
+        );
+        snapshots.set(name, previous === null ? null : Uint8Array.from(previous));
+      }
+      yield* secretStore
+        .set(name, value)
+        .pipe(Effect.mapError((cause) => secretStoreError(`failed to write ${detail}`, cause)));
+    });
+
+  const replaceTrackedProviderPassword = (
+    snapshots: ProviderPasswordSnapshots,
+    provider: ExternalProviderServer,
+    password: string | null,
+  ): Effect.Effect<void, ServerSettingsError> =>
+    Effect.gen(function* () {
+      if (!snapshots.has(provider)) {
+        const previous = yield* providerCredentials.getServerPassword(provider).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                detail: `failed to snapshot ${provider} server password`,
+                cause,
+              }),
+          ),
+        );
+        snapshots.set(provider, previous);
+      }
+      yield* providerCredentials.replaceServerPassword(provider, password).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              detail: `failed to update ${provider} server password`,
+              cause,
+            }),
+        ),
+      );
+    });
+
+  const rollbackCredentialWrites = (
+    providerSecrets: ProviderSecretSnapshots,
+    providerPasswords: ProviderPasswordSnapshots,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      for (const [name, previous] of [...providerSecrets].reverse()) {
+        yield* (previous === null ? secretStore.remove(name) : secretStore.set(name, previous)).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to roll back provider instance secret", {
+              path: settingsPath,
+              secret: name,
+              error,
+            }),
+          ),
+        );
+      }
+      for (const [provider, previous] of [...providerPasswords].reverse()) {
+        yield* providerCredentials.replaceServerPassword(provider, previous).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to roll back provider server password", {
+              path: settingsPath,
+              provider,
+              error,
+            }),
+          ),
+        );
+      }
+    });
+
+  const markLiveSecrets = (names: ReadonlySet<string>): void => {
+    for (const name of names) {
+      pendingObsoleteSecretNames.delete(name);
+    }
+  };
+
   // Secret writes must land before the settings file references them (a crash
   // after the file write must still materialize), while removals are returned
   // as obsolete names the caller cleans up best-effort only after the settings
@@ -680,9 +767,11 @@ const makeServerSettings = Effect.gen(function* () {
   const persistProviderEnvironmentSecrets = (
     current: ServerSettings,
     next: ServerSettings,
+    snapshots: ProviderSecretSnapshots,
   ): Effect.Effect<
     {
       readonly settings: ServerSettings;
+      readonly liveSecretNames: ReadonlySet<string>;
       readonly obsoleteSecretNames: ReadonlySet<string>;
     },
     ServerSettingsError
@@ -714,16 +803,12 @@ const makeServerSettings = Effect.gen(function* () {
             if (variable.valueRedacted !== true) {
               const value = variable.value ?? "";
               if (value.length > 0) {
-                yield* secretStore
-                  .set(secretName, providerEnvironmentTextEncoder.encode(value))
-                  .pipe(
-                    Effect.mapError((cause) =>
-                      secretStoreError(
-                        `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
-                        cause,
-                      ),
-                    ),
-                  );
+                yield* writeTrackedProviderSecret(
+                  snapshots,
+                  secretName,
+                  providerEnvironmentTextEncoder.encode(value),
+                  `secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                );
                 environment.push({ ...variable, value: "", valueRedacted: true });
               } else {
                 obsoleteSecretNames.add(secretName);
@@ -750,13 +835,11 @@ const makeServerSettings = Effect.gen(function* () {
               continue;
             }
             nextConfigSecretKeys.add(secretName);
-            yield* secretStore.set(secretName, providerEnvironmentTextEncoder.encode(value)).pipe(
-              Effect.mapError((cause) =>
-                secretStoreError(
-                  `failed to write secret for provider instance '${instanceId}' config '${key}'`,
-                  cause,
-                ),
-              ),
+            yield* writeTrackedProviderSecret(
+              snapshots,
+              secretName,
+              providerEnvironmentTextEncoder.encode(value),
+              `secret for provider instance '${instanceId}' config '${key}'`,
             );
             config[key] = "";
             config[`${key}Redacted`] = true;
@@ -785,14 +868,9 @@ const makeServerSettings = Effect.gen(function* () {
         }
       }
 
-      // A secret that failed to be removed earlier but is live again (same
-      // instance id and name re-created) must not be deleted by a later
-      // pending-cleanup retry.
-      for (const key of nextEnvironmentSecretKeys) {
-        pendingObsoleteSecretNames.delete(key);
-      }
-      for (const key of nextConfigSecretKeys) {
-        pendingObsoleteSecretNames.delete(key);
+      const liveSecretNames = new Set([...nextEnvironmentSecretKeys, ...nextConfigSecretKeys]);
+      for (const name of liveSecretNames) {
+        obsoleteSecretNames.delete(name);
       }
 
       return {
@@ -800,6 +878,7 @@ const makeServerSettings = Effect.gen(function* () {
           ...next,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
         },
+        liveSecretNames,
         obsoleteSecretNames,
       };
     });
@@ -888,82 +967,75 @@ const makeServerSettings = Effect.gen(function* () {
     return false;
   };
 
-  const loadSettingsFromDisk = Effect.gen(function* () {
-    const exists = yield* fs.exists(settingsPath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            detail: "failed to check settings file existence",
-            cause,
-          }),
-      ),
-    );
-    if (!exists) {
-      return {
-        settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
-        revision: 0,
-        migrated: false,
-      };
-    }
+  const loadSettingsFromDisk = (passwordSnapshots: ProviderPasswordSnapshots) =>
+    Effect.gen(function* () {
+      const exists = yield* fs.exists(settingsPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              detail: "failed to check settings file existence",
+              cause,
+            }),
+        ),
+      );
+      if (!exists) {
+        return {
+          settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
+          revision: 0,
+          migrated: false,
+        };
+      }
 
-    const raw = yield* fs.readFileString(settingsPath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            detail: "failed to read settings file",
-            cause,
-          }),
-      ),
-    );
-    const decoded = decodeSettingsFromJson(settingsPath, raw);
-    if (decoded._tag === "Failure") {
-      const quarantinePath = `${settingsPath}.invalid-${Date.now()}`;
-      yield* fs.rename(settingsPath, quarantinePath).pipe(Effect.catch(() => Effect.void));
-      yield* Effect.logWarning("quarantined invalid settings.json, using defaults", {
-        path: settingsPath,
-        quarantinePath,
-        error: decoded.error,
-      });
+      const raw = yield* fs.readFileString(settingsPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              detail: "failed to read settings file",
+              cause,
+            }),
+        ),
+      );
+      const decoded = decodeSettingsFromJson(settingsPath, raw);
+      if (decoded._tag === "Failure") {
+        const quarantinePath = `${settingsPath}.invalid-${Date.now()}`;
+        yield* fs.rename(settingsPath, quarantinePath).pipe(Effect.catch(() => Effect.void));
+        yield* Effect.logWarning("quarantined invalid settings.json, using defaults", {
+          path: settingsPath,
+          quarantinePath,
+          error: decoded.error,
+        });
+        return {
+          settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
+          revision: 0,
+          migrated: false,
+        };
+      }
+      const hasPlaintextInstanceSecrets = hasPlaintextProviderInstanceSecrets(decoded.value);
+      const legacyPasswords = readLegacyProviderPasswords(raw);
+      yield* Effect.forEach(
+        legacyPasswords,
+        ([provider, password]) =>
+          replaceTrackedProviderPassword(passwordSnapshots, provider, password),
+        { discard: true },
+      );
+      // Materialize every existing redacted secret before startup persists a
+      // plaintext-secret discovery. Otherwise an empty redacted marker could be
+      // mistaken for a cleared value and remove the still-referenced secret.
+      const materializedSettings = yield* materializeProviderEnvironmentSecrets(
+        yield* withCredentialState(migrateSettings(decoded.value, decoded.migrationVersion)),
+      );
       return {
-        settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
-        revision: 0,
-        migrated: false,
+        settings: materializedSettings,
+        revision: decoded.revision,
+        migrated:
+          hasPlaintextInstanceSecrets ||
+          legacyPasswords.size > 0 ||
+          decoded.legacyFormat ||
+          decoded.migrationVersion !== SERVER_SETTINGS_MIGRATION_VERSION,
       };
-    }
-    const hasPlaintextInstanceSecrets = hasPlaintextProviderInstanceSecrets(decoded.value);
-    const legacyPasswords = readLegacyProviderPasswords(raw);
-    yield* Effect.forEach(
-      legacyPasswords,
-      ([provider, password]) => providerCredentials.replaceServerPassword(provider, password),
-      { discard: true },
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            detail: "failed to migrate provider credentials",
-            cause,
-          }),
-      ),
-    );
-    // Materialize every existing redacted secret before startup persists a
-    // plaintext-secret discovery. Otherwise an empty redacted marker could be
-    // mistaken for a cleared value and remove the still-referenced secret.
-    const materializedSettings = yield* materializeProviderEnvironmentSecrets(
-      yield* withCredentialState(migrateSettings(decoded.value, decoded.migrationVersion)),
-    );
-    return {
-      settings: materializedSettings,
-      revision: decoded.revision,
-      migrated:
-        hasPlaintextInstanceSecrets ||
-        legacyPasswords.size > 0 ||
-        decoded.legacyFormat ||
-        decoded.migrationVersion !== SERVER_SETTINGS_MIGRATION_VERSION,
-    };
-  });
+    });
 
   const writeSettingsAtomically = (snapshot: ServerSettingsSnapshot) => {
     return writeFileStringAtomically({
@@ -987,6 +1059,8 @@ const makeServerSettings = Effect.gen(function* () {
       return yield* Deferred.await(startedDeferred);
     }
 
+    const providerSecretSnapshots: ProviderSecretSnapshots = new Map();
+    const providerPasswordSnapshots: ProviderPasswordSnapshots = new Map();
     const startup = Effect.gen(function* () {
       yield* fs.makeDirectory(path.dirname(settingsPath), { recursive: true }).pipe(
         Effect.mapError(
@@ -998,18 +1072,22 @@ const makeServerSettings = Effect.gen(function* () {
             }),
         ),
       );
-      const loaded = yield* loadSettingsFromDisk;
+      const loaded = yield* loadSettingsFromDisk(providerPasswordSnapshots);
       let obsoleteSecretNames: ReadonlySet<string> | undefined;
       if (loaded.migrated) {
         loaded.revision += 1;
-        const persisted =
-          yield* persistProviderEnvironmentSecrets(loaded.settings, loaded.settings);
+        const persisted = yield* persistProviderEnvironmentSecrets(
+          loaded.settings,
+          loaded.settings,
+          providerSecretSnapshots,
+        );
         obsoleteSecretNames = persisted.obsoleteSecretNames;
         yield* writeSettingsAtomically({
           revision: loaded.revision,
           migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
           settings: persisted.settings,
         });
+        markLiveSecrets(persisted.liveSecretNames);
       }
       yield* Ref.set(settingsRef, loaded.settings);
       yield* Ref.set(revisionRef, loaded.revision);
@@ -1020,6 +1098,7 @@ const makeServerSettings = Effect.gen(function* () {
 
     const startupExit = yield* Effect.exit(startup);
     if (startupExit._tag === "Failure") {
+      yield* rollbackCredentialWrites(providerSecretSnapshots, providerPasswordSnapshots);
       yield* Deferred.failCause(startedDeferred, startupExit.cause).pipe(Effect.orDie);
       return yield* Effect.failCause(startupExit.cause);
     }
@@ -1031,37 +1110,50 @@ const makeServerSettings = Effect.gen(function* () {
   const updateSettings = (patch: ServerSettingsPatch) =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const disk = yield* loadSettingsFromDisk;
-        const current = disk.settings;
-        for (const provider of EXTERNAL_SERVER_PROVIDERS) {
-          const password = patch.providers?.[provider]?.serverPassword;
-          if (password !== undefined) {
-            yield* providerCredentials.replaceServerPassword(provider, password).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({
-                    settingsPath,
-                    detail: `failed to update ${provider} server password`,
-                    cause,
-                  }),
-              ),
+        const providerSecretSnapshots: ProviderSecretSnapshots = new Map();
+        const providerPasswordSnapshots: ProviderPasswordSnapshots = new Map();
+        const updateExit = yield* Effect.exit(
+          Effect.gen(function* () {
+            const disk = yield* loadSettingsFromDisk(providerPasswordSnapshots);
+            const current = disk.settings;
+            for (const provider of EXTERNAL_SERVER_PROVIDERS) {
+              const password = patch.providers?.[provider]?.serverPassword;
+              if (password !== undefined) {
+                yield* replaceTrackedProviderPassword(
+                  providerPasswordSnapshots,
+                  provider,
+                  password,
+                );
+              }
+            }
+            const normalized = yield* normalizeSettings(
+              settingsPath,
+              current,
+              omitProviderPasswords(patch),
             );
-          }
-        }
-        const normalized = yield* normalizeSettings(
-          settingsPath,
-          current,
-          omitProviderPasswords(patch),
+            const next = yield* withCredentialState(normalized);
+            const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
+            const { settings: persistedSettings, liveSecretNames, obsoleteSecretNames } =
+              yield* persistProviderEnvironmentSecrets(
+                current,
+                next,
+                providerSecretSnapshots,
+              );
+            yield* writeSettingsAtomically({
+              revision: nextRevision,
+              migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
+              settings: persistedSettings,
+            });
+            markLiveSecrets(liveSecretNames);
+            return { next, nextRevision, obsoleteSecretNames };
+          }),
         );
-        const next = yield* withCredentialState(normalized);
-        const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
-        const { settings: persistedSettings, obsoleteSecretNames } =
-          yield* persistProviderEnvironmentSecrets(current, next);
-        yield* writeSettingsAtomically({
-          revision: nextRevision,
-          migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
-          settings: persistedSettings,
-        });
+        if (updateExit._tag === "Failure") {
+          yield* rollbackCredentialWrites(providerSecretSnapshots, providerPasswordSnapshots);
+          return yield* Effect.failCause(updateExit.cause);
+        }
+
+        const { next, nextRevision, obsoleteSecretNames } = updateExit.value;
         yield* Ref.set(settingsRef, next);
         yield* Ref.set(revisionRef, nextRevision);
         yield* emitChange(next);
