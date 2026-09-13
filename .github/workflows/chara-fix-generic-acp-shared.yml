@@ -1,0 +1,52 @@
+name: Chara fix generic ACP shared metadata
+
+on:
+  push:
+    branches:
+      - codex/generic-acp-provider
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Port ACP shared provider metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          model = Path("packages/shared/src/model.ts")
+          text = model.read_text()
+          marker = '  pi: new Set<ModelSlug>(),\n  // Devin\'s built-in list is intentionally empty; its CLI supplies the live catalog.\n'
+          if marker not in text:
+              raise SystemExit("shared model insertion point changed")
+          text = text.replace(
+              marker,
+              '  pi: new Set<ModelSlug>(),\n  // Generic ACP agents advertise their live catalog during session setup.\n  acp: new Set(MODEL_OPTIONS_BY_PROVIDER.acp.map((option) => option.slug)),\n  // Devin\'s built-in list is intentionally empty; its CLI supplies the live catalog.\n',
+              1,
+          )
+          model.write_text(text)
+
+          metadata = Path("packages/shared/src/providerMetadata.ts")
+          text = metadata.read_text()
+          marker = '''  {\n    kind: "devin",\n    displayName: PROVIDER_DISPLAY_NAMES.devin,\n    available: true,\n    setupDocsHref: "https://trysynara.com/docs/providers/devin",\n    supportsNativeTurnSteering: false,\n    usage: {\n      signInCommand: "devin auth login",\n      learnMoreHref: "https://app.devin.ai/usage",\n    },\n  },\n] as const satisfies readonly ProviderDescriptor[]);'''
+          replacement = '''  {\n    kind: "devin",\n    displayName: PROVIDER_DISPLAY_NAMES.devin,\n    available: true,\n    setupDocsHref: "https://trysynara.com/docs/providers/devin",\n    supportsNativeTurnSteering: false,\n    usage: {\n      signInCommand: "devin auth login",\n      learnMoreHref: "https://app.devin.ai/usage",\n    },\n  },\n  {\n    kind: "acp",\n    displayName: PROVIDER_DISPLAY_NAMES.acp,\n    available: true,\n    setupDocsHref: "https://trysynara.com/docs/providers",\n    supportsNativeTurnSteering: false,\n    usage: null,\n  },\n] as const satisfies readonly ProviderDescriptor[]);'''
+          if marker not in text:
+              raise SystemExit("provider metadata insertion point changed")
+          text = text.replace(marker, replacement, 1)
+          metadata.write_text(text)
+          PY
+
+          git rm .github/workflows/chara-fix-generic-acp-shared.yml
+          git diff --check
+          git config user.name "cmdr-chara"
+          git config user.email "249489759+cmdr-chara@users.noreply.github.com"
+          git add packages/shared/src/model.ts packages/shared/src/providerMetadata.ts
+          git commit -m "fix: port generic ACP shared metadata"
+          git push origin HEAD:codex/generic-acp-provider
