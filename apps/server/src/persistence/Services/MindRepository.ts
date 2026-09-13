@@ -85,8 +85,10 @@ export const SearchMindCandidatesInput = Schema.Struct({
   projectId: ProjectId,
   /** Prebuilt FTS5 MATCH expression; build it with {@link buildMindFtsMatchExpr}. */
   matchExpr: Schema.String,
+  // Default stays the recall bound; the UI search widens to the project cap —
+  // a project can never hold more rows, so its match total is a true count.
   limit: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_RECALL_CANDIDATE_MAX_ITEMS })),
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_MEMORY_PROJECT_CAP })),
   ).pipe(Schema.withDecodingDefault(() => MIND_RECALL_CANDIDATE_MAX_ITEMS)),
 });
 export type SearchMindCandidatesInput = typeof SearchMindCandidatesInput.Type;

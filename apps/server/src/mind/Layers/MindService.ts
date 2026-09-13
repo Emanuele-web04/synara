@@ -803,6 +803,9 @@ const makeMindService = Effect.gen(function* () {
       const matchExpr = buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS));
       const scope: ReadonlyArray<ProjectId> =
         input.projectId !== null ? [input.projectId] : yield* repository.listProjectIds();
+      // Candidate bound = the per-project memory cap, not the recall bound: a
+      // project can never hold more rows, so `count` below is the true match
+      // total rather than a truncated estimate.
       const candidates = (yield* Effect.forEach(
         scope,
         (projectId) =>
@@ -810,7 +813,7 @@ const makeMindService = Effect.gen(function* () {
             repository.searchCandidates({
               projectId,
               matchExpr,
-              limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
+              limit: MIND_MEMORY_PROJECT_CAP,
             }),
           ),
         { concurrency: 1 },
