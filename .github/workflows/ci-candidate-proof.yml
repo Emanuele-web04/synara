@@ -7,60 +7,61 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  mac-device-baseline:
-    name: Full-install device baseline (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, macos-15-intel]
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 8feb6c4691dff692b9f3643ec7eaf6142fed569e
+          ref: fe6d8c4d6510a2d5f7b7e46f1ce1a84f82aa04d1
+          fetch-depth: 0
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - name: Full installation matching the existing device workflow
-        run: bun install --frozen-lockfile --ignore-scripts
-      - name: Native capability probe
-        run: bun run test:device:probe
-      - name: Native simulator smoke
-        timeout-minutes: 15
-        run: |
-          set -o pipefail
-          bun run test:device 2>&1 | tee "$RUNNER_TEMP/device-smoke.log"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: device-baseline-${{ matrix.os }}
-          path: ${{ runner.temp }}/device-smoke.log
-          retention-days: 14
-  measurements:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Preserve source-linked job timing evidence
+      - name: Preserve source and benchmark metadata
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/ci-results"
-          for run in 34785599800 34786794723 34787600386; do
-            gh api "repos/Emanuele-web04/synara/actions/runs/$run" > "$RUNNER_TEMP/ci-results/run-$run.json"
-            gh api "repos/Emanuele-web04/synara/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/ci-results/jobs-$run.json"
-          done
+          mkdir -p "$RUNNER_TEMP/ci-final-evidence"
+          cd "$GITHUB_WORKSPACE"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/ci-final-evidence/source.tar.gz"
+          git archive --format=tar.gz 99d7dd11739ad2ad34aca29f82f6ae8d5cf7dc05 > "$RUNNER_TEMP/ci-final-evidence/base.tar.gz"
+          git log -12 --format='%H %s' > "$RUNNER_TEMP/ci-final-evidence/commits.txt"
+          gh api 'repos/Emanuele-web04/synara/actions/runs?branch=codex%2Fci-cross-platform&per_page=100' > "$RUNNER_TEMP/ci-final-evidence/runs.json"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          dest = pathlib.Path(os.environ['RUNNER_TEMP']) / 'ci-final-evidence'
+          runs = json.loads((dest / 'runs.json').read_text())['workflow_runs']
+          for run in runs:
+              print(run['id'], run['name'], run['status'], run['conclusion'], run['head_sha'])
+              if run['name'] in ['PR Size', 'PR Vouch']:
+                  continue
+              run_dir = dest / str(run['id'])
+              run_dir.mkdir()
+              result = subprocess.run(['gh', 'api', f"repos/Emanuele-web04/synara/actions/runs/{run['id']}/jobs?per_page=100"], capture_output=True, check=True)
+              (run_dir / 'jobs.json').write_bytes(result.stdout)
+              result = subprocess.run(['gh', 'api', f"repos/Emanuele-web04/synara/actions/runs/{run['id']}/artifacts?per_page=100"], capture_output=True, check=True)
+              (run_dir / 'artifacts.json').write_bytes(result.stdout)
+              for job in json.loads((run_dir / 'jobs.json').read_text())['jobs']:
+                  if job['status'] != 'completed':
+                      continue
+                  if run['name'] == 'CI' and job['conclusion'] == 'success':
+                      continue
+                  log = subprocess.run(['gh', 'api', f"repos/Emanuele-web04/synara/actions/jobs/{job['id']}/logs"], capture_output=True)
+                  if log.returncode == 0:
+                      (run_dir / f"{job['id']}.log").write_bytes(log.stdout)
+          PY
+      - name: Record optional service availability without exposing credentials
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+        run: |
+          node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.RUNNER_TEMP+"/ci-final-evidence/services.json",JSON.stringify({turboToken:!!process.env.TURBO_TOKEN,turboTeam:!!process.env.TURBO_TEAM,browserbase:!!process.env.BROWSERBASE_API_KEY}));'
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: ci-with-balancing
-          path: ${{ runner.temp }}/ci-results
+          name: ci-final-evidence
+          path: ${{ runner.temp }}/ci-final-evidence
           retention-days: 14
