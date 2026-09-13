@@ -99,7 +99,9 @@ export function planChanges(files, workspaces, full = false) {
     build: desktop || server || web,
     windows: desktop || server,
     // A nonempty placeholder avoids an empty matrix even when the job is skipped.
-    matrix: { include: include.length ? include : [{ pkg: "not-selected", filters: "", "test-args": "" }] },
+    matrix: {
+      include: include.length ? include : [{ pkg: "not-selected", filters: "", "test-args": "" }],
+    },
   };
 }
 
@@ -111,7 +113,9 @@ export function changedFiles(root, base) {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
-  }).split("\0").filter(Boolean);
+  })
+    .split("\0")
+    .filter(Boolean);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -125,6 +129,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   appendFileSync(process.env.GITHUB_OUTPUT, `${output.join("\n")}\n`);
   console.log(JSON.stringify({ changedFiles: files.length, full, plan }, null, 2));
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI selection\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`);
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## CI selection\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`,
+    );
   }
 }

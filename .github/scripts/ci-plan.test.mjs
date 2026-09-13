@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -62,13 +70,19 @@ test("main and other non-PR events run everything, including prose changes", () 
 });
 
 test("mixed changes take the union, regardless of order", () => {
-  for (const files of [["README.md", "apps/server/src/index.ts"], ["apps/server/src/index.ts", "README.md"]]) {
+  for (const files of [
+    ["README.md", "apps/server/src/index.ts"],
+    ["apps/server/src/index.ts", "README.md"],
+  ]) {
     assert.deepEqual(selected(planChanges(files, workspaceFixture)), server);
   }
 });
 
 test("new workspace ownership selects full validation", () => {
-  const workspaces = [...workspaceFixture, { directory: "apps/new", name: "@synara/new", dependencies: [] }];
+  const workspaces = [
+    ...workspaceFixture,
+    { directory: "apps/new", name: "@synara/new", dependencies: [] },
+  ];
   assert.deepEqual(selected(planChanges(["apps/new/source.ts"], workspaces)), all);
 });
 
@@ -80,8 +94,14 @@ test("transitive consumers and cycles do not lose fan-out", () => {
 
 test("full matrix preserves web and both serial server shards exactly once", () => {
   const plan = planChanges(["bun.lock"], workspaceFixture);
-  assert.deepEqual(plan.matrix.include.map(({ pkg }) => pkg), ["web", "server 1/2", "server 2/2"]);
-  assert.deepEqual(plan.matrix.include.map((entry) => entry["test-args"]), ["", "--shard=1/2", "--shard=2/2"]);
+  assert.deepEqual(
+    plan.matrix.include.map(({ pkg }) => pkg),
+    ["web", "server 1/2", "server 2/2"],
+  );
+  assert.deepEqual(
+    plan.matrix.include.map((entry) => entry["test-args"]),
+    ["", "--shard=1/2", "--shard=2/2"],
+  );
   assert.equal(planChanges(["README.md"], workspaceFixture).unit, false);
   assert.equal(planChanges(["README.md"], workspaceFixture).matrix.include.length, 1);
 });
@@ -90,21 +110,32 @@ test("workspace discovery includes dev, optional and peer dependencies", (contex
   const directory = mkdtempSync(resolve(tmpdir(), "synara-ci-workspaces-"));
   context.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(resolve(directory, "apps/consumer"), { recursive: true });
-  writeFileSync(resolve(directory, "package.json"), JSON.stringify({ workspaces: { packages: ["apps/*"] } }));
-  writeFileSync(resolve(directory, "apps/consumer/package.json"), JSON.stringify({
-    name: "consumer",
-    dependencies: { a: "workspace:*" },
-    devDependencies: { b: "workspace:*" },
-    optionalDependencies: { c: "workspace:*" },
-    peerDependencies: { d: "workspace:*" },
-  }));
+  writeFileSync(
+    resolve(directory, "package.json"),
+    JSON.stringify({ workspaces: { packages: ["apps/*"] } }),
+  );
+  writeFileSync(
+    resolve(directory, "apps/consumer/package.json"),
+    JSON.stringify({
+      name: "consumer",
+      dependencies: { a: "workspace:*" },
+      devDependencies: { b: "workspace:*" },
+      optionalDependencies: { c: "workspace:*" },
+      peerDependencies: { d: "workspace:*" },
+    }),
+  );
   assert.deepEqual(readWorkspaces(directory)[0].dependencies, ["a", "b", "c", "d"]);
 });
 
 test("git diff includes both rename sides and safely handles unusual filenames", (context) => {
   const directory = mkdtempSync(resolve(tmpdir(), "synara-ci-diff-"));
   context.after(() => rmSync(directory, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   git("init");
   git("config", "user.email", "ci-test@example.invalid");
   git("config", "user.name", "CI test");
@@ -129,12 +160,23 @@ test("git diff includes both rename sides and safely handles unusual filenames",
 });
 
 const workflow = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-const gate = workflow.split("// BEGIN GATE CONTRACT (executed verbatim by ci-plan.test.mjs)\n")[1]?.split("// END GATE CONTRACT")[0];
+const gate = workflow
+  .split("// BEGIN GATE CONTRACT (executed verbatim by ci-plan.test.mjs)\n")[1]
+  ?.split("// END GATE CONTRACT")[0];
 assert.ok(gate, "the production aggregate gate must remain testable");
-const jobFlags = { "static-typecheck": "code", unit: "unit", browser: "browser", build: "build", windows_process: "windows" };
+const jobFlags = {
+  "static-typecheck": "code",
+  unit: "unit",
+  browser: "browser",
+  build: "build",
+  windows_process: "windows",
+};
 function needsFor(plan) {
   const needs = {
-    changes: { result: "success", outputs: Object.fromEntries(flags.map((flag) => [flag, String(plan[flag])])) },
+    changes: {
+      result: "success",
+      outputs: Object.fromEntries(flags.map((flag) => [flag, String(plan[flag])])),
+    },
     "static-fast": { result: "success" },
   };
   for (const [job, flag] of Object.entries(jobFlags)) {
@@ -142,7 +184,8 @@ function needsFor(plan) {
   }
   return needs;
 }
-const evaluateGate = (needs) => runInNewContext(gate, { process: { env: { NEEDS: JSON.stringify(needs) } } });
+const evaluateGate = (needs) =>
+  runInNewContext(gate, { process: { env: { NEEDS: JSON.stringify(needs) } } });
 
 for (const [name, file] of scenarios) {
   test(`gate accepts the exact ${name} plan`, () => {
@@ -189,16 +232,23 @@ test("required name, selection wiring and migration history remain enforced", ()
   assert.ok(!workflow.includes("continue-on-error"));
   for (const [job, flag] of Object.entries(jobFlags)) {
     const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z_-]+:\n/)[0];
-    assert.ok(section?.includes(`if: needs.changes.outputs.${flag} == 'true'`), `${job} must use ${flag}`);
+    assert.ok(
+      section?.includes(`if: needs.changes.outputs.${flag} == 'true'`),
+      `${job} must use ${flag}`,
+    );
   }
 });
 
 // The fixture tests are runnable without installing or downloading the workspace.
 // CI additionally checks minimum fan-out against the actual checked-out manifests.
-test("real workspace manifests preserve required scenario fan-out", { skip: !existsSync(resolve(root, "package.json")) }, () => {
-  const workspaces = readWorkspaces(root);
-  for (const [name, file, expected] of scenarios) {
-    const actual = planChanges([file], workspaces);
-    for (const flag of expected) assert.equal(actual[flag], true, `${name} must select ${flag}`);
-  }
-});
+test(
+  "real workspace manifests preserve required scenario fan-out",
+  { skip: !existsSync(resolve(root, "package.json")) },
+  () => {
+    const workspaces = readWorkspaces(root);
+    for (const [name, file, expected] of scenarios) {
+      const actual = planChanges([file], workspaces);
+      for (const flag of expected) assert.equal(actual[flag], true, `${name} must select ${flag}`);
+    }
+  },
+);
