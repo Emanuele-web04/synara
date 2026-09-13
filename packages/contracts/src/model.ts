@@ -129,6 +129,10 @@ export const PiModelOptions = Schema.Struct({
 });
 export type PiModelOptions = typeof PiModelOptions.Type;
 
+/** ACP model options are intentionally open-ended and negotiated per agent. */
+export const AcpModelOptions = Schema.Struct({});
+export type AcpModelOptions = typeof AcpModelOptions.Type;
+
 export const CursorModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
@@ -169,6 +173,7 @@ export const ProviderModelOptions = Schema.Struct({
   droid: Schema.optional(DroidModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
+  acp: Schema.optional(AcpModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
