@@ -3,6 +3,11 @@
 // Layer: Provider runtime tests
 // Exports: Vitest regressions for OpenCode local server reuse
 
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, sep } from "node:path";
+
 import { Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect, it } from "vitest";
@@ -122,4 +127,97 @@ describe("OpenCode local server pool identity", () => {
       ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
     );
   });
+
+  it.each(["absolute", "relative"])(
+    "preserves %s cwd parent traversal through a symlink",
+    async (spelling) => {
+      const fixture = realpathSync(mkdtempSync(join(tmpdir(), "opencode-pool-")));
+      const workspace = join(fixture, "workspace");
+      const target = join(fixture, "target");
+      const child = join(target, "child");
+      const state = {
+        spawnUrls: [] as Array<string>,
+        spawnCwds: [] as Array<string | undefined>,
+      };
+
+      try {
+        mkdirSync(workspace);
+        mkdirSync(child, { recursive: true });
+        symlinkSync(
+          child,
+          join(workspace, "link"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        // join/resolve would erase the parent traversal before the test reaches the runtime.
+        const absoluteCwd = `${workspace}${sep}link${sep}..`;
+        const cwd =
+          spelling === "relative"
+            ? `${relative(process.cwd(), workspace)}${sep}link${sep}..`
+            : absoluteCwd;
+
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const runtime = yield* OpenCodeRuntime;
+              const throughLink = yield* runtime.connectToOpenCodeServer({
+                binaryPath: "opencode",
+                cwd,
+              });
+              const direct = yield* runtime.connectToOpenCodeServer({
+                binaryPath: "opencode",
+                cwd: workspace,
+              });
+
+              expect(throughLink.url).not.toBe(direct.url);
+              expect(state.spawnCwds).toEqual([cwd, workspace]);
+              // Exercise the OS cwd semantics rather than Node's lexical JS realpath implementation.
+              const physicalCwd = (directory: string) =>
+                execFileSync(process.execPath, ["-p", "process.cwd()"], {
+                  cwd: directory,
+                  encoding: "utf8",
+                }).trim();
+              expect(physicalCwd(state.spawnCwds[0]!)).toBe(physicalCwd(cwd));
+              if (process.platform !== "win32") {
+                expect(physicalCwd(state.spawnCwds[0]!)).toBe(physicalCwd(target));
+              }
+              expect(physicalCwd(state.spawnCwds[1]!)).toBe(physicalCwd(workspace));
+            }),
+          ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+        );
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not hide a missing directory before parent traversal",
+    async () => {
+      const fixture = realpathSync(mkdtempSync(join(tmpdir(), "opencode-pool-")));
+      const cwd = `${fixture}${sep}missing${sep}..`;
+      const state = {
+        spawnUrls: [] as Array<string>,
+        spawnCwds: [] as Array<string | undefined>,
+      };
+
+      try {
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const runtime = yield* OpenCodeRuntime;
+              yield* runtime.connectToOpenCodeServer({ binaryPath: "opencode", cwd });
+              expect(state.spawnCwds).toEqual([cwd]);
+              expect(() =>
+                execFileSync(process.execPath, ["-p", "process.cwd()"], {
+                  cwd: state.spawnCwds[0],
+                }),
+              ).toThrow();
+            }),
+          ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+        );
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    },
+  );
 });

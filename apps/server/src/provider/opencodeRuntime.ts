@@ -1156,10 +1156,12 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
-          // A cwd is process identity, while CLI display/readiness metadata is not. Resolve the cwd
-          // once so equivalent spellings reuse the same warm process and the spawned process uses
-          // the exact path represented by the pool key.
-          const pooledInput = input.cwd ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          // Collapse ordinary aliases, but let the OS resolve parent traversal: resolving `..`
+          // lexically can cross a symlink differently or hide a missing directory. Keep the same
+          // spelling in both the pool key and spawn options, without adding filesystem work here.
+          const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
+          const pooledInput =
+            input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
           const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {
