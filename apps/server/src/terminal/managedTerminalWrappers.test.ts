@@ -165,6 +165,15 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
 
     expect(() => readFileSync(path.join(rootDir, "pi-old"), "utf8")).toThrow();
     expect(readFileSync(path.join(rootDir, "pi-new"), "utf8")).toContain("/accounts/new");
+
+    const emptyState = prepareManagedTerminalWrappers({
+      baseEnv: { PATH: path.join(dir, "missing-bin") },
+      rootDir,
+      zshRootDir,
+      profiles: [],
+    });
+    expect(emptyState.binDir).toBeNull();
+    expect(() => readFileSync(path.join(rootDir, "pi-new"), "utf8")).toThrow();
   });
 });
 

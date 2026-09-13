@@ -770,6 +770,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly logsDir: string;
   private managedWrapperBinDir: string | null;
   private managedWrapperZshDir: string | null;
+  private readonly managedWrapperRootDir: string | null;
+  private readonly managedWrapperZshRootDir: string | null;
   private readonly historyLineLimit: number;
   private readonly historyByteLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
@@ -807,12 +809,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   constructor(options: TerminalManagerOptions) {
     super();
     this.logsDir = options.logsDir ?? path.resolve(process.cwd(), ".logs", "terminals");
-    this.managedWrapperBinDir =
+    this.managedWrapperRootDir =
       process.platform === "win32"
         ? null
         : path.join(this.logsDir, MANAGED_TERMINAL_WRAPPER_DIRNAME);
-    this.managedWrapperZshDir =
+    this.managedWrapperZshRootDir =
       process.platform === "win32" ? null : path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME);
+    this.managedWrapperBinDir = this.managedWrapperRootDir;
+    this.managedWrapperZshDir = this.managedWrapperZshRootDir;
     this.historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
     this.historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
     this.ptyAdapter = options.ptyAdapter;
@@ -858,7 +862,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private async refreshManagedProfileWrappers(): Promise<void> {
-    if (!this.managedProfileResolver || !this.managedWrapperBinDir) return;
+    if (!this.managedProfileResolver || !this.managedWrapperRootDir) return;
     if (this.managedProfileRefresh) return this.managedProfileRefresh;
     const refresh = (async () => {
       try {
@@ -866,9 +870,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         const preparedWrappers = prepareManagedTerminalAgentWrappers({
           baseEnv: process.env,
           profiles,
-          targetDir: this.managedWrapperBinDir!,
+          targetDir: this.managedWrapperRootDir,
           zshDir:
-            this.managedWrapperZshDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
+            this.managedWrapperZshRootDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
         });
         this.managedWrapperBinDir = preparedWrappers.binDir;
         this.managedWrapperZshDir = preparedWrappers.zshDir;

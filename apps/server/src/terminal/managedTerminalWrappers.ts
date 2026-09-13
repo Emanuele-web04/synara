@@ -458,6 +458,9 @@ export function prepareManagedTerminalWrappers(options: {
   }
 
   if (Object.keys(targetPathByCliKind).length === 0 && (options.profiles?.length ?? 0) === 0) {
+    if (fs.existsSync(options.rootDir)) {
+      synchronizeProviderProfileWrappers(options.rootDir, []);
+    }
     return {
       binDir: null,
       codexHomeDir: null,

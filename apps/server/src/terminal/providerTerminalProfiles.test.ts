@@ -86,4 +86,72 @@ describe("deriveManagedTerminalProfiles", () => {
       { PI_CODING_AGENT_DIR: imported },
     );
   });
+
+  it.each([
+    ["antigravity", "agy"],
+    ["droid", "droid"],
+  ] as const)("does not isolate the default %s profile through its internal driver alias", async (
+    provider,
+    executable,
+  ) => {
+    const { binDir, homeDir, stateDir } = fixture();
+    installCli(binDir, executable);
+
+    const profiles = await deriveManagedTerminalProfiles({
+      settings: DEFAULT_SERVER_SETTINGS,
+      baseEnv: { PATH: binDir, HOME: homeDir },
+      homeDir,
+      stateDir,
+    });
+    const profile = profiles.find((candidate) => candidate.commandName === `${executable}-default`);
+
+    expect(profile?.isolateEnvironment).toBe(false);
+    expect(profile?.environment.HOME).toBe(homeDir);
+  });
+
+  it("preserves an imported Devin profile directory", async () => {
+    const { binDir, homeDir, stateDir, root } = fixture();
+    installCli(binDir, "devin");
+    const imported = path.join(root, "existing-devin");
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        devin_work: { driver: "devin", config: { profileDir: imported } },
+      },
+    };
+
+    const profiles = await deriveManagedTerminalProfiles({
+      settings,
+      baseEnv: { PATH: binDir, HOME: homeDir },
+      homeDir,
+      stateDir,
+    });
+
+    expect(profiles.find((profile) => profile.commandName === "devin-work")?.environment.HOME).toBe(
+      imported,
+    );
+  });
+
+  it("isolates an explicitly imported directory on a default profile", async () => {
+    const { binDir, homeDir, stateDir, root } = fixture();
+    installCli(binDir, "cursor-agent");
+    const imported = path.join(root, "existing-cursor");
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        cursor: { driver: "cursor", config: { profileDir: imported } },
+      },
+    };
+
+    const profiles = await deriveManagedTerminalProfiles({
+      settings,
+      baseEnv: { PATH: binDir, HOME: homeDir },
+      homeDir,
+      stateDir,
+    });
+    const profile = profiles.find((candidate) => candidate.commandName === "cursor-agent-default");
+
+    expect(profile?.isolateEnvironment).toBe(true);
+    expect(profile?.environment.CURSOR_CONFIG_DIR).toBe(imported);
+  });
 });

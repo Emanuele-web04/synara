@@ -15,6 +15,7 @@ import {
   codexAccountInstanceId,
   deriveProviderInstances,
   isUnresolvedAutomationInstanceId,
+  providerImportedDirectoryConfig,
   providerStartOptionsFromInstance,
   resolveProviderInstance,
   unresolvedAutomationInstanceId,
@@ -429,5 +430,19 @@ describe("providerStartOptionsFromInstance profile directories", () => {
     );
 
     expect(providerStartOptionsFromInstance(resolved!)?.pi?.agentDir).toBe("/profiles/pi-work");
+  });
+});
+
+describe("providerImportedDirectoryConfig", () => {
+  it.each([
+    ["codex", "homePath"],
+    ["claudeAgent", "configDir"],
+    ["pi", "agentDir"],
+    ["cursor", "profileDir"],
+    ["devin", "profileDir"],
+  ] as const)("maps a %s import to %s", (provider, configKey) => {
+    expect(providerImportedDirectoryConfig(provider, "/profiles/imported")).toEqual({
+      [configKey]: "/profiles/imported",
+    });
   });
 });
