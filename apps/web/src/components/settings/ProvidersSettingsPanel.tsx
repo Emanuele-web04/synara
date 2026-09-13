@@ -1152,12 +1152,18 @@ function ProviderInstancesControl(props: {
                   typeof instance.config === "object" &&
                   !Array.isArray(instance.config) &&
                   (instance.config as Record<string, unknown>)[`${configKey}Redacted`] === true;
+                const inputId = `provider-instance-${instanceId}-${configKey}`;
                 return (
-                  <label className="block" key={field.settingsKey}>
-                    <span className="block text-xs font-medium text-foreground">{field.label}</span>
+                  <div className="block" key={field.settingsKey}>
+                    <label
+                      htmlFor={inputId}
+                      className="block text-xs font-medium text-foreground"
+                    >
+                      {field.label}
+                    </label>
                     <div className="mt-1 flex items-center gap-2">
                       <DebouncedSettingTextInput
-                        id={`provider-instance-${instanceId}-${configKey}`}
+                        id={inputId}
                         size="sm"
                         variant="soft"
                         className="flex-1"
@@ -1186,7 +1192,7 @@ function ProviderInstancesControl(props: {
                         </Button>
                       ) : null}
                     </div>
-                  </label>
+                  </div>
                 );
               })}
               {provider === "codex" ? (
