@@ -30,6 +30,8 @@ import {
 } from "@synara/shared/deviceHelperCache";
 import { sandboxedHelperCommand } from "../apps/server/src/device/helperSandbox.ts";
 
+import { waitForDeviceAccessibility } from "./lib/device-smoke-readiness.ts";
+
 const execFileAsync = promisify(execFile);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,7 +62,7 @@ function fail(message: string, detail?: unknown): never {
 }
 
 function assert(condition: boolean, message: string): asserts condition {
-  if (!condition) fail(message);
+  if (!condition) throw new Error(message);
 }
 
 // ── Environment ──────────────────────────────────────────────────────
@@ -539,10 +541,10 @@ async function main(): Promise<void> {
 
     step("Pressing the home button");
     await client.call("button", { name: "home" });
-    await sleep(1200);
-
-    step("Dumping the accessibility tree");
-    const described = await client.call("describe-ui", { maxDepth: 6 });
+    step("Waiting for SpringBoard accessibility");
+    const described = await waitForDeviceAccessibility((timeoutMs) =>
+      client!.call("describe-ui", { maxDepth: 6 }, timeoutMs),
+    );
     const tree = described["tree"] as { role?: string; children?: unknown[] } | undefined;
     assert(Boolean(tree), "describe-ui returned no tree");
     const children = tree!.children ?? [];
@@ -570,7 +572,7 @@ async function main(): Promise<void> {
       console.error("[device-smoke] helper stderr:");
       for (const line of client.stderr.slice(-20)) console.error(`  ${line}`);
     }
-    fail("smoke run failed", error);
+    throw error;
   } finally {
     collector.close();
     child?.stdin.end();
@@ -593,4 +595,4 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+void main().catch((error) => fail("smoke run failed", error));
