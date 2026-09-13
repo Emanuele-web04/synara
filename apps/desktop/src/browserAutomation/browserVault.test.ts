@@ -22,7 +22,9 @@ async function fixture() {
 const origin = "https://login.example.test";
 const page = (url = origin) => ({ getURL: () => url, isDestroyed: () => false });
 
-describe("browser vault", () => {
+// These integration tests repeat production scrypt derivations and durable writes.
+// Allow for CPU contention when release preflight runs all workspace suites together.
+describe("browser vault", { timeout: 15_000 }, () => {
   it.each([false, true])(
     "preserves saved passwords when provenance persistence fails (update=%s)",
     async (update) => {
