@@ -919,9 +919,7 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "copilotBinaryPath") || hasOwn(patch, "customCopilotModels")) {
     providers.copilot = {
-      ...(hasOwn(patch, "copilotBinaryPath")
-        ? { binaryPath: patch.copilotBinaryPath ?? "" }
-        : {}),
+      ...(hasOwn(patch, "copilotBinaryPath") ? { binaryPath: patch.copilotBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customCopilotModels")
         ? { customModels: patch.customCopilotModels ?? [] }
         : {}),
@@ -1250,7 +1248,10 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
-  const copilotBinaryPath = normalizeProviderBinaryPathOverride("copilot", settings.copilotBinaryPath);
+  const copilotBinaryPath = normalizeProviderBinaryPathOverride(
+    "copilot",
+    settings.copilotBinaryPath,
+  );
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
