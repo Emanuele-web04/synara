@@ -3,7 +3,7 @@
 // Layer: Web settings state
 // Exports: app setting schema, normalization helpers, provider option builders
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema, SchemaTransformation } from "effect";
 import {
@@ -2521,6 +2521,20 @@ export function useAppSettings() {
   const normalizedStoredSettingsRef = useRef(false);
   const serverSettingsMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingServerSettingsMigrationPatchRef = useRef<ServerSettingsPatch | null>(null);
+  const enqueueServerSettingsMutation = useCallback(
+    <Result>(mutation: () => Promise<Result>): Promise<Result> => {
+      const queued = serverSettingsMutationQueueRef.current.then(
+        () => mutation(),
+        () => mutation(),
+      );
+      serverSettingsMutationQueueRef.current = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+      return queued;
+    },
+    [],
+  );
 
   const defaults = normalizeAppSettings({
     ...DEFAULT_APP_SETTINGS,
@@ -2571,8 +2585,9 @@ export function useAppSettings() {
     }
 
     serverSettingsMigrationInFlight = true;
-    void ensureNativeApi()
-      .server.updateSettings(migrationPatch)
+    void enqueueServerSettingsMutation(() =>
+      ensureNativeApi().server.updateSettings(migrationPatch),
+    )
       .then((nextSettings) => {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
@@ -2586,7 +2601,13 @@ export function useAppSettings() {
       .finally(() => {
         serverSettingsMigrationInFlight = false;
       });
-  }, [localSettings, queryClient, serverSettingsQuery.data, setSettings]);
+  }, [
+    enqueueServerSettingsMutation,
+    localSettings,
+    queryClient,
+    serverSettingsQuery.data,
+    setSettings,
+  ]);
 
   const refreshProvidersAfterEnablementChange = async () => {
     const api = ensureNativeApi();
@@ -2598,20 +2619,6 @@ export function useAppSettings() {
       .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
       .catch(() => undefined);
     await invalidateProviderUsageQueries(queryClient).catch(() => undefined);
-  };
-
-  const enqueueServerSettingsMutation = <Result>(
-    mutation: () => Promise<Result>,
-  ): Promise<Result> => {
-    const queued = serverSettingsMutationQueueRef.current.then(
-      () => mutation(),
-      () => mutation(),
-    );
-    serverSettingsMutationQueueRef.current = queued.then(
-      () => undefined,
-      () => undefined,
-    );
-    return queued;
   };
 
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
