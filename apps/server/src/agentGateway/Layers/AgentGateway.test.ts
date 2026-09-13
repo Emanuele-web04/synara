@@ -326,6 +326,20 @@ function makeAutomationDefinition(
   };
 }
 
+function makeFullAutomationUpdate(definition: AutomationDefinition) {
+  return {
+    automationId: definition.id,
+    name: definition.name,
+    prompt: definition.prompt,
+    schedule: definition.schedule,
+    enabled: true,
+    maxIterations: definition.maxIterations,
+    stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
+    notificationPolicy: "all",
+    completionPolicy: { type: "none" },
+  };
+}
+
 const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
   "token-parent-claude": "thread-parent",
@@ -5262,53 +5276,62 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("persists updated standalone targets and preserves an omitted one", () => {
+  it.effect("persists updated standalone and dedicated targets and preserves omitted ones", () => {
     const standalone = makeAutomationDefinition({
       id: AutomationId.makeUnsafe("automation-standalone"),
       mode: "standalone",
       targetThreadId: null,
     });
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone]);
+    const dedicated = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-dedicated"),
+      mode: "dedicated",
+      targetThreadId: null,
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone, dedicated]);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
-      const fullUpdate = {
-        automationId: standalone.id,
-        name: standalone.name,
-        prompt: standalone.prompt,
-        schedule: standalone.schedule,
-        enabled: true,
-        maxIterations: standalone.maxIterations,
-        stopAfterConsecutiveFailures: standalone.stopAfterConsecutiveFailures,
-        notificationPolicy: "all" as const,
-        completionPolicy: { type: "none" as const },
-      };
-
-      const targeted = yield* harness.callTool({
-        token: "token-parent",
-        name: "synara_update_automation",
-        args: {
-          ...fullUpdate,
-          target: {
-            provider: "codex",
-            model: "gpt-5.6-sol",
-            options: { reasoningEffort: "medium" },
-          },
-        },
-      });
-      assert.isFalse(isToolError(targeted.result), toolErrorText(targeted.result));
-      assert.deepEqual(harness.automationUpdates[0]?.modelSelection, {
+      const target: ModelSelection = {
         provider: "codex",
         model: "gpt-5.6-sol",
         options: { reasoningEffort: "medium" },
+      };
+
+      const targetedStandalone = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: { ...makeFullAutomationUpdate(standalone), target },
       });
+      assert.isFalse(
+        isToolError(targetedStandalone.result),
+        toolErrorText(targetedStandalone.result),
+      );
+      assert.deepEqual(harness.automationUpdates[0]?.modelSelection, target);
+
+      const targetedDedicated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          ...makeFullAutomationUpdate(dedicated),
+          target: { ...target, options: { reasoningEffort: "low" } },
+        },
+      });
+      assert.isFalse(
+        isToolError(targetedDedicated.result),
+        toolErrorText(targetedDedicated.result),
+      );
+      assert.deepEqual(harness.automationUpdates[1]?.modelSelection, {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "low" },
+      } as ModelSelection);
 
       const preserved = yield* harness.callTool({
         token: "token-parent",
         name: "synara_update_automation",
-        args: fullUpdate,
+        args: makeFullAutomationUpdate(standalone),
       });
       assert.isFalse(isToolError(preserved.result), toolErrorText(preserved.result));
-      assert.notProperty(harness.automationUpdates[1] as Record<string, unknown>, "modelSelection");
+      assert.notProperty(harness.automationUpdates[2] as Record<string, unknown>, "modelSelection");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
