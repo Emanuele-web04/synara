@@ -50,7 +50,7 @@ import {
   type UpdateDownloadedEvent,
 } from "electron-updater";
 
-import type { ContextMenuItem } from "@synara/contracts";
+import type { DesktopContextMenuItem } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
@@ -843,6 +843,30 @@ function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
     destructiveMenuIconCache = null;
     return undefined;
   }
+}
+// Renderer-rasterized Central icons: 32px PNGs shown in a 16pt macOS menu slot.
+const CONTEXT_MENU_ICON_DATA_URL_PREFIX = "data:image/png;base64,";
+const CONTEXT_MENU_ICON_MAX_DATA_URL_LENGTH = 64_000;
+// NSMenu sizes to its widest title and Electron has no minimum width; trailing em
+// spaces add a little breathing room on the right of macOS context menus.
+const MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING = "\u2003\u2003";
+
+function createContextMenuIcon(dataUrl: unknown): Electron.NativeImage | undefined {
+  if (
+    process.platform !== "darwin" ||
+    typeof dataUrl !== "string" ||
+    dataUrl.length > CONTEXT_MENU_ICON_MAX_DATA_URL_LENGTH ||
+    !dataUrl.startsWith(CONTEXT_MENU_ICON_DATA_URL_PREFIX)
+  ) {
+    return undefined;
+  }
+  const icon = nativeImage.createFromBuffer(
+    Buffer.from(dataUrl.slice(CONTEXT_MENU_ICON_DATA_URL_PREFIX.length), "base64"),
+    { scaleFactor: 2 },
+  );
+  if (icon.isEmpty()) return undefined;
+  icon.setTemplateImage(true);
+  return icon;
 }
 let updatePollTimer: ReturnType<typeof setInterval> | null = null;
 let updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -4435,7 +4459,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
-    async (_event, items: ContextMenuItem[], position?: { x: number; y: number }) => {
+    async (_event, items: DesktopContextMenuItem[], position?: { x: number; y: number }) => {
       const normalizedItems = items
         .filter((item) => typeof item.id === "string" && typeof item.label === "string")
         .map((item) => ({
@@ -4443,6 +4467,7 @@ function registerIpcHandlers(): void {
           label: item.label,
           separatorBefore: item.separatorBefore === true,
           destructive: item.destructive === true,
+          icon: createContextMenuIcon(item.iconDataUrl),
         }));
       if (normalizedItems.length === 0) {
         return null;
@@ -4477,14 +4502,15 @@ function registerIpcHandlers(): void {
             hasInsertedDestructiveSeparator = true;
           }
           const itemOption: MenuItemConstructorOptions = {
-            label: item.label,
+            label:
+              process.platform === "darwin"
+                ? `${item.label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
+                : item.label,
             click: () => resolve(item.id),
           };
-          if (item.destructive) {
-            const destructiveIcon = getDestructiveMenuIcon();
-            if (destructiveIcon) {
-              itemOption.icon = destructiveIcon;
-            }
+          const icon = item.icon ?? (item.destructive ? getDestructiveMenuIcon() : undefined);
+          if (icon) {
+            itemOption.icon = icon;
           }
           template.push(itemOption);
         }

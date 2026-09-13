@@ -16,6 +16,7 @@ import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { pinActionLabel } from "~/lib/pin";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
@@ -131,23 +132,47 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         [
           ...(isThreadActionCard
             ? [
-                { id: "rename", label: "Rename thread" },
+                { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
                 {
                   id: "toggle-pin",
                   label: pinActionLabel("thread", card.thread?.isPinned ?? false),
+                  icon: THREAD_CONTEXT_MENU_ICONS.pin,
                 },
               ]
             : []),
           ...(workspacePath
-            ? [{ id: "copy-path", label: "Copy Path", separatorBefore: true }]
+            ? [
+                {
+                  id: "copy-path",
+                  label: "Copy Path",
+                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                  separatorBefore: true,
+                },
+              ]
             : []),
-          ...(isThreadBacked ? [{ id: "copy-thread-id", label: "Copy Thread ID" }] : []),
+          ...(isThreadBacked
+            ? [
+                {
+                  id: "copy-thread-id",
+                  label: "Copy Thread ID",
+                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                },
+              ]
+            : []),
           ...(isThreadActionCard
-            ? [{ id: "archive", label: "Archive", separatorBefore: true }]
+            ? [
+                {
+                  id: "archive",
+                  label: "Archive",
+                  icon: THREAD_CONTEXT_MENU_ICONS.archive,
+                  separatorBefore: true,
+                },
+              ]
             : []),
           {
             id: "delete",
             label: deletesOnlyDraft ? "Delete draft" : "Delete",
+            icon: THREAD_CONTEXT_MENU_ICONS.delete,
             destructive: true,
             separatorBefore: !isThreadActionCard,
           },
