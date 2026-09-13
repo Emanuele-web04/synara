@@ -257,15 +257,18 @@ export default function GitActionsControl({
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(
-    () => getProviderStartOptions(settings, settings.textGenerationProviderInstanceId),
+    () =>
+      getProviderStartOptions(
+        settings,
+        settings.textGenerationProviderInstanceId ?? settings.textGenerationProvider ?? "codex",
+      ),
     [settings],
   );
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({
       provider: settings.textGenerationProvider ?? "codex",
-      ...(settings.textGenerationProviderInstanceId
-        ? { instanceId: settings.textGenerationProviderInstanceId }
-        : {}),
+      instanceId:
+        settings.textGenerationProviderInstanceId ?? settings.textGenerationProvider ?? "codex",
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
     }),
     [
