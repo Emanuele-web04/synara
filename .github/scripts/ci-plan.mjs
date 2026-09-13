@@ -17,7 +17,7 @@ export const workspacePaths = {
 const unitRows = [
   {
     pkg: "core",
-    filters: "--filter=\"*\" --filter=!@synara/web --filter=!@synara/cli",
+    filters: '--filter="*" --filter=!@synara/web --filter=!@synara/cli',
     "test-args": "",
   },
   { pkg: "web", filters: "--filter=@synara/web", "test-args": "" },
@@ -32,12 +32,18 @@ function git(root, args) {
 export function readGraph(root) {
   const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   const patterns = manifest.workspaces?.packages ?? manifest.workspaces;
-  if (JSON.stringify(patterns?.toSorted()) !== JSON.stringify(["apps/*", "packages/*", "scripts"])) {
+  if (
+    JSON.stringify(patterns?.toSorted()) !== JSON.stringify(["apps/*", "packages/*", "scripts"])
+  ) {
     throw new Error("Workspace layout changed; review CI ownership before narrowing validation.");
   }
   const tracked = git(root, ["ls-files", "-z"]).split("\0");
-  const manifests = tracked.filter((path) => /^(?:apps\/[^/]+|packages\/[^/]+|scripts)\/package\.json$/.test(path));
-  const expected = Object.values(workspacePaths).map((path) => `${path}/package.json`).toSorted();
+  const manifests = tracked.filter((path) =>
+    /^(?:apps\/[^/]+|packages\/[^/]+|scripts)\/package\.json$/.test(path),
+  );
+  const expected = Object.values(workspacePaths)
+    .map((path) => `${path}/package.json`)
+    .toSorted();
   if (JSON.stringify(manifests.toSorted()) !== JSON.stringify(expected)) {
     throw new Error("Workspace inventory changed; full validation is required.");
   }
@@ -56,7 +62,9 @@ export function readGraph(root) {
         throw new Error(`Unknown workspace dependency: ${dependency}.`);
       }
     }
-    graph[name] = Object.keys(dependencies).filter((dependency) => Object.hasOwn(workspacePaths, dependency));
+    graph[name] = Object.keys(dependencies).filter((dependency) =>
+      Object.hasOwn(workspacePaths, dependency),
+    );
   }
   // Packaging includes the CLI (and its web renderer) without declaring it in
   // desktop/package.json. Do not lose this dependency when deciding build lanes.
@@ -80,11 +88,21 @@ export function affectedPackages(changed, graph) {
 }
 
 function result(flags, rows, reason, affected = []) {
-  return { ...flags, unit: rows.length > 0, matrix: { include: rows }, reason, affected: [...affected].toSorted() };
+  return {
+    ...flags,
+    unit: rows.length > 0,
+    matrix: { include: rows },
+    reason,
+    affected: [...affected].toSorted(),
+  };
 }
 
 export function fullPlan(reason) {
-  return result({ typecheck: true, browser: true, build: true, windows: true, migrations: true }, unitRows, reason);
+  return result(
+    { typecheck: true, browser: true, build: true, windows: true, migrations: true },
+    unitRows,
+    reason,
+  );
 }
 
 function isDocumentation(path) {
@@ -103,11 +121,18 @@ export function planChanges(paths, graph) {
   let code = false;
   let migrations = false;
   for (const path of paths) {
-    if (typeof path !== "string" || !path || path.includes("\0") || path.split("/").includes("..")) {
+    if (
+      typeof path !== "string" ||
+      !path ||
+      path.includes("\0") ||
+      path.split("/").includes("..")
+    ) {
       return fullPlan("Invalid changed path; run all lanes.");
     }
     if (isDocumentation(path)) continue;
-    const owner = Object.entries(workspacePaths).find(([, directory]) => path.startsWith(`${directory}/`))?.[0];
+    const owner = Object.entries(workspacePaths).find(([, directory]) =>
+      path.startsWith(`${directory}/`),
+    )?.[0];
     if (
       !owner ||
       path.endsWith("/package.json") ||
@@ -167,11 +192,22 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const plan = planForEvent(process.cwd(), process.env.GITHUB_EVENT_NAME, process.env.GITHUB_REF);
   console.log(JSON.stringify(plan, null, 2));
   if (process.env.GITHUB_OUTPUT) {
-    for (const key of ["typecheck", "unit", "browser", "build", "windows", "migrations", "matrix"]) {
+    for (const key of [
+      "typecheck",
+      "unit",
+      "browser",
+      "build",
+      "windows",
+      "migrations",
+      "matrix",
+    ]) {
       appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${JSON.stringify(plan[key])}\n`);
     }
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI plan\n\n${plan.reason}\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`);
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## CI plan\n\n${plan.reason}\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`,
+    );
   }
 }

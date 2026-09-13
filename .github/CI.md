@@ -54,21 +54,21 @@ core, web and both CLI shards. “Browser” means all four stable runners. The
 separate marketing validation workflow runs for marketing changes; scheduled
 geometry/device checks and release publication triggers are unchanged.
 
-| Representative PR | Typecheck | Unit runners | Browser | Desktop build | Windows | Lineage |
-| --- | --- | --- | --- | --- | --- | --- |
-| Root Markdown / documentation | Skip | Skip | Skip | Skip | Skip | Skip |
-| Marketing content only | Skip | Skip | Skip | Skip | Skip | Skip |
-| Web code | Run | All units | Run | Run | Run | Skip |
-| Browser test/config | Run | All units | Run | Run | Run | Skip |
-| Desktop code | Run | Core | Skip | Run | Run | Skip |
-| Server/CLI code | Run | Core + both CLI | Skip | Run | Run | Skip |
-| Shared Windows/process runtime | Run | All units | Run | Run | Run | Run |
-| Server persistence/migration | Run | Core + both CLI | Skip | Run | Run | Run |
-| packages/shared | Run | All units | Run | Run | Run | Run |
-| packages/contracts | Run | All units | Run | Run | Run | Run |
-| Dependency/lockfile | Run | All units | Run | Run | Run | Run |
-| CI workflow/action/planner | Run | All units | Run | Run | Run | Run |
-| Release tooling | Run | All units | Run | Run | Run | Run |
+| Representative PR              | Typecheck | Unit runners    | Browser | Desktop build | Windows | Lineage |
+| ------------------------------ | --------- | --------------- | ------- | ------------- | ------- | ------- |
+| Root Markdown / documentation  | Skip      | Skip            | Skip    | Skip          | Skip    | Skip    |
+| Marketing content only         | Skip      | Skip            | Skip    | Skip          | Skip    | Skip    |
+| Web code                       | Run       | All units       | Run     | Run           | Run     | Skip    |
+| Browser test/config            | Run       | All units       | Run     | Run           | Run     | Skip    |
+| Desktop code                   | Run       | Core            | Skip    | Run           | Run     | Skip    |
+| Server/CLI code                | Run       | Core + both CLI | Skip    | Run           | Run     | Skip    |
+| Shared Windows/process runtime | Run       | All units       | Run     | Run           | Run     | Run     |
+| Server persistence/migration   | Run       | Core + both CLI | Skip    | Run           | Run     | Run     |
+| packages/shared                | Run       | All units       | Run     | Run           | Run     | Run     |
+| packages/contracts             | Run       | All units       | Run     | Run           | Run     | Run     |
+| Dependency/lockfile            | Run       | All units       | Run     | Run           | Run     | Run     |
+| CI workflow/action/planner     | Run       | All units       | Run     | Run           | Run     | Run     |
+| Release tooling                | Run       | All units       | Run     | Run           | Run     | Run     |
 
 Marketing application code also receives whole-workspace typechecking. Server or
 desktop process changes keep Windows even when the changed file name does not
@@ -83,24 +83,24 @@ Its 16 runner jobs totalled **2,334 seconds / 38.90 runner-minutes**. These are
 execution durations, not billed minutes or OS-price-weighted charges. This is a
 single successful full main run, not a statistically representative PR median.
 
-| Job | Runner duration (s) | Workspace/tool setup (s) | Main work (s) |
-| --- | --- | --- | --- |
-| Changes | 9 | 0 | 1 |
-| Static fast | 40 | 24 | 7 |
-| Typecheck | 56 | 22 | 26 |
-| Migration lineage | 13 | 1 | <1 |
-| Release smoke | 29 | 19 | <1 smoke + 1 identity |
-| Windows | 492 | 393 | 69 |
-| Desktop build | 114 | 20 | 85 |
-| Core units | 59 | 17 | 35 |
-| Web units | 144 | 24 | 111 |
-| Server 1/2 | 158 | 27 | 123 |
-| Server 2/2 | 246 | 18 | 221 |
-| Browser chat-follow | 188 | 17 | 149 |
-| Browser chat-workflows | 321 | 29 | 264 |
-| Browser components 1/2 | 189 | 18 | 149 |
-| Browser components 2/2 | 272 | 18 | 230 |
-| Aggregate gate | 4 | 0 | <1 |
+| Job                    | Runner duration (s) | Workspace/tool setup (s) | Main work (s)         |
+| ---------------------- | ------------------- | ------------------------ | --------------------- |
+| Changes                | 9                   | 0                        | 1                     |
+| Static fast            | 40                  | 24                       | 7                     |
+| Typecheck              | 56                  | 22                       | 26                    |
+| Migration lineage      | 13                  | 1                        | <1                    |
+| Release smoke          | 29                  | 19                       | <1 smoke + 1 identity |
+| Windows                | 492                 | 393                      | 69                    |
+| Desktop build          | 114                 | 20                       | 85                    |
+| Core units             | 59                  | 17                       | 35                    |
+| Web units              | 144                 | 24                       | 111                   |
+| Server 1/2             | 158                 | 27                       | 123                   |
+| Server 2/2             | 246                 | 18                       | 221                   |
+| Browser chat-follow    | 188                 | 17                       | 149                   |
+| Browser chat-workflows | 321                 | 29                       | 264                   |
+| Browser components 1/2 | 189                 | 18                       | 149                   |
+| Browser components 2/2 | 272                 | 18                       | 230                   |
+| Aggregate gate         | 4                   | 0                        | <1                    |
 
 Setup is the composite action or explicit tool/install steps, not checkout,
 runner startup, browser runtime installation or post-job cache saves. Columns
@@ -140,26 +140,26 @@ files or changing worker counts. Geometry quarantine remains solely nightly.
 
 ## Decisions for every workflow/lane
 
-| Lane/workflow | Decision | Rationale |
-| --- | --- | --- |
-| Changes | Keep; replace coarse filter | Dependency-aware, tested, conservative merge-tree planning; no install/API permission |
-| Static fast | Keep; merge release smoke | Fast independent feedback; one setup and one identity check |
-| Typecheck | Keep; conditional | Parallel whole-workspace validation; results stay uncached |
-| Core units | Keep; conditional | Already efficiently grouped; script tests have implicit source inputs |
-| Web units | Conditional | Keep entire suite whenever web is affected |
-| Both server shards | Keep; conditional | Substantial serial test time; no evidence for blind rebalancing |
-| All four browser shards | Keep; conditional | Stable correctness unchanged; skip only unrelated dependency surfaces |
-| Desktop build | Conditional | Explicit CLI/renderer packaging fan-out; preload verification unchanged |
-| Windows regression | Conditional; remove duplicate scanner | Native coverage unchanged; delete measured pathological cache work |
-| Migration lineage | Conditional; keep separate | Full tags, no dependency install, explicit missing-history failure |
-| Release smoke job | Merge into static | Removes a 29s runner for <1s unique work; no correctness moved to nightly |
-| Quality gate | Keep; harden | Required display name unchanged; validate expected results exactly |
-| Nightly geometry | Keep | Existing reliability quarantine only; no stable tests moved here |
-| Release workflow | Keep | Signing, provenance, native artifacts and publication permissions remain isolated |
-| Device helper matrix | Keep | Scheduled/manual compatibility probes are not redundant PR work |
-| Marketing validation | Keep | Dedicated builds/browser/accessibility checks and final outcome enforcement |
-| PR size / vouch | Keep | Permission-separated metadata automation; do not trade security for fewer YAML jobs |
-| Issue labels | Keep | Independent metadata operation, not a duplicate code-validation lane |
+| Lane/workflow           | Decision                              | Rationale                                                                             |
+| ----------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| Changes                 | Keep; replace coarse filter           | Dependency-aware, tested, conservative merge-tree planning; no install/API permission |
+| Static fast             | Keep; merge release smoke             | Fast independent feedback; one setup and one identity check                           |
+| Typecheck               | Keep; conditional                     | Parallel whole-workspace validation; results stay uncached                            |
+| Core units              | Keep; conditional                     | Already efficiently grouped; script tests have implicit source inputs                 |
+| Web units               | Conditional                           | Keep entire suite whenever web is affected                                            |
+| Both server shards      | Keep; conditional                     | Substantial serial test time; no evidence for blind rebalancing                       |
+| All four browser shards | Keep; conditional                     | Stable correctness unchanged; skip only unrelated dependency surfaces                 |
+| Desktop build           | Conditional                           | Explicit CLI/renderer packaging fan-out; preload verification unchanged               |
+| Windows regression      | Conditional; remove duplicate scanner | Native coverage unchanged; delete measured pathological cache work                    |
+| Migration lineage       | Conditional; keep separate            | Full tags, no dependency install, explicit missing-history failure                    |
+| Release smoke job       | Merge into static                     | Removes a 29s runner for <1s unique work; no correctness moved to nightly             |
+| Quality gate            | Keep; harden                          | Required display name unchanged; validate expected results exactly                    |
+| Nightly geometry        | Keep                                  | Existing reliability quarantine only; no stable tests moved here                      |
+| Release workflow        | Keep                                  | Signing, provenance, native artifacts and publication permissions remain isolated     |
+| Device helper matrix    | Keep                                  | Scheduled/manual compatibility probes are not redundant PR work                       |
+| Marketing validation    | Keep                                  | Dedicated builds/browser/accessibility checks and final outcome enforcement           |
+| PR size / vouch         | Keep                                  | Permission-separated metadata automation; do not trade security for fewer YAML jobs   |
+| Issue labels            | Keep                                  | Independent metadata operation, not a duplicate code-validation lane                  |
 
 ## Before/after interpretation
 
@@ -168,21 +168,21 @@ projection as completed-run data. Structural counts below are deterministic from
 the graph. Typical code scope matters, so both full and isolated examples are
 listed rather than claiming a universal “typical PR” duration.
 
-| Metric | Before | After design | Evidence |
-| --- | --- | --- | --- |
-| Full critical path | 513s (main sample) | Measure on PR; browser becomes candidate bottleneck | Before measured; after not assumed |
-| Full runner time | 38.90 min | Measure on PR | No fabricated after timing |
-| Full runner jobs | 16 | 15 | Structural |
-| Web-only jobs | 16 | 14 | Structural |
-| Server-only jobs | 16 | 9 | Structural |
-| Desktop-only jobs | 16 | 7 | Structural |
-| Docs-only jobs | 3 | 3 | Structural; still no heavy lanes |
-| Frozen workspace installations | 13 full | 12 full; 7 server; 5 desktop | Structural |
-| Playwright installations | 4/code PR | 4 affected; 0 server/desktop/docs | Structural |
-| Windows jobs | 1/code PR | 1 affected; 0 docs/marketing | Structural; not removed for platform changes |
-| Windows Bun package archive | 331.465s restore | Not restored or saved | Measured removed operation; cold install delta unknown |
-| Linux redundant Bun archive | 2.069s static sample | Skipped on exact node_modules hit | Measured removed operation |
-| Turbo persistence consumers | Every setup lane | Unit/build only | Structural; test cacheability unchanged |
+| Metric                         | Before               | After design                                        | Evidence                                               |
+| ------------------------------ | -------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| Full critical path             | 513s (main sample)   | Measure on PR; browser becomes candidate bottleneck | Before measured; after not assumed                     |
+| Full runner time               | 38.90 min            | Measure on PR                                       | No fabricated after timing                             |
+| Full runner jobs               | 16                   | 15                                                  | Structural                                             |
+| Web-only jobs                  | 16                   | 14                                                  | Structural                                             |
+| Server-only jobs               | 16                   | 9                                                   | Structural                                             |
+| Desktop-only jobs              | 16                   | 7                                                   | Structural                                             |
+| Docs-only jobs                 | 3                    | 3                                                   | Structural; still no heavy lanes                       |
+| Frozen workspace installations | 13 full              | 12 full; 7 server; 5 desktop                        | Structural                                             |
+| Playwright installations       | 4/code PR            | 4 affected; 0 server/desktop/docs                   | Structural                                             |
+| Windows jobs                   | 1/code PR            | 1 affected; 0 docs/marketing                        | Structural; not removed for platform changes           |
+| Windows Bun package archive    | 331.465s restore     | Not restored or saved                               | Measured removed operation; cold install delta unknown |
+| Linux redundant Bun archive    | 2.069s static sample | Skipped on exact node_modules hit                   | Measured removed operation                             |
+| Turbo persistence consumers    | Every setup lane     | Unit/build only                                     | Structural; test cacheability unchanged                |
 
 Removing only the measured Windows restore and standalone release runner removes
 360s of observed operations, before accounting for replacement cold-download
