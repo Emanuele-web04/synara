@@ -17,11 +17,14 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
 } as const satisfies Record<ProviderKind, string>;
 
 const CLI_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const RESERVED_CLI_COMMANDS = new Set<string>(Object.values(PROVIDER_CLI_COMMAND_BY_KIND));
 
 export function normalizeProviderCliAlias(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const alias = value.trim();
-  return CLI_COMMAND_PATTERN.test(alias) ? alias : undefined;
+  return CLI_COMMAND_PATTERN.test(alias) && !RESERVED_CLI_COMMANDS.has(alias)
+    ? alias
+    : undefined;
 }
 
 function profileSuffix(provider: ProviderKind, instanceId: ProviderInstanceId): string {

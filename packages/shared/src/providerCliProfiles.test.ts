@@ -34,5 +34,7 @@ describe("provider CLI profile names", () => {
     ).toBe("pairing-pi");
     expect(normalizeProviderCliAlias("claude work")).toBeUndefined();
     expect(normalizeProviderCliAlias("claude-work; rm -rf /")).toBeUndefined();
+    expect(normalizeProviderCliAlias("claude")).toBeUndefined();
+    expect(normalizeProviderCliAlias("codex")).toBeUndefined();
   });
 });
