@@ -230,6 +230,7 @@ test("required name, selection wiring and migration history remain enforced", ()
   assert.equal((workflow.match(/run: bun run brand:check/g) ?? []).length, 1);
   assert.equal((workflow.match(/run: bun run windows-runtime:check/g) ?? []).length, 1);
   assert.ok(!workflow.includes("continue-on-error"));
+  assert.ok(workflow.includes("run: bun run test --filter='!@synara/web' --filter='!@synara/cli'"));
   for (const [job, flag] of Object.entries(jobFlags)) {
     const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z_-]+:\n/)[0];
     assert.ok(

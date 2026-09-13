@@ -116,9 +116,11 @@ jobs:
         run: bun run typecheck
 
       # 26s typecheck + 35s core work stays off the critical path while removing
-      # one checkout/install. Keep all core packages: scripts have cross-app tests.
+      # one checkout/install. Scripts have cross-app tests, so core stays broad.
+      # Exclude only the separately sharded apps: newly added workspace tests
+      # then run automatically instead of falling outside a fixed allowlist.
       - name: Test core packages
-        run: bun run test --filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop
+        run: bun run test --filter='!@synara/web' --filter='!@synara/cli'
 
   # Keep the server's serial worker flags and both shards. Turbo still runs
   # package build prerequisites; tests and typechecks remain non-cacheable.
