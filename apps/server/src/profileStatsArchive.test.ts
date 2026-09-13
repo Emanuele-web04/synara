@@ -23,6 +23,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import {
+  aggregateThreadTurnSnapshotRows,
   aggregateThreadTokenRows,
   ProfileStatsArchive,
   ProfileStatsArchiveLive,
@@ -264,6 +265,28 @@ const acknowledgeProviderCommandJournal = (sql: SqlClient.SqlClient) =>
   `;
 
 describe("ProfileStatsArchive", () => {
+  it("snapshots reasoning from canonical model option rows", () => {
+    expect(
+      aggregateThreadTurnSnapshotRows(
+        [
+          {
+            payloadJson:
+              '{"modelSelection":{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
+          },
+        ],
+        null,
+      ),
+    ).toEqual([
+      {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5-codex",
+        reasoning: "high",
+        turnCount: 1,
+      },
+    ]);
+  });
+
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
     isGitRepositoryImpl = () => Effect.succeed(true);

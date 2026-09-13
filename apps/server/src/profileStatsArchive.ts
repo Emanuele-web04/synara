@@ -111,6 +111,28 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function readReasoningOption(options: unknown): string | null {
+  if (Array.isArray(options)) {
+    for (const id of ["reasoningEffort", "effort"] as const) {
+      const match = options.find(
+        (entry) =>
+          entry !== null &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as { readonly id?: unknown }).id === id,
+      );
+      const value = readString((match as { readonly value?: unknown } | undefined)?.value);
+      if (value !== null) return value;
+    }
+    return null;
+  }
+  if (options === null || typeof options !== "object") {
+    return null;
+  }
+  const legacy = options as { readonly reasoningEffort?: unknown; readonly effort?: unknown };
+  return readString(legacy.reasoningEffort) ?? readString(legacy.effort);
+}
+
 function parseModelSelection(value: unknown): ModelSelectionLike | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -121,15 +143,11 @@ function parseModelSelection(value: unknown): ModelSelectionLike | null {
     model?: unknown;
     options?: unknown;
   };
-  const options =
-    record.options !== null && typeof record.options === "object"
-      ? (record.options as { reasoningEffort?: unknown; effort?: unknown })
-      : null;
   return {
     provider: readString(record.provider),
     instanceId: readString(record.instanceId) ?? readString(record.provider),
     model: readString(record.model),
-    reasoning: readString(options?.reasoningEffort) ?? readString(options?.effort),
+    reasoning: readReasoningOption(record.options),
   };
 }
 
