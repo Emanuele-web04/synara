@@ -38,6 +38,8 @@ export interface ManagedTerminalProfile {
   readonly omittedSensitiveEnvironmentNames?: ReadonlyArray<string>;
 }
 
+const PROVIDER_PROFILE_MANIFEST_FILENAME = "provider-profiles.json";
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
@@ -298,6 +300,48 @@ function writeFileIfChanged(filePath: string, content: string, mode: number): vo
   }
 }
 
+function readProviderProfileManifest(rootDir: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      fs.readFileSync(path.join(rootDir, PROVIDER_PROFILE_MANIFEST_FILENAME), "utf8"),
+    );
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string =>
+          typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function synchronizeProviderProfileWrappers(
+  rootDir: string,
+  profiles: ReadonlyArray<ManagedTerminalProfile>,
+): void {
+  const nextNames = new Set(profiles.map((profile) => profile.commandName));
+  for (const previousName of readProviderProfileManifest(rootDir)) {
+    if (nextNames.has(previousName)) continue;
+    try {
+      fs.unlinkSync(path.join(rootDir, previousName));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  for (const profile of profiles) {
+    writeFileIfChanged(
+      path.join(rootDir, profile.commandName),
+      buildProviderProfileWrapperScript(profile),
+      PRIVATE_EXECUTABLE_FILE_MODE,
+    );
+  }
+  writeFileIfChanged(
+    path.join(rootDir, PROVIDER_PROFILE_MANIFEST_FILENAME),
+    `${JSON.stringify([...nextNames].toSorted(), null, 2)}\n`,
+    PRIVATE_FILE_MODE,
+  );
+}
+
 function buildManagedZshRc(quotedZshDir: string): string {
   return `# Synara zsh rc wrapper
 _synara_home="\${SYNARA_ORIGINAL_ZDOTDIR:-$HOME}"
@@ -439,13 +483,7 @@ export function prepareManagedTerminalWrappers(options: {
       PRIVATE_EXECUTABLE_FILE_MODE,
     );
   }
-  for (const profile of options.profiles ?? []) {
-    writeFileIfChanged(
-      path.join(options.rootDir, profile.commandName),
-      buildProviderProfileWrapperScript(profile),
-      PRIVATE_EXECUTABLE_FILE_MODE,
-    );
-  }
+  synchronizeProviderProfileWrappers(options.rootDir, options.profiles ?? []);
   ensureManagedZshWrappers(options.zshRootDir);
 
   return {

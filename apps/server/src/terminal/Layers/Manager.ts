@@ -33,6 +33,7 @@ import { Effect, Encoding, Layer, Schema } from "effect";
 import { createLogger } from "../../logger";
 import { PtyAdapter, PtyAdapterShape, type PtyExitEvent, type PtyProcess } from "../Services/PTY";
 import { ServerConfig } from "../../config";
+import { ServerSettingsService } from "../../serverSettings";
 import {
   ensurePrivateDirectorySync,
   PRIVATE_FILE_MODE,
@@ -41,7 +42,9 @@ import {
 import {
   applyManagedTerminalAgentWrapperEnv,
   prepareManagedTerminalAgentWrappers,
+  type ManagedTerminalProfile,
 } from "../managedTerminalWrappers";
+import { deriveManagedTerminalProfiles } from "../providerTerminalProfiles";
 import {
   ShellCandidate,
   TerminalError,
@@ -752,6 +755,7 @@ interface TerminalManagerOptions {
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+  managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
 }
 
 interface KillEscalationHandle {
@@ -795,6 +799,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private currentSubprocessPollDelayMs = 0;
   private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
+  private readonly managedProfileResolver:
+    | (() => Promise<ReadonlyArray<ManagedTerminalProfile>>)
+    | undefined;
+  private managedProfileRefresh: Promise<void> | null = null;
 
   constructor(options: TerminalManagerOptions) {
     super();
@@ -825,6 +833,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
     this.maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
+    this.managedProfileResolver = options.managedProfileResolver;
     ensurePrivateDirectorySync(this.logsDir);
     if (this.managedWrapperBinDir) {
       try {
@@ -848,12 +857,42 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
+  private async refreshManagedProfileWrappers(): Promise<void> {
+    if (!this.managedProfileResolver || !this.managedWrapperBinDir) return;
+    if (this.managedProfileRefresh) return this.managedProfileRefresh;
+    const refresh = (async () => {
+      try {
+        const profiles = await this.managedProfileResolver!();
+        const preparedWrappers = prepareManagedTerminalAgentWrappers({
+          baseEnv: process.env,
+          profiles,
+          targetDir: this.managedWrapperBinDir!,
+          zshDir:
+            this.managedWrapperZshDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
+        });
+        this.managedWrapperBinDir = preparedWrappers.binDir;
+        this.managedWrapperZshDir = preparedWrappers.zshDir;
+      } catch (error) {
+        this.logger.warn("failed to refresh provider terminal profiles", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    this.managedProfileRefresh = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.managedProfileRefresh === refresh) this.managedProfileRefresh = null;
+    }
+  }
+
   private historyLimits(): HistoryLimits {
     return { maxLines: this.historyLineLimit, maxBytes: this.historyByteLimit };
   }
 
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalOpenInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
@@ -1068,6 +1107,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalRestartInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
@@ -2369,11 +2409,25 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 export const TerminalManagerLive = Layer.effect(
   TerminalManager,
   Effect.gen(function* () {
-    const { terminalLogsDir } = yield* ServerConfig;
+    const { homeDir, stateDir, terminalLogsDir } = yield* ServerConfig;
+    const serverSettings = yield* ServerSettingsService;
 
     const ptyAdapter = yield* PtyAdapter;
     const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() => new TerminalManagerRuntime({ logsDir: terminalLogsDir, ptyAdapter })),
+      Effect.sync(
+        () =>
+          new TerminalManagerRuntime({
+            logsDir: terminalLogsDir,
+            ptyAdapter,
+            managedProfileResolver: async () =>
+              deriveManagedTerminalProfiles({
+                settings: await Effect.runPromise(serverSettings.getSettings),
+                baseEnv: process.env,
+                homeDir,
+                stateDir,
+              }),
+          }),
+      ),
       (r) => Effect.promise(() => r.disposeForShutdown()),
     );
 
