@@ -264,6 +264,10 @@
       "types": "./src/providerInstances.ts",
       "import": "./src/providerInstances.ts"
     },
+    "./providerCliProfiles": {
+      "types": "./src/providerCliProfiles.ts",
+      "import": "./src/providerCliProfiles.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"
