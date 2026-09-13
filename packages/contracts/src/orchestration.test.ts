@@ -210,6 +210,7 @@ it.effect("preserves Antigravity effort options separately from the model", () =
 
     assert.deepStrictEqual(parsed, {
       provider: "antigravity",
+      instanceId: "antigravity",
       model: "Gemini 3.5 Flash",
       options: { reasoningEffort: "high" },
     });
