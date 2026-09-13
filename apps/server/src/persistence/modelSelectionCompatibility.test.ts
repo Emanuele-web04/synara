@@ -8,6 +8,48 @@ import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 
 import { normalizePersistedModelSelection } from "./modelSelectionCompatibility.ts";
 
+it("preserves explicit provider instance ids during compatibility normalization", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    }),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    },
+  );
+});
+
+
+
+it("uses settings to resolve opaque provider instance ids", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection(
+      {
+        instanceId: "work",
+        model: "company-model",
+      },
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      },
+    ),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "company-model",
+    },
+  );
+});
+
 it("migrates legacy Kilo provider values and labels to OpenCode", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

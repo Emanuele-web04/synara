@@ -3,7 +3,8 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { MODEL_OPTIONS_BY_PROVIDER, ProviderInstanceId } from "@synara/contracts";
+import { Schema } from "effect";
 
 type ModelProviderKind =
   | "codex"
@@ -27,6 +28,7 @@ const DROID_ONLY_MODEL_SLUGS = new Set(
     .map((model) => model.slug.toLowerCase())
     .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
 );
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
 
 const LEGACY_GEMINI_MODEL_LABELS: Readonly<Record<string, string>> = {
   "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
@@ -152,7 +154,7 @@ function inferSpecificModelProvider(model: string): ModelProviderKind | undefine
   if (lowerModel.includes("devin")) {
     return "devin";
   }
-  return "codex";
+  return undefined;
 }
 
 function readLegacyProviderOptions(
@@ -243,8 +245,13 @@ export function normalizeLegacyModelSelection(input: {
           reasoningEffort: antigravityModel.reasoningEffort,
         }
       : normalizedOptions;
+  const instanceId =
+    typeof input.instanceId === "string" && isProviderInstanceId(input.instanceId.trim())
+      ? input.instanceId.trim()
+      : undefined;
   return {
     provider,
+    ...(instanceId !== undefined ? { instanceId } : {}),
     model: antigravityModel?.model ?? input.model,
     ...(options === undefined ? {} : { options }),
   };
