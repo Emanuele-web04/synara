@@ -1,0 +1,27 @@
+{
+  "sourceRun": 34785503156,
+  "sourceHead": "c12a12b6be86dd8a15a3890c861fc8c67a4c4d06",
+  "defaultSeconds": 0.6,
+  "seconds": {
+    "src/orchestration/Layers/ProviderCommandReactor.test.ts": 33.64,
+    "src/provider/Layers/AntigravityAdapter.test.ts": 27.6,
+    "src/git/Layers/GitCore.test.ts": 15.25,
+    "src/git/Layers/GitManager.test.ts": 13.38,
+    "src/orchestration/Layers/ProviderRuntimeIngestion.test.ts": 12.9,
+    "src/provider/acp/AcpJsonRpcConnection.test.ts": 12.73,
+    "src/orchestration/Layers/CheckpointReactor.test.ts": 10.55,
+    "src/provider/Layers/ProviderService.test.ts": 9.77,
+    "src/main.test.ts": 5.83,
+    "src/authEffectRoute.test.ts": 5.4,
+    "src/orchestration/Layers/OrchestrationEngine.test.ts": 5.14,
+    "integration/orchestrationEngine.integration.test.ts": 4.71,
+    "src/terminal/Layers/Manager.test.ts": 4.49,
+    "src/orchestration/Layers/ProjectionPipeline.test.ts": 4.1,
+    "src/wsRpc.connectionLifecycle.test.ts": 4.0,
+    "src/automation/Layers/AutomationService.test.ts": 3.2,
+    "src/git/Layers/CursorTextGeneration.test.ts": 3.18,
+    "src/provider/acp/AcpSdkConformance.test.ts": 2.87,
+    "src/orchestration/Layers/messageTextChunks.test.ts": 2.54,
+    "src/provider/Layers/PiAdapter.lifecycle.test.ts": 2.43
+  }
+}

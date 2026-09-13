@@ -20,6 +20,13 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: read
+
+concurrency:
+  group: device-helper-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Inventory only: prints what each image actually ships so the pinned pairs in
   # `probe` can be refreshed when an image drops or adds a version. Kept separate
@@ -117,7 +124,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.toolchain.outputs.present == 'true'
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: node .github/scripts/install-workspace.mjs device
 
       # The blocking check: compile against this toolchain and ask the helper
       # which capabilities resolved. A moved symbol fails here, needs no

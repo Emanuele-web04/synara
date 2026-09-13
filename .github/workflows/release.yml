@@ -202,9 +202,16 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        # Preflight already runs the full lifecycle-script install plus lint,
-        # typecheck, and tests. Artifact jobs only need dependencies available.
-        run: bun install --frozen-lockfile --ignore-scripts
+        # Preflight still validates the complete workspace with lifecycle scripts.
+        # Native full/filtered Windows packaging, provenance and startup passed.
+        # Keep Linux/macOS unchanged until their end-to-end gain is verified.
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            node .github/scripts/install-workspace.mjs release
+          else
+            bun install --frozen-lockfile --ignore-scripts
+          fi
 
       - id: build_artifact
         name: Build desktop artifact

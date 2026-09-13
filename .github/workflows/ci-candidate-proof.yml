@@ -1,0 +1,57 @@
+name: CI candidate proof
+
+on:
+  push:
+    branches: [codex/ci-cross-platform]
+    paths: [.github/workflows/ci-candidate-proof.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  mac-device:
+    name: Native device (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Install the committed device dependency profile
+        run: node .github/scripts/install-workspace.mjs device
+      - name: Native capability probe
+        run: bun run test:device:probe
+      - name: Native simulator smoke
+        timeout-minutes: 15
+        run: bun run test:device
+  measurements:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Preserve source-linked job timing evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-results"
+          for run in 34785599800 34786794723; do
+            gh api "repos/Emanuele-web04/synara/actions/runs/$run" > "$RUNNER_TEMP/ci-results/run-$run.json"
+            gh api "repos/Emanuele-web04/synara/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/ci-results/jobs-$run.json"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-before-balancing
+          path: ${{ runner.temp }}/ci-results
+          retention-days: 14
