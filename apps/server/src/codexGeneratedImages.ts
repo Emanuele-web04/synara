@@ -193,9 +193,15 @@ export function enabledCodexProviderInstanceIdsFromSettings(
 export function resolveCodexGeneratedImagesRoots(
   homePath?: CodexGeneratedImageHomeCandidate,
 ): readonly string[] {
-  return resolveCodexHomeAllowlistCandidates(codexHomePathsInputFromContext(homePath)).map((home) =>
+  return resolveCodexGeneratedImageHomes(homePath).map((home) =>
     path.join(home, "generated_images"),
   );
+}
+
+export function resolveCodexGeneratedImageHomes(
+  homePath?: CodexGeneratedImageHomeCandidate,
+): readonly string[] {
+  return resolveCodexHomeAllowlistCandidates(codexHomePathsInputFromContext(homePath));
 }
 
 export function firstStringValue(
