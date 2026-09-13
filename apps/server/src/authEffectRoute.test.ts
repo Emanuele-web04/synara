@@ -355,6 +355,67 @@ describe("authEffectRouteLayer", () => {
 });
 
 describe("binaryUploadEffectRouteLayer", () => {
+  it("routes voice uploads through the requested provider instance", async () => {
+    const transcribeVoice = vi.fn(() => Effect.succeed({ text: "hello from work" }));
+    await withAuthEffectServer(
+      { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape,
+      makeServerAuth({ count: 0 }),
+      async (serverOrigin) => {
+        const params = new URLSearchParams({
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          cwd: "/tmp/project",
+          mimeType: "audio/wav",
+          sampleRateHz: "16000",
+          durationMs: "250",
+        });
+        const response = await fetch(
+          `${serverOrigin}${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer bearer-token" },
+            body: Uint8Array.from([1]),
+          },
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ text: "hello from work" });
+        expect(transcribeVoice).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            providerOptions: {
+              codex: {
+                accountId: "codex_work",
+                homePath: "/tmp/codex-work",
+                environment: { OPENAI_API_KEY: "work-secret" },
+              },
+            },
+          }),
+        );
+      },
+      binaryUploadEffectRouteLayer,
+      {
+        providerAdapterRegistry: {
+          getByProvider: () => Effect.succeed({ provider: "codex", transcribeVoice } as never),
+          listProviders: () => Effect.succeed(["codex"]),
+        },
+        serverSettingsLayer: ServerSettingsService.layerTest({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              enabled: true,
+              environment: [
+                { name: "OPENAI_API_KEY", value: "work-secret", sensitive: true },
+              ],
+              config: { homePath: "/tmp/codex-work" },
+            },
+          },
+        }),
+      },
+    );
+  });
+
   it("rejects voice uploads before transcription when the provider is disabled", async () => {
     const transcribeVoice = vi.fn(() => Effect.succeed({ text: "unexpected" }));
     await withAuthEffectServer(

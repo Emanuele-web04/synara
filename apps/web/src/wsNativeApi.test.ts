@@ -1220,6 +1220,7 @@ describe("wsNativeApi", () => {
     const api = createWsNativeApi();
     const result = await api.server.transcribeVoice({
       provider: "codex",
+      providerInstanceId: "codex_work",
       cwd: "/repo",
       audioBase64: "AQID",
       mimeType: "audio/wav",
@@ -1232,6 +1233,7 @@ describe("wsNativeApi", () => {
       expect.stringContaining("/api/voice/transcribe?"),
       expect.objectContaining({ method: "POST", body: Uint8Array.from([1, 2, 3]) }),
     );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("providerInstanceId=codex_work");
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
