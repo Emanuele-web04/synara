@@ -924,32 +924,28 @@ export function getManageableProviderInstances(
   return result;
 }
 
-// Removes every setting keyed by an explicit instance id so a later instance
-// that reuses the id cannot inherit the deleted account's model preferences.
+// Removes every app setting keyed by an explicit instance id so a later
+// instance that reuses the id cannot inherit the deleted account's preferences.
 export function removeProviderInstancePreferences(
-  settings: Pick<AppSettings, "providerInstances" | "favorites">,
+  settings: Pick<AppSettings, "providerInstances">,
   instanceId: string,
-): Pick<AppSettings, "providerInstances" | "favorites"> {
+): Pick<AppSettings, "providerInstances"> {
   const providerInstances: Record<string, ProviderInstanceConfig> = {
     ...settings.providerInstances,
   };
   delete providerInstances[instanceId];
   return {
     providerInstances: providerInstances as ProviderInstanceConfigMap,
-    favorites: settings.favorites.filter((favorite) => favorite.provider !== instanceId),
   };
 }
 
 export function removeManageableProviderInstance(
   settings: Pick<
     AppSettings,
-    "codexAccounts" | "codexHomePath" | "favorites" | "providerInstances" | "selectedCodexAccountId"
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
   >,
   instanceId: string,
-): Pick<
-  AppSettings,
-  "codexAccounts" | "favorites" | "providerInstances" | "selectedCodexAccountId"
-> {
+): Pick<AppSettings, "codexAccounts" | "providerInstances" | "selectedCodexAccountId"> {
   const preferences = removeProviderInstancePreferences(settings, instanceId);
   const legacyAccount = normalizeCodexAccounts(settings.codexAccounts).find(
     (account) => providerInstanceIdForCodexAccount(account.id) === instanceId,

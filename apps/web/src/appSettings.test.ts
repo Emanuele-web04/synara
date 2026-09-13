@@ -1358,7 +1358,6 @@ describe("getProviderInstanceOptions", () => {
             },
           ],
           codexHomePath: "",
-          favorites: [{ provider: instanceId, model: "gpt-work" }],
           providerInstances: {
             [instanceId]: { driver: "codex", enabled: false },
           },
@@ -1368,7 +1367,6 @@ describe("getProviderInstanceOptions", () => {
       ),
     ).toEqual({
       codexAccounts: [],
-      favorites: [],
       providerInstances: {},
       selectedCodexAccountId: "default",
     });
