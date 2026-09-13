@@ -707,8 +707,10 @@ export interface DesktopBridge {
       permissions?: readonly DesktopAppSnapPermissionKind[],
     ) => Promise<DesktopAppSnapState>;
     /**
-     * Fires the macOS prompts for the requested grants, then walks the floating
-     * permission coach through each pane still missing a grant.
+     * Reads current grants without prompting, then walks the floating permission
+     * coach through each pane still missing a grant — opening its System
+     * Settings page and raising that pane's prompt as each step begins, so macOS
+     * never shows several permission dialogs at once.
      */
     startPermissionSetup: (
       permissions: readonly DesktopAppSnapPermissionKind[],

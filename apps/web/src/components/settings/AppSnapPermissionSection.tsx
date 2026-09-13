@@ -2,7 +2,7 @@
 // Purpose: The single guided macOS permission checklist — per-pane Grant buttons that deep-link
 //          System Settings, run the floating GrantCoach, and poll until the grant lands. Shared
 //          by the AppSnap panel (Input Monitoring + Screen Recording) and the Computer panel
-//          (Accessibility + Input Monitoring + Screen Recording).
+//          (Accessibility + Screen Recording).
 // Layer: Settings UI component
 
 import {
@@ -215,12 +215,17 @@ export function AppSnapPermissionSection({
   }, [guidePane, permissionKinds]);
 
   // The floating drag-in coach lives for exactly as long as the inline guide.
+  // Only hide what this surface showed: mounting with no guide must not close a
+  // coach a startPermissionSetup session is still driving.
+  const shownGuidePaneRef = useRef<DesktopAppSnapSettingsPane | null>(null);
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
     if (guidePane) {
+      shownGuidePaneRef.current = guidePane;
       void bridge.showPermissionGuide(guidePane).catch(() => undefined);
-    } else {
+    } else if (shownGuidePaneRef.current) {
+      shownGuidePaneRef.current = null;
       void bridge.hidePermissionGuide?.();
     }
   }, [guidePane]);
@@ -253,8 +258,7 @@ export function AppSnapPermissionSection({
         toastManager.add({
           type: "info",
           title: "Permissions unchanged",
-          description:
-            "Use Grant next to a permission to walk through setup.",
+          description: "Use Grant next to a permission to walk through setup.",
         });
       }
     } catch (error) {

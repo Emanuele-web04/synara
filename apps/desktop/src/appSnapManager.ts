@@ -48,6 +48,9 @@ const ORPHANED_PICKER_IMAGE_PATTERN =
   /^appsnap-picker-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.png$/;
 const LIST_WINDOWS_TIMEOUT_MS = 5_000;
 const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
+// Permission checks run through the serialized command queue, so a wedged
+// helper must be killed rather than stall every queued read behind it.
+const PERMISSION_COMMAND_TIMEOUT_MS = 10_000;
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
 // Late helper answers to timed-out or interrupted picker requests are dropped
 // instead of being consumed as unsolicited hotkey captures.
@@ -504,6 +507,9 @@ export class DesktopAppSnapManager {
   // leaves this queue empty, so its close never spawns a follow-on coach.
   #guidePaneQueue: DesktopAppSnapSettingsPane[] = [];
   #guideSessionKinds: readonly DesktopAppSnapPermissionKind[] = [];
+  // The grant watch polls every 800ms; dedupe keeps a steady-state guide from
+  // spamming unchanged snapshots over IPC on every tick.
+  #lastEmittedStateJson: string | null = null;
   #guideSessionOpensSettings = false;
 
   constructor(options: DesktopAppSnapManagerOptions) {
@@ -760,6 +766,19 @@ export class DesktopAppSnapManager {
       this.#activeGuidePane = pane;
       this.#lastGuideState = null;
       this.#startGuideGrantWatch(child);
+      child.once("error", () => {
+        if (this.#guideProcess !== child) return;
+        this.#guideProcess = null;
+        this.#activeGuidePane = null;
+        this.#stopGuideGrantWatch(child);
+        this.#guideOutputLines?.close();
+        this.#guideOutputLines = null;
+        this.#lastGuideState = "closed";
+        this.#options.onPermissionGuideState("closed");
+        this.#guidePaneQueue = [];
+        this.#guideSessionKinds = [];
+        this.#guideSessionOpensSettings = false;
+      });
       this.#guideOutputLines = this.#wireHelperOutput(child, (message) =>
         this.#handleGuideMessage(child, message),
       );
@@ -786,11 +805,23 @@ export class DesktopAppSnapManager {
           return;
         }
         // Recheck before advancing so a pane the user already flipped while the
-        // last coach was up never shows a stale guide of its own.
-        void this.#runPermissionCommand("--check-permissions", this.#guideSessionKinds)
-          .then(() => this.#advancePermissionGuide())
+        // last coach was up never shows a stale guide of its own. A failed
+        // recheck ends the session rather than advancing on stale fields.
+        const sessionKinds = this.#guideSessionKinds;
+        void this.#runPermissionCommand("--check-permissions", sessionKinds)
+          .then((ok) => {
+            if (ok) {
+              this.#advancePermissionGuide();
+              return;
+            }
+            this.#guidePaneQueue = [];
+            this.#guideSessionKinds = [];
+            this.#guideSessionOpensSettings = false;
+          })
           .catch(() => {
             this.#guidePaneQueue = [];
+            this.#guideSessionKinds = [];
+            this.#guideSessionOpensSettings = false;
           });
       });
     } catch {
@@ -916,10 +947,21 @@ export class DesktopAppSnapManager {
     this.#options.onPermissionGuideState("granted");
     this.#stopGuideProcess();
     if (this.#guidePaneQueue.length === 0) return;
-    void this.#runPermissionCommand("--check-permissions", this.#guideSessionKinds)
-      .then(() => this.#advancePermissionGuide())
+    const sessionKinds = this.#guideSessionKinds;
+    void this.#runPermissionCommand("--check-permissions", sessionKinds)
+      .then((ok) => {
+        if (ok) {
+          this.#advancePermissionGuide();
+          return;
+        }
+        this.#guidePaneQueue = [];
+        this.#guideSessionKinds = [];
+        this.#guideSessionOpensSettings = false;
+      })
       .catch(() => {
         this.#guidePaneQueue = [];
+        this.#guideSessionKinds = [];
+        this.#guideSessionOpensSettings = false;
       });
   }
 
@@ -1341,7 +1383,11 @@ export class DesktopAppSnapManager {
   }
 
   #emitState(): void {
-    this.#options.onState(this.getState());
+    const state = this.getState();
+    const json = JSON.stringify(state);
+    if (json === this.#lastEmittedStateJson) return;
+    this.#lastEmittedStateJson = json;
+    this.#options.onState(state);
   }
 
   #setState(status: DesktopAppSnapState["status"], message: string | null): void {
@@ -1396,7 +1442,6 @@ export class DesktopAppSnapManager {
       this.#setState(
         "permission-required",
         permissionRequiredMessage({
-          accessibility: this.#accessibilityPermission,
           inputMonitoring: this.#inputMonitoringPermission,
           screenRecording: this.#screenRecordingPermission,
         }),
@@ -1621,6 +1666,11 @@ export class DesktopAppSnapManager {
       let receivedPermissions = false;
       let reportedError: string | null = null;
       let spawnFailed = false;
+      const timeout = setTimeout(() => {
+        if (this.#permissionProcess === child) this.#permissionProcess = null;
+        child.kill();
+        resolve(false);
+      }, PERMISSION_COMMAND_TIMEOUT_MS);
       this.#wireHelperOutput(child, (message) => {
         if (message.type === "permissions") {
           receivedPermissions = true;
@@ -1630,12 +1680,14 @@ export class DesktopAppSnapManager {
         }
       });
       child.once("error", (error) => {
+        clearTimeout(timeout);
         spawnFailed = true;
         if (this.#permissionProcess === child) this.#permissionProcess = null;
         this.#setState("error", `Could not inspect AppSnap permissions: ${error.message}`);
         resolve(false);
       });
       child.once("close", () => {
+        clearTimeout(timeout);
         if (this.#permissionProcess === child) this.#permissionProcess = null;
         if (this.#disposed) {
           resolve(false);
@@ -1765,7 +1817,6 @@ export class DesktopAppSnapManager {
       this.#setState(
         "permission-required",
         permissionRequiredMessage({
-          accessibility: this.#accessibilityPermission,
           inputMonitoring: this.#inputMonitoringPermission,
           screenRecording: this.#screenRecordingPermission,
         }),

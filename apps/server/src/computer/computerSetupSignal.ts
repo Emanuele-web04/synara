@@ -156,20 +156,19 @@ export function computerSetupSignal(input: {
  * What the *model* is told, as opposed to what the user is shown.
  *
  * Deliberately terse and free of instructions the model could try to follow: the
- * remedy is a dialog the OS has already put in front of the human, so the
- * agent's whole job here is to stop and say so. Handed the long user-facing
- * availability message instead, models wrote paragraphs explaining macOS privacy
- * to a user who was already looking at the prompt.
+ * remedy is a setup card already in front of the human, so the agent's whole job
+ * here is to stop and say so. Handed the long user-facing availability message
+ * instead, models wrote paragraphs explaining macOS privacy to a user who was
+ * already looking at the card.
  *
- * The tense matters. Detecting a missing grant is now what asks the OS for it
- * (`MacComputerBackend.requestMissingPermissions`), so by the time this note
- * reaches the model the dialog is on screen — telling the model to instruct the
- * user through System Settings would talk over it.
+ * The tense matters. Detecting a missing grant is read-only — nothing is asked
+ * of macOS until the user runs the card's guided setup — so this note claims
+ * only what is on screen, never that a system prompt is already up.
  */
 export function computerSetupToolNote(signal: ComputerSetupSignal): string {
   const labels = listComputerPermissions(signal.missing);
   const needed = labels.length > 0 ? labels : "a macOS privacy permission";
-  const asked = `macOS is asking the user right now for ${needed}, and Synara has shown them a setup card.`;
+  const asked = `Synara needs ${needed} and has shown the user a setup card with a guided flow.`;
   if (signal.blocking) {
     return (
       `${asked} Nothing on the desktop can be driven without it. ` +

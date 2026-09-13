@@ -1,4 +1,5 @@
 import { ThreadId, type ComputerStatusResult } from "@synara/contracts";
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useComputerControlModeChange } from "./useComputerControlModeChange";
@@ -44,11 +45,9 @@ describe("Computer activation permission guide", () => {
       const f = fixture();
       f.change(mode);
       await vi.waitFor(() =>
-        expect(f.permissions.startPermissionSetup).toHaveBeenCalledExactlyOnceWith([
-          "accessibility",
-          "inputMonitoring",
-          "screenRecording",
-        ]),
+        expect(f.permissions.startPermissionSetup).toHaveBeenCalledExactlyOnceWith(
+          COMPUTER_PERMISSION_KINDS,
+        ),
       );
       expect(f.setMode).toHaveBeenCalledWith("test", mode, { revokeQueued: false, generation: 4 });
       expect(f.focusComposer).not.toHaveBeenCalled();

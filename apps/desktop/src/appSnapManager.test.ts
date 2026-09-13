@@ -1628,6 +1628,165 @@ describe("AppSnap permission guide", () => {
   });
 });
 
+describe("AppSnap permission setup sessions", () => {
+  function createSessionManager(state: {
+    accessibility: string;
+    screenRecording: string;
+    inputMonitoring: string;
+  }): {
+    manager: DesktopAppSnapManager;
+    guideChildren: FakeChildProcess[];
+    requests: string[];
+    openSettingsPane: Mock;
+    onPermissionGuideState: Mock;
+    dispose: () => void;
+  } {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-session-"));
+    const guideChildren: FakeChildProcess[] = [];
+    const requests: string[] = [];
+    const openSettingsPane = vi.fn();
+    const onPermissionGuideState = vi.fn();
+    const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
+      if (args.includes("--permission-guide")) {
+        const child = createFakeChildProcess();
+        guideChildren.push(child);
+        return child;
+      }
+      const child = createFakeChildProcess();
+      if (args.includes("--request-permissions")) requests.push(args.join(" "));
+      setImmediate(() => {
+        child.stdout.end(`${JSON.stringify({ type: "permissions", ...state })}\n`);
+        child.stderr.end();
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara Test",
+      appBundlePath: "/Applications/Synara Test.app",
+      spawn,
+      openSettingsPane,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      onPermissionGuideState,
+    });
+    return {
+      manager,
+      guideChildren,
+      requests,
+      openSettingsPane,
+      onPermissionGuideState,
+      dispose: () => {
+        manager.dispose();
+        rmSync(captureDirectory, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("walks each missing pane in sequence, raising only that pane's request", async () => {
+    const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
+    const { manager, guideChildren, requests, openSettingsPane, dispose } =
+      createSessionManager(state);
+    try {
+      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      await flushPromises();
+      // Only the first missing pane is up: its settings page, its OS request,
+      // and its coach. The Screen Recording request must not fire yet.
+      expect(openSettingsPane).toHaveBeenLastCalledWith("accessibility");
+      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+      expect(guideChildren).toHaveLength(1);
+
+      // The grant watch sees Accessibility flip: the first coach closes and the
+      // session advances to Screen Recording on its own.
+      state.accessibility = "granted";
+      await vi.waitFor(() => expect(guideChildren).toHaveLength(2), { timeout: 4000 });
+      expect(guideChildren[0]!.stdin.read()?.toString().trimEnd()).toBe("close");
+      expect(openSettingsPane).toHaveBeenLastCalledWith("screen-recording");
+      expect(requests).toEqual([
+        "--request-permissions --permission accessibility",
+        "--request-permissions --permission screenRecording",
+      ]);
+
+      state.screenRecording = "granted";
+      await vi.waitFor(
+        () => expect(guideChildren[1]!.stdin.read()?.toString().trimEnd()).toBe("close"),
+        { timeout: 4000 },
+      );
+      await flushPromises();
+      // The session is done: two panes opened, two requests, two coaches.
+      expect(openSettingsPane).toHaveBeenCalledTimes(2);
+      expect(guideChildren).toHaveLength(2);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("skips panes that are already granted", async () => {
+    const state = {
+      accessibility: "granted",
+      screenRecording: "denied",
+      inputMonitoring: "denied",
+    };
+    const { manager, guideChildren, requests, openSettingsPane, dispose } =
+      createSessionManager(state);
+    try {
+      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      await flushPromises();
+      expect(openSettingsPane).toHaveBeenCalledExactlyOnceWith("screen-recording");
+      expect(requests).toEqual(["--request-permissions --permission screenRecording"]);
+      expect(guideChildren).toHaveLength(1);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("ends the session when the coach is dismissed instead of respawning", async () => {
+    const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
+    const { manager, guideChildren, requests, onPermissionGuideState, dispose } =
+      createSessionManager(state);
+    try {
+      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      await flushPromises();
+      expect(guideChildren).toHaveLength(1);
+      // The user dismisses the first coach: the exit is not a grant, so the
+      // session must stop rather than open the next pane over their dismissal.
+      guideChildren[0]!.emit("exit", 0, null);
+      await flushPromises();
+      await new Promise<void>((resolve) => setTimeout(resolve, 900));
+      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
+      expect(guideChildren).toHaveLength(1);
+      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("reports closed and ends the session when the guide helper fails to spawn", async () => {
+    const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
+    const { manager, guideChildren, requests, onPermissionGuideState, dispose } =
+      createSessionManager(state);
+    try {
+      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      await flushPromises();
+      expect(guideChildren).toHaveLength(1);
+      // A spawn-level failure (EACCES/ENOENT) emits `error` without `exit`.
+      guideChildren[0]!.emit("error", new Error("spawn EACCES"));
+      await flushPromises();
+      await new Promise<void>((resolve) => setTimeout(resolve, 900));
+      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
+      expect(guideChildren).toHaveLength(1);
+      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+    } finally {
+      dispose();
+    }
+  });
+});
+
 describe("explicit AppSnap observation", () => {
   it("captures while disabled without permission or manual callback side effects", async () => {
     const directory = mkdtempSync(join(tmpdir(), "synara-appsnap-request-"));

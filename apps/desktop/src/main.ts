@@ -5352,15 +5352,20 @@ async function bootstrap(): Promise<void> {
     browserOsKeyStore,
   );
   try {
-    await Promise.race([
-      browserSessionRestore.initialize(),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Browser session restoration timed out.")),
-          BROWSER_SESSION_RESTORE_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+    let restoreTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        browserSessionRestore.initialize().finally(() => clearTimeout(restoreTimer)),
+        new Promise<never>((_, reject) => {
+          restoreTimer = setTimeout(
+            () => reject(new Error("Browser session restoration timed out.")),
+            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(restoreTimer);
+    }
   } catch {
     console.warn(
       "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",

@@ -1832,10 +1832,10 @@ describe("agent gateway computer setup prompts", () => {
     expect(prompts).toEqual([
       { toolName: "computer_list_windows", missing: ["accessibility"], buildSignature: "signed" },
     ]);
-    // The model is told the OS is asking the user right now — not how macOS
+    // The model is told a setup card is in front of the user — not how macOS
     // privacy works, and not to walk them through System Settings over the top
-    // of a dialog that is already on screen.
-    expect(text).toContain("macOS is asking the user right now for Accessibility");
+    // of a card that is already on screen.
+    expect(text).toContain("Synara needs Accessibility and has shown the user a setup card");
     expect(text).toContain("waiting for the user to grant it");
     expect(text).not.toContain("Turn Synara on in");
   });
@@ -1950,7 +1950,7 @@ describe("agent gateway computer setup prompts", () => {
     const state = await run("computer_get_state", { include_screenshot: true });
     expect(state.content.map((entry) => entry.type)).toEqual(["text", "image"]);
     expect((resultJson(state) as { setupRequired?: string }).setupRequired).toContain(
-      "macOS is asking the user right now for Accessibility",
+      "Synara needs Accessibility and has shown the user a setup card",
     );
 
     // And a failure, which used to hand back the backend's sentence alone.
@@ -1958,7 +1958,7 @@ describe("agent gateway computer setup prompts", () => {
     const failed = await run("computer_screenshot", { window_id: "fake-terminal" });
     expect(failed.isError).toBe(true);
     const text = failed.content.find((entry) => entry.type === "text");
-    expect(text?.type === "text" ? text.text : "").toContain("macOS is asking the user right now");
+    expect(text?.type === "text" ? text.text : "").toContain("setup card");
   });
 
   it("raises the card from a state read that reports a blocking permission", async () => {

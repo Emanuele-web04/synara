@@ -1,6 +1,7 @@
 // FILE: AppSnapPermissionGuide.tsx
-// Purpose: Guided macOS permission setup for AppSnap — deep-links the exact System Settings
-//          pane, walks through adding this build, and offers a restart for the TCC relaunch.
+// Purpose: Guided macOS permission setup shared by AppSnap and Computer control — deep-links
+//          the exact System Settings pane, walks through adding this build, and offers a restart
+//          for the rare case where a grant does not apply live.
 // Layer: Settings UI component
 
 import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
@@ -67,8 +68,7 @@ export function AppSnapPermissionGuide(props: {
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Still showing Denied after enabling it? Restarting the app clears stale macOS grant
-        state.
+        Still showing Denied after enabling it? Restarting the app clears stale macOS grant state.
       </p>
       <Button type="button" size="xs" variant="outline" onClick={props.onRestart}>
         {`Restart ${app}`}
