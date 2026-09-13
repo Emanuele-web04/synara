@@ -28,7 +28,7 @@ Then open http://localhost:5899/.
 - `SYNARA_AUTH_TOKEN` is inherited from the launching shell: a server started with it set requires auth the web client does not have, which produces a healthy-but-disconnected UI. Unset it in the isolated test process only — never strip it from production policy.
 - `VITE_DEV_SERVER_URL` on the **server** is required — without it the WS handshake from the vite origin is rejected with 403 (see `apps/server/src/trustedOrigins.ts`).
 - `VITE_WS_URL` on the **web** side tells the app where the WS server lives (`apps/web/src/wsTransport.ts`).
-- Default ports are 3773 (server) / 5733 (web) plus a per-checkout hash offset — pick explicit distinct ports to avoid colliding with a running dev instance.
+- Default ports are 3773 (server) / 5733 (web), with no automatic per-checkout offset. The dev runner uses an explicit `SYNARA_PORT_OFFSET` or derives an offset from `SYNARA_DEV_INSTANCE` when supplied — pick explicit distinct ports and confirm the dry-run output to avoid colliding with a running dev instance.
 - Add a disposable git workspace through the sidebar's **Projects → Add project**
   button and enter its absolute folder path. If New project in the composer
   picker does not open the dialog, use this sidebar entry point instead.
