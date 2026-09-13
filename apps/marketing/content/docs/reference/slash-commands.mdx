@@ -54,6 +54,8 @@ For a cross-provider side chat, put the provider kind or display name first—fo
 | `/goal pause` / `/goal resume` | Pause or resume autonomous pursuit and its timer        |
 | `/goal clear`                  | Remove the active goal without recording an achievement |
 
+Use `/goal -- <objective>` to treat the objective as literal text, including control words such as `clear`. Goal menu and edit prefills use this form automatically. To start an objective with `--`, repeat the separator: `/goal -- -- <text>`.
+
 Goals are deliberate durable task state, not an automatic label for every prompt. See [Thread goals](/docs/features/thread-goals) for continuation priority, achievement, and blocked-goal behavior.
 
 ## App

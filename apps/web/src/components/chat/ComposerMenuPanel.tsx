@@ -22,7 +22,7 @@ import {
 } from "./composerPickerStyles";
 
 export const COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME =
-  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60";
+  "px-2 pt-1 pb-0.5 text-[11px] font-normal text-muted-foreground/60";
 
 /** Glyph size shared by every panel row icon, whatever the menu. */
 export const COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME = "size-3.5";
