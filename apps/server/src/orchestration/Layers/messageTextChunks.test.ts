@@ -135,6 +135,34 @@ async function assertReaders(system: Awaited<ReturnType<typeof openSystem>>, tex
   return row;
 }
 
+it("stores contiguous CJK token deltas as one segment across reload and settlement", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "synara-cjk-chunks-"));
+  let system = await openSystem(dir);
+  const text = "知道。\n\n- 前端 Web：`/project/web`\n- `erp-code` 是 ERP 项目。";
+  try {
+    await system.seed();
+    for (const [index, delta] of Array.from(text).entries()) {
+      await system.delta(`cjk-${index}`, delta);
+    }
+    const streaming = await assertReaders(system, text);
+    expect(streaming.textSegments).toHaveLength(1);
+    expect(
+      await system.run(system.sql`SELECT COUNT(*) AS count FROM message_text_segments`),
+    ).toEqual([{ count: 1 }]);
+    await system.runtime.dispose();
+    system = await openSystem(dir);
+    expect((await assertReaders(system, text)).textSegments).toHaveLength(1);
+    await system.complete();
+    expect((await assertReaders(system, text)).textSegments).toBeUndefined();
+    await system.runtime.dispose();
+    system = await openSystem(dir);
+    expect((await assertReaders(system, text)).textSegments).toBeUndefined();
+  } finally {
+    await system.runtime.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 it("preserves split Unicode across segments, restart and completion in every reader", async () => {
   const dir = await mkdtemp(join(tmpdir(), "synara-chunk-restart-"));
   let system = await openSystem(dir);

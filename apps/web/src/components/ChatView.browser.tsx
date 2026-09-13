@@ -12,6 +12,7 @@ import {
   type AutomationDefinition,
   CheckpointRef,
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -3952,23 +3953,20 @@ describe("ChatView transcript geometry (full app)", () => {
           container.tabIndex = 0;
           container.focus();
           expect(document.activeElement).toBe(container);
-          const initialTop = container.scrollTop;
-          await userEvent.keyboard(`{${keyboardKey}}`);
-          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop - 1));
-          // A cancelled list jump can emit scrollend before native key scrolling
-          // finishes. Wait for an actual quiet viewport before recording its text.
-          let lastTop = container.scrollTop;
-          let stableSince = performance.now();
-          await vi.waitFor(
-            () => {
-              if (container.scrollTop !== lastTop) {
-                lastTop = container.scrollTop;
-                stableSince = performance.now();
-              }
-              expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
-            },
-            { timeout: 3_000, interval: 20 },
-          );
+          // Streaming can advance while the browser input command is in transit.
+          // Compare against the offset at keydown, when the gesture takes ownership.
+          let initialTop: number | null = null;
+          const captureInitialTop = (event: KeyboardEvent) => {
+            if (event.key === keyboardKey) initialTop = container.scrollTop;
+          };
+          container.addEventListener("keydown", captureInitialTop, { capture: true });
+          try {
+            await userEvent.keyboard(`{${keyboardKey}}`);
+          } finally {
+            container.removeEventListener("keydown", captureInitialTop, { capture: true });
+          }
+          expect(initialTop).not.toBeNull();
+          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop! - 1));
         } else if (action === "find") {
           await dispatchConfiguredShortcutWhenReady(window, { key: "f" });
           await page.getByLabelText("Find in thread").fill("assistant filler 0");
@@ -3990,6 +3988,20 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
+        // Native wheel and key scrolling may continue after the input command
+        // resolves. Record the reader position only once the viewport is quiet.
+        let lastTop = container.scrollTop;
+        let stableSince = performance.now();
+        await vi.waitFor(
+          () => {
+            if (container.scrollTop !== lastTop) {
+              lastTop = container.scrollTop;
+              stableSince = performance.now();
+            }
+            expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+          },
+          { timeout: 3_000, interval: 20 },
+        );
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
@@ -5261,7 +5273,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(
           useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
             .codex,
-        ).toMatchObject({ provider: "codex", model: "gpt-5.5" });
+        ).toMatchObject({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
       });
       expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
 
