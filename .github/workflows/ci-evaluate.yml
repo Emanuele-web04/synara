@@ -14,40 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tools:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - run: bun install --frozen-lockfile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      - name: Capture local verification tools and previous CI implementation
-        run: |
-          mkdir -p "$RUNNER_TEMP/tools"
-          cp "$(command -v node)" "$RUNNER_TEMP/tools/node"
-          cp "$(command -v bun)" "$RUNNER_TEMP/tools/bun"
-          find node_modules/.bun -type f -name oxfmt -path '*linux-x64*' -exec cp {} "$RUNNER_TEMP/tools/oxfmt" \;
-          git fetch --depth=1 origin 45ecb1be74cdfb6ad9f76e04e0cad07967a9cb46
-          git archive 45ecb1be74cdfb6ad9f76e04e0cad07967a9cb46 .github > "$RUNNER_TEMP/tools/previous-ci.tar"
-          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP/tools" actionlint
-          "$RUNNER_TEMP/tools/oxfmt" .github/scripts/ci-timing-reporter.mjs .github/workflows/ci-evaluate.yml
-          git diff > "$RUNNER_TEMP/tools/format.patch"
-          tar -czf "$RUNNER_TEMP/tools.tar.gz" -C "$RUNNER_TEMP/tools" .
-      - uses: actions/upload-artifact@v7
-        with:
-          name: local-verification-tools
-          path: ${{ runner.temp }}/tools.tar.gz
-          retention-days: 3
-
   linux:
     name: Linux workload (${{ matrix.runner }}, ${{ matrix.suite }})
     runs-on: ${{ matrix.runner }}
@@ -96,56 +62,3 @@ jobs:
           path: ${{ runner.temp }}/timings
           retention-days: 7
           if-no-files-found: error
-
-  native:
-    name: Unsigned native validation (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            platform: mac
-            target: dmg
-            arch: arm64
-          - runner: macos-15-intel
-            platform: mac
-            target: dmg
-            arch: x64
-          - runner: ubuntu-24.04
-            platform: linux
-            target: AppImage
-            arch: x64
-          - runner: windows-2022
-            platform: win
-            target: nsis
-            arch: x64
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - name: Install filtered release tooling
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
-      - name: Build actual unsigned artifact
-        shell: bash
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: |
-          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
-          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version "$version" --source-commit "$GITHUB_SHA" --verbose
-      - name: Smoke actual packaged startup
-        shell: bash
-        run: |
-          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
-          node scripts/verify-packaged-desktop-startup.ts --assets-dir release --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version "$version"
-      - name: Probe native device helper
-        if: matrix.platform == 'mac'
-        run: bun run test:device:probe
