@@ -17,10 +17,11 @@ import {
   type MindProfile,
   type MindRecallItem,
   type MindRecallResult,
+  type MindSearchResult,
   type ProjectId,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { toPersistenceSqlError } from "../../persistence/Errors.ts";
+import { type PersistenceSqlError, toPersistenceSqlError } from "../../persistence/Errors.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Clock, Effect, Layer, Option } from "effect";
 
@@ -28,8 +29,8 @@ import {
   buildMindFtsMatchExpr,
   MIND_RECEIPT_PRUNE_MAX_ITEMS,
   MindRepository,
-  type MindMemoryCandidate,
   type MindMemoryRow,
+  type MindRepositoryError,
 } from "../../persistence/Services/MindRepository.ts";
 import {
   MindInvalidTextError,
@@ -57,6 +58,7 @@ import {
   type MindRememberRequest,
   type MindRememberResult,
   type MindRecallRequest,
+  type MindSearchRequest,
   type MindServiceError,
   type MindServiceShape,
   type MindProfileGetRequest,
@@ -177,6 +179,36 @@ const topDigestRows = (
     .map((row) => ({ row, weight: effectiveWeight(row, nowIso) }))
     .toSorted((a, b) => b.weight - a.weight || a.row.memoryId.localeCompare(b.row.memoryId))
     .slice(0, MIND_RECALL_MAX_ITEMS);
+
+/**
+ * SQLite reports FTS5 query-expression failures (bad syntax, unknown
+ * tokenizer, unterminated quotes) with these message markers — under the same
+ * SQLITE_ERROR code as storage failures, so only the message discriminates.
+ * "no such table" and friends deliberately do not match: a missing, locked,
+ * or corrupt FTS index is an outage that must surface, not an empty result.
+ */
+const FTS_QUERY_ERROR_PATTERN =
+  /fts5:|syntax error|malformed match|unterminated|no such tokenizer|expression tree/i;
+const isFtsQueryError = (error: PersistenceSqlError): boolean =>
+  FTS_QUERY_ERROR_PATTERN.test(error.detail);
+
+/**
+ * Tolerates proven FTS query-expression failures as "no matches" (tokenizer
+ * edges on exotic input are best-effort), but rethrows every other
+ * PersistenceSqlError so a storage outage never masquerades as zero hits.
+ */
+const tolerateFtsQueryError = <A, R>(
+  effect: Effect.Effect<ReadonlyArray<A>, MindRepositoryError, R>,
+): Effect.Effect<ReadonlyArray<A>, MindRepositoryError, R> =>
+  effect.pipe(
+    Effect.catchTag("PersistenceSqlError", (error) =>
+      isFtsQueryError(error)
+        ? Effect.logWarning("Mind FTS search failed; returning no matches.", {
+            error: error.message,
+          }).pipe(Effect.as([] as ReadonlyArray<A>))
+        : Effect.fail(error),
+    ),
+  );
 
 const decodeRememberReceipt = (resultJson: string): MindRememberResult | undefined => {
   try {
@@ -487,23 +519,13 @@ const makeMindService = Effect.gen(function* () {
           note: MIND_RECALL_HYGIENE_NOTE,
         };
       }
-      const candidates = yield* repository
-        .searchCandidates({
+      const candidates = yield* tolerateFtsQueryError(
+        repository.searchCandidates({
           projectId: input.projectId,
           matchExpr: buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS)),
           limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
-        })
-        .pipe(
-          // Recall stays a pure read that never throws on query-shaped FTS
-          // failures (tokenizer edges on exotic input): best-effort, no
-          // matches. Decode-level corruption is already skipped row-wise by
-          // the repository, so only SQL failures can land here.
-          Effect.catchTag("PersistenceSqlError", (error) =>
-            Effect.logWarning("Mind recall FTS search failed; returning no matches.", {
-              error: error.message,
-            }).pipe(Effect.as([] as ReadonlyArray<MindMemoryCandidate>)),
-          ),
-        );
+        }),
+      );
       // rankCandidates sorts ascending by score. bm25 is negative/lower-is-better and
       // the weight factor is a positive multiplier, so the best match carries the most
       // negative score and heads the ascending list — consume from the front.
@@ -764,6 +786,42 @@ const makeMindService = Effect.gen(function* () {
       };
     });
 
+  /**
+   * UI search: server-side FTS over every stored row, not just the loaded
+   * list page, so matches outside the page stay discoverable. Scoped to one
+   * project, or every project for the global view. Same failure policy as
+   * recall: query-expression errors degrade to no matches, storage failures
+   * rethrow.
+   */
+  const search = (input: MindSearchRequest): Effect.Effect<MindSearchResult, MindServiceError> =>
+    Effect.gen(function* () {
+      const nowIso = yield* nowIsoNow;
+      const query = input.query.trim();
+      if (query.length === 0) {
+        return { memories: [], count: 0, cap: MIND_MEMORY_PROJECT_CAP };
+      }
+      const matchExpr = buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS));
+      const scope: ReadonlyArray<ProjectId> =
+        input.projectId !== null ? [input.projectId] : yield* repository.listProjectIds();
+      const candidates = (yield* Effect.forEach(
+        scope,
+        (projectId) =>
+          tolerateFtsQueryError(
+            repository.searchCandidates({
+              projectId,
+              matchExpr,
+              limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
+            }),
+          ),
+        { concurrency: 1 },
+      )).flat();
+      const memories = candidates
+        .map((candidate) => toMindMemory(candidate.memory, nowIso))
+        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
+        .slice(0, MIND_MEMORY_PROJECT_CAP);
+      return { memories, count: candidates.length, cap: MIND_MEMORY_PROJECT_CAP };
+    });
+
   const setPinned = (input: MindSetPinnedRequest): Effect.Effect<MindMemory, MindServiceError> =>
     sqlClient
       .withTransaction(
@@ -1008,8 +1066,9 @@ const makeMindService = Effect.gen(function* () {
     Effect.map(repository.getProfile({ projectId: input.projectId }), Option.getOrNull);
 
   // User-only write from the Mind UI: no thread/turn context, no journal row.
-  // An empty text on opt-out keeps the last saved text; with no prior profile
-  // there is nothing to keep, so the save is rejected as empty.
+  // An empty text on opt-out keeps the last saved text (it stays inactive while
+  // opted out); an empty text while opting in is rejected — otherwise clearing
+  // the textarea would silently reactivate the content the user just removed.
   const profileSet = (input: MindProfileSetRequest): Effect.Effect<MindProfile, MindServiceError> =>
     sqlClient
       .withTransaction(
@@ -1018,7 +1077,11 @@ const makeMindService = Effect.gen(function* () {
           const existing = yield* repository.getProfile({ projectId: input.projectId });
           const normalized = normalizeMindText(input.text);
           const nextText =
-            normalized.length > 0 ? normalized : Option.isSome(existing) ? existing.value.text : "";
+            normalized.length > 0
+              ? normalized
+              : !input.optedIn && Option.isSome(existing)
+                ? existing.value.text
+                : "";
           if (nextText.length === 0) {
             return yield* Effect.fail(
               new MindInvalidTextError({
@@ -1102,7 +1165,9 @@ const makeMindService = Effect.gen(function* () {
         })),
       ]
         .toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
-        .slice(0, MIND_HISTORY_MAX_ENTRIES);
+        // Keep the NEWEST entries: slicing the front would let an active
+        // memory's recent confirms, edits, and pins fall off its own timeline.
+        .slice(-MIND_HISTORY_MAX_ENTRIES);
       if (entries.length === 0) {
         // The memory exists, so it was remembered — the journal row may
         // predate journaling. Anchor the empty timeline honestly on creation.
@@ -1119,6 +1184,7 @@ const makeMindService = Effect.gen(function* () {
     status,
     list,
     listAll,
+    search,
     setPinned,
     affirm: (input: MindAffirmRequest) =>
       confirm({

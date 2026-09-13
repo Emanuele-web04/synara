@@ -53,6 +53,8 @@ import type {
   MindProfileGetInput,
   MindProfileGetResult,
   MindProfileSetInput,
+  MindSearchInput,
+  MindSearchResult,
   MindSetPinnedInput,
   MindUpdateInput,
 } from "./mind";
@@ -971,6 +973,7 @@ export interface NativeApi {
   };
   mind: {
     list: (input: MindListInput) => Promise<MindListResult>;
+    search: (input: MindSearchInput) => Promise<MindSearchResult>;
     forget: (input: MindForgetInput) => Promise<void>;
     setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
     affirm: (input: MindAffirmInput) => Promise<MindMemory>;

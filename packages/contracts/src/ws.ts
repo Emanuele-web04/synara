@@ -21,6 +21,7 @@ import {
   MindListInput,
   MindProfileGetInput,
   MindProfileSetInput,
+  MindSearchInput,
   MindSetPinnedInput,
   MindUpdateInput,
 } from "./mind";
@@ -312,6 +313,7 @@ export const WS_METHODS = {
 
   // Mind methods
   mindList: "mind.list",
+  mindSearch: "mind.search",
   mindForget: "mind.forget",
   mindSetPinned: "mind.setPinned",
   mindAffirm: "mind.affirm",
@@ -532,6 +534,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Mind methods
   tagRequestBody(WS_METHODS.mindList, MindListInput),
+  tagRequestBody(WS_METHODS.mindSearch, MindSearchInput),
   tagRequestBody(WS_METHODS.mindForget, MindForgetInput),
   tagRequestBody(WS_METHODS.mindSetPinned, MindSetPinnedInput),
   tagRequestBody(WS_METHODS.mindAffirm, MindAffirmInput),

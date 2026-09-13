@@ -85,6 +85,10 @@ const PROJECTS = {
   updateRetry: "project-mind-service-update-retry",
   history: "project-mind-service-history",
   historyEmpty: "project-mind-service-history-empty",
+  historyCap: "project-mind-service-history-cap",
+  search: "project-mind-service-search",
+  searchOther: "project-mind-service-search-other",
+  recallOutage: "project-mind-service-recall-outage",
 } as const;
 
 let memoryCounter = 0;
@@ -1322,6 +1326,114 @@ layer("MindService", (it) => {
       assert.lengthOf(timeline.entries, 1);
       assert.strictEqual(timeline.entries[0]?.op, "remember");
       assert.strictEqual(timeline.entries[0]?.createdAt, seeded.createdAt);
+    }),
+  );
+
+  it.effect("history keeps the newest entries once the timeline exceeds the cap", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.historyCap);
+      yield* ensureProjectRow(PROJECTS.historyCap);
+      const remembered = yield* service.remember(
+        rememberRequest(projectId, "history cap fact", { turnId: "turn-history-cap" }),
+      );
+      // 1 remember + 105 confirms = 106 entries; the cap keeps the newest 100.
+      for (let index = 0; index < 105; index++) {
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* service.confirm({
+          memoryId: remembered.memoryId,
+          projectId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: `turn-cap-${index}`,
+        });
+      }
+
+      const timeline = yield* service.history({ projectId, memoryId: remembered.memoryId });
+      assert.lengthOf(timeline.entries, 100);
+      // The oldest entry (the remember itself) fell off; confirms remain,
+      // still oldest-first so the newest activity is the tail.
+      assert.isTrue(timeline.entries.every((entry) => entry.op === "confirm"));
+      for (let index = 1; index < timeline.entries.length; index++) {
+        assert.isTrue(timeline.entries[index - 1]!.createdAt <= timeline.entries[index]!.createdAt);
+      }
+    }),
+  );
+
+  it.effect("search scans every stored row, scoped or global, weight-desc", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.search);
+      const otherId = ProjectId.makeUnsafe(PROJECTS.searchOther);
+      yield* ensureProjectRow(PROJECTS.search);
+      yield* ensureProjectRow(PROJECTS.searchOther);
+      yield* service.remember(
+        rememberRequest(projectId, "zzqneedle fact alpha", { turnId: "turn-search-1" }),
+      );
+      yield* service.remember(
+        rememberRequest(otherId, "zzqneedle fact beta", { turnId: "turn-search-2" }),
+      );
+      yield* service.remember(
+        rememberRequest(projectId, "unrelated haystack", { turnId: "turn-search-3" }),
+      );
+
+      // Global scope finds matches in every project, including ones whose rows
+      // a bounded list page would not have loaded.
+      const global = yield* service.search({ projectId: null, query: "zzqneedle" });
+      assert.strictEqual(global.count, 2);
+      assert.strictEqual(global.cap, MIND_MEMORY_PROJECT_CAP);
+      assert.deepStrictEqual(global.memories.map((memory) => memory.text).toSorted(), [
+        "zzqneedle fact alpha",
+        "zzqneedle fact beta",
+      ]);
+
+      const scoped = yield* service.search({ projectId, query: "zzqneedle" });
+      assert.strictEqual(scoped.count, 1);
+      assert.strictEqual(scoped.memories[0]?.text, "zzqneedle fact alpha");
+
+      const empty = yield* service.search({ projectId: null, query: "   " });
+      assert.strictEqual(empty.count, 0);
+      assert.deepStrictEqual(empty.memories, []);
+
+      const miss = yield* service.search({ projectId: null, query: "nomatchzzz" });
+      assert.strictEqual(miss.count, 0);
+      assert.deepStrictEqual(miss.memories, []);
+    }),
+  );
+
+  it.effect("recall and search rethrow storage failures instead of returning empty", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.recallOutage);
+      yield* ensureProjectRow(PROJECTS.recallOutage);
+      yield* service.remember(
+        rememberRequest(projectId, "zzoutage searchable fact", { turnId: "turn-outage" }),
+      );
+
+      // A missing FTS index is an outage, not a query-syntax problem: it must
+      // surface as a failure rather than an authoritative empty result. The
+      // finalizer restores the index for the shared in-memory database.
+      yield* sql`DROP TABLE mind_memories_fts`;
+      yield* Effect.gen(function* () {
+        const recalled = yield* Effect.flip(service.recall({ projectId, query: "zzoutage" }));
+        assert.strictEqual(recalled._tag, "PersistenceSqlError");
+        const searched = yield* Effect.flip(service.search({ projectId, query: "zzoutage" }));
+        assert.strictEqual(searched._tag, "PersistenceSqlError");
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* sql`CREATE VIRTUAL TABLE mind_memories_fts USING fts5(text, content='mind_memories', content_rowid='rowid', tokenize='unicode61')`;
+            yield* sql`INSERT INTO mind_memories_fts(mind_memories_fts) VALUES('rebuild')`;
+          }).pipe(Effect.orDie),
+        ),
+      );
+
+      const restored = yield* service.recall({ projectId, query: "zzoutage" });
+      assert.strictEqual(restored.items.length, 1);
     }),
   );
 });

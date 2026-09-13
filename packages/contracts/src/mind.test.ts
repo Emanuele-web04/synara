@@ -23,6 +23,8 @@ import {
   MindRecallInput,
   MindRecallResult,
   MindRememberInput,
+  MindSearchInput,
+  MindSearchResult,
   MindSetPinnedInput,
   MindUpdateInput,
 } from "./mind";
@@ -174,6 +176,39 @@ describe("Mind contracts", () => {
     expect(decodes(MindAffirmInput, { projectId: "project-1", memoryId: "memory-1" })).toBe(true);
     expect(decodes(MindAffirmInput, { memoryId: "memory-1" })).toBe(false);
     expect(decodes(MindAffirmInput, { projectId: "project-1", memoryId: "  " })).toBe(false);
+  });
+
+  it("bounds the search input and result and routes it over the WebSocket body", () => {
+    expect(WS_METHODS.mindSearch).toBe("mind.search");
+    expect(decodes(MindSearchInput, { query: "deploy" })).toBe(true);
+    expect(decodes(MindSearchInput, { query: "deploy", projectId: "project-1" })).toBe(true);
+    expect(decodes(MindSearchInput, { query: "deploy", projectId: "" })).toBe(false);
+    expect(decodes(MindSearchInput, {})).toBe(false);
+    expect(decodes(MindSearchInput, { query: "x".repeat(MIND_RECALL_QUERY_MAX_CHARS + 1) })).toBe(
+      false,
+    );
+    expect(
+      decodes(MindSearchResult, { memories: [memory], count: 1, cap: MIND_MEMORY_PROJECT_CAP }),
+    ).toBe(true);
+    expect(
+      decodes(MindSearchResult, {
+        memories: Array.from({ length: MIND_MEMORY_PROJECT_CAP + 1 }, () => memory),
+        count: MIND_MEMORY_PROJECT_CAP + 1,
+        cap: MIND_MEMORY_PROJECT_CAP,
+      }),
+    ).toBe(false);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.search", query: "deploy", projectId: "project-1" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(WebSocketRequest, {
+        id: "request-1",
+        body: { _tag: "mind.search", projectId: "project-1" },
+      }),
+    ).toBe(false);
   });
 
   it("routes the update and history methods over the WebSocket request body", () => {

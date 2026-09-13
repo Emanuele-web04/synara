@@ -7,7 +7,8 @@ import {
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { type VariantProps } from "class-variance-authority";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDebouncedValue } from "@tanstack/react-pacer";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -57,6 +58,9 @@ export const Route = createFileRoute("/_chat/mind/")({
 });
 
 const mindQueryKey = ["mind"] as const;
+
+/** Matches WorkspaceSearchPalette's cadence: fast enough to feel live. */
+const MIND_SEARCH_DEBOUNCE_MS = 100;
 
 const EMPTY_MIND_LIST: MindListResult = { memories: [], count: 0, cap: 0 };
 
@@ -419,6 +423,9 @@ function MindRouteView() {
   const projects = useStore((state) => state.projects);
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const trimmedSearch = search.trim();
+  const [debouncedSearch] = useDebouncedValue(trimmedSearch, { wait: MIND_SEARCH_DEBOUNCE_MS });
+  const searchActive = debouncedSearch.length > 0;
 
   const mindQuery = useQuery({
     queryKey: mindQueryKey,
@@ -430,6 +437,22 @@ function MindRouteView() {
     refetchInterval: 30_000,
   });
   const data = mindQuery.data ?? EMPTY_MIND_LIST;
+
+  // Server-side FTS over every stored row — the bounded list page is capped,
+  // so matches it never loaded would stay undiscoverable to local filtering.
+  // Scope rides the project chip; keepPreviousData holds the last result set
+  // while the next keystroke's query is in flight.
+  const searchQuery = useQuery({
+    queryKey: ["mind", "search", projectFilter ?? "", debouncedSearch] as const,
+    queryFn: () =>
+      ensureNativeApi().mind.search({
+        query: debouncedSearch,
+        ...(projectFilter === null ? {} : { projectId: ProjectId.makeUnsafe(projectFilter) }),
+      }),
+    enabled: searchActive,
+    staleTime: 15_000,
+    placeholderData: keepPreviousData,
+  });
 
   // Optimistic removal: the row disappears immediately; the server's forget is
   // idempotent, so the invalidate-on-settle only converges the count/cap meta.
@@ -602,18 +625,16 @@ function MindRouteView() {
   // and any out-of-order cache merges keep the same order the server would send.
   const sortedMemories = useMemo(() => sortMindMemories(data.memories), [data.memories]);
   const filteredMemories = useMemo(() => {
-    const scoped =
-      projectFilter === null
-        ? sortedMemories
-        : sortedMemories.filter((memory) => memory.projectId === projectFilter);
-    const query = search.trim().toLowerCase();
-    if (query.length === 0) return scoped;
-    return scoped.filter(
-      (memory) =>
-        memory.text.toLowerCase().includes(query) ||
-        (projectNamesById.get(memory.projectId) ?? "").toLowerCase().includes(query),
-    );
-  }, [sortedMemories, search, projectFilter, projectNamesById]);
+    // Search is server-side FTS on memory text; results arrive project-scoped
+    // and weight-desc. Project names are not in the FTS index — narrowing by
+    // project is the chips' job.
+    if (searchActive) {
+      return sortMindMemories(searchQuery.data?.memories ?? []);
+    }
+    return projectFilter === null
+      ? sortedMemories
+      : sortedMemories.filter((memory) => memory.projectId === projectFilter);
+  }, [searchActive, searchQuery.data, sortedMemories, projectFilter]);
 
   // Day groups for the loaded page: newest day first, weight-desc inside a day.
   const groupedMemories = useMemo(
@@ -638,12 +659,16 @@ function MindRouteView() {
   const renderMindList = () => (
     <section className="flex flex-col gap-2">
       {filteredMemories.length === 0 ? (
-        <div className="flex flex-col items-start gap-2 px-2 py-4 text-xs text-muted-foreground">
-          <span>No memories match — clear search.</span>
-          <Button variant="outline" size="sm" onClick={() => setSearch("")}>
-            Clear search
-          </Button>
-        </div>
+        searchActive && searchQuery.isPending ? (
+          <div className="px-2 py-4 text-xs text-muted-foreground">Searching…</div>
+        ) : (
+          <div className="flex flex-col items-start gap-2 px-2 py-4 text-xs text-muted-foreground">
+            <span>No memories match — clear search.</span>
+            <Button variant="outline" size="sm" onClick={() => setSearch("")}>
+              Clear search
+            </Button>
+          </div>
+        )
       ) : (
         <div className="flex flex-col">
           {groupedMemories.map((group, index) => (
@@ -736,16 +761,19 @@ function MindRouteView() {
                 Select a project to edit its profile.
               </p>
             ) : null}
-            {data.memories.length > 0 ? (
+            {data.memories.length > 0 || searchActive ? (
               <div className="flex flex-col gap-2 px-2">
                 <p className="text-xs text-muted-foreground">
-                  {formatMindCountLabel({
-                    shown: data.memories.length,
-                    total: data.count,
-                    pinnedCount,
-                    cap: data.cap,
-                  })}
-                  {digestSuffix}
+                  {searchActive
+                    ? searchQuery.data === undefined
+                      ? "Searching…"
+                      : `${searchQuery.data.count} ${pluralize(searchQuery.data.count, "match", "matches")}`
+                    : `${formatMindCountLabel({
+                        shown: data.memories.length,
+                        total: data.count,
+                        pinnedCount,
+                        cap: data.cap,
+                      })}${digestSuffix}`}
                 </p>
                 {visibleProjects.length > 1 ? (
                   <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by project">
@@ -795,7 +823,20 @@ function MindRouteView() {
               <div className="py-16 text-center text-sm text-muted-foreground">
                 Loading memories...
               </div>
-            ) : data.memories.length === 0 ? (
+            ) : searchActive && searchQuery.isError ? (
+              <Alert variant="error" size="sm" className="text-destructive">
+                <AlertDescription>
+                  <span>
+                    {searchQuery.error instanceof Error
+                      ? searchQuery.error.message
+                      : "Failed to search memories."}
+                  </span>
+                  <Button variant="outline" size="sm" onClick={() => void searchQuery.refetch()}>
+                    Retry
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : data.memories.length === 0 && !searchActive ? (
               <div className="flex flex-col items-center gap-1 py-16 text-center">
                 <p className="max-w-md text-sm font-medium text-foreground">
                   Mind is Synara's shared memory for your projects. Agents save durable decisions

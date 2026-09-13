@@ -7,6 +7,7 @@ import type {
   MindMemoryType,
   MindProfile,
   MindRecallResult,
+  MindSearchResult,
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
@@ -106,6 +107,16 @@ export interface MindListRequest {
   readonly projectId: ProjectId;
 }
 
+/**
+ * UI search: `projectId` scopes to one project, null searches every project
+ * (the global Mind view). Server-side FTS — finds matches the bounded list
+ * page never loaded.
+ */
+export interface MindSearchRequest {
+  readonly projectId: ProjectId | null;
+  readonly query: string;
+}
+
 export interface MindSetPinnedRequest {
   readonly projectId: ProjectId;
   readonly memoryId: MindMemoryId;
@@ -196,6 +207,12 @@ export interface MindServiceShape {
   /** Full project list for the UI, effective weights computed, weight-desc. */
   readonly list: (input: MindListRequest) => Effect.Effect<MindListResult, MindServiceError>;
   readonly listAll: () => Effect.Effect<MindListResult, MindServiceError>;
+  /**
+   * FTS search over every stored row, scoped to one project or all projects —
+   * unlike the list page, matches outside the loaded cap stay discoverable.
+   * Returns weight-desc memories plus the true match total.
+   */
+  readonly search: (input: MindSearchRequest) => Effect.Effect<MindSearchResult, MindServiceError>;
   /** Pin/unpin pass-through; journals `pin`/`unpin`. Pinned rows never decay or prune. */
   readonly setPinned: (input: MindSetPinnedRequest) => Effect.Effect<MindMemory, MindServiceError>;
   /**

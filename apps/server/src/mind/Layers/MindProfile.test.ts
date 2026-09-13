@@ -51,6 +51,7 @@ const PROJECTS = {
   secret: "project-mind-profile-secret",
   revisions: "project-mind-profile-revisions",
   excluded: "project-mind-profile-excluded",
+  optedInBlank: "project-mind-profile-opted-in-blank",
 } as const;
 
 layer("MindProfile", (it) => {
@@ -136,6 +137,28 @@ layer("MindProfile", (it) => {
         service.profileSet({ projectId, text: "x".repeat(501), optedIn: true }),
       );
       assert.strictEqual(long._tag, "MindInvalidTextError");
+    }),
+  );
+
+  it.effect("clearing the text while opting in is rejected, not silently restored", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.optedInBlank);
+      yield* ensureProjectRow(PROJECTS.optedInBlank);
+
+      yield* service.profileSet({ projectId, text: "Deploys on Fridays.", optedIn: false });
+
+      // The empty-text fallback is opt-out only: opting in with a cleared
+      // textarea must fail instead of reactivating the removed content.
+      const rejected = yield* Effect.flip(
+        service.profileSet({ projectId, text: "   ", optedIn: true }),
+      );
+      assert.strictEqual(rejected._tag, "MindInvalidTextError");
+
+      const saved = yield* service.profileGet({ projectId });
+      assert.strictEqual(saved?.text, "Deploys on Fridays.");
+      assert.strictEqual(saved?.optedIn, false);
     }),
   );
 

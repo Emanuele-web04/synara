@@ -89,6 +89,29 @@ export const MindListInput = Schema.Struct({
 export type MindListInput = typeof MindListInput.Type;
 
 /**
+ * Server-side memory search for the Mind view: FTS over every stored row, not
+ * just the loaded list page, so matches outside the page stay discoverable.
+ * `projectId` scopes the search; omitted means all projects (global view).
+ */
+export const MindSearchInput = Schema.Struct({
+  query: Schema.String.check(Schema.isMaxLength(MIND_RECALL_QUERY_MAX_CHARS)),
+  projectId: Schema.optional(ProjectId),
+});
+export type MindSearchInput = typeof MindSearchInput.Type;
+
+/**
+ * Search result page: `memories` is the matched page (weight-desc, bounded by
+ * the shared cap), `count` is the true match total so the UI can signal
+ * truncation. Same shape contract as {@link MindListResult}.
+ */
+export const MindSearchResult = Schema.Struct({
+  memories: Schema.Array(MindMemory).check(Schema.isMaxLength(MIND_MEMORY_PROJECT_CAP)),
+  count: NonNegativeInt,
+  cap: NonNegativeInt,
+});
+export type MindSearchResult = typeof MindSearchResult.Type;
+
+/**
  * Full Mind list for the UI: every memory of the (project-scoped) store with
  * its server-computed effective weight, the project's total count, and the cap.
  *

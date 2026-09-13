@@ -2078,6 +2078,14 @@ const makeWsRpcHandlersLayer = () =>
                 }),
             "Failed to list memories",
           ),
+        [WS_METHODS.mindSearch]: (input) =>
+          rpcEffect(
+            mindService.search({
+              projectId: input.projectId ?? null,
+              query: input.query,
+            }),
+            "Failed to search memories",
+          ),
         [WS_METHODS.mindForget]: (input) =>
           rpcEffect(
             mindService
