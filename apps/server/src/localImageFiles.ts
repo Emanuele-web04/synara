@@ -18,7 +18,7 @@ import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
 import {
   type CodexGeneratedImageHomeCandidate,
-  resolveCodexGeneratedImagesRoots,
+  resolveCodexGeneratedImageHomes,
 } from "./codexGeneratedImages.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
@@ -210,8 +210,18 @@ export async function resolveAllowedLocalPreviewFile(input: {
         ? input.codexHomePaths
         : [input.codexHomePath, ...input.codexHomePaths];
   const generatedImagesRoots = await Promise.all(
-    [...new Set(codexHomeCandidates.flatMap((home) => resolveCodexGeneratedImagesRoots(home)))].map(
-      realpathOrNull,
+    [...new Set(codexHomeCandidates.flatMap((home) => resolveCodexGeneratedImageHomes(home)))].map(
+      async (home) => {
+        const [realHome, realRoot] = await Promise.all([
+          realpathOrNull(home),
+          realpathOrNull(path.join(home, "generated_images")),
+        ]);
+        // A generated_images symlink must not turn a configured Codex home into
+        // an allowlist for an unrelated directory.
+        return realHome !== null && realRoot !== null && isPathInside(realRoot, realHome)
+          ? realRoot
+          : null;
+      },
     ),
   ).then((roots) => roots.filter((root): root is string => root !== null));
   const allowed =
