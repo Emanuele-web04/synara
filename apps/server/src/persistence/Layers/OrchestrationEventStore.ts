@@ -10,6 +10,7 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
+  type ServerSettings,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
@@ -125,7 +126,10 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedEventRow {
+function normalizeLegacyEventRow(
+  row: ParsedPersistedEventRow,
+  settings?: ServerSettings,
+): ParsedPersistedEventRow {
   if (!isRecord(row.payload)) {
     return row;
   }
@@ -201,7 +205,10 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   return normalizedPayload === undefined ? row : { ...row, payload: normalizedPayload };
 }
 
-type PersistedEventUpcaster = (row: ParsedPersistedEventRow) => ParsedPersistedEventRow;
+type PersistedEventUpcaster = (
+  row: ParsedPersistedEventRow,
+  settings?: ServerSettings,
+) => ParsedPersistedEventRow;
 
 // Every unversioned event passes through the same v0 -> v1 boundary. Most event types are a
 // no-op; the model-selection families need the historical shape normalization above.
@@ -251,6 +258,7 @@ function parsePersistedJson(
 function decodePersistedEventRow(
   operation: string,
   row: RawPersistedEventRow,
+  settings?: ServerSettings,
 ): Effect.Effect<OrchestrationEvent, PersistenceDecodeError> {
   return Effect.gen(function* () {
     const payload = yield* parsePersistedJson(operation, row, "payloadJson");
@@ -310,7 +318,7 @@ function decodePersistedEventRow(
           `No persisted event upcaster is registered for schema version ${version}.`,
         );
       }
-      candidate = upcaster(candidate);
+      candidate = upcaster(candidate, settings);
     }
 
     return yield* decodeEvent(candidate).pipe(
@@ -412,6 +420,10 @@ const makeEventStore = Effect.gen(function* () {
     onSome: (serverSettings) =>
       serverSettings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
   });
+  const decodeRowWithSettings = (operation: string, row: RawPersistedEventRow) =>
+    readSettingsForModelSelectionDecode.pipe(
+      Effect.flatMap((settings) => decodePersistedEventRow(operation, row, settings)),
+    );
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
@@ -608,7 +620,7 @@ const makeEventStore = Effect.gen(function* () {
         ),
       ),
       Effect.flatMap((row) =>
-        decodePersistedEventRow("OrchestrationEventStore.append:rowToEvent", row).pipe(
+        decodeRowWithSettings("OrchestrationEventStore.append:rowToEvent", row).pipe(
           // Durable JSON is sanitized above, while the just-committed in-memory
           // event keeps transient launch credentials for internal runtime consumers.
           Effect.map((savedEvent) =>
@@ -683,7 +695,7 @@ const makeEventStore = Effect.gen(function* () {
           ),
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) =>
-              decodePersistedEventRow("OrchestrationEventStore.readFromSequence:rowToEvent", row),
+              decodeRowWithSettings("OrchestrationEventStore.readFromSequence:rowToEvent", row),
             ),
           ),
         ),
@@ -722,7 +734,7 @@ const makeEventStore = Effect.gen(function* () {
             ),
             Effect.flatMap((rows) =>
               Effect.forEach(rows, (row) =>
-                decodePersistedEventRow(
+                decodeRowWithSettings(
                   "OrchestrationEventStore.readThreadEventsFromSequence:rowToEvent",
                   row,
                 ),
@@ -789,7 +801,7 @@ const makeEventStore = Effect.gen(function* () {
       ),
       Effect.flatMap((rows) =>
         Effect.forEach(rows, (row) =>
-          decodePersistedEventRow("OrchestrationEventStore.readThreadEvents:rowToEvent", row),
+          decodeRowWithSettings("OrchestrationEventStore.readThreadEvents:rowToEvent", row),
         ),
       ),
     );
