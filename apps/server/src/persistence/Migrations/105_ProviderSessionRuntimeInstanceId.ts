@@ -31,18 +31,39 @@ export default Effect.gen(function* () {
     WHERE json_valid(runtime_payload_json)
       AND json_extract(runtime_payload_json, '$.modelSelection.provider') IS NOT NULL
       AND json_extract(runtime_payload_json, '$.modelSelection.instanceId') IS NULL
+      AND typeof(json_extract(runtime_payload_json, '$.modelSelection.provider')) = 'text'
+      AND length(trim(json_extract(runtime_payload_json, '$.modelSelection.provider'))) BETWEEN 1 AND 64
+      AND trim(json_extract(runtime_payload_json, '$.modelSelection.provider')) GLOB '[A-Za-z]*'
+      AND trim(json_extract(runtime_payload_json, '$.modelSelection.provider')) NOT GLOB '*[^A-Za-z0-9_-]*'
   `;
 
   yield* sql`
     UPDATE provider_session_runtime
-    SET provider_instance_id = CASE
-      WHEN json_valid(runtime_payload_json) THEN COALESCE(
-        json_extract(runtime_payload_json, '$.providerInstanceId'),
-        json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
-        provider_name
-      )
-      ELSE provider_name
-    END
+    SET provider_instance_id = COALESCE(
+      CASE
+        WHEN json_valid(runtime_payload_json)
+          AND typeof(json_extract(runtime_payload_json, '$.providerInstanceId')) = 'text'
+          AND length(trim(json_extract(runtime_payload_json, '$.providerInstanceId'))) BETWEEN 1 AND 64
+          AND trim(json_extract(runtime_payload_json, '$.providerInstanceId')) GLOB '[A-Za-z]*'
+          AND trim(json_extract(runtime_payload_json, '$.providerInstanceId')) NOT GLOB '*[^A-Za-z0-9_-]*'
+        THEN trim(json_extract(runtime_payload_json, '$.providerInstanceId'))
+      END,
+      CASE
+        WHEN json_valid(runtime_payload_json)
+          AND typeof(json_extract(runtime_payload_json, '$.modelSelection.instanceId')) = 'text'
+          AND length(trim(json_extract(runtime_payload_json, '$.modelSelection.instanceId'))) BETWEEN 1 AND 64
+          AND trim(json_extract(runtime_payload_json, '$.modelSelection.instanceId')) GLOB '[A-Za-z]*'
+          AND trim(json_extract(runtime_payload_json, '$.modelSelection.instanceId')) NOT GLOB '*[^A-Za-z0-9_-]*'
+        THEN trim(json_extract(runtime_payload_json, '$.modelSelection.instanceId'))
+      END,
+      CASE
+        WHEN length(trim(provider_name)) BETWEEN 1 AND 64
+          AND trim(provider_name) GLOB '[A-Za-z]*'
+          AND trim(provider_name) NOT GLOB '*[^A-Za-z0-9_-]*'
+        THEN trim(provider_name)
+        ELSE 'codex'
+      END
+    )
     WHERE provider_instance_id IS NULL
   `;
 

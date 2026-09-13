@@ -358,18 +358,31 @@ layer("reconcileMigrationLineage", (it) => {
           updated_at,
           deleted_at
         )
-        VALUES (
-          'thread-malformed-runtime',
-          'project-provider-instance',
-          'Malformed Legacy Runtime',
-          'not-json',
-          'full-access',
-          'default',
-          'local',
-          ${now},
-          ${now},
-          NULL
-        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'project-provider-instance',
+            'Malformed Legacy Runtime',
+            'not-json',
+            'full-access',
+            'default',
+            'local',
+            ${now},
+            ${now},
+            NULL
+          ),
+          (
+            'thread-invalid-instance',
+            'project-provider-instance',
+            'Invalid Legacy Instance',
+            ${JSON.stringify({ instanceId: "invalid instance!", model: "gpt-5.4" })},
+            'full-access',
+            'default',
+            'local',
+            ${now},
+            ${now},
+            NULL
+          )
       `;
       yield* sql`
         INSERT INTO projection_thread_sessions (
@@ -381,15 +394,25 @@ layer("reconcileMigrationLineage", (it) => {
           last_error,
           updated_at
         )
-        VALUES (
-          'thread-malformed-runtime',
-          'stopped',
-          'codex',
-          'full-access',
-          NULL,
-          NULL,
-          ${now}
-        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'stopped',
+            'codex',
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          ),
+          (
+            'thread-invalid-instance',
+            'stopped',
+            'codex',
+            'full-access',
+            NULL,
+            NULL,
+            ${now}
+          )
       `;
       yield* sql`
         INSERT INTO provider_session_runtime (
@@ -402,16 +425,30 @@ layer("reconcileMigrationLineage", (it) => {
           resume_cursor_json,
           runtime_payload_json
         )
-        VALUES (
-          'thread-malformed-runtime',
-          'codex',
-          'codex',
-          'full-access',
-          'stopped',
-          ${now},
-          NULL,
-          'not-json'
-        )
+        VALUES
+          (
+            'thread-malformed-runtime',
+            'codex',
+            'codex',
+            'full-access',
+            'stopped',
+            ${now},
+            NULL,
+            'not-json'
+          ),
+          (
+            'thread-invalid-instance',
+            'codex',
+            'codex',
+            'full-access',
+            'stopped',
+            ${now},
+            NULL,
+            ${JSON.stringify({
+              providerInstanceId: "also invalid!",
+              modelSelection: { instanceId: "invalid instance!", model: "gpt-5.4" },
+            })}
+          )
       `;
 
       yield* runMigrations({ toMigrationInclusive: 54 });
@@ -439,6 +476,24 @@ layer("reconcileMigrationLineage", (it) => {
         providerInstanceId: "codex",
         runtimePayloadJson: "not-json",
       });
+
+      const [invalidProjectionSession] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-invalid-instance'
+      `;
+      const [invalidRuntime] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM provider_session_runtime
+        WHERE thread_id = 'thread-invalid-instance'
+      `;
+
+      assert.deepStrictEqual(invalidProjectionSession, { providerInstanceId: "codex" });
+      assert.deepStrictEqual(invalidRuntime, { providerInstanceId: "codex" });
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 });
