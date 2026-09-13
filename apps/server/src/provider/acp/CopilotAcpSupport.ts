@@ -22,7 +22,7 @@ export interface CopilotAcpRuntimeSettings {
 
 export interface CopilotAcpRuntimeInput extends Omit<
   AcpSessionRuntimeOptions,
-  "authMethodId" | "resolveAuthMethodId" | "authentication" | "spawn"
+  "authMethodId" | "resolveAuthMethodId" | "authPolicy" | "spawn"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly copilotSettings: CopilotAcpRuntimeSettings | null | undefined;
@@ -59,10 +59,19 @@ export function buildCopilotAcpSpawnInput(
  */
 export const resolveCopilotAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
-): Effect.Effect<string | undefined> =>
-  Effect.succeed(
-    (initializeResult.authMethods ?? []).map((method) => method.id.trim()).find(Boolean),
-  );
+): Effect.Effect<string, AcpErrors.AcpError> => {
+  const methodId = (initializeResult.authMethods ?? [])
+    .map((method) => method.id.trim())
+    .find(Boolean);
+  return methodId
+    ? Effect.succeed(methodId)
+    : Effect.fail(
+        new AcpErrors.AcpRequestError({
+          code: -32000,
+          errorMessage: "Copilot requires authentication but advertised no authentication methods.",
+        }),
+      );
+};
 
 export const makeCopilotAcpRuntime = (
   input: CopilotAcpRuntimeInput,
@@ -73,7 +82,7 @@ export const makeCopilotAcpRuntime = (
         ...input,
         spawn: buildCopilotAcpSpawnInput(input.copilotSettings, input.cwd),
         resolveAuthMethodId: resolveCopilotAcpAuthMethodId,
-        authentication: "when-advertised",
+        authPolicy: "on-demand",
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

@@ -476,7 +476,11 @@ export function makeCopilotAdapter(settings: CopilotAcpRuntimeSettings = {}) {
             pendingUserInputs,
             turns: [],
             session,
-            modeState: yield* acp.getModeState,
+            modeState: yield* acp.getModeState.pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/get_mode_state", error),
+              ),
+            ),
             activeTurnId: undefined,
             activeInteractionMode: undefined,
             activeTurnHadAssistantContent: false,

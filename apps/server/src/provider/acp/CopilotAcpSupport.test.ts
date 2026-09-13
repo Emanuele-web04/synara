@@ -51,11 +51,10 @@ describe("resolveCopilotAcpAuthMethodId", () => {
     expect(methodId).toBe("github-login");
   });
 
-  it("allows BYOK sessions when Copilot advertises no client-driven auth method", async () => {
-    const methodId = await Effect.runPromise(
-      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])),
-    );
-    expect(methodId).toBeUndefined();
+  it("fails auth-method resolution when authentication is required but none is advertised", async () => {
+    await expect(
+      Effect.runPromise(resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([]))),
+    ).rejects.toThrow("advertised no authentication methods");
   });
 });
 
