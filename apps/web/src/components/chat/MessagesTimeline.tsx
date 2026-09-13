@@ -2643,11 +2643,37 @@ function useStableMessageTimelineEntries(
   );
 }
 
+function tailAnchorMessagesEqual(
+  left: MessageTimelineEntry["message"],
+  right: MessageTimelineEntry["message"],
+): boolean {
+  // Compare by value, not reference: deriveTimelineEntries clones assistant
+  // messages linked to a proposed plan to strip plan markup, so a work-only
+  // update produces a new object with identical content. Reference equality
+  // here would mistake that clone for a real message change and extend the
+  // anchor hold. `textSegments` is passed through by spread, so its reference
+  // only changes when the source message actually updated.
+  return (
+    left.id === right.id &&
+    left.role === right.role &&
+    left.text === right.text &&
+    left.streaming === right.streaming &&
+    left.createdAt === right.createdAt &&
+    left.turnId === right.turnId &&
+    left.textSegments === right.textSegments
+  );
+}
+
 function messageTimelineEntriesEqual(
   left: MessageTimelineEntry,
   right: MessageTimelineEntry,
 ): boolean {
-  if (left.id !== right.id || left.kind !== right.kind || left.message !== right.message) {
+  if (
+    left.id !== right.id ||
+    left.kind !== right.kind ||
+    left.createdAt !== right.createdAt ||
+    !tailAnchorMessagesEqual(left.message, right.message)
+  ) {
     return false;
   }
   if (left.kind === "message-segment" && right.kind === "message-segment") {
