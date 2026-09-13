@@ -9184,7 +9184,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("enables plan mode from the composer extras menu", async () => {
+  it("enables plan mode from the composer extras panel", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -9195,8 +9195,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Mode").click();
-      await page.getByRole("menuitemradio", { name: "Plan" }).click();
+      await page.getByText("Turn plan mode on").click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
@@ -9207,6 +9206,68 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["extras panel", "edit button", "edit command"])(
+    "sets a literal control-word goal from the %s",
+    async (entryPoint) => {
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-literal-goal-test" as MessageId,
+        targetText: "literal goal test",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: [{ ...snapshot.threads[0]!, goal: "clear" }],
+        },
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi();
+
+      try {
+        if (entryPoint === "edit button") {
+          await page.getByRole("button", { name: "Edit goal" }).click();
+        } else {
+          const prompt = entryPoint === "extras panel" ? "clear" : "/goal edit";
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+          const composerEditor = await waitForComposerEditor();
+          await vi.waitFor(() =>
+            expect(composerEditor.textContent ?? "").toContain(
+              entryPoint === "extras panel" ? "clear" : "edit",
+            ),
+          );
+          if (entryPoint === "extras panel") {
+            await page.getByLabelText("Composer extras").click();
+            await page.getByText("Set a goal to keep pursuing").click();
+          } else {
+            (await waitForSendButton()).click();
+          }
+        }
+        await vi.waitFor(() =>
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "/goal -- clear",
+          ),
+        );
+        const sendButton = await waitForSendButton();
+        sendButton.click();
+
+        await vi.waitFor(() => {
+          const request = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              request.command.type === "thread.meta.update" &&
+              "goal" in request.command,
+          );
+          expect(request?.command).toMatchObject({ type: "thread.meta.update", goal: "clear" });
+        });
+      } finally {
+        restoreNativeApi();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("activates Debug with /debug and returns to Default from the badge and /default", async () => {
     const mounted = await mountChatView({
