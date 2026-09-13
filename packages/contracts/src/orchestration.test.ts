@@ -334,7 +334,7 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
   }),
 );
 
-it.effect("drops legacy provider passwords from decoded provider options", () =>
+it.effect("preserves OpenCode runtime credentials in provider start options", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProviderStartOptions({
       opencode: {
@@ -348,9 +348,9 @@ it.effect("drops legacy provider passwords from decoded provider options", () =>
       opencode: {
         binaryPath: "/custom/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
+        serverPassword: "legacy-opencode-secret",
       },
     });
-    assert.doesNotMatch(JSON.stringify(parsed), /serverPassword|legacy-.*-secret/);
   }),
 );
 

@@ -1537,8 +1537,7 @@ const makeWsRpcHandlersLayer = () =>
                 ),
                 Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
                 Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
                   onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
                 }),
               ),

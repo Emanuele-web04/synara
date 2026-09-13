@@ -34,6 +34,7 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import { isProviderKind } from "@synara/shared/providerInstances";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import {
   buildSubagentIdentityDirectory,
@@ -1013,6 +1014,9 @@ const make = Effect.gen(function* () {
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
     provider: ProviderRuntimeEvent["provider"],
   ) {
+    if (!isProviderKind(provider)) {
+      return false;
+    }
     const capabilities = yield* providerService
       .getCapabilities(provider)
       .pipe(Effect.catch(() => Effect.succeed(null)));

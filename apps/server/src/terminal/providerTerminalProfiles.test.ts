@@ -82,32 +82,34 @@ describe("deriveManagedTerminalProfiles", () => {
       stateDir,
     });
 
-    expect(profiles.find((profile) => profile.commandName === "pi-work")?.environment).toMatchObject(
-      { PI_CODING_AGENT_DIR: imported },
-    );
+    expect(
+      profiles.find((profile) => profile.commandName === "pi-work")?.environment,
+    ).toMatchObject({ PI_CODING_AGENT_DIR: imported });
   });
 
   it.each([
     ["antigravity", "agy"],
     ["droid", "droid"],
-  ] as const)("does not isolate the default %s profile through its internal driver alias", async (
-    provider,
-    executable,
-  ) => {
-    const { binDir, homeDir, stateDir } = fixture();
-    installCli(binDir, executable);
+  ] as const)(
+    "does not isolate the default %s profile through its internal driver alias",
+    async (provider, executable) => {
+      const { binDir, homeDir, stateDir } = fixture();
+      installCli(binDir, executable);
 
-    const profiles = await deriveManagedTerminalProfiles({
-      settings: DEFAULT_SERVER_SETTINGS,
-      baseEnv: { PATH: binDir, HOME: homeDir },
-      homeDir,
-      stateDir,
-    });
-    const profile = profiles.find((candidate) => candidate.commandName === `${executable}-default`);
+      const profiles = await deriveManagedTerminalProfiles({
+        settings: DEFAULT_SERVER_SETTINGS,
+        baseEnv: { PATH: binDir, HOME: homeDir },
+        homeDir,
+        stateDir,
+      });
+      const profile = profiles.find(
+        (candidate) => candidate.commandName === `${executable}-default`,
+      );
 
-    expect(profile?.isolateEnvironment).toBe(false);
-    expect(profile?.environment.HOME).toBe(homeDir);
-  });
+      expect(profile?.isolateEnvironment).toBe(false);
+      expect(profile?.environment.HOME).toBe(homeDir);
+    },
+  );
 
   it("preserves an imported Devin profile directory", async () => {
     const { binDir, homeDir, stateDir, root } = fixture();

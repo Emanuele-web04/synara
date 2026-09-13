@@ -6,6 +6,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderKind,
   type ProviderRequestKind,

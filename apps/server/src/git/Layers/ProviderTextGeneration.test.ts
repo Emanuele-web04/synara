@@ -136,7 +136,7 @@ describe("ProviderTextGenerationLive", () => {
       ),
     ).rejects.toMatchObject({
       _tag: "TextGenerationError",
-      detail: "Codex is disabled in Settings > Providers.",
+      detail: "Provider instance 'codex' is disabled.",
     });
     expect(codex.generateDiffSummary).not.toHaveBeenCalled();
     expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
@@ -154,8 +154,8 @@ describe("ProviderTextGenerationLive", () => {
         yield* textGeneration.generateDiffSummary({
           cwd: "/repo",
           patch: "diff --git a/file.ts b/file.ts",
-          model: "claude-opus-4-8",
-          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+          model: "Gemini 3.5 Flash",
+          modelSelection: { provider: "antigravity", model: "Gemini 3.5 Flash" },
         });
       }).pipe(Effect.provide(layer)),
     );
@@ -164,7 +164,7 @@ describe("ProviderTextGenerationLive", () => {
     expect(cursor.generateDiffSummary).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "composer-2",
-        modelSelection: { provider: "cursor", model: "composer-2" },
+        modelSelection: { provider: "cursor", instanceId: "cursor", model: "composer-2" },
       }),
     );
   });
@@ -367,6 +367,7 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: {
           provider: "droid",
+          instanceId: "droid",
           model: "deepseek-v4-flash-0731",
           options: { reasoningEffort: "high" },
         },
@@ -401,6 +402,7 @@ describe("ProviderTextGenerationLive", () => {
           model: "deepseek-v4-flash-0731",
           modelSelection: {
             provider: "droid",
+            instanceId: "droid",
             model: "deepseek-v4-flash-0731",
           },
         }),

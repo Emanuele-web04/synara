@@ -34,6 +34,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,

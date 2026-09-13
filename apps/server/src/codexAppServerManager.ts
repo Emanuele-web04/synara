@@ -196,8 +196,11 @@ interface CodexSessionContext {
     | undefined;
   nextRequestId: number;
   stopping: boolean;
+  /** Transport/process failure initiated teardown, so a later exit remains observable. */
+  failureStopping?: boolean;
   transportError?: Error;
   stopPromise?: Promise<void>;
+  teardownFailed?: boolean;
   teardownCapturedBeforeExit?: boolean;
   codexOptions?: CodexDiscoveryOptions;
   authTracking?: PreparedCodexAuthTracking;
@@ -2513,9 +2516,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.stopPromise) {
       return context.stopPromise;
     }
-    if (context.stopping) {
+    if (context.stopping && context.teardownFailed !== true) {
       return;
     }
+    context.teardownFailed = false;
 
     let settleBeforeTeardown: Promise<void> | undefined;
     if (!context.stopping) {
@@ -2569,6 +2573,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
         // A later stop/start may retry proof after the process has exited.
         if (context.stopPromise === stopPromise) {
+          context.teardownFailed = true;
           delete context.stopPromise;
         }
         throw error;
@@ -2918,7 +2923,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
       const codexOptions = context.codexOptions;
-      const currentTracking = prepareCodexAuthTracking(codexProcessEnvInputForOptions(codexOptions));
+      const currentTracking = prepareCodexAuthTracking(
+        codexProcessEnvInputForOptions(codexOptions),
+      );
       return readCodexPreparedAuthTrackingFingerprint(currentTracking) === context.authFingerprint
         ? undefined
         : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
@@ -3035,14 +3042,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           return activeSession;
         }
       }
-      return this.getOrCreateDiscoverySession(
-        normalizedCwd,
-        codexOptions,
-        expectedAuthFingerprint,
-      );
+      return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
     }
-    const firstActive = Array.from(this.sessions.values()).find((context) =>
-      this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
+    const firstActive = Array.from(this.sessions.values()).find(
+      (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
     );
     if (firstActive) {
       return firstActive;
@@ -3104,8 +3107,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
     const authContext =
-      context ??
-      (await this.resolveContextForDiscovery(undefined, input.cwd, input.codexOptions));
+      context ?? (await this.resolveContextForDiscovery(undefined, input.cwd, input.codexOptions));
     const readAuthStatus = async (refreshToken: boolean) => {
       const response = await this.sendRequest<Record<string, unknown>>(
         authContext,
@@ -3435,7 +3437,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.child.on("error", (error) => this.handleTransportFailure(context, error));
 
     context.child.on("exit", (code, signal) => {
-      if (context.stopping) {
+      if (context.stopping && context.failureStopping !== true) {
         return;
       }
 
@@ -3479,6 +3481,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private stopFailedContext(context: CodexSessionContext): void {
+    context.failureStopping = true;
     const stopping = context.discovery
       ? this.stopDiscoverySessionContext(context)
       : this.stopSessionContext(context, false);

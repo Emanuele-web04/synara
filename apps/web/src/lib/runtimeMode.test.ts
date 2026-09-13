@@ -39,6 +39,8 @@ describe("runtime mode provider support", () => {
         { slug: "claude-test", name: "Claude Test", supportsAutoMode: true },
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "ready",
           available: true,
           authStatus: "authenticated",
@@ -53,6 +55,8 @@ describe("runtime mode provider support", () => {
     expect(
       providerModelSupportsAutoRuntimeMode("codex", undefined, {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -70,6 +74,8 @@ describe("runtime mode provider support", () => {
         { slug: "claude-test", name: "Claude Test" },
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "ready",
           available: true,
           authStatus: "authenticated",

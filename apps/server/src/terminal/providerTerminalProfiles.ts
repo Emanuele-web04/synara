@@ -52,7 +52,10 @@ const PROFILE_ENVIRONMENT_KEYS = new Set([
   "XDG_STATE_HOME",
 ]);
 
-function readConfigString(config: Readonly<Record<string, unknown>>, key: string): string | undefined {
+function readConfigString(
+  config: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -63,7 +66,9 @@ function nonSensitiveEnvironment(
   return Object.fromEntries(
     (instance.raw.environment ?? []).flatMap((variable) => {
       const name = variable.name.trim();
-      return name && typeof variable.value === "string" && variable.sensitive !== true &&
+      return name &&
+        typeof variable.value === "string" &&
+        variable.sensitive !== true &&
         variable.valueRedacted !== true
         ? [[name, variable.value ?? ""]]
         : [];
@@ -151,7 +156,7 @@ export async function deriveManagedTerminalProfiles(input: {
     } else if (instance.driver === "claudeAgent") {
       const configured = {
         ...configuredEnvironment,
-        ...(readConfigString(instance.config, "configDir") ?? profileDir
+        ...((readConfigString(instance.config, "configDir") ?? profileDir)
           ? {
               CLAUDE_CONFIG_DIR: expandProviderAccountHomePath(
                 (readConfigString(instance.config, "configDir") ?? profileDir)!,

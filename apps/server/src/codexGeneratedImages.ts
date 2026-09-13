@@ -91,10 +91,7 @@ export interface CodexGeneratedImageHomeContext {
 
 export type CodexGeneratedImageHomeCandidate = string | CodexGeneratedImageHomeContext;
 
-const CODEX_HOME_CONTEXT_ENV_KEYS = [
-  "CODEX_HOME",
-  "SYNARA_HOME",
-] as const;
+const CODEX_HOME_CONTEXT_ENV_KEYS = ["CODEX_HOME", "SYNARA_HOME"] as const;
 
 function codexHomePathsInputFromContext(
   codexHome?: CodexGeneratedImageHomeCandidate,

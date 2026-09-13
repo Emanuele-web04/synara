@@ -3,6 +3,7 @@
 // Layer: Shared platform runtime
 
 import {
+  execSync as nodeExecSync,
   execFile as nodeExecFile,
   spawn as nodeSpawn,
   spawnSync as nodeSpawnSync,
@@ -10,6 +11,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type ExecFileException,
   type ExecFileOptionsWithStringEncoding,
+  type ExecSyncOptionsWithStringEncoding,
   type SpawnOptions,
   type SpawnSyncOptionsWithBufferEncoding,
   type SpawnSyncOptionsWithStringEncoding,
@@ -17,6 +19,7 @@ import {
 } from "node:child_process";
 
 import { prepareProcess, type ProcessLaunchInput, type ProcessLaunchPlan } from "./platformProcess";
+import { resolveWindowsComSpec } from "./platformEnvironment";
 
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExecutable">;
 
@@ -49,6 +52,12 @@ export type RuntimeExecFileOptions = Omit<
   "shell" | "windowsHide" | "windowsVerbatimArguments"
 > &
   ProcessPlanningOptions;
+
+export type RuntimeExecShellSyncOptions = Omit<
+  ExecSyncOptionsWithStringEncoding,
+  "shell" | "windowsHide"
+> &
+  Pick<ProcessLaunchInput, "platform">;
 
 type PipeStdio = "pipe" | readonly ["pipe", "pipe", "pipe"];
 type PlanningOptions =
@@ -167,6 +176,23 @@ export function spawnProcessSync(
     windowsHide: plan.windowsHide,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   }) as SpawnSyncReturns<string> | SpawnSyncReturns<Buffer>;
+}
+
+/**
+ * Runs an explicitly configured shell snippet while keeping host shell and
+ * window policy inside the shared process boundary.
+ */
+export function execShellCommandSync(
+  command: string,
+  options: RuntimeExecShellSyncOptions,
+): string {
+  const { platform = process.platform, ...nodeOptions } = options;
+  const env = nodeOptions.env ?? process.env;
+  return nodeExecSync(command, {
+    ...nodeOptions,
+    shell: platform === "win32" ? resolveWindowsComSpec(env) : "/bin/sh",
+    windowsHide: platform === "win32",
+  });
 }
 
 /** Callback-compatible execFile for SDK hooks that require that interface. */

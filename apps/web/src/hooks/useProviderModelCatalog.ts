@@ -328,10 +328,8 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       ...selectedInstanceQueryOption("opencode"),
       binaryPath: readProviderOptionString(
-        getProviderStartOptions(
-          settings,
-          selectedInstanceQueryOption("opencode").instanceId,
-        )?.opencode,
+        getProviderStartOptions(settings, selectedInstanceQueryOption("opencode").instanceId)
+          ?.opencode,
         "binaryPath",
       ),
       cwd: discoveryCwd,

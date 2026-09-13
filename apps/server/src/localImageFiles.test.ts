@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
@@ -181,32 +174,29 @@ describe("resolveAllowedLocalPreviewFile", () => {
     }
   });
 
-  it(
-    "rejects generated_images roots that symlink outside the configured Codex home",
-    async () => {
-      if (process.platform === "win32") return;
-      const fakeRoot = path.join(
-        process.cwd(),
-        `.test-codex-symlinked-images-${process.pid}-${Date.now()}`,
-      );
-      tempDirs.push(fakeRoot);
-      const codexHome = path.join(fakeRoot, "codex-home");
-      const outsideRoot = path.join(fakeRoot, "outside");
-      const imagePath = path.join(outsideRoot, "thread", "call.png");
-      mkdirSync(path.dirname(imagePath), { recursive: true });
-      mkdirSync(codexHome, { recursive: true });
-      writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-      symlinkSync(outsideRoot, path.join(codexHome, "generated_images"), "dir");
+  it("rejects generated_images roots that symlink outside the configured Codex home", async () => {
+    if (process.platform === "win32") return;
+    const fakeRoot = path.join(
+      process.cwd(),
+      `.test-codex-symlinked-images-${process.pid}-${Date.now()}`,
+    );
+    tempDirs.push(fakeRoot);
+    const codexHome = path.join(fakeRoot, "codex-home");
+    const outsideRoot = path.join(fakeRoot, "outside");
+    const imagePath = path.join(outsideRoot, "thread", "call.png");
+    mkdirSync(path.dirname(imagePath), { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    symlinkSync(outsideRoot, path.join(codexHome, "generated_images"), "dir");
 
-      const result = await resolveAllowedLocalPreviewFile({
-        requestedPath: imagePath,
-        cwd: null,
-        codexHomePaths: [codexHome],
-      });
+    const result = await resolveAllowedLocalPreviewFile({
+      requestedPath: imagePath,
+      cwd: null,
+      codexHomePaths: [codexHome],
+    });
 
-      assert.equal(result, null);
-    },
-  );
+    assert.equal(result, null);
+  });
 
   it("allows generated images from the configured Codex account overlay after direct-home toggles", async () => {
     const fakeRoot = path.join(

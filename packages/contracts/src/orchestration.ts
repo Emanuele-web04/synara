@@ -131,10 +131,7 @@ function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefin
   if (lowerInstanceId.startsWith("cursor")) {
     return "cursor";
   }
-  if (
-    lowerInstanceId.startsWith("antigravity") ||
-    lowerInstanceId.startsWith("gemini")
-  ) {
+  if (lowerInstanceId.startsWith("antigravity") || lowerInstanceId.startsWith("gemini")) {
     return "antigravity";
   }
   if (lowerInstanceId.startsWith("grok")) {

@@ -180,25 +180,15 @@ describe("composerDraftStore modelSelection", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelection(
       threadId,
-      modelSelection(
-        "codex",
-        "gpt-5.3-codex",
-        { reasoningEffort: "xhigh" },
-        "codex_work",
-      ),
+      modelSelection("codex", "gpt-5.3-codex", { reasoningEffort: "xhigh" }, "codex_work"),
     );
 
-    store.setModelSelection(
-      threadId,
-      modelSelection("codex", "gpt-5.4", undefined, "codex_work"),
-    );
+    store.setModelSelection(threadId, modelSelection("codex", "gpt-5.4", undefined, "codex_work"));
 
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider
         .codex_work,
-    ).toEqual(
-      modelSelection("codex", "gpt-5.4", { reasoningEffort: "xhigh" }, "codex_work"),
-    );
+    ).toEqual(modelSelection("codex", "gpt-5.4", { reasoningEffort: "xhigh" }, "codex_work"));
   });
 
   it("keeps same-provider instance selections in separate draft slots", () => {

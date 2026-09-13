@@ -111,49 +111,37 @@ export function useChatProviderModels({
       settings.providerOrder,
     ],
   );
-  const selectedProviderInstanceId = useMemo<ProviderInstanceId>(() => {
-    const sessionInstanceId =
-      activeThread?.session?.provider === selectedProvider
-        ? activeThread.session.providerInstanceId
-        : undefined;
-    if (sessionInstanceId) return sessionInstanceId;
-
-    let candidateInstanceId: ProviderInstanceId | undefined =
-      selectedProviderByThreadId === selectedProvider
-        ? (selectedProviderInstanceIdByThreadId ?? undefined)
-        : undefined;
-    const draftSelection = candidateInstanceId
-      ? composerDraft.modelSelectionByProvider[candidateInstanceId]
+  const sessionInstanceId =
+    activeThread?.session?.provider === selectedProvider
+      ? activeThread.session.providerInstanceId
       : undefined;
-    if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
-      candidateInstanceId = draftSelection.instanceId;
-    }
-    if (
-      !candidateInstanceId &&
-      activeThread?.modelSelection.provider === selectedProvider &&
-      activeThread.modelSelection.instanceId
-    ) {
-      candidateInstanceId = activeThread.modelSelection.instanceId;
-    }
-    if (
-      !candidateInstanceId &&
-      activeProject?.defaultModelSelection?.provider === selectedProvider &&
-      activeProject.defaultModelSelection.instanceId
-    ) {
-      candidateInstanceId = activeProject.defaultModelSelection.instanceId;
-    }
-    return resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
-  }, [
-    activeProject?.defaultModelSelection,
-    activeThread?.modelSelection,
-    activeThread?.session?.provider,
-    activeThread?.session?.providerInstanceId,
-    composerDraft.modelSelectionByProvider,
-    selectedProvider,
-    selectedProviderByThreadId,
-    selectedProviderInstanceIdByThreadId,
-    settings,
-  ]);
+  let candidateInstanceId: ProviderInstanceId | undefined =
+    selectedProviderByThreadId === selectedProvider
+      ? (selectedProviderInstanceIdByThreadId ?? undefined)
+      : undefined;
+  const draftSelection = candidateInstanceId
+    ? composerDraft.modelSelectionByProvider[candidateInstanceId]
+    : undefined;
+  if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
+    candidateInstanceId = draftSelection.instanceId;
+  }
+  if (
+    !candidateInstanceId &&
+    activeThread?.modelSelection.provider === selectedProvider &&
+    activeThread.modelSelection.instanceId
+  ) {
+    candidateInstanceId = activeThread.modelSelection.instanceId;
+  }
+  if (
+    !candidateInstanceId &&
+    activeProject?.defaultModelSelection?.provider === selectedProvider &&
+    activeProject.defaultModelSelection.instanceId
+  ) {
+    candidateInstanceId = activeProject.defaultModelSelection.instanceId;
+  }
+  const selectedProviderInstanceId =
+    sessionInstanceId ??
+    resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
@@ -349,8 +337,6 @@ export function useChatProviderModels({
     selectedProvider === "devin";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
-    providerInstances,
-    selectedProviderInstanceId,
     selectedModel,
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,

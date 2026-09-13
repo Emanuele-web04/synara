@@ -1129,7 +1129,11 @@ describe("ProviderCommandReactor", () => {
       expect.objectContaining({
         cwd: "/tmp/provider-project",
         context: "conversation",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: {
+          provider: "codex",
+          instanceId: "codex",
+          model: "gpt-5-codex",
+        },
         message: expect.stringContaining("User: Fix the backend authentication callback race"),
       }),
     );
@@ -1160,7 +1164,11 @@ describe("ProviderCommandReactor", () => {
     );
     expect(harness.generateThreadTitle).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+        modelSelection: {
+          provider: "opencode",
+          instanceId: "opencode",
+          model: "openai/gpt-5",
+        },
         providerOptions: expect.objectContaining({
           opencode: expect.objectContaining({
             binaryPath: "/custom/opencode",
@@ -7282,6 +7290,7 @@ describe("ProviderCommandReactor", () => {
   it("does not reuse stale provider options when the configured title fallback is gone", async () => {
     const harness = await createHarness({
       threadModelSelection: {
+        provider: "antigravity",
         instanceId: "antigravity",
         model: "auto-gemini-3",
       },
@@ -7296,6 +7305,7 @@ describe("ProviderCommandReactor", () => {
           cursor: { enabled: false },
           antigravity: { enabled: false },
           opencode: { enabled: false },
+          droid: { enabled: false },
         },
       },
     });
@@ -7322,6 +7332,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
+          provider: "antigravity",
           instanceId: "antigravity",
           model: "auto-gemini-3",
         },
@@ -7399,6 +7410,7 @@ describe("ProviderCommandReactor", () => {
   it("merges live provider instance options before first-turn title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
+        provider: "opencode",
         instanceId: "opencode_work",
         model: "openai/gpt-5",
       },
@@ -7465,6 +7477,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
+          provider: "opencode",
           instanceId: "opencode_work",
           model: "openai/gpt-5",
         },
@@ -7736,6 +7749,7 @@ describe("ProviderCommandReactor", () => {
       serverSettings: {
         providers: {
           codex: { enabled: false },
+          claudeAgent: { enabled: false },
           cursor: { enabled: false },
           opencode: { enabled: false },
           droid: { enabled: false },
@@ -10804,6 +10818,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
+          provider: "codex",
           instanceId: "codex_work",
           model: "gpt-5.4",
         },
@@ -10862,6 +10877,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
+          provider: "codex",
           instanceId: "codex",
           model: "gpt-5.4",
         },
@@ -10913,6 +10929,7 @@ describe("ProviderCommandReactor", () => {
         messageId: asMessageId("user-message-stopped-edit"),
         text: "edited prompt for work account",
         modelSelection: {
+          provider: "codex",
           instanceId: "codex_work",
           model: "gpt-5.4",
         },
@@ -10979,13 +10996,11 @@ describe("ProviderCommandReactor", () => {
     });
 
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
-    const thread = readModel.threads.find(
-      (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
-    );
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(harness.startSession.mock.calls.length).toBe(0);
     expect(thread?.session).toMatchObject({
       status: "error",
-      providerName: null,
+      providerName: "codex",
       providerInstanceId: "codex_removed",
       lastError: expect.stringContaining("Unknown provider instance 'codex_removed'."),
     });
@@ -11002,6 +11017,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
+          provider: "codex",
           instanceId: "codex",
           model: "gpt-5-codex",
         },
@@ -11027,6 +11043,7 @@ describe("ProviderCommandReactor", () => {
       (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
     );
     expect(retriedThread?.modelSelection).toEqual({
+      provider: "codex",
       instanceId: "codex",
       model: "gpt-5-codex",
     });
@@ -11096,6 +11113,7 @@ describe("ProviderCommandReactor", () => {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.modelSelection).toEqual({
+      provider: "codex",
       instanceId: "codex",
       model: "gpt-5-codex",
     });
@@ -11170,6 +11188,7 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("codex");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
     expect(thread?.modelSelection).toEqual({
+      provider: "codex",
       instanceId: "codex",
       model: "gpt-5-codex",
     });

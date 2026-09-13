@@ -13,6 +13,7 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { Effect, Schema } from "effect";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
@@ -140,7 +141,10 @@ function canProjectTurnModelSelection(
   if (modelSelection === undefined) {
     return false;
   }
-  return canProjectTurnModelSelectionForSession(thread.session, modelSelection.instanceId);
+  return canProjectTurnModelSelectionForSession(
+    thread.session,
+    resolveModelSelectionInstanceId(modelSelection),
+  );
 }
 
 // Message ids are unique within a thread and streamed deltas land on the newest

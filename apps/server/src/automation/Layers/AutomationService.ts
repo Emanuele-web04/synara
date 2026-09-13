@@ -199,14 +199,15 @@ export function resolveAutomationCompletionTextGenerationInputForSettings(
   const fallbackInstance = resolveEnabledProviderInstance(settings, {
     instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
   });
-  const fallbackProviderOptions = fallbackInstance
-    ? providerStartOptionsFromInstance(fallbackInstance)
-    : undefined;
+  if (!fallbackInstance) {
+    return {};
+  }
+  const fallbackProviderOptions = providerStartOptionsFromInstance(fallbackInstance);
   return (
     resolveTextGenerationInputForSelection(
       settings.textGenerationModelSelection,
       fallbackProviderOptions,
-      fallbackInstance?.driver,
+      fallbackInstance.driver,
     ) ?? {}
   );
 }
@@ -455,6 +456,7 @@ function sanitizeAutomationStreamEvent(event: AutomationStreamEvent): Automation
     case "run-upserted":
       return { ...event, run: withoutAutomationRunProviderOptions(event.run) };
     case "definition-deleted":
+    case "memory-upserted":
       return event;
   }
 }
@@ -793,21 +795,41 @@ export const AutomationServiceLive = Layer.effect(
     const completionEvaluationProviderDisabledReason = (definition: AutomationDefinition) =>
       serverSettings.getSettings.pipe(
         Effect.map((settings) => {
-          const directInput = resolveTextGenerationInputForSelection(
-            definition.modelSelection,
-            definition.providerOptions,
-          );
+          const directInstance = definition.modelSelection
+            ? resolveEnabledProviderInstance(settings, {
+                instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+              })
+            : null;
+          const directInput = directInstance
+            ? resolveTextGenerationInputForSelection(
+                definition.modelSelection,
+                providerStartOptionsFromInstance(directInstance),
+                directInstance.driver,
+              )
+            : null;
+          if (directInput) {
+            return null;
+          }
+
           const fallbackSelection = settings.textGenerationModelSelection;
-          const provider =
-            directInput?.modelSelection.provider ??
-            (hasDedicatedTextGenerationProvider(fallbackSelection.provider)
-              ? fallbackSelection.provider
-              : "codex");
-          const instanceId = directInput?.modelSelection
-            ? resolveModelSelectionInstanceId(directInput.modelSelection)
-            : hasDedicatedTextGenerationProvider(fallbackSelection.provider)
-              ? resolveModelSelectionInstanceId(fallbackSelection)
-              : provider;
+          const fallbackInstanceId = resolveModelSelectionInstanceId(fallbackSelection);
+          const fallbackInstance = resolveEnabledProviderInstance(settings, {
+            instanceId: fallbackInstanceId,
+          });
+          const fallbackInput = fallbackInstance
+            ? resolveTextGenerationInputForSelection(
+                fallbackSelection,
+                providerStartOptionsFromInstance(fallbackInstance),
+                fallbackInstance.driver,
+              )
+            : null;
+          if (fallbackInput) {
+            return null;
+          }
+
+          const instanceId = hasDedicatedTextGenerationProvider(fallbackSelection.provider)
+            ? fallbackInstanceId
+            : "codex";
           return providerInstanceUnavailableReason(settings, instanceId);
         }),
         Effect.mapError(toServiceError("Failed to read completion-evaluation provider settings.")),

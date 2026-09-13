@@ -12,7 +12,7 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-const isModelSelection = Schema.is(ModelSelection);
+const decodeModelSelection = Schema.decodeUnknownSync(ModelSelection);
 
 layer("105_ProviderSessionRuntimeInstanceId", (it) => {
   it.effect("canonicalizes legacy modelSelection payloads and backfills instance ids", () =>
@@ -45,7 +45,7 @@ layer("105_ProviderSessionRuntimeInstanceId", (it) => {
             modelSelection: {
               provider: "codex",
               model: "gpt-5.4",
-              options: [{ id: "reasoningEffort", value: "high" }],
+              options: { reasoningEffort: "high" },
             },
           })}
         )
@@ -70,8 +70,14 @@ layer("105_ProviderSessionRuntimeInstanceId", (it) => {
       assert.equal(payload.modelSelection?.instanceId, "codex");
       assert.equal(payload.modelSelection?.provider, undefined);
       assert.equal(payload.modelSelection?.model, "gpt-5.4");
-      // Recovery gates on the strict schema; the canonicalized payload must decode.
-      assert.equal(isModelSelection(payload.modelSelection), true);
+      // Recovery decodes the compact persisted form back into the canonical
+      // provider-and-instance selection used by the runtime.
+      assert.deepStrictEqual(decodeModelSelection(payload.modelSelection), {
+        provider: "codex",
+        instanceId: "codex",
+        model: "gpt-5.4",
+        options: { reasoningEffort: "high" },
+      });
     }),
   );
 });

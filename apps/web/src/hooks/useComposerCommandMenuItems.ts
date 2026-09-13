@@ -235,19 +235,17 @@ export function buildSearchableModelOptions(input: {
       return (
         input.modelOptionsByProviderInstance?.[instanceId] ??
         input.modelOptionsByProvider[option.value]
-      ).map(
-        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-          provider: option.value,
-          instanceId,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
-        }),
-      );
+      ).map(({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+        provider: option.value,
+        instanceId,
+        providerLabel: option.label,
+        slug,
+        name,
+        searchSlug: slug.toLowerCase(),
+        searchName: name.toLowerCase(),
+        searchProvider: option.label.toLowerCase(),
+        searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+      }));
     });
 }
 

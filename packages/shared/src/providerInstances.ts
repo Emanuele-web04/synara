@@ -55,7 +55,7 @@ const PROVIDER_INSTANCE_ID_MAX_CHARS = 64;
 const CODEX_ACCOUNT_INSTANCE_PREFIX = "codex_";
 const UNRESOLVED_AUTOMATION_INSTANCE_PREFIX = "synara_unresolved_automation_";
 
-export function unresolvedAutomationInstanceId(provider: ProviderKind): ProviderInstanceId {
+export function unresolvedAutomationInstanceId(provider: ProviderDriverKind): ProviderInstanceId {
   return `${UNRESOLVED_AUTOMATION_INSTANCE_PREFIX}${provider}` as ProviderInstanceId;
 }
 
@@ -184,9 +184,7 @@ export function inferLegacyProviderKindFromInstanceId(
   return undefined;
 }
 
-export function inferLegacyProviderKindFromModel(
-  model: string | null | undefined,
-): ProviderKind {
+export function inferLegacyProviderKindFromModel(model: string | null | undefined): ProviderKind {
   const lowerModel = model?.toLowerCase() ?? "";
   if (
     lowerModel.includes("claude") ||
@@ -561,9 +559,7 @@ export function providerStartOptionsFromInstance(
           ? {
               ...(environment.environment ?? {}),
               ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
-              ...(secureStorageDir
-                ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir }
-                : {}),
+              ...(secureStorageDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir } : {}),
             }
           : environment.environment;
       return binaryPath || homePath || claudeEnvironment

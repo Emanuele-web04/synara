@@ -54,7 +54,10 @@ describe("agent gateway contracts", () => {
 
   it("decodes provider-specific model options without folding them into the slug", () => {
     const decoded = decodeCreate({ requestId: "terra-low", threads: [thread] });
-    assert.deepEqual(decoded.threads[0]?.target, thread.target);
+    assert.deepEqual(decoded.threads[0]?.target, {
+      ...thread.target,
+      instanceId: "codex",
+    });
     assert.throws(() =>
       decodeCreate({
         requestId: "cross-provider-options",
@@ -107,6 +110,7 @@ describe("agent gateway contracts", () => {
             },
             exampleTarget: {
               provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
               options: { reasoningEffort: "low" },
             },

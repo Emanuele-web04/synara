@@ -1253,6 +1253,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
+          const providerInstanceId =
+            Option.getOrNull(thread)?.modelSelection.instanceId ??
+            Option.getOrNull(currentSession)?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            Option.getOrNull(thread)?.modelSelection.provider ??
+            event.payload.modelSelection?.provider;
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
             currentSession: Option.getOrNull(currentSession),
@@ -1261,15 +1267,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
-            providerInstanceId:
-              Option.getOrNull(thread)?.modelSelection.instanceId ??
-              Option.getOrNull(currentSession)?.providerInstanceId ??
-              event.payload.modelSelection?.instanceId,
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              providerInstanceId: turnStartSession.providerInstanceId ?? null,
+            });
           }
           return;
         }

@@ -4350,8 +4350,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             : input.reuseAnyActiveContext
               ? [...sessions.values()].find(
                   (context) =>
-                    !input.instanceId ||
-                    context.session.providerInstanceId === input.instanceId,
+                    !input.instanceId || context.session.providerInstanceId === input.instanceId,
                 )
               : undefined;
           if (
@@ -4373,7 +4372,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               const serverPassword =
                 input.serverPassword?.trim() ||
                 (options?.resolveServerPassword &&
-                canUseDefaultOpenCodeServerPassword(provider, input.instanceId)
+                canUseDefaultOpenCodeServerPassword(provider, input.instanceId ?? undefined)
                   ? yield* options.resolveServerPassword(provider).pipe(
                       Effect.mapError(
                         (cause) =>
@@ -4393,7 +4392,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cwd: input.cwd?.trim() || serverConfig.cwd,
                   homeDir: serverConfig.homeDir,
                   isolationRootDir: serverConfig.stateDir,
-                  ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+                  ...(input.instanceId != null ? { instanceId: input.instanceId } : {}),
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(input.environment !== undefined ? { environment: input.environment } : {}),
                   ...(input.experimentalWebSockets ? { experimentalWebSockets: true } : {}),

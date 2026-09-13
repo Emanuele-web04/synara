@@ -274,8 +274,7 @@ export function ModelsSettingsPanel({
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
-                    textGenerationProviderInstanceId:
-                      defaults.textGenerationProviderInstanceId,
+                    textGenerationProviderInstanceId: defaults.textGenerationProviderInstanceId,
                     textGenerationModel: defaults.textGenerationModel,
                   })
                 }

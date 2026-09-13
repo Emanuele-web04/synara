@@ -409,10 +409,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const serverPassword =
         explicitServerPassword ||
         (config.resolveServerPassword &&
-        canUseDefaultOpenCodeServerPassword(
-          config.provider,
-          input.modelSelection.instanceId,
-        )
+        canUseDefaultOpenCodeServerPassword(config.provider, input.modelSelection.instanceId)
           ? ((yield* config.resolveServerPassword(config.provider)) ?? "")
           : "");
       const experimentalWebSockets = providerOptions?.experimentalWebSockets === true;

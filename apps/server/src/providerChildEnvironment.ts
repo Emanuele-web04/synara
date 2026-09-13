@@ -47,9 +47,7 @@ export function isProviderCredentialKey(key: string): boolean {
 
 /** Removes ambient provider credentials while retaining ordinary process state. */
 export function withoutProviderCredentialEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(env).filter(([key]) => !isProviderCredentialKey(key)),
-  );
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isProviderCredentialKey(key)));
 }
 
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {

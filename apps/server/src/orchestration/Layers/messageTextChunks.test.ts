@@ -27,7 +27,12 @@ import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "./ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+
+const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshotQueryBase.pipe(
+  Layer.provide(ServerSettingsService.layerTest()),
+);
 
 const at = "2026-09-10T12:00:00.000Z";
 const threadId = ThreadId.makeUnsafe("chunk-thread");

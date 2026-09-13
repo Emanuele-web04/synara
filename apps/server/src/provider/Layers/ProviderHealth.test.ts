@@ -4,7 +4,18 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ProviderInstanceId, ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, FileSystem, Layer, Path, Ref, Sink, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Sink,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -56,6 +67,14 @@ import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance
 // ── Test helpers ────────────────────────────────────────────────────
 
 const encoder = new TextEncoder();
+
+function assertProviderInstanceEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  name: string,
+  expected: string,
+) {
+  assert.strictEqual(env?.[name], expected);
+}
 
 function mockHandle(
   result: { stdout: string; stderr: string; code: number },
@@ -1951,7 +1970,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             undefined,
             "/custom/bin/claude",
             "C:\\Users\\work\\.claude-work",
-            { SYNARA_TEST_INSTANCE: "claude-work" },
+            undefined,
+            { PROVIDER_TEST_INSTANCE: "claude-work" },
           );
           assert.strictEqual(status.status, "ready");
         }),
@@ -1962,13 +1982,10 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(env?.HOME, "C:\\Users\\work\\.claude-work");
             assert.strictEqual(env?.USERPROFILE, "C:\\Users\\work\\.claude-work");
             assert.strictEqual(env?.APPDATA, "C:\\Users\\work\\.claude-work\\AppData\\Roaming");
-            assert.strictEqual(
-              env?.LOCALAPPDATA,
-              "C:\\Users\\work\\.claude-work\\AppData\\Local",
-            );
+            assert.strictEqual(env?.LOCALAPPDATA, "C:\\Users\\work\\.claude-work\\AppData\\Local");
             assert.strictEqual(env?.HOMEDRIVE, "C:");
             assert.strictEqual(env?.HOMEPATH, "\\Users\\work\\.claude-work");
-            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "claude-work");
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "claude-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
             if (joined === "auth status")
@@ -2067,12 +2084,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it("builds Claude SDK probe environments in the configured server home", () => {
       const env = makeClaudeProbeEnv(
         "~/.claude-work",
-        { SYNARA_TEST_INSTANCE: "claude-work" },
+        { PROVIDER_TEST_INSTANCE: "claude-work" },
         "/tmp/synara-test-home",
       );
 
       assert.strictEqual(env.HOME, "/tmp/synara-test-home/.claude-work");
-      assert.strictEqual(env.SYNARA_TEST_INSTANCE, "claude-work");
+      assert.strictEqual(env.PROVIDER_TEST_INSTANCE, "claude-work");
     });
 
     it.effect("scopes environment-only Claude health probes to the selected instance", () => {
@@ -2465,7 +2482,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("passes configured instance environment to the Antigravity version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus("/custom/bin/agy", {
-          SYNARA_TEST_INSTANCE: "antigravity-work",
+          PROVIDER_TEST_INSTANCE: "antigravity-work",
         });
         assert.strictEqual(status.provider, "antigravity");
         assert.strictEqual(status.status, "error");
@@ -2473,7 +2490,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/agy");
-            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "antigravity-work");
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "antigravity-work");
             assert.strictEqual(env?.NO_BROWSER, "true");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "", stderr: "version failed", code: 1 };
@@ -2522,14 +2539,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("passes configured instance environment to the OpenCode version probe", () =>
       Effect.gen(function* () {
         const status = yield* makeCheckOpenCodeProviderStatus("/custom/bin/opencode", {
-          SYNARA_TEST_INSTANCE: "opencode-work",
+          PROVIDER_TEST_INSTANCE: "opencode-work",
         });
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/opencode");
-            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "opencode-work");
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "opencode-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2614,14 +2631,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("passes configured instance environment to the Pi version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkPiProviderStatus("/tmp/pi-agent", "/custom/bin/pi", {
-          SYNARA_TEST_INSTANCE: "pi-work",
+          PROVIDER_TEST_INSTANCE: "pi-work",
         });
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/pi");
-            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "pi-work");
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "pi-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2870,7 +2887,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           "/custom/bin/grok",
           {
             GROK_CODE_XAI_API_KEY: "selected-account-b",
-            SYNARA_TEST_INSTANCE: "grok-work",
+            PROVIDER_TEST_INSTANCE: "grok-work",
           },
           "grok_work",
         );
@@ -2880,7 +2897,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/grok");
-            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "grok-work");
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "grok-work");
             assert.strictEqual(env?.XAI_API_KEY, undefined);
             assertProviderInstanceEnv(env, "GROK_CODE_XAI_API_KEY", "selected-account-b");
             const joined = args.join(" ");

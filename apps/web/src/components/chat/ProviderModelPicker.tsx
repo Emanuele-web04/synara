@@ -313,8 +313,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
     ).filter((option) =>
       props.providers?.some(
-        (provider) =>
-          (provider.driver ?? provider.provider) === option.value && provider.available,
+        (provider) => (provider.driver ?? provider.provider) === option.value && provider.available,
       ),
     ),
     hiddenProviderSet,
@@ -537,9 +536,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         : provider === "pi"
           ? setPiFavoriteModelSlugs
           : setOpenCodeFavoriteModelSlugs;
-    setFavoriteModelSlugs((current) =>
-      toggleFavoriteModelKey(current, provider, instanceId, slug),
-    );
+    setFavoriteModelSlugs((current) => toggleFavoriteModelKey(current, provider, instanceId, slug));
   };
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
@@ -579,11 +576,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
     const favoriteModelSlugSet =
       favoriteProvider !== null && favoriteModelKeySet !== undefined
-        ? favoriteModelSlugsForInstance(
-            favoriteProvider,
-            selectedInstanceId,
-            favoriteModelKeySet,
-          )
+        ? favoriteModelSlugsForInstance(favoriteProvider, selectedInstanceId, favoriteModelKeySet)
         : undefined;
     const groupedOptions =
       favoriteModelSlugSet !== undefined
@@ -739,7 +732,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           </span>
         </MenuItem>
       ))}
-      {visibleAvailableProviderOptions.length > 0 || visibleUnsupportedProviderInstances.length > 0 ? (
+      {visibleAvailableProviderOptions.length > 0 ||
+      visibleUnsupportedProviderInstances.length > 0 ? (
         <MenuSeparator />
       ) : null}
       <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>

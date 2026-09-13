@@ -537,8 +537,7 @@ export const createComposerDraftStoreState =
           if (selection) {
             const key = modelSelectionStorageKey(selection);
             const current = nextMap[key];
-            nextMap[key] =
-              current && current.model !== selection.model ? current : selection;
+            nextMap[key] = current && current.model !== selection.model ? current : selection;
           }
         }
         if (

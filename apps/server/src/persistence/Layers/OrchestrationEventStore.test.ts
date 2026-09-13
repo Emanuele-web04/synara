@@ -102,9 +102,9 @@ layer("OrchestrationEventStore", (it) => {
       };
       assert.deepStrictEqual(storedPayload.providerOptions, expectedProviderOptions);
 
-      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      );
+      const replayed = yield* Stream.runCollect(
+        eventStore.readFromSequence(0, Number.MAX_SAFE_INTEGER),
+      ).pipe(Effect.map((chunk) => Array.from(chunk)));
       const replayedTurn = replayed.find(
         (event) => event.eventId === EventId.makeUnsafe("evt-provider-options-sanitized"),
       );
@@ -496,6 +496,7 @@ layer("OrchestrationEventStore", (it) => {
               options: [{ id: "reasoningEffort", value: "medium" }],
             },
             dispatchMode: "queue",
+            dispatchOrigin: "user",
             runtimeMode: "full-access",
             interactionMode: "default",
             createdAt: now,
@@ -504,9 +505,9 @@ layer("OrchestrationEventStore", (it) => {
         )
       `;
 
-      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      );
+      const replayed = yield* Stream.runCollect(
+        eventStore.readFromSequence(0, Number.MAX_SAFE_INTEGER),
+      ).pipe(Effect.map((chunk) => Array.from(chunk)));
       const projectCreated = replayed.find(
         (event) => event.eventId === EventId.makeUnsafe("evt-import-project-created"),
       );

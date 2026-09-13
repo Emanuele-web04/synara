@@ -82,8 +82,10 @@ export function useChatProviderStatus({
   settings,
   configuredProviderStatuses,
 }: ChatProviderStatusInput) {
-  const [confirmedCustomBinaryPathsByProviderInstance, setConfirmedCustomBinaryPathsByProviderInstance] =
-    useState<Partial<Record<ProviderInstanceId, string>>>(loadConfirmedCustomBinaryPaths);
+  const [
+    confirmedCustomBinaryPathsByProviderInstance,
+    setConfirmedCustomBinaryPathsByProviderInstance,
+  ] = useState<Partial<Record<ProviderInstanceId, string>>>(loadConfirmedCustomBinaryPaths);
   const confirmedCustomBinarySessionKeysRef = useRef<Set<string>>(new Set());
   const pendingCustomBinaryPathsByThreadProviderRef = useRef<Map<string, string>>(new Map());
 

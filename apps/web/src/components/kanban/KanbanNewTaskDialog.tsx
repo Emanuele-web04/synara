@@ -64,10 +64,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, LoaderCircleIcon, PaperclipIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
-import {
-  findProviderStatus,
-  resolveVoiceTranscriptionTarget,
-} from "~/lib/providerAvailability";
+import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   normalizeRuntimeModeForProvider,
@@ -339,6 +336,8 @@ export function KanbanNewTaskDialog({
     selectedProvider,
     selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,

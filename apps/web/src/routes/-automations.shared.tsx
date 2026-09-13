@@ -20,7 +20,11 @@ import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import type { Thread } from "~/types";
 import {
   ComposerPickerMenuPopup,
@@ -939,13 +943,9 @@ export function AutomationModelPicker({
           runtimeModels: runtimeModelsByProvider[provider],
         });
         onChange(
-          buildModelSelection(
-            provider,
-            model,
-            undefined,
-            runtimeModel?.supportsAutoMode,
-            { instanceId: instanceId ?? provider },
-          ),
+          buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode, {
+            instanceId: instanceId ?? provider,
+          }),
         );
       }}
       providerInstances={providerInstances}

@@ -89,9 +89,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         ),
       );
 
-      const fallbackModelSelection = Selection.hasDedicatedTextGenerationProvider(
-        requestedProvider,
-      )
+      const fallbackModelSelection = Selection.hasDedicatedTextGenerationProvider(requestedProvider)
         ? undefined
         : settings.textGenerationModelSelection;
       const selectedProvider = fallbackModelSelection?.provider ?? requestedProvider;
@@ -116,19 +114,12 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         ? resolveModelSelectionInstanceId(selectedModelSelection)
         : selectedProvider;
       const instance = resolveProviderInstance(settings, {
-        provider: selectedProvider,
         instanceId: selectedInstanceId,
       });
       if (!instance) {
         return yield* new TextGenerationError({
           operation,
           detail: `No provider instance registered for id '${selectedInstanceId}'.`,
-        });
-      }
-      if (instance.driver !== selectedProvider) {
-        return yield* new TextGenerationError({
-          operation,
-          detail: `Provider instance '${instance.instanceId}' uses '${instance.driver}', not '${selectedProvider}'.`,
         });
       }
       if (!instance.enabled) {
@@ -154,7 +145,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         implementation,
         input: {
           ...input,
-          ...(fallbackModelSelection ? { model: fallbackModelSelection.model } : {}),
+          ...(selectedModelSelection ? { model: selectedModelSelection.model } : {}),
           ...(routedSelection ? { modelSelection: routedSelection } : {}),
           ...(providerOptions ? { providerOptions } : {}),
         },

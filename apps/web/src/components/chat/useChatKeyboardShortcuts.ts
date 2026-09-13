@@ -287,11 +287,7 @@ export function useChatKeyboardShortcuts({
           direction,
         });
         if (!nextSlug) return;
-        onProviderModelSelect(
-          selectedProvider,
-          nextSlug as ModelSlug,
-          selectedProviderInstanceId,
-        );
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug, selectedProviderInstanceId);
         return;
       }
 

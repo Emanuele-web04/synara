@@ -117,7 +117,7 @@ async function withAuthEffectServer(
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
   overrides?: {
     readonly providerAdapterRegistry?: ProviderAdapterRegistryShape;
-    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService, unknown>;
   },
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -405,9 +405,7 @@ describe("binaryUploadEffectRouteLayer", () => {
             codex_work: {
               driver: "codex",
               enabled: true,
-              environment: [
-                { name: "OPENAI_API_KEY", value: "work-secret", sensitive: true },
-              ],
+              environment: [{ name: "OPENAI_API_KEY", value: "work-secret", sensitive: true }],
               config: { homePath: "/tmp/codex-work" },
             },
           },
@@ -440,7 +438,7 @@ describe("binaryUploadEffectRouteLayer", () => {
 
         expect(response.status).toBe(409);
         await expect(response.json()).resolves.toEqual({
-          error: "Codex is disabled in Settings > Providers.",
+          error: "Voice transcription provider instance 'codex' is unavailable.",
         });
         expect(transcribeVoice).not.toHaveBeenCalled();
       },

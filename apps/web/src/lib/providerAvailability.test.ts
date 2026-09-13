@@ -424,7 +424,12 @@ describe("isProviderUsable", () => {
   it("allows the local custom-binary confirmation fallback to start a session", () => {
     const normalized = normalizeProviderStatusForLocalConfig({
       provider: "grok",
-      status: BASE_STATUS,
+      status: {
+        ...BASE_STATUS,
+        provider: "grok",
+        instanceId: "grok",
+        driver: "grok",
+      },
       customBinaryPath: "/opt/homebrew/bin/grok",
     });
 
@@ -457,9 +462,16 @@ describe("resolveAvailableProviderPreference", () => {
           {
             ...READY_STATUS,
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             authStatus: "unauthenticated",
           },
-          { ...READY_STATUS, provider: "cursor" },
+          {
+            ...READY_STATUS,
+            provider: "cursor",
+            instanceId: "cursor",
+            driver: "cursor",
+          },
         ],
         providerOrder: ["claudeAgent", "cursor"],
       }),
@@ -474,9 +486,16 @@ describe("resolveAvailableProviderPreference", () => {
           {
             ...READY_STATUS,
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             authStatus: "unauthenticated",
           },
-          { ...READY_STATUS, provider: "codex" },
+          {
+            ...READY_STATUS,
+            provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
+          },
         ],
       }),
     ).toBe("codex");

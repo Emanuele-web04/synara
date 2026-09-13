@@ -460,9 +460,7 @@ export function buildModelSelection(
   const supportsAutoMode =
     typeof supportsAutoModeOrMetadata === "boolean" ? supportsAutoModeOrMetadata : undefined;
   const metadata =
-    typeof supportsAutoModeOrMetadata === "object"
-      ? supportsAutoModeOrMetadata
-      : explicitMetadata;
+    typeof supportsAutoModeOrMetadata === "object" ? supportsAutoModeOrMetadata : explicitMetadata;
   switch (provider) {
     case "antigravity":
       return attachModelSelectionMetadata(

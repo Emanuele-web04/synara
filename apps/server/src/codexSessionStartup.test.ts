@@ -64,15 +64,18 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
   const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
   const internals = manager as unknown as {
     assertSupportedCodexCliVersion: () => Promise<void>;
-    buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
+    buildSessionProcessEnv: () => Promise<{ env: NodeJS.ProcessEnv }>;
   };
   vi.spyOn(internals, "assertSupportedCodexCliVersion").mockResolvedValue(undefined);
-  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({});
+  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({
+    env: { CODEX_SQLITE_HOME: process.cwd() },
+  });
   const input = {
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
     resumeCursor: { threadId: "codex-existing-thread" },
+    expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
   };
   const expectedErrorMessage =
     failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;

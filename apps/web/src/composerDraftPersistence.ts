@@ -75,9 +75,7 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
-function normalizePersistedModelSelectionMap(
-  value: unknown,
-): ModelSelectionByProviderInstance {
+function normalizePersistedModelSelectionMap(value: unknown): ModelSelectionByProviderInstance {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
   const result: ModelSelectionByProviderInstance = {};
   for (const [legacyProvider, rawSelection] of Object.entries(value)) {
@@ -94,6 +92,20 @@ function normalizePersistedModelSelectionMap(
     }
   }
   return result;
+}
+
+function normalizePersistedActiveProviderInstanceId(
+  value: unknown,
+  selections: ModelSelectionByProviderInstance,
+): ProviderInstanceId | null {
+  const instanceId = normalizeProviderInstanceId(value);
+  if (!instanceId) return null;
+  if (selections[instanceId] !== undefined) return instanceId;
+
+  const migratedProvider = normalizeProviderKind(value);
+  return migratedProvider && selections[migratedProvider] !== undefined
+    ? migratedProvider
+    : instanceId;
 }
 
 function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnnotationDraft {
@@ -1016,7 +1028,10 @@ function normalizePersistedDraftsByThreadId(
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
-      activeProvider = normalizeProviderInstanceId(draftCandidate.activeProvider) ?? null;
+      activeProvider = normalizePersistedActiveProviderInstanceId(
+        draftCandidate.activeProvider,
+        modelSelectionByProvider,
+      );
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
@@ -1430,8 +1445,10 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     stickyModelSelectionByProvider = normalizePersistedModelSelectionMap(
       normalizedPersistedState.stickyModelSelectionByProvider,
     );
-    stickyActiveProvider =
-      normalizeProviderInstanceId(normalizedPersistedState.stickyActiveProvider) ?? null;
+    stickyActiveProvider = normalizePersistedActiveProviderInstanceId(
+      normalizedPersistedState.stickyActiveProvider,
+      stickyModelSelectionByProvider,
+    );
   } else {
     // Legacy migration path
     const stickyModelOptions =
@@ -1456,7 +1473,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelection,
       nextStickyModelOptions,
     );
-    stickyActiveProvider = normalizeProviderInstanceId(normalizedPersistedState.stickyProvider) ?? null;
+    stickyActiveProvider = stickyModelSelection
+      ? modelSelectionStorageKey(stickyModelSelection)
+      : null;
   }
 
   return {
@@ -1548,7 +1567,10 @@ export function toHydratedThreadDraft(
   const modelSelectionByProvider = normalizeModelSelectionMapByInstance(
     (persistedDraft.modelSelectionByProvider ?? {}) as ModelSelectionByProviderInstance,
   );
-  const activeProvider = normalizeProviderInstanceId(persistedDraft.activeProvider) ?? null;
+  const activeProvider = normalizePersistedActiveProviderInstanceId(
+    persistedDraft.activeProvider,
+    modelSelectionByProvider,
+  );
 
   return {
     ...(persistedDraft.pendingUserInputDrafts

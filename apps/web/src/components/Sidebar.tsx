@@ -148,9 +148,7 @@ import {
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
-import {
-  providerComposerCapabilitiesQueryOptions,
-} from "../lib/providerDiscoveryReactQuery";
+import { providerComposerCapabilitiesQueryOptions } from "../lib/providerDiscoveryReactQuery";
 import {
   buildThreadImportCandidates,
   filterThreadImportTargetsByCapabilities,
@@ -2782,9 +2780,9 @@ export default function Sidebar() {
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
             : provider === "droid"
               ? `Imported Droid session${suffix ? ` ${suffix}` : ""}`
-            : provider === "opencode"
-              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+              : provider === "opencode"
+                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {

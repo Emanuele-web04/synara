@@ -429,8 +429,7 @@ function withFakeCodexEnv<A, E, R>(input: FakeCodexOptions, effect: Effect.Effec
       const previousRequireNoUserExtensions =
         process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS;
       const previousRotatedAuth = process.env.SYNARA_FAKE_CODEX_ROTATED_AUTH;
-      const previousRequireSecureIsolation =
-        process.env.SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION;
+      const previousRequireSecureIsolation = process.env.SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION;
       const previousForbiddenCwd = process.env.SYNARA_FAKE_CODEX_FORBIDDEN_CWD;
       const previousTrapTerm = process.env.SYNARA_FAKE_CODEX_TRAP_TERM;
       const previousTermMarker = process.env.SYNARA_FAKE_CODEX_TERM_MARKER;
@@ -1348,7 +1347,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
                 } else {
                   process.env.CODEX_HOME = previousCodexHome;
                 }
-
               }),
             ),
           );

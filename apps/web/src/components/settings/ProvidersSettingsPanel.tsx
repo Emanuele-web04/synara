@@ -792,10 +792,7 @@ function CodexAccountsControl(props: {
     });
   };
 
-  const updateAccount = (
-    accountId: string,
-    patch: Partial<Omit<CodexAccountSettings, "id">>,
-  ) => {
+  const updateAccount = (accountId: string, patch: Partial<Omit<CodexAccountSettings, "id">>) => {
     props.updateSettings({
       codexAccounts: normalizeCodexAccounts(
         accounts.map((account) => (account.id === accountId ? { ...account, ...patch } : account)),
@@ -826,9 +823,7 @@ function CodexAccountsControl(props: {
 
       <SettingsSelectControl
         value={props.settings.selectedCodexAccountId}
-        onValueChange={(selectedCodexAccountId) =>
-          props.updateSettings({ selectedCodexAccountId })
-        }
+        onValueChange={(selectedCodexAccountId) => props.updateSettings({ selectedCodexAccountId })}
         ariaLabel="Codex account"
         triggerClassName="w-full"
         valueContent={<span className="truncate">{selectedAccountLabel}</span>}
@@ -1005,10 +1000,7 @@ function ProviderInstancesControl(props: {
     props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
   };
   const addInstance = () => {
-    const next = { ...props.settings.providerInstances } as Record<
-      string,
-      ProviderInstanceConfig
-    >;
+    const next = { ...props.settings.providerInstances } as Record<string, ProviderInstanceConfig>;
     // Derived instances share this namespace with explicit entries. Reusing a
     // derived id would mutate that account instead of creating a new profile.
     const { index, instanceId } = nextInstanceIdentity();
@@ -1069,8 +1061,7 @@ function ProviderInstancesControl(props: {
     } = existing;
     const displayName =
       patch.displayName !== undefined ? patch.displayName.trim() : existingDisplayName;
-    const environment =
-      patch.environment !== undefined ? patch.environment : existingEnvironment;
+    const environment = patch.environment !== undefined ? patch.environment : existingEnvironment;
     updateInstances({
       ...props.settings.providerInstances,
       [instanceId]: {
@@ -1104,9 +1095,7 @@ function ProviderInstancesControl(props: {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">
-            {instanceSectionLabel}
-          </span>
+          <span className="block text-xs font-medium text-foreground">{instanceSectionLabel}</span>
           <span className="mt-1 block text-xs text-muted-foreground">
             {provider === "codex"
               ? "Add a separately routed Codex instance with its own home or shadow auth home."
@@ -1148,7 +1137,9 @@ function ProviderInstancesControl(props: {
           provider,
           instanceId,
           config:
-            instance.config && typeof instance.config === "object" && !Array.isArray(instance.config)
+            instance.config &&
+            typeof instance.config === "object" &&
+            !Array.isArray(instance.config)
               ? (instance.config as Record<string, unknown>)
               : undefined,
         });
@@ -1236,9 +1227,7 @@ function ProviderInstancesControl(props: {
                 </div>
               </label>
               <label className="block sm:col-span-2">
-                <span className="block text-xs font-medium text-foreground">
-                  Command override
-                </span>
+                <span className="block text-xs font-medium text-foreground">Command override</span>
                 <DebouncedSettingTextInput
                   id={`provider-instance-${instanceId}-cli-alias`}
                   size="sm"
@@ -1292,10 +1281,7 @@ function ProviderInstancesControl(props: {
                 const inputId = `provider-instance-${instanceId}-${configKey}`;
                 return (
                   <div className="block" key={field.settingsKey}>
-                    <label
-                      htmlFor={inputId}
-                      className="block text-xs font-medium text-foreground"
-                    >
+                    <label htmlFor={inputId} className="block text-xs font-medium text-foreground">
                       {field.label}
                     </label>
                     <div className="mt-1 flex items-center gap-2">
@@ -1310,7 +1296,9 @@ function ProviderInstancesControl(props: {
                           if (redacted && value.length === 0) return;
                           updateInstance(instanceId, { config: { [configKey]: value } });
                         }}
-                        placeholder={redacted ? "Secret saved — type to replace" : field.placeholder}
+                        placeholder={
+                          redacted ? "Secret saved — type to replace" : field.placeholder
+                        }
                         spellCheck={false}
                       />
                       {redacted ? (
@@ -1967,8 +1955,7 @@ export function ProvidersSettingsPanel({
                 {outdatedProviderStatuses.map((providerStatus) => {
                   const instanceId = providerStatusInstanceKey(providerStatus);
                   const updateActive =
-                    isProviderUpdateActive(providerStatus) ||
-                    updatingProviders.has(instanceId);
+                    isProviderUpdateActive(providerStatus) || updatingProviders.has(instanceId);
                   const updateLabel = providerUpdateStatusLabel(providerStatus);
                   return (
                     <SettingsListRow

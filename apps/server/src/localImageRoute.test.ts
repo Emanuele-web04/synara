@@ -31,7 +31,11 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import type { ProviderAdapterError } from "./provider/Errors.ts";
 import type { ProviderAdapterShape } from "./provider/Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry.ts";
-import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
+import {
+  ServerSettingsService,
+  type ServerSettingsShape,
+  toServerSettingsView,
+} from "./serverSettings.ts";
 
 const tempDirs: string[] = [];
 
@@ -191,8 +195,14 @@ function makeServerSettings(getSettings: ServerSettingsShape["getSettings"]): Se
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    getSettingsView: getSettings.pipe(Effect.map(toServerSettingsView)),
+    getSnapshot: getSettings.pipe(
+      Effect.map((settings) => ({ revision: 0, migrationVersion: 2, settings })),
+    ),
     updateSettings: () => Effect.die("unused"),
+    updateSettingsView: () => Effect.die("unused"),
     streamChanges: Stream.empty,
+    streamViews: Stream.empty,
   };
 }
 

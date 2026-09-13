@@ -144,8 +144,9 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected provider catalog query: ${String(resource)}`);
   });
-  mocks.useQueries.mockReset().mockImplementation(
-    ({ queries }: { readonly queries: ReadonlyArray<QueryOptionsLike> }) => {
+  mocks.useQueries
+    .mockReset()
+    .mockImplementation(({ queries }: { readonly queries: ReadonlyArray<QueryOptionsLike> }) => {
       const next = queries.map((query) => {
         const instanceId = query.queryKey[3];
         return query.enabled === false || typeof instanceId !== "string"
@@ -160,8 +161,7 @@ beforeEach(() => {
       }
       lastInstanceQueryResults = next;
       return next;
-    },
-  );
+    });
 });
 
 describe("useProviderModelCatalog", () => {

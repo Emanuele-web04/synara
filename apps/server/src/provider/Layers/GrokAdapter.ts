@@ -627,10 +627,10 @@ export function buildGrokModelDiscoveryEnv(
       driver: PROVIDER,
       env,
       platform,
-    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-    ...(input.environment !== undefined ? { environment: input.environment } : {}),
-    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
-    ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
     }),
   });
 }

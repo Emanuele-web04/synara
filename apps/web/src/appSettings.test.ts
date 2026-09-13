@@ -56,6 +56,7 @@ import {
   removeManageableProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
@@ -389,7 +390,7 @@ describe("getGitTextGenerationModelOptions", () => {
     ).toBe(true);
   });
 
-  it("omits chat-only providers that have no Git text-generation backend", () => {
+  it("includes Git text-generation providers and omits chat-only providers", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customClaudeModels: ["claude-opus-4-8"],
@@ -399,7 +400,7 @@ describe("getGitTextGenerationModelOptions", () => {
       textGenerationProvider: "codex",
     });
 
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(false);
+    expect(options.some((option) => option.provider === "claudeAgent")).toBe(true);
     expect(options.some((option) => option.provider === "grok")).toBe(false);
     expect(options.some((option) => option.provider === "antigravity")).toBe(false);
     expect(options.some((option) => option.provider === "pi")).toBe(false);
@@ -1002,7 +1003,6 @@ describe("getProviderStartOptions", () => {
           droidBinaryPath: "",
           openCodeBinaryPath: "",
           openCodeExperimentalWebSockets: false,
-          openCodeServerPassword: "",
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
@@ -1040,7 +1040,6 @@ describe("getProviderStartOptions", () => {
           droidBinaryPath: "",
           openCodeBinaryPath: "",
           openCodeExperimentalWebSockets: false,
-          openCodeServerPassword: "",
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
@@ -1074,7 +1073,6 @@ describe("getProviderStartOptions", () => {
           droidBinaryPath: "",
           openCodeBinaryPath: "",
           openCodeExperimentalWebSockets: false,
-          openCodeServerPassword: "",
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
@@ -1526,7 +1524,6 @@ describe("provider-indexed custom model settings", () => {
       providerInstances: {
         claudeAgent: {
           driver: "claudeAgent",
-          enabled: true,
           config: { customModels: ["claude/default-instance"] },
         },
       },

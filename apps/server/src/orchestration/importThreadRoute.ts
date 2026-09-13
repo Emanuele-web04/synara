@@ -155,9 +155,11 @@ async function queryClaudeHistoricalSession<T>(input: {
   }
   const options = input.dir ? { dir: input.dir } : undefined;
   const sdk = await loadClaudeAgentSdk();
-  return (input.method === "getSessionInfo"
-    ? sdk.getSessionInfo(input.sessionId, options)
-    : sdk.getSessionMessages(input.sessionId, options)) as Promise<T>;
+  return (
+    input.method === "getSessionInfo"
+      ? sdk.getSessionInfo(input.sessionId, options)
+      : sdk.getSessionMessages(input.sessionId, options)
+  ) as Promise<T>;
 }
 
 export function claudeHistoricalSessionEnvironment(
@@ -599,10 +601,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
-    const importResumeCursor = providerResumeCursorForImport(
-      provider,
-      externalId,
-    );
+    const importResumeCursor = providerResumeCursorForImport(provider, externalId);
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
       provider,
@@ -624,10 +623,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         });
       } else if (provider === "claudeAgent") {
         yield* importClaudeThreadHistory({
-        threadId: thread.id,
-        externalId,
-        cwd,
-        providerInstanceId: resolvedProvider.instance.instanceId,
+          threadId: thread.id,
+          externalId,
+          cwd,
+          providerInstanceId: resolvedProvider.instance.instanceId,
           ...(providerOptions ? { providerOptions } : {}),
           importedAt: session.updatedAt,
         });

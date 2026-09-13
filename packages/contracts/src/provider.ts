@@ -86,6 +86,7 @@ export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),

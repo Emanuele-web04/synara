@@ -22,9 +22,7 @@ const RESERVED_CLI_COMMANDS = new Set<string>(Object.values(PROVIDER_CLI_COMMAND
 export function normalizeProviderCliAlias(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const alias = value.trim();
-  return CLI_COMMAND_PATTERN.test(alias) && !RESERVED_CLI_COMMANDS.has(alias)
-    ? alias
-    : undefined;
+  return CLI_COMMAND_PATTERN.test(alias) && !RESERVED_CLI_COMMANDS.has(alias) ? alias : undefined;
 }
 
 function profileSuffix(provider: ProviderKind, instanceId: ProviderInstanceId): string {

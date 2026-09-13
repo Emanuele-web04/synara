@@ -252,14 +252,15 @@ describe("Codex Synara harness policy", () => {
         },
       });
       endpointUrl = "http://127.0.0.1:48123/mcp";
-      const env = await (
+      const launch = await (
         manager as unknown as {
           buildSessionProcessEnv: (
-            homePath: string | undefined,
+            options: { homePath: string } | undefined,
             token: string | undefined,
-          ) => Promise<NodeJS.ProcessEnv>;
+          ) => Promise<{ env: NodeJS.ProcessEnv }>;
         }
-      ).buildSessionProcessEnv(homePath, "token");
+      ).buildSessionProcessEnv({ homePath }, "token");
+      const env = launch.env;
       const configPath = path.join(env.CODEX_HOME ?? homePath, "config.toml");
       expect(readFileSync(configPath, "utf8")).toContain('url = "http://127.0.0.1:48123/mcp"');
     } finally {
@@ -985,8 +986,8 @@ describe("codex CLI version gate", () => {
     writeFileSync(
       binaryPath,
       isWindows
-        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.100.0\r\n`
-        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.100.0"\n`,
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.105.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.105.0"\n`,
       { mode: 0o755 },
     );
     const probeCount = () => {
@@ -1179,6 +1180,7 @@ describe("codex CLI version gate", () => {
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    vi.stubEnv("SYNARA_HOME", path.join(tempDir, "runtime"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -1201,6 +1203,7 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
+          SYNARA_HOME: process.env.SYNARA_HOME,
         },
         homePath: tempDir,
         platform: "darwin",
@@ -1216,6 +1219,7 @@ describe("buildCodexProcessEnv", () => {
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
+      vi.unstubAllEnvs();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -3691,11 +3695,7 @@ describe("CodexAppServerManager discovery", () => {
         }
       ).resolveContextForDiscovery(),
     ).resolves.toBe(discoveryContext);
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
-      process.cwd(),
-      undefined,
-      undefined,
-    );
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd(), undefined, undefined);
   });
 
   it("reuses one in-flight discovery startup for concurrent callers", async () => {
@@ -3944,16 +3944,18 @@ describe("CodexAppServerManager discovery", () => {
       collabReceiverParents: new Map(),
     };
 
-    const resolveContextForDiscovery = vi.spyOn(
-      manager as unknown as {
-        resolveContextForDiscovery: (
-          threadId?: string,
-          cwd?: string,
-          codexOptions?: unknown,
-        ) => unknown;
-      },
-      "resolveContextForDiscovery",
-    ).mockReturnValue(context);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
     const sendRequest = vi
       .spyOn(
         manager as unknown as {
@@ -4081,16 +4083,18 @@ describe("CodexAppServerManager discovery", () => {
       collabReceiverParents: new Map(),
     };
 
-    const resolveContextForDiscovery = vi.spyOn(
-      manager as unknown as {
-        resolveContextForDiscovery: (
-          threadId?: string,
-          cwd?: string,
-          codexOptions?: unknown,
-        ) => unknown;
-      },
-      "resolveContextForDiscovery",
-    ).mockReturnValue(context);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
     const sendRequest = vi
       .spyOn(
         manager as unknown as {
@@ -4223,6 +4227,15 @@ describe("thread checkpoint control", () => {
     });
 
     try {
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: process.env.SYNARA_HOME },
+        homePath,
+      });
+      const generation = readCodexSharedContinuationGeneration({
+        env: { SYNARA_HOME: process.env.SYNARA_HOME },
+        homePath,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
       const result = await manager.forkThread({
         sourceThreadId: asThreadId("thread_1"),
         sourceResumeCursor: {
@@ -4237,6 +4250,7 @@ describe("thread checkpoint control", () => {
           options: { fastMode: false },
         },
         runtimeMode: "full-access",
+        expectedCodexContinuationGeneration: generation!,
       });
 
       const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");

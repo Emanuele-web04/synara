@@ -29,6 +29,7 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
+import { isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -140,9 +141,12 @@ export const makeAgentGateway = Effect.gen(function* () {
       serverSettings.getSettings,
       providerHealth.getStatuses,
     ]);
-    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>(
-      statuses.map((status) => [status.provider, status]),
-    );
+    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>();
+    for (const status of statuses) {
+      if (isProviderKind(status.driver)) {
+        statusByProvider.set(status.driver, status);
+      }
+    }
     return new Map<ProviderKind, AgentGatewayProviderAvailability>(
       PROVIDER_KINDS.map((provider) => {
         const status = statusByProvider.get(provider);

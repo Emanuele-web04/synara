@@ -29,10 +29,7 @@ import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
-import {
-  buildProviderProcessEnv,
-  type ProviderProcessEnvDriver,
-} from "../providerProcessEnv.ts";
+import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -310,15 +307,22 @@ export function buildAcpSpawnProcessEnv(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
+  const overlay = spawn.env
+    ? Object.fromEntries(
+        Object.entries(spawn.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      )
+    : undefined;
   const accountIsolatedEnv = spawn.providerEnvironment
     ? buildProviderProcessEnv({
         ...spawn.providerEnvironment,
         env,
         platform,
-        ...(spawn.env !== undefined ? { overlay: spawn.env } : {}),
+        ...(overlay !== undefined ? { overlay } : {}),
       })
     : spawn.env
-      ? { ...spawn.env }
+      ? { ...env, ...overlay }
       : env;
   return buildProviderChildEnvironment({ provider: "acp", baseEnv: accountIsolatedEnv });
 }

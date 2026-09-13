@@ -147,13 +147,9 @@ export function useKanbanTaskScratchDraft(input: {
       supportsAutoMode?: boolean,
     ) => {
       const store = useComposerDraftStore.getState();
-      const nextSelection = buildModelSelection(
-        provider,
-        model,
-        undefined,
-        supportsAutoMode,
-        { instanceId: instanceId ?? provider },
-      );
+      const nextSelection = buildModelSelection(provider, model, undefined, supportsAutoMode, {
+        instanceId: instanceId ?? provider,
+      });
       // Mirrors the composer: update the scratch draft and persist the sticky selection.
       store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
     },

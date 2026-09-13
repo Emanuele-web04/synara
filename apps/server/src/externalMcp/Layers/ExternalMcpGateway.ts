@@ -13,6 +13,7 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
+import { isProviderKind } from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -180,9 +181,12 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       settings.getSettings,
       providerHealth.getStatuses,
     ]);
-    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>(
-      statuses.map((status) => [status.provider, status]),
-    );
+    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>();
+    for (const status of statuses) {
+      if (isProviderKind(status.driver)) {
+        statusByProvider.set(status.driver, status);
+      }
+    }
     return new Map<ProviderKind, AgentGatewayProviderAvailability>(
       PROVIDER_KINDS.map((provider) => {
         const status = statusByProvider.get(provider);

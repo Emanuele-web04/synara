@@ -3,7 +3,12 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { MODEL_OPTIONS_BY_PROVIDER, ProviderInstanceId } from "@synara/contracts";
+import {
+  MODEL_OPTIONS_BY_PROVIDER,
+  ProviderInstanceId,
+  type ServerSettings,
+} from "@synara/contracts";
+import { isProviderKind } from "@synara/shared/providerInstances";
 import { Schema } from "effect";
 
 type ModelProviderKind =

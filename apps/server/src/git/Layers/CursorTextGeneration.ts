@@ -74,9 +74,10 @@ export function resolveCursorSettings(
   };
 }
 
-const makeCursorAcpConfig = (
-  serverConfig: { readonly homeDir: string; readonly stateDir: string },
-): AcpTextGenerationConfig<CursorModelSelection, CursorAcpRuntimeCursorSettings> => ({
+const makeCursorAcpConfig = (serverConfig: {
+  readonly homeDir: string;
+  readonly stateDir: string;
+}): AcpTextGenerationConfig<CursorModelSelection, CursorAcpRuntimeCursorSettings> => ({
   providerLabel: CURSOR_TEXT_GENERATION_LABEL,
   timeoutMs: CURSOR_TIMEOUT_MS,
   resolveModelSelection: resolveCursorModelSelection,

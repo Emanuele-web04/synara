@@ -104,13 +104,7 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   antigravity: ["binaryPath", "environment"],
   grok: ["binaryPath", "environment"],
   droid: ["binaryPath", "environment"],
-  opencode: [
-    "binaryPath",
-    "serverUrl",
-    "serverPassword",
-    "experimentalWebSockets",
-    "environment",
-  ],
+  opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],
 } as const satisfies Record<ProviderKind, readonly string[]>;
 

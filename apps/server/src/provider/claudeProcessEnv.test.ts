@@ -15,10 +15,7 @@ import {
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
 } from "./claudeProcessEnv.ts";
-import {
-  buildClaudeInstanceProcessEnv,
-  claudeIsolatedHomePath,
-} from "./claudeEnvironment.ts";
+import { buildClaudeInstanceProcessEnv, claudeIsolatedHomePath } from "./claudeEnvironment.ts";
 
 describe("claudeProcessEnv", () => {
   const dynamicAccountEnvironment = {
@@ -26,13 +23,8 @@ describe("claudeProcessEnv", () => {
     VERTEX_REGION_CLAUDE_FUTURE_MODEL: "account-region",
   };
 
-  function withAmbientEnvironment<T>(
-    ambient: Readonly<Record<string, string>>,
-    run: () => T,
-  ): T {
-    const previous = Object.fromEntries(
-      Object.keys(ambient).map((key) => [key, process.env[key]]),
-    );
+  function withAmbientEnvironment<T>(ambient: Readonly<Record<string, string>>, run: () => T): T {
+    const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
     Object.assign(process.env, ambient);
     try {
       return run();
@@ -213,11 +205,15 @@ describe("claudeProcessEnv", () => {
       isolationRootDir,
       providerInstanceId: "claude_redacted_b",
     });
-    const explicitlyEmpty = buildClaudeInstanceProcessEnv(undefined, {}, {
-      homeDir: "/home/server",
-      isolationRootDir,
-      providerInstanceId: "claude_empty",
-    });
+    const explicitlyEmpty = buildClaudeInstanceProcessEnv(
+      undefined,
+      {},
+      {
+        homeDir: "/home/server",
+        isolationRootDir,
+        providerInstanceId: "claude_empty",
+      },
+    );
 
     assert.notEqual(redactedA.HOME, redactedB.HOME);
     assert.notEqual(redactedA.HOME, explicitlyEmpty.HOME);
@@ -301,7 +297,7 @@ describe("claudeProcessEnv", () => {
   it("removes mixed-case ambient Windows account and config aliases", () => {
     const result = buildClaudeInstanceProcessEnv(
       undefined,
-      { Synara_Test_Instance: "work" },
+      { Provider_Test_Instance: "work" },
       {
         homeDir: "C:\\Users\\server",
         isolationRootDir: "C:\\Synara\\userdata",
@@ -324,7 +320,7 @@ describe("claudeProcessEnv", () => {
     );
 
     assert.equal(result.PATH, "C:\\Windows\\System32");
-    assert.equal(result.SYNARA_TEST_INSTANCE, "work");
+    assert.equal(result.PROVIDER_TEST_INSTANCE, "work");
     assert.equal(result.HTTPS_PROXY, "https://shared-proxy.example.test");
     for (const key of [
       "CLAUDE_CONFIG_DIR",
@@ -336,7 +332,10 @@ describe("claudeProcessEnv", () => {
       "VERTEX_REGION_CLAUDE_FUTURE_MODEL",
     ]) {
       assert.equal(result[key], undefined);
-      assert.equal(Object.keys(result).some((candidate) => candidate.toUpperCase() === key), false);
+      assert.equal(
+        Object.keys(result).some((candidate) => candidate.toUpperCase() === key),
+        false,
+      );
     }
   });
 
@@ -382,7 +381,10 @@ describe("claudeProcessEnv", () => {
       assert.equal(result.ANTHROPIC_API_KEY, "selected-last-key");
       assert.equal(result.CLAUDE_CODE_USE_BEDROCK, "1");
       assert.equal(result.AWS_PROFILE, "selected-aws-profile");
-      assert.equal(Object.keys(result).every((key) => key === key.toUpperCase()), true);
+      assert.equal(
+        Object.keys(result).every((key) => key === key.toUpperCase()),
+        true,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -447,13 +449,13 @@ describe("claudeProcessEnv", () => {
     const accountEnvironment = Object.fromEntries(
       CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS.map((key) => [key, `account-a-${key}`]),
     );
-    const inherited = {
+    const inherited: Readonly<Record<string, string>> = {
       ...accountEnvironment,
       ...dynamicAccountEnvironment,
       CLAUDE_CONFIG_DIR: "/home/account-a/.claude",
       HTTPS_PROXY: "https://shared-network-proxy.example.test",
       NODE_EXTRA_CA_CERTS: "/shared/network-ca.pem",
-    } satisfies NodeJS.ProcessEnv;
+    };
     withAmbientEnvironment(inherited, () => {
       const result = buildClaudeInstanceProcessEnv("/home/account-b");
 

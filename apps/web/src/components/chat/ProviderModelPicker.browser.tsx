@@ -255,10 +255,7 @@ describe("ProviderModelPicker", () => {
       provider: "claudeAgent",
       model: "claude-opus-4-6",
       lockedProvider: null,
-      providers: [
-        providerStatus("codex"),
-        providerStatus("claudeAgent"),
-      ],
+      providers: [providerStatus("codex"), providerStatus("claudeAgent")],
     });
 
     try {

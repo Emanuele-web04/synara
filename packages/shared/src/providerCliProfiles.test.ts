@@ -4,9 +4,9 @@ import { normalizeProviderCliAlias, providerCliCommandName } from "./providerCli
 
 describe("provider CLI profile names", () => {
   it("derives stable commands from instance ids rather than editable labels", () => {
-    expect(
-      providerCliCommandName({ provider: "claudeAgent", instanceId: "claude_work" }),
-    ).toBe("claude-work");
+    expect(providerCliCommandName({ provider: "claudeAgent", instanceId: "claude_work" })).toBe(
+      "claude-work",
+    );
     expect(providerCliCommandName({ provider: "codex", instanceId: "codex_personal" })).toBe(
       "codex-personal",
     );
