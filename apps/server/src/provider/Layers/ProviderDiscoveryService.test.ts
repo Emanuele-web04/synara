@@ -354,16 +354,19 @@ describe("ProviderDiscoveryService provider instances", () => {
     ).rejects.toThrow("Unknown provider instance 'codex_removed'");
   });
 
-  it("rejects disabled provider instance ids", async () => {
+  it("returns an empty disabled result without invoking the instance adapter", async () => {
+    let adapterCalls = 0;
     await expect(
       runDiscovery({
         adapter: {
-          listModels: () =>
-            Effect.succeed({
+          listModels: () => {
+            adapterCalls += 1;
+            return Effect.succeed({
               models: [],
               source: "stub",
               cached: false,
-            } satisfies ProviderListModelsResult),
+            } satisfies ProviderListModelsResult);
+          },
         },
         settings: {
           providerInstances: {
@@ -384,7 +387,8 @@ describe("ProviderDiscoveryService provider instances", () => {
           });
         }),
       }),
-    ).rejects.toThrow("Provider instance 'codex_disabled' is disabled");
+    ).resolves.toEqual({ models: [], source: "disabled", cached: false });
+    expect(adapterCalls).toBe(0);
   });
 });
 

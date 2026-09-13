@@ -240,12 +240,6 @@ const make = Effect.gen(function* () {
           issue: `Requested provider '${parsed.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
         });
       }
-      if (!instance.enabled) {
-        return yield* new ProviderValidationError({
-          operation: "ProviderDiscoveryService.resolveDiscoveryInput",
-          issue: `Provider instance '${instance.instanceId}' is disabled.`,
-        });
-      }
       const resolved = {
         ...parsed,
         provider: instance.driver as ProviderKind,
@@ -256,11 +250,13 @@ const make = Effect.gen(function* () {
         readonly instanceId: string;
         readonly enabled: boolean;
       };
-      return applyProviderStartOptions(
-        resolved,
-        providerStartOptionsFromInstance(instance),
-        parsed.instanceId !== undefined,
-      );
+      return instance.enabled
+        ? applyProviderStartOptions(
+            resolved,
+            providerStartOptionsFromInstance(instance),
+            parsed.instanceId !== undefined,
+          )
+        : resolved;
     });
 
   const getComposerCapabilities: ProviderDiscoveryServiceShape["getComposerCapabilities"] = (
