@@ -1,0 +1,91 @@
+name: CI cross-platform experiments
+
+# Temporary branch-only trigger; removed after the experiment is measured.
+on:
+  push:
+    branches: [codex/ci-cross-platform-optimization]
+    paths:
+      - .github/workflows/ci-experiments.yml
+      - .github/scripts/ci-benchmark.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-experiments-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record local instruction inventory
+        run: git ls-files '*AGENTS.md' '*CLAUDE.md'
+      - name: Check optional service configuration without exposing values
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+        run: |
+          node -e 'for (const name of ["TURBO_TOKEN", "TURBO_TEAM", "TURBO_REMOTE_CACHE_SIGNATURE_KEY", "BROWSERBASE_API_KEY"]) console.log(`${name}: ${process.env[name] ? "configured" : "absent"}`)'
+  install:
+    name: Install benchmark (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Compare isolated cold full and filtered installs
+        run: node .github/scripts/ci-benchmark.mjs install
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: install-${{ matrix.os }}
+          path: ci-benchmark-results
+          retention-days: 7
+  linux:
+    name: Linux workload (${{ matrix.os }}, sample ${{ matrix.sample }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        sample: [1, 2]
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Measure complete server tests and chat workflows
+        run: node .github/scripts/ci-benchmark.mjs linux
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-${{ matrix.os }}-${{ matrix.sample }}
+          path: ci-benchmark-results
+          retention-days: 7
