@@ -3,6 +3,7 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -299,14 +300,12 @@ function formatOpenCodeServerStartupDetail(input: {
 
 function pooledOpenCodeServerKey(input: {
   readonly binaryPath: string;
-  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly cwd?: string;
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
   readonly poolIsolationKey?: string;
 }): string {
-  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
     binaryPath: input.binaryPath,
     cwd: input.cwd ?? null,
@@ -314,14 +313,6 @@ function pooledOpenCodeServerKey(input: {
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
     poolIsolationKey: input.poolIsolationKey ?? null,
-    cliSpec: {
-      defaultBinaryPath: cliSpec.defaultBinaryPath,
-      displayName: cliSpec.displayName,
-      serverReadyPrefix: cliSpec.serverReadyPrefix,
-      configContentEnvVar: cliSpec.configContentEnvVar,
-      dataDirectoryName: cliSpec.dataDirectoryName,
-      serverAuthUsername: cliSpec.serverAuthUsername,
-    },
   });
 }
 
@@ -1165,7 +1156,11 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
-          const key = pooledOpenCodeServerKey(input);
+          // A cwd is process identity, while CLI display/readiness metadata is not. Resolve the cwd
+          // once so equivalent spellings reuse the same warm process and the spawned process uses
+          // the exact path represented by the pool key.
+          const pooledInput = input.cwd ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {
             yield* cancelPooledServerIdleClose(existing);
@@ -1179,7 +1174,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
               const serverScope = yield* Scope.make();
               const startedExit = yield* Effect.exit(
                 restore(
-                  startOpenCodeServerProcess(input).pipe(
+                  startOpenCodeServerProcess(pooledInput).pipe(
                     Effect.provideService(Scope.Scope, serverScope),
                   ),
                 ),
@@ -1194,7 +1189,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 key,
                 server: startedExit.value,
                 scope: serverScope,
-                closeOnRelease: input.poolIsolationKey !== undefined,
+                closeOnRelease: pooledInput.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
                 exitWatchFiber: null,
