@@ -38,7 +38,6 @@ import {
   InsertMindMemoryInput,
   InsertMindProfileRevisionInput,
   InsertMindRevisionInput,
-  ListAllMindMemoriesInput,
   ListMindJournalForMemoryInput,
   ListMindMemoriesInput,
   ListMindProfileRevisionsInput,
@@ -200,17 +199,20 @@ const toJournalEntryOption = (
 const encodeJournalActor = (actor: MindJournalEntry["actor"]): string =>
   actor.kind === "agent" ? `agent:${actor.provider}` : "user:ui";
 
-// Unrecognized strings and agent candidates whose provider is not yet a proven
-// literal pass through so the downstream journal/revision decoders can reject
-// them (fail the read) or fall back to the user actor.
-const decodeJournalActor = (
-  actor: string,
-): MindJournalEntry["actor"] | { readonly kind: "agent"; readonly provider: string } | string => {
-  if (actor === "user:ui") return { kind: "user" };
-  if (actor.startsWith("agent:")) {
-    return { kind: "agent", provider: actor.slice("agent:".length) };
+const decodeMindActor = Schema.decodeUnknownSync(MindJournalEntry.fields.actor);
+// Journal actors round-trip as 'agent:<provider>' | 'user:ui'. Anything else —
+// including an unrecognized provider literal — falls back to the user actor:
+// one hand-edited actor string must not poison a whole journal or revision row.
+const decodeJournalActor = (actor: string): MindJournalEntry["actor"] => {
+  const candidate =
+    actor === "user:ui" || !actor.startsWith("agent:")
+      ? { kind: "user" }
+      : { kind: "agent", provider: actor.slice("agent:".length) };
+  try {
+    return decodeMindActor(candidate);
+  } catch {
+    return { kind: "user" };
   }
-  return actor;
 };
 
 const toJournalEntry = (row: MindJournalDbRow) =>
@@ -224,24 +226,13 @@ const toJournalEntry = (row: MindJournalDbRow) =>
     createdAt: row.createdAt,
   }).pipe(Effect.mapError(toPersistenceDecodeError("MindRepository.journalRowToDomain")));
 
-// Revision rows fall back to the user actor on undecodable actor text: one
-// hand-edited row must not fail a whole history read.
-const decodeRevisionActor = Schema.decodeUnknownSync(MindJournalEntry.fields.actor);
-const toRevisionSafe = (row: MindRevisionDbRow): MindTextRevisionRow => {
-  let actor: MindTextRevisionRow["actor"] = { kind: "user" };
-  try {
-    actor = decodeRevisionActor(decodeJournalActor(row.actor));
-  } catch {
-    // Keep the user fallback.
-  }
-  return {
-    memoryId: row.memoryId,
-    oldHash: row.oldHash,
-    newHash: row.newHash,
-    actor,
-    createdAt: row.createdAt,
-  };
-};
+const toRevisionSafe = (row: MindRevisionDbRow): MindTextRevisionRow => ({
+  memoryId: row.memoryId,
+  oldHash: row.oldHash,
+  newHash: row.newHash,
+  actor: decodeJournalActor(row.actor),
+  createdAt: row.createdAt,
+});
 
 /** Decodes the raw profile row into the domain row (opted_in 0/1 → boolean). */
 const toProfile = (row: MindProfileDbRow) =>
@@ -260,20 +251,12 @@ const toProfileOption = (
     onSome: (profileRow) => Effect.map(toProfile(profileRow), Option.some),
   });
 
-const toProfileRevisionSafe = (row: MindProfileRevisionDbRow): MindProfileRevisionRow => {
-  let actor: MindProfileRevisionRow["actor"] = { kind: "user" };
-  try {
-    actor = decodeRevisionActor(decodeJournalActor(row.actor));
-  } catch {
-    // Keep the user fallback.
-  }
-  return {
-    projectId: row.projectId,
-    textHash: row.textHash,
-    actor,
-    createdAt: row.createdAt,
-  };
-};
+const toProfileRevisionSafe = (row: MindProfileRevisionDbRow): MindProfileRevisionRow => ({
+  projectId: row.projectId,
+  textHash: row.textHash,
+  actor: decodeJournalActor(row.actor),
+  createdAt: row.createdAt,
+});
 
 const makeMindRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -391,28 +374,51 @@ const makeMindRepository = Effect.gen(function* () {
       `,
   });
 
+  // SQL mirror of effectiveWeight() in mind/scoring.ts: pinned rows rank at
+  // their clamped peak, unpinned rows decay exponentially by idle days over a
+  // stability window scaled by type. peak_weight and access_count are
+  // CHECK-constrained to [0,1] and >= 0, so the clamp is redundant here.
+  // Constants are single-sourced; a parity test asserts the SQL order equals
+  // the TypeScript order.
+  const typeFactorSql = sql.literal(
+    `CASE m.type ${Object.entries(TYPE_FACTORS)
+      .map(([type, factor]) => `WHEN '${type}' THEN ${factor}`)
+      .join(" ")} ELSE 1 END`,
+  );
+  // Callers must alias the memory table as `m` so this fragment stays valid
+  // when the query joins the FTS shadow table.
+  const effectiveWeightSql = (nowIso: string) => sql`
+    CASE
+      WHEN m.pinned = 1 THEN m.peak_weight
+      ELSE m.peak_weight * exp(
+        -MAX(0.0, julianday(${nowIso}) - julianday(m.last_accessed_at))
+        / ((${STABILITY_BASE_DAYS} + ${STABILITY_PER_ACCESS_DAYS} * MAX(0, m.access_count)) * ${typeFactorSql})
+      )
+    END
+  `;
+
   const listMemoryRows = SqlSchema.findAll({
     Request: ListMindMemoriesInput,
     Result: MindMemoryDbRow,
-    execute: ({ projectId, limit }) =>
+    execute: ({ projectId, nowIso, limit }) =>
       sql`
         SELECT
-          id AS "memoryId",
-          project_id AS "projectId",
-          text,
-          type,
-          text_hash AS "textHash",
-          peak_weight AS "peakWeight",
-          access_count AS "accessCount",
-          pinned,
-          created_at AS "createdAt",
-          last_accessed_at AS "lastAccessedAt",
-          provenance_kind AS "provenanceKind",
-          source_thread_id AS "sourceThreadId",
-          source_provider AS "sourceProvider"
-        FROM mind_memories
-        WHERE project_id = ${projectId}
-        ORDER BY pinned DESC, last_accessed_at DESC, id ASC
+          m.id AS "memoryId",
+          m.project_id AS "projectId",
+          m.text AS "text",
+          m.type AS "type",
+          m.text_hash AS "textHash",
+          m.peak_weight AS "peakWeight",
+          m.access_count AS "accessCount",
+          m.pinned AS "pinned",
+          m.created_at AS "createdAt",
+          m.last_accessed_at AS "lastAccessedAt",
+          m.provenance_kind AS "provenanceKind",
+          m.source_thread_id AS "sourceThreadId",
+          m.source_provider AS "sourceProvider"
+        FROM mind_memories AS m
+        ${projectId === undefined ? sql`` : sql`WHERE m.project_id = ${projectId}`}
+        ORDER BY ${effectiveWeightSql(nowIso)} DESC, m.id ASC
         LIMIT ${limit ?? MIND_MEMORY_PROJECT_CAP}
       `,
   });
@@ -650,8 +656,8 @@ const makeMindRepository = Effect.gen(function* () {
     execute: ({ projectId }) =>
       sql`
         SELECT COUNT(*) AS "count"
-        FROM mind_memories
-        WHERE project_id = ${projectId}
+        FROM mind_memories AS m
+        ${projectId === undefined ? sql`` : sql`WHERE m.project_id = ${projectId}`}
       `,
   });
 
@@ -723,81 +729,15 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.flatMap(toMemoryOption),
     );
 
-  const listByProject: MindRepositoryShape["listByProject"] = (input) =>
+  const list: MindRepositoryShape["list"] = (input) =>
     listMemoryRows(input).pipe(
-      Effect.mapError(toPersistenceSqlError("MindRepository.listByProject:query")),
+      Effect.mapError(toPersistenceSqlError("MindRepository.list:query")),
       Effect.flatMap(toMemoryListSafe),
     );
 
-  // SQL mirror of effectiveWeight() in mind/scoring.ts: pinned rows rank at
-  // their clamped peak, unpinned rows decay exponentially by idle days over a
-  // stability window scaled by type. peak_weight and access_count are
-  // CHECK-constrained to [0,1] and >= 0, so the clamp is redundant here.
-  // Constants are single-sourced; a parity test asserts the SQL order equals
-  // the TypeScript order.
-  const typeFactorSql = sql.literal(
-    `CASE m.type ${Object.entries(TYPE_FACTORS)
-      .map(([type, factor]) => `WHEN '${type}' THEN ${factor}`)
-      .join(" ")} ELSE 1 END`,
-  );
-  // Callers must alias the memory table as `m` so this fragment stays valid
-  // when the query joins the FTS shadow table.
-  const effectiveWeightSql = (nowIso: string) => sql`
-    CASE
-      WHEN m.pinned = 1 THEN m.peak_weight
-      ELSE m.peak_weight * exp(
-        -MAX(0.0, julianday(${nowIso}) - julianday(m.last_accessed_at))
-        / ((${STABILITY_BASE_DAYS} + ${STABILITY_PER_ACCESS_DAYS} * MAX(0, m.access_count)) * ${typeFactorSql})
-      )
-    END
-  `;
-
-  const listAllMemoryRows = SqlSchema.findAll({
-    Request: ListAllMindMemoriesInput,
-    Result: MindMemoryDbRow,
-    execute: ({ nowIso, limit }) =>
-      sql`
-        SELECT
-          id AS "memoryId",
-          project_id AS "projectId",
-          text,
-          type,
-          text_hash AS "textHash",
-          peak_weight AS "peakWeight",
-          access_count AS "accessCount",
-          pinned,
-          created_at AS "createdAt",
-          last_accessed_at AS "lastAccessedAt",
-          provenance_kind AS "provenanceKind",
-          source_thread_id AS "sourceThreadId",
-          source_provider AS "sourceProvider"
-        FROM mind_memories AS m
-        ORDER BY ${effectiveWeightSql(nowIso)} DESC, m.id ASC
-        LIMIT ${limit ?? MIND_MEMORY_PROJECT_CAP}
-      `,
-  });
-
-  // Bounded to one project-cap page: the global Mind view never reads the
-  // whole table. Callers pair this with `countAll` for the true total.
-  const listAll: MindRepositoryShape["listAll"] = (input) =>
-    listAllMemoryRows(input).pipe(
-      Effect.mapError(toPersistenceSqlError("MindRepository.listAll:query")),
-      Effect.flatMap(toMemoryListSafe),
-    );
-
-  const countAllRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: Schema.Struct({ count: Schema.Number }),
-    execute: () =>
-      sql`
-        SELECT COUNT(*) AS "count"
-        FROM mind_memories
-      `,
-  });
-
-  const countAll: MindRepositoryShape["countAll"] = () =>
-    countAllRows(undefined).pipe(
-      Effect.mapError(toPersistenceSqlError("MindRepository.countAll:query")),
+  const count: MindRepositoryShape["count"] = (input) =>
+    countMemoryRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.count:query")),
       Effect.map((rows) => rows[0]?.count ?? 0),
     );
 
@@ -820,7 +760,7 @@ const makeMindRepository = Effect.gen(function* () {
   const searchAllCandidateRows = SqlSchema.findAll({
     Request: SearchAllMindCandidatesInput,
     Result: MindMemoryCandidateDbRow,
-    execute: ({ matchExpr, nowIso, limit }) =>
+    execute: ({ projectId, matchExpr, nowIso, limit }) =>
       sql`
         SELECT
           m.id AS "memoryId",
@@ -840,6 +780,7 @@ const makeMindRepository = Effect.gen(function* () {
         FROM mind_memories_fts
         JOIN mind_memories AS m ON m.rowid = mind_memories_fts.rowid
         WHERE mind_memories_fts MATCH ${matchExpr}
+        ${projectId === undefined ? sql`` : sql`AND m.project_id = ${projectId}`}
         ORDER BY ${effectiveWeightSql(nowIso)} DESC, m.id ASC
         LIMIT ${limit ?? MIND_MEMORY_PROJECT_CAP}
       `,
@@ -1019,12 +960,6 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.flatMap(toJournalEntryOption),
     );
 
-  const countByProject: MindRepositoryShape["countByProject"] = (input) =>
-    countMemoryRows(input).pipe(
-      Effect.mapError(toPersistenceSqlError("MindRepository.countByProject:query")),
-      Effect.map((rows) => rows[0]?.count ?? 0),
-    );
-
   const getReceipt: MindRepositoryShape["getReceipt"] = (input) =>
     getReceiptRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("MindRepository.getReceipt:query")),
@@ -1071,9 +1006,8 @@ const makeMindRepository = Effect.gen(function* () {
     insert,
     findByTextHash,
     getById,
-    listByProject,
-    listAll,
-    countAll,
+    list,
+    count,
     searchCandidates,
     searchAllCandidates,
     countSearchMatches,
@@ -1090,7 +1024,7 @@ const makeMindRepository = Effect.gen(function* () {
     deleteById,
     appendJournal,
     findJournalOp,
-    countByProject,
+
     getReceipt,
     putReceipt,
     pruneReceipts,

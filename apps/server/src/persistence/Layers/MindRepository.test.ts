@@ -122,7 +122,7 @@ layer("MindRepository", (it) => {
 
       const missingHash = yield* repository.findByTextHash({ projectId, textHash: "no-such-hash" });
       assert.isTrue(Option.isNone(missingHash));
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 1);
+      assert.strictEqual(yield* repository.count({ projectId }), 1);
     }),
   );
 
@@ -164,13 +164,13 @@ layer("MindRepository", (it) => {
         )
       `;
 
-      const listed = yield* repository.listByProject({ projectId });
+      const listed = yield* repository.list({ projectId, nowIso: "2026-09-20T00:00:00.000Z" });
       assert.lengthOf(listed, 1);
       assert.deepStrictEqual(listed[0]?.provenance, { kind: "user" });
     }),
   );
 
-  it.effect("lists a project pinned-first, then most recently accessed, bounded by limit", () =>
+  it.effect("lists a project by effective weight, bounded by limit", () =>
     Effect.gen(function* () {
       const repository = yield* MindRepository;
       yield* runMigrations();
@@ -189,13 +189,14 @@ layer("MindRepository", (it) => {
         memoryInput({ projectId: ProjectId.makeUnsafe(PROJECTS.listOther) }),
       );
 
-      const listed = yield* repository.listByProject({ projectId });
+      const nowIso = "2026-09-13T00:00:00.000Z";
+      const listed = yield* repository.list({ projectId, nowIso });
       assert.deepStrictEqual(
         listed.map((memory) => memory.memoryId),
         [pinned.memoryId, newer.memoryId, oldest.memoryId],
       );
 
-      const bounded = yield* repository.listByProject({ projectId, limit: 2 });
+      const bounded = yield* repository.list({ projectId, nowIso, limit: 2 });
       assert.deepStrictEqual(
         bounded.map((memory) => memory.memoryId),
         [pinned.memoryId, newer.memoryId],
@@ -308,16 +309,16 @@ layer("MindRepository", (it) => {
         )
       `;
 
-      const listed = yield* repository.listByProject({ projectId });
+      const listed = yield* repository.list({ projectId, nowIso: "2026-09-20T00:00:00.000Z" });
       assert.deepStrictEqual(
         listed.map((memory) => memory.memoryId),
         [good.memoryId],
       );
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 2);
+      assert.strictEqual(yield* repository.count({ projectId }), 2);
     }),
   );
 
-  it.effect("listAll is bounded to one project-cap page with an explicit limit override", () =>
+  it.effect("list is bounded to one project-cap page with an explicit limit override", () =>
     Effect.gen(function* () {
       const repository = yield* MindRepository;
       yield* runMigrations();
@@ -341,9 +342,9 @@ layer("MindRepository", (it) => {
 
       // The default page never exceeds the cap even though the project holds more.
       const nowIso = new Date().toISOString();
-      assert.strictEqual((yield* repository.listAll({ nowIso })).length, MIND_MEMORY_PROJECT_CAP);
-      assert.strictEqual((yield* repository.listAll({ nowIso, limit: 2 })).length, 2);
-      assert.isTrue((yield* repository.countAll()) >= MIND_MEMORY_PROJECT_CAP + 5);
+      assert.strictEqual((yield* repository.list({ nowIso })).length, MIND_MEMORY_PROJECT_CAP);
+      assert.strictEqual((yield* repository.list({ nowIso, limit: 2 })).length, 2);
+      assert.isTrue((yield* repository.count({})) >= MIND_MEMORY_PROJECT_CAP + 5);
     }),
   );
 
@@ -543,13 +544,13 @@ layer("MindRepository", (it) => {
       const projectId = ProjectId.makeUnsafe(PROJECTS.count);
       const otherProjectId = ProjectId.makeUnsafe(PROJECTS.countOther);
 
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 0);
+      assert.strictEqual(yield* repository.count({ projectId }), 0);
       yield* repository.insert(memoryInput({ projectId }));
       yield* repository.insert(memoryInput({ projectId }));
       yield* repository.insert(memoryInput({ projectId: otherProjectId }));
 
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 2);
-      assert.strictEqual(yield* repository.countByProject({ projectId: otherProjectId }), 1);
+      assert.strictEqual(yield* repository.count({ projectId }), 2);
+      assert.strictEqual(yield* repository.count({ projectId: otherProjectId }), 1);
     }),
   );
 
@@ -599,7 +600,7 @@ layer("MindRepository", (it) => {
     }),
   );
 
-  it.effect("listAll ranks the global page by the scoring.ts effective weight", () =>
+  it.effect("list ranks the global page by the scoring.ts effective weight", () =>
     Effect.gen(function* () {
       const repository = yield* MindRepository;
       yield* runMigrations();
@@ -659,9 +660,9 @@ layer("MindRepository", (it) => {
         yield* repository.insert(seed);
       }
 
-      const page = yield* repository.listAll({ nowIso });
+      const page = yield* repository.list({ nowIso });
       const mine = new Set(seeds.map((seed) => seed.memoryId));
-      const expected = [...seeds].sort(
+      const expected = seeds.toSorted(
         (a, b) =>
           effectiveWeight(b, nowIso) - effectiveWeight(a, nowIso) ||
           a.memoryId.localeCompare(b.memoryId),

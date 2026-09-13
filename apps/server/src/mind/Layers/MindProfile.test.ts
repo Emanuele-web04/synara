@@ -222,7 +222,7 @@ layer("MindProfile", (it) => {
       const list = yield* service.list({ projectId });
       assert.deepStrictEqual(list.memories, []);
       assert.strictEqual(list.count, 0);
-      const all = yield* service.listAll();
+      const all = yield* service.list({});
       assert.isFalse(all.memories.some((memory) => memory.text === "only a profile"));
       const status = yield* service.status({ projectId });
       assert.strictEqual(status.count, 0);

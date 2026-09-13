@@ -104,16 +104,17 @@ export interface MindStatusResult {
 }
 
 export interface MindListRequest {
-  readonly projectId: ProjectId;
+  /** Omitted lists one global page across all projects (the Mind view). */
+  readonly projectId?: ProjectId | undefined;
 }
 
 /**
- * UI search: `projectId` scopes to one project, null searches every project
+ * UI search: `projectId` scopes to one project, omitted searches every project
  * (the global Mind view). Server-side FTS — finds matches the bounded list
  * page never loaded.
  */
 export interface MindSearchRequest {
-  readonly projectId: ProjectId | null;
+  readonly projectId?: ProjectId | undefined;
   readonly query: string;
 }
 
@@ -204,9 +205,12 @@ export interface MindServiceShape {
    */
   readonly forget: (input: MindForgetRequest) => Effect.Effect<MindForgetResult, MindServiceError>;
   readonly status: (input: MindStatusRequest) => Effect.Effect<MindStatusResult, MindServiceError>;
-  /** Full project list for the UI, effective weights computed, weight-desc. */
+  /**
+   * Memory page for the UI, effective weights computed, weight-desc: one
+   * project when `projectId` is set, otherwise one global page across all
+   * projects (capped; `count` stays the true total).
+   */
   readonly list: (input: MindListRequest) => Effect.Effect<MindListResult, MindServiceError>;
-  readonly listAll: () => Effect.Effect<MindListResult, MindServiceError>;
   /**
    * FTS search over every stored row, scoped to one project or all projects —
    * unlike the list page, matches outside the loaded cap stay discoverable.

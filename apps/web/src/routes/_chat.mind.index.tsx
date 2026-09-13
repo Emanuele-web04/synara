@@ -45,13 +45,7 @@ import {
   optimisticForgetCount,
   sortMindMemories,
 } from "~/lib/mindList";
-import { rollbackOptimisticProfile } from "~/lib/mindProfileQuery";
-import {
-  MIND_LIST_QUERY_ROOT,
-  mindListQueryKey,
-  restoreMindLists,
-  snapshotMindLists,
-} from "~/lib/mindListQuery";
+import { MIND_LIST_QUERY_ROOT, mindListQueryKey } from "~/lib/mindListQuery";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
@@ -343,17 +337,15 @@ function MindProfileCard({
         optedIn: input.optedIn,
         updatedAt: new Date().toISOString(),
       });
-      return { previous };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: profileQueryKey });
       toastManager.add({ type: "success", title: "Profile saved" });
     },
-    onError: (error, _input, context) => {
-      // previous === undefined means the cache held nothing before the
-      // optimistic write — restoring would leave the fabricated profile
-      // visible as if it had saved, so the entry is reset instead.
-      rollbackOptimisticProfile(queryClient, profileQueryKey, context?.previous);
+    onError: (error) => {
+      // A rejected save invalidates back to the server's truth — including a
+      // first save whose optimistic write fabricated an entry.
+      void queryClient.invalidateQueries({ queryKey: profileQueryKey });
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -485,7 +477,8 @@ function MindRouteView() {
     mutationFn: (memory: MindMemory) =>
       ensureNativeApi().mind.forget({ projectId: memory.projectId, memoryId: memory.memoryId }),
     onMutate: async (memory) => {
-      const previous = await snapshotMindLists(queryClient);
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
+      // The optimistic write fans out to every cached list scope.
       queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
@@ -495,7 +488,6 @@ function MindRouteView() {
             }
           : prev,
       );
-      return { previous };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
@@ -503,8 +495,10 @@ function MindRouteView() {
       void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({ type: "success", title: "Memory forgotten" });
     },
-    onError: (error, _memory, context) => {
-      restoreMindLists(queryClient, context?.previous);
+    onError: (error) => {
+      // The optimistic write only touched the cache — invalidating refetches
+      // the server's truth for every scope.
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -515,7 +509,7 @@ function MindRouteView() {
     mutationFn: (memory: MindMemory) =>
       ensureNativeApi().mind.affirm({ projectId: memory.projectId, memoryId: memory.memoryId }),
     onMutate: async (memory) => {
-      const previous = await snapshotMindLists(queryClient);
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
       queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
@@ -532,14 +526,13 @@ function MindRouteView() {
             }
           : prev,
       );
-      return { previous };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       toastManager.add({ type: "success", title: "Memory affirmed" });
     },
-    onError: (error, _memory, context) => {
-      restoreMindLists(queryClient, context?.previous);
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -560,7 +553,7 @@ function MindRouteView() {
         type: input.type,
       }),
     onMutate: async (input) => {
-      const previous = await snapshotMindLists(queryClient);
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
       queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
@@ -573,7 +566,6 @@ function MindRouteView() {
             }
           : prev,
       );
-      return { previous };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
@@ -581,8 +573,8 @@ function MindRouteView() {
       void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({ type: "success", title: "Saved" });
     },
-    onError: (error, _input, context) => {
-      restoreMindLists(queryClient, context?.previous);
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -595,7 +587,7 @@ function MindRouteView() {
         pinned: input.pinned,
       }),
     onMutate: async (input) => {
-      const previous = await snapshotMindLists(queryClient);
+      await queryClient.cancelQueries({ queryKey: mindQueryKey });
       queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
@@ -606,7 +598,6 @@ function MindRouteView() {
             }
           : prev,
       );
-      return { previous };
     },
     onSuccess: (_data, input) => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
@@ -615,8 +606,8 @@ function MindRouteView() {
         title: input.pinned ? "Memory pinned" : "Memory unpinned",
       });
     },
-    onError: (error, _input, context) => {
-      restoreMindLists(queryClient, context?.previous);
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -806,7 +797,6 @@ function MindRouteView() {
                           shown: data.memories.length,
                           total: data.count,
                           pinnedCount,
-                          cap: data.cap,
                         })}${digestSuffix}`}
                   </p>
                 ) : null}

@@ -11,36 +11,26 @@ import {
   formatMindHistoryOpLabel,
   formatMindWeightLabel,
   groupMindMemoriesByDay,
-  isMindListTruncated,
-  mindCapPercent,
   optimisticAffirmWeight,
   optimisticForgetCount,
   sortMindMemories,
 } from "./mindList";
 
-describe("isMindListTruncated", () => {
-  it("is truncated only when fewer rows are shown than the true total", () => {
-    expect(isMindListTruncated({ shown: 500, total: 2300 })).toBe(true);
-    expect(isMindListTruncated({ shown: 2, total: 2 })).toBe(false);
-    expect(isMindListTruncated({ shown: 0, total: 0 })).toBe(false);
-  });
-});
-
 describe("formatMindCountLabel", () => {
   it("renders the plain count when the whole store is loaded", () => {
-    expect(formatMindCountLabel({ shown: 2, total: 2, pinnedCount: 1, cap: 500 })).toBe(
+    expect(formatMindCountLabel({ shown: 2, total: 2, pinnedCount: 1 })).toBe(
       "2 memories · 1 pinned",
     );
   });
 
   it("renders the singular noun for one memory", () => {
-    expect(formatMindCountLabel({ shown: 1, total: 1, pinnedCount: 0, cap: 500 })).toBe(
+    expect(formatMindCountLabel({ shown: 1, total: 1, pinnedCount: 0 })).toBe(
       "1 memory · 0 pinned",
     );
   });
 
   it("renders showing X of N when the page is truncated", () => {
-    expect(formatMindCountLabel({ shown: 500, total: 2300, pinnedCount: 12, cap: 500 })).toBe(
+    expect(formatMindCountLabel({ shown: 500, total: 2300, pinnedCount: 12 })).toBe(
       "Showing 500 of 2300 memories · 12 pinned",
     );
   });
@@ -148,14 +138,6 @@ describe("countStaleMindMemories", () => {
     });
     const fresh = makeMemory({ lastAccessedAt: new Date(nowMs - 5 * dayMs).toISOString() });
     expect(countStaleMindMemories([stale, pinnedStale, fresh], nowMs)).toBe(1);
-  });
-});
-
-describe("mindCapPercent", () => {
-  it("rounds the share of cap in use and guards a zero cap", () => {
-    expect(mindCapPercent({ count: 400, cap: 500 })).toBe(80);
-    expect(mindCapPercent({ count: 1, cap: 3 })).toBe(33);
-    expect(mindCapPercent({ count: 5, cap: 0 })).toBe(0);
   });
 });
 

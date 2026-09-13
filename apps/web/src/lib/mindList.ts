@@ -2,25 +2,17 @@ import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import type { MindHistoryEntry, MindMemory } from "@synara/contracts";
 
-/** True while the loaded page is truncated: fewer rows shown than the true total. */
-export function isMindListTruncated(input: {
-  readonly shown: number;
-  readonly total: number;
-}): boolean {
-  return input.shown < input.total;
-}
-
 /** "N memories · P pinned", or "Showing S of N memories · …" when truncated. */
 export function formatMindCountLabel(input: {
   readonly shown: number;
   readonly total: number;
   readonly pinnedCount: number;
-  readonly cap: number;
 }): string {
   const noun = pluralize(input.total, "memory", "memories");
-  const head = isMindListTruncated(input)
-    ? `Showing ${input.shown} of ${input.total} ${noun}`
-    : `${input.total} ${noun}`;
+  const head =
+    input.shown < input.total
+      ? `Showing ${input.shown} of ${input.total} ${noun}`
+      : `${input.total} ${noun}`;
   return `${head} · ${input.pinnedCount} pinned`;
 }
 
@@ -34,8 +26,7 @@ export function optimisticForgetCount(input: {
   readonly count: number;
   readonly shown: number;
 }): number {
-  if (isMindListTruncated({ shown: input.shown, total: input.count })) return input.count;
-  return Math.max(0, input.count - 1);
+  return input.shown < input.count ? input.count : Math.max(0, input.count - 1);
 }
 
 /**
@@ -125,12 +116,6 @@ export function countStaleMindMemories(
   ).length;
 }
 
-/** Share of the project cap in use, 0–100+ (over cap stays honest, never clamped). */
-export function mindCapPercent(input: { readonly count: number; readonly cap: number }): number {
-  if (input.cap <= 0) return 0;
-  return Math.round((input.count / input.cap) * 100);
-}
-
 /**
  * Digest signals appended to the meta count line: stale memories needing
  * review, plus cap pressure only once half the cap is in use — quiet
@@ -145,9 +130,9 @@ export function formatMindDigestSuffix(input: {
   if (input.staleCount > 0) {
     parts.push(input.staleCount === 1 ? "1 needs review" : `${input.staleCount} need review`);
   }
-  const percent = mindCapPercent({ count: input.count, cap: input.cap });
-  if (input.cap > 0 && percent >= 50) {
-    parts.push(`${percent}% of cap`);
+  if (input.cap > 0) {
+    const percent = Math.round((input.count / input.cap) * 100);
+    if (percent >= 50) parts.push(`${percent}% of cap`);
   }
   return parts.length === 0 ? "" : ` · ${parts.join(" · ")}`;
 }

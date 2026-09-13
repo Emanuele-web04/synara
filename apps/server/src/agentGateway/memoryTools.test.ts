@@ -328,7 +328,7 @@ layer("agent gateway memory tools", (it) => {
 
       // The memory lands in the caller thread's project, and nowhere else.
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.remember) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.remember) }),
         1,
       );
       const row = Option.getOrThrow(yield* repository.getById({ memoryId }));
@@ -382,11 +382,11 @@ layer("agent gateway memory tools", (it) => {
         ProjectId.makeUnsafe(PROJECTS.resolveA),
       );
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveA) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveA) }),
         1,
       );
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveB) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveB) }),
         1,
       );
 
@@ -401,11 +401,11 @@ layer("agent gateway memory tools", (it) => {
       );
       assert.isTrue(ghost.includes("was not found"));
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveA) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveA) }),
         1,
       );
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveB) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.resolveB) }),
         1,
       );
     }),
@@ -430,7 +430,7 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(error.code, "memory_secret_rejected");
       assert.isTrue(error.message.includes("secret"));
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.secret) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.secret) }),
         0,
       );
     }),
@@ -461,10 +461,7 @@ layer("agent gateway memory tools", (it) => {
       );
       assert.equal(error.code, "memory_cap_reached");
       assert.isTrue(error.message.includes("forget or consolidate"));
-      assert.equal(
-        yield* repository.countByProject({ projectId: capProjectId }),
-        MIND_MEMORY_PROJECT_CAP,
-      );
+      assert.equal(yield* repository.count({ projectId: capProjectId }), MIND_MEMORY_PROJECT_CAP);
     }),
   );
 
@@ -494,7 +491,7 @@ layer("agent gateway memory tools", (it) => {
         assert.equal(retry.created, true);
         assert.equal(retry.memoryId, first.memoryId);
         assert.equal(
-          yield* repository.countByProject({
+          yield* repository.count({
             projectId: ProjectId.makeUnsafe(PROJECTS.idempotent),
           }),
           1,
@@ -577,7 +574,7 @@ layer("agent gateway memory tools", (it) => {
         Option.getOrThrow(yield* repository.getById({ memoryId: b.memoryId })),
         beforeB,
       );
-      assert.equal(yield* repository.countByProject({ projectId }), 2);
+      assert.equal(yield* repository.count({ projectId }), 2);
     }),
   );
 
@@ -669,7 +666,7 @@ layer("agent gateway memory tools", (it) => {
       );
       assert.equal(first.deleted, true);
       assert.equal(first.alreadyGone, false);
-      assert.equal(yield* repository.countByProject({ projectId }), 0);
+      assert.equal(yield* repository.count({ projectId }), 0);
 
       // Idempotent: the second forget succeeds without an error.
       const second = decodePayload(
@@ -728,7 +725,7 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(forgotten.deleted, false);
       assert.equal(forgotten.alreadyGone, true);
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.xproject) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.xproject) }),
         1,
       );
     }),
@@ -798,7 +795,7 @@ layer("agent gateway memory tools", (it) => {
       assert.isTrue(missingMemoryId.includes('"memoryId"'));
 
       assert.equal(
-        yield* repository.countByProject({ projectId: ProjectId.makeUnsafe(PROJECTS.invalid) }),
+        yield* repository.count({ projectId: ProjectId.makeUnsafe(PROJECTS.invalid) }),
         0,
       );
     }),

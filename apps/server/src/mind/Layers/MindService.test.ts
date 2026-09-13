@@ -175,7 +175,7 @@ layer("MindService", (it) => {
         assert.strictEqual(second.reinforced, true);
         assert.strictEqual(second.replayed, false);
         assert.strictEqual(second.memoryId, first.memoryId);
-        assert.strictEqual(yield* repository.countByProject({ projectId }), 1);
+        assert.strictEqual(yield* repository.count({ projectId }), 1);
         const reinforced = Option.getOrThrow(
           yield* repository.getById({ memoryId: first.memoryId }),
         );
@@ -518,7 +518,7 @@ layer("MindService", (it) => {
         assert.strictEqual(rejected.cap, MIND_MEMORY_PROJECT_CAP);
         assert.isTrue(rejected.message.includes("forget or consolidate"));
       }
-      assert.strictEqual(yield* repository.countByProject({ projectId }), MIND_MEMORY_PROJECT_CAP);
+      assert.strictEqual(yield* repository.count({ projectId }), MIND_MEMORY_PROJECT_CAP);
     }),
   );
 
@@ -540,7 +540,7 @@ layer("MindService", (it) => {
         );
         assert.strictEqual(rejected._tag, "MindSecretRejectedError");
       }
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 0);
+      assert.strictEqual(yield* repository.count({ projectId }), 0);
 
       const empty = yield* Effect.flip(
         service.remember(rememberRequest(projectId, "   ", { turnId: "turn-empty" })),
@@ -556,7 +556,7 @@ layer("MindService", (it) => {
       if (long._tag === "MindInvalidTextError") {
         assert.strictEqual(long.reason, "tooLong");
       }
-      assert.strictEqual(yield* repository.countByProject({ projectId }), 0);
+      assert.strictEqual(yield* repository.count({ projectId }), 0);
     }),
   );
 
@@ -861,7 +861,7 @@ layer("MindService", (it) => {
     }),
   );
 
-  it.effect("list isolates poison rows with shown/total/skipped counts", () =>
+  it.effect("list isolates poison rows: count stays true while the page drops them", () =>
     Effect.gen(function* () {
       const service = yield* MindService;
       const sql = yield* SqlClient.SqlClient;
@@ -913,7 +913,6 @@ layer("MindService", (it) => {
         [good.memoryId],
       );
       assert.strictEqual(list.count, 2);
-      assert.strictEqual(list.skipped, 1);
     }),
   );
 
@@ -996,7 +995,7 @@ layer("MindService", (it) => {
         });
       const eligible = () =>
         repository
-          .listByProject({ projectId })
+          .list({ projectId, nowIso: new Date().toISOString() })
           .pipe(
             Effect.map((rows) => rows.filter((row) => row.text.startsWith("sweep bound filler"))),
           );
@@ -1052,16 +1051,15 @@ layer("MindService", (it) => {
     }),
   );
 
-  it.effect("listAll pairs the bounded page with the true total", () =>
+  it.effect("the global list pairs the bounded page with the true total", () =>
     Effect.gen(function* () {
       const service = yield* MindService;
       const repository = yield* MindRepository;
       yield* runMigrations();
-      const all = yield* service.listAll();
-      assert.strictEqual(all.count, yield* repository.countAll());
+      const all = yield* service.list({});
+      assert.strictEqual(all.count, yield* repository.count({}));
       assert.isTrue(all.memories.length <= all.count);
       assert.isTrue(all.memories.length <= MIND_MEMORY_PROJECT_CAP);
-      assert.isTrue(all.skipped === undefined || all.skipped >= 0);
     }),
   );
 
@@ -1387,7 +1385,7 @@ layer("MindService", (it) => {
 
       // Global scope finds matches in every project, including ones whose rows
       // a bounded list page would not have loaded.
-      const global = yield* service.search({ projectId: null, query: "zzqneedle" });
+      const global = yield* service.search({ query: "zzqneedle" });
       assert.strictEqual(global.count, 2);
       assert.strictEqual(global.cap, MIND_MEMORY_PROJECT_CAP);
       assert.deepStrictEqual(global.memories.map((memory) => memory.text).toSorted(), [
@@ -1399,11 +1397,11 @@ layer("MindService", (it) => {
       assert.strictEqual(scoped.count, 1);
       assert.strictEqual(scoped.memories[0]?.text, "zzqneedle fact alpha");
 
-      const empty = yield* service.search({ projectId: null, query: "   " });
+      const empty = yield* service.search({ query: "   " });
       assert.strictEqual(empty.count, 0);
       assert.deepStrictEqual(empty.memories, []);
 
-      const miss = yield* service.search({ projectId: null, query: "nomatchzzz" });
+      const miss = yield* service.search({ query: "nomatchzzz" });
       assert.strictEqual(miss.count, 0);
       assert.deepStrictEqual(miss.memories, []);
     }),
@@ -1586,7 +1584,7 @@ layer("MindService", (it) => {
       }),
   );
 
-  it.effect("listAll ranks one global page by effective weight across projects", () =>
+  it.effect("list ranks one global page by effective weight across projects", () =>
     Effect.gen(function* () {
       const service = yield* MindService;
       yield* runMigrations();
@@ -1622,7 +1620,7 @@ layer("MindService", (it) => {
         peakWeight: 0.62,
       });
 
-      const result = yield* service.listAll();
+      const result = yield* service.list({});
       // The shared suite database holds other tests' rows; assert the relative
       // order of this test's rows inside the global page (all three outrank the
       // ~0.6 fresh-noise floor, so the cap cannot cut them).

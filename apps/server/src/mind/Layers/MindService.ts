@@ -30,6 +30,7 @@ import {
   MIND_RECEIPT_PRUNE_MAX_ITEMS,
   MindRepository,
   type MindMemoryRow,
+  type MindReceiptRow,
   type MindRepositoryError,
 } from "../../persistence/Services/MindRepository.ts";
 import {
@@ -244,6 +245,13 @@ const makeMindService = Effect.gen(function* () {
 
   const nowIsoNow = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString());
 
+  // A turnId-scoped receipt is the durable replay marker; no turnId means
+  // nothing was ever recorded, so nothing can replay.
+  const findReceipt = (projectId: ProjectId, operationId: string | null) =>
+    operationId === null
+      ? Effect.succeed(Option.none<MindReceiptRow>())
+      : repository.getReceipt({ projectId, operationId });
+
   /**
    * Runs the prune sweep at most once per 24h per project, on the first memory
    * operation after the interval. Deletes prune-eligible rows (journaling
@@ -262,7 +270,7 @@ const makeMindService = Effect.gen(function* () {
         return;
       }
       const nowIso = new Date(nowMillis).toISOString();
-      const rows = yield* repository.listByProject({ projectId });
+      const rows = yield* repository.list({ projectId, nowIso });
       const pruneIds = rows
         .filter((row) => shouldPrune(row, nowIso))
         .map((row) => row.memoryId)
@@ -371,15 +379,10 @@ const makeMindService = Effect.gen(function* () {
           const textHash = hashMindText(normalized);
           const operationId = input.turnId === null ? null : `remember:${input.turnId}:${textHash}`;
 
-          if (operationId !== null) {
-            const receipt = yield* repository.getReceipt({
-              projectId: input.projectId,
-              operationId,
-            });
-            if (Option.isSome(receipt)) {
-              const replayed = decodeRememberReceipt(receipt.value.resultJson);
-              if (replayed !== undefined) return replayed;
-            }
+          const receipt = yield* findReceipt(input.projectId, operationId);
+          if (Option.isSome(receipt)) {
+            const replayed = decodeRememberReceipt(receipt.value.resultJson);
+            if (replayed !== undefined) return replayed;
           }
 
           const existing = yield* repository.findByTextHash({
@@ -452,7 +455,7 @@ const makeMindService = Effect.gen(function* () {
             return result;
           }
 
-          const count = yield* repository.countByProject({ projectId: input.projectId });
+          const count = yield* repository.count({ projectId: input.projectId });
           if (count >= MIND_MEMORY_PROJECT_CAP) {
             return yield* Effect.fail(
               new MindProjectCapReachedError({
@@ -539,7 +542,7 @@ const makeMindService = Effect.gen(function* () {
         MIND_RECALL_MAX_ITEMS,
       );
       if (query.trim().length === 0) {
-        const rows = yield* repository.listByProject({ projectId: input.projectId });
+        const rows = yield* repository.list({ projectId: input.projectId, nowIso });
         const digestItems = topDigestRows(rows, nowIso).map(({ row, weight }) =>
           toRecallItem(row, weight, nowIso),
         );
@@ -596,12 +599,8 @@ const makeMindService = Effect.gen(function* () {
           const operationId =
             input.turnId === null ? null : `confirm:${input.turnId}:${input.memoryId}`;
           if (operationId !== null) {
-            const receipt = yield* repository.getReceipt({
-              projectId: row.projectId,
-              operationId,
-            });
             const replayed =
-              Option.isSome(receipt) ||
+              Option.isSome(yield* findReceipt(row.projectId, operationId)) ||
               Option.isSome(
                 yield* repository.findJournalOp({
                   memoryId: input.memoryId,
@@ -673,18 +672,13 @@ const makeMindService = Effect.gen(function* () {
           const nowIso = yield* nowIsoNow;
           const operationId =
             input.turnId === null ? null : `forget:${input.turnId}:${input.memoryId}`;
-          if (operationId !== null) {
-            const receipt = yield* repository.getReceipt({
-              projectId: input.projectId,
-              operationId,
-            });
-            if (Option.isSome(receipt)) {
-              return {
-                memoryId: input.memoryId,
-                deleted: true,
-                alreadyGone: false,
-              };
-            }
+          const receipt = yield* findReceipt(input.projectId, operationId);
+          if (Option.isSome(receipt)) {
+            return {
+              memoryId: input.memoryId,
+              deleted: true,
+              alreadyGone: false,
+            };
           }
           const existing = yield* repository.getById({ memoryId: input.memoryId });
           if (Option.isNone(existing)) {
@@ -739,14 +733,14 @@ const makeMindService = Effect.gen(function* () {
   const status = (input: MindStatusRequest): Effect.Effect<MindStatusResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
-      const rows = yield* repository.listByProject({ projectId: input.projectId });
+      const rows = yield* repository.list({ projectId: input.projectId, nowIso });
       const digestItems = topDigestRows(rows, nowIso).map(({ row, weight }) =>
         toRecallItem(row, weight, nowIso),
       );
       const oldestIdleDays = rows.reduce((max, row) => Math.max(max, idleDaysOf(row, nowIso)), 0);
       const profile = yield* repository.getProfile({ projectId: input.projectId });
       return {
-        count: yield* repository.countByProject({ projectId: input.projectId }),
+        count: yield* repository.count({ projectId: input.projectId }),
         cap: MIND_MEMORY_PROJECT_CAP,
         pinnedCount: rows.filter((row) => row.pinned).length,
         digestChars: renderDigestWithProfile(digestItems, optedInProfileText(profile)).length,
@@ -755,15 +749,18 @@ const makeMindService = Effect.gen(function* () {
       };
     });
 
+  // One SQL page ranked by the persisted scoring inputs (the repository
+  // mirrors effectiveWeight), so the read stays O(page) no matter how many
+  // projects hold memories. `count` is the true total; `memories` is the
+  // shown page — a shortfall below the expected page means undecodable rows
+  // were skipped read-side (never fatal), so it is logged, not silenced.
   const list = (input: MindListRequest): Effect.Effect<MindListResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
-      const rows = yield* repository.listByProject({ projectId: input.projectId });
-      // `count` is the true total; `memories` is the shown page. A shortfall
-      // means undecodable rows were skipped read-side (never fatal) — log it
-      // with shown/total so corruption is visible instead of silent.
-      const total = yield* repository.countByProject({ projectId: input.projectId });
-      const skipped = Math.max(0, total - rows.length);
+      const scope = input.projectId === undefined ? {} : { projectId: input.projectId };
+      const rows = yield* repository.list({ ...scope, nowIso });
+      const total = yield* repository.count(scope);
+      const skipped = Math.max(0, Math.min(MIND_MEMORY_PROJECT_CAP, total) - rows.length);
       if (skipped > 0) {
         yield* Effect.logWarning("Mind list skipped undecodable rows.", {
           projectId: input.projectId,
@@ -775,35 +772,7 @@ const makeMindService = Effect.gen(function* () {
       const memories = rows
         .map((row) => toMindMemory(row, nowIso))
         .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-      return skipped > 0
-        ? { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP, skipped }
-        : { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP };
-    });
-
-  // Global list for the project-agnostic Mind view: one SQL page ranked by
-  // the persisted scoring inputs (the repository mirrors effectiveWeight), so
-  // the read stays O(page) no matter how many projects hold memories.
-  const listAll = (): Effect.Effect<MindListResult, MindServiceError> =>
-    Effect.gen(function* () {
-      const nowIso = yield* nowIsoNow;
-      const rows = yield* repository.listAll({ nowIso });
-      const total = yield* repository.countAll();
-      // A shortfall below the expected page means undecodable rows were
-      // skipped read-side (never fatal) — same accounting as `list`.
-      const skipped = Math.max(0, Math.min(MIND_MEMORY_PROJECT_CAP, total) - rows.length);
-      if (skipped > 0) {
-        yield* Effect.logWarning("Mind list skipped undecodable rows.", {
-          shown: rows.length,
-          total,
-          skipped,
-        });
-      }
-      const memories = rows
-        .map((row) => toMindMemory(row, nowIso))
-        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-      return skipped > 0
-        ? { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP, skipped }
-        : { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP };
+      return { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP };
     });
 
   /**
@@ -821,33 +790,22 @@ const makeMindService = Effect.gen(function* () {
         return { memories: [], count: 0, cap: MIND_MEMORY_PROJECT_CAP };
       }
       const matchExpr = buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS));
-      if (input.projectId !== null) {
-        // Scoped: the cap-sized bound fetches every match (a project can never
-        // hold more rows than the cap), so candidates.length is the true total.
-        const candidates = yield* tolerateFtsQueryError(
-          repository.searchCandidates({
-            projectId: input.projectId,
-            matchExpr,
-            limit: MIND_MEMORY_PROJECT_CAP,
-          }),
-          [],
-        );
-        const memories = candidates
-          .map((candidate) => toMindMemory(candidate.memory, nowIso))
-          .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-        return { memories, count: candidates.length, cap: MIND_MEMORY_PROJECT_CAP };
-      }
-      // Global: one weight-ranked FTS page plus one match count — no
-      // per-project scan, so the query stays O(page) like `listAll`.
+      // One weight-ranked FTS page — scoped or global — so the query stays
+      // O(page). A scoped page can never exceed the cap, so its length is the
+      // true total; the global page pairs with one match-count query.
       const candidates = yield* tolerateFtsQueryError(
         repository.searchAllCandidates({
+          ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
           matchExpr,
           nowIso,
           limit: MIND_MEMORY_PROJECT_CAP,
         }),
         [],
       );
-      const count = yield* tolerateFtsQueryError(repository.countSearchMatches({ matchExpr }), 0);
+      const count =
+        input.projectId === undefined
+          ? yield* tolerateFtsQueryError(repository.countSearchMatches({ matchExpr }), 0)
+          : candidates.length;
       const memories = candidates
         .map((candidate) => toMindMemory(candidate.memory, nowIso))
         .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
@@ -862,17 +820,12 @@ const makeMindService = Effect.gen(function* () {
             input.turnId === null
               ? null
               : `setPinned:${input.turnId}:${input.memoryId}:${input.pinned ? "1" : "0"}`;
-          if (operationId !== null) {
-            const receipt = yield* repository.getReceipt({
-              projectId: input.projectId,
-              operationId,
-            });
-            if (Option.isSome(receipt)) {
-              const current = yield* repository.getById({ memoryId: input.memoryId });
-              if (Option.isSome(current) && current.value.projectId === input.projectId) {
-                const nowIso = yield* nowIsoNow;
-                return toMindMemory(current.value, nowIso);
-              }
+          const receipt = yield* findReceipt(input.projectId, operationId);
+          if (Option.isSome(receipt)) {
+            const current = yield* repository.getById({ memoryId: input.memoryId });
+            if (Option.isSome(current) && current.value.projectId === input.projectId) {
+              const nowIso = yield* nowIsoNow;
+              return toMindMemory(current.value, nowIso);
             }
           }
           const existing = yield* repository.getById({ memoryId: input.memoryId });
@@ -987,18 +940,13 @@ const makeMindService = Effect.gen(function* () {
           const textHash = hashMindText(normalized);
           const operationId =
             input.turnId === null ? null : `update:${input.turnId}:${input.memoryId}:${textHash}`;
-          if (operationId !== null) {
-            const receipt = yield* repository.getReceipt({
-              projectId: row.projectId,
-              operationId,
-            });
-            if (Option.isSome(receipt)) {
-              // Durable no-op: re-read the row the first update wrote.
-              const current = yield* repository.getById({ memoryId: input.memoryId });
-              if (Option.isSome(current)) {
-                const nowIso = yield* nowIsoNow;
-                return toMindMemory(current.value, nowIso);
-              }
+          const receipt = yield* findReceipt(row.projectId, operationId);
+          if (Option.isSome(receipt)) {
+            // Durable no-op: re-read the row the first update wrote.
+            const current = yield* repository.getById({ memoryId: input.memoryId });
+            if (Option.isSome(current)) {
+              const nowIso = yield* nowIsoNow;
+              return toMindMemory(current.value, nowIso);
             }
           }
           const clash = yield* repository.findByTextHash({
@@ -1227,7 +1175,6 @@ const makeMindService = Effect.gen(function* () {
     forget,
     status,
     list,
-    listAll,
     search,
     setPinned,
     affirm: (input: MindAffirmRequest) =>

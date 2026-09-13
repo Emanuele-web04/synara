@@ -73,7 +73,10 @@ export const GetMindMemoryInput = Schema.Struct({
 export type GetMindMemoryInput = typeof GetMindMemoryInput.Type;
 
 export const ListMindMemoriesInput = Schema.Struct({
-  projectId: ProjectId,
+  /** Omitted lists one global page across all projects. */
+  projectId: Schema.optional(ProjectId),
+  /** Scoring instant for the SQL effective-weight ranking (see `list`). */
+  nowIso: IsoDateTime,
   // The list surface is bounded by the per-project cap: no unbounded reads.
   limit: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_MEMORY_PROJECT_CAP })),
@@ -93,18 +96,9 @@ export const SearchMindCandidatesInput = Schema.Struct({
 });
 export type SearchMindCandidatesInput = typeof SearchMindCandidatesInput.Type;
 
-export const ListAllMindMemoriesInput = Schema.Struct({
-  /** Scoring instant for the SQL effective-weight ranking (see listAll). */
-  nowIso: IsoDateTime,
-  // The global Mind view is one cap-sized page; the true total comes from
-  // `countAll` so callers can label truncation honestly.
-  limit: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MIND_MEMORY_PROJECT_CAP })),
-  ).pipe(Schema.withDecodingDefault(() => MIND_MEMORY_PROJECT_CAP)),
-});
-export type ListAllMindMemoriesInput = typeof ListAllMindMemoriesInput.Type;
-
 export const SearchAllMindCandidatesInput = Schema.Struct({
+  /** Omitted searches every project (the global Mind view). */
+  projectId: Schema.optional(ProjectId),
   /** Prebuilt FTS5 MATCH expression; build it with {@link buildMindFtsMatchExpr}. */
   matchExpr: Schema.String,
   /** Scoring instant for the SQL effective-weight ranking. */
@@ -245,7 +239,8 @@ export const FindMindJournalOpInput = Schema.Struct({
 export type FindMindJournalOpInput = typeof FindMindJournalOpInput.Type;
 
 export const CountMindMemoriesInput = Schema.Struct({
-  projectId: ProjectId,
+  /** Omitted counts across all projects. */
+  projectId: Schema.optional(ProjectId),
 });
 export type CountMindMemoriesInput = typeof CountMindMemoriesInput.Type;
 
@@ -299,25 +294,17 @@ export interface MindRepositoryShape {
     input: GetMindMemoryInput,
   ) => Effect.Effect<Option.Option<MindMemoryRow>, MindRepositoryError>;
   /**
-   * Lists a project's memories pinned-first, then most recently accessed.
-   * Callers re-rank by effective weight; this order is the deterministic base.
-   * Poison rows (undecodable, e.g. legacy corruption) are skipped, never
-   * fatal: callers reconcile `countByProject` against the shown rows.
+   * One memory page ranked by effective weight in SQL (the formula mirrors
+   * `effectiveWeight` in mind/scoring.ts; a parity test asserts both produce
+   * the same order): one project when `projectId` is set, otherwise one
+   * global page across all projects. Bounded to one project-cap page; the
+   * true total comes from `count`. Poison rows are skipped, never fatal.
    */
-  readonly listByProject: (
+  readonly list: (
     input: ListMindMemoriesInput,
   ) => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
-  /**
-   * One global page across all projects, ranked by effective weight in SQL
-   * (the formula mirrors `effectiveWeight` in mind/scoring.ts; a parity test
-   * asserts both produce the same order). Bounded to one project-cap page;
-   * the true total comes from `countAll`. Poison rows are skipped, never fatal.
-   */
-  readonly listAll: (
-    input: ListAllMindMemoriesInput,
-  ) => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
-  /** True total across all projects — the denominator for the bounded `listAll` page. */
-  readonly countAll: () => Effect.Effect<number, MindRepositoryError>;
+  /** True total for the given scope — the denominator for the bounded `list` page. */
+  readonly count: (input: CountMindMemoriesInput) => Effect.Effect<number, MindRepositoryError>;
   /**
    * FTS5 candidate fetch: joins `mind_memories` against `mind_memories_fts`
    * and returns rows with their raw bm25 rank (best first). The match
@@ -328,10 +315,11 @@ export interface MindRepositoryShape {
     input: SearchMindCandidatesInput,
   ) => Effect.Effect<ReadonlyArray<MindMemoryCandidate>, MindRepositoryError>;
   /**
-   * Global FTS5 candidate fetch: one query over every project, ranked by the
-   * same SQL effective weight as `listAll`, so the bounded page matches what a
-   * merged per-project scan would keep. Pair with `countSearchMatches` for the
-   * true match total.
+   * Weight-ranked FTS5 candidate page: one query ranked by the same SQL
+   * effective weight as `list`, scoped to one project or spanning every
+   * project when `projectId` is omitted. For global searches pair with
+   * `countSearchMatches` for the true match total; a scoped page can never
+   * exceed the cap, so its length is already the true total.
    */
   readonly searchAllCandidates: (
     input: SearchAllMindCandidatesInput,
@@ -398,9 +386,6 @@ export interface MindRepositoryShape {
   readonly findJournalOp: (
     input: FindMindJournalOpInput,
   ) => Effect.Effect<Option.Option<MindJournalEntry>, MindRepositoryError>;
-  readonly countByProject: (
-    input: CountMindMemoriesInput,
-  ) => Effect.Effect<number, MindRepositoryError>;
   readonly getReceipt: (
     input: GetMindReceiptInput,
   ) => Effect.Effect<Option.Option<MindReceiptRow>, MindRepositoryError>;

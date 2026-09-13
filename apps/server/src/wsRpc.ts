@@ -2055,22 +2055,13 @@ const makeWsRpcHandlersLayer = () =>
 
         [WS_METHODS.mindList]: (input) =>
           rpcEffect(
-            // The Mind view is project-agnostic: `listAll` returns one
-            // weight-desc global page (capped, `count` the true total so the
-            // UI can tell when the page is truncated).
-            input.projectId !== undefined
-              ? mindService.list({ projectId: input.projectId })
-              : mindService.listAll(),
+            // Omitted projectId returns one weight-desc global page (capped,
+            // `count` the true total so the UI can tell when it is truncated).
+            mindService.list(input),
             "Failed to list memories",
           ),
         [WS_METHODS.mindSearch]: (input) =>
-          rpcEffect(
-            mindService.search({
-              projectId: input.projectId ?? null,
-              query: input.query,
-            }),
-            "Failed to search memories",
-          ),
+          rpcEffect(mindService.search(input), "Failed to search memories"),
         [WS_METHODS.mindForget]: (input) =>
           rpcEffect(
             mindService

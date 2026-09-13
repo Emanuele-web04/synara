@@ -100,33 +100,22 @@ export const MindSearchInput = Schema.Struct({
 export type MindSearchInput = typeof MindSearchInput.Type;
 
 /**
- * Search result page: `memories` is the matched page (weight-desc, bounded by
- * the shared cap), `count` is the true match total so the UI can signal
- * truncation. Same shape contract as {@link MindListResult}.
- */
-export const MindSearchResult = Schema.Struct({
-  memories: Schema.Array(MindMemory).check(Schema.isMaxLength(MIND_MEMORY_PROJECT_CAP)),
-  count: NonNegativeInt,
-  cap: NonNegativeInt,
-});
-export type MindSearchResult = typeof MindSearchResult.Type;
-
-/**
- * Full Mind list for the UI: every memory of the (project-scoped) store with
- * its server-computed effective weight, the project's total count, and the cap.
+ * Full Mind list for the UI: a weight-desc page of memories with
+ * server-computed effective weights, the scope's total count, and the cap.
  *
  * `count` is always the true total. `memories` is the shown page: it can be
- * shorter than `count` when the global view truncates to one cap-sized page,
- * and `skipped` counts the undecodable (poison) rows dropped during the read.
- * Both fields are optional so older payloads still decode.
+ * shorter than `count` when the global view truncates to one cap-sized page.
  */
 export const MindListResult = Schema.Struct({
   memories: Schema.Array(MindMemory).check(Schema.isMaxLength(MIND_MEMORY_PROJECT_CAP)),
   count: NonNegativeInt,
   cap: NonNegativeInt,
-  skipped: Schema.optional(NonNegativeInt),
 });
 export type MindListResult = typeof MindListResult.Type;
+
+/** Search result page — same shape contract as {@link MindListResult}. */
+export const MindSearchResult = MindListResult;
+export type MindSearchResult = MindListResult;
 
 export const MindForgetInput = Schema.Struct({
   projectId: ProjectId,
