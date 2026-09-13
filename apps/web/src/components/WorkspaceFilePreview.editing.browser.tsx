@@ -520,6 +520,56 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
   }
 });
 
+it("keeps rapid Markdown checkbox edits while a save is in flight", async () => {
+  let finish!: (value: { relativePath: string; version: string }) => void;
+  const writeFile = vi
+    .fn()
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    )
+    .mockResolvedValue({ relativePath: "README.md", version: SAVED_VERSION });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      readFile: vi
+        .fn()
+        .mockResolvedValue(
+          loadedFile({ relativePath: "README.md", contents: "- [ ] first\n- [ ] second\n" }),
+        ),
+      writeFile,
+    },
+  } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+      </QueryClientProvider>,
+    );
+    await expect.element(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    const boxes = page.getByRole("checkbox");
+    await boxes.nth(0).click();
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await boxes.nth(1).click();
+    await expect.element(boxes.nth(0)).toBeChecked();
+    await expect.element(boxes.nth(1)).toBeChecked();
+    finish({ relativePath: "README.md", version: "sha256:first-toggle" });
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          contents: "- [x] first\n- [x] second\n",
+          expectedVersion: "sha256:first-toggle",
+        }),
+      ),
+    );
+  } finally {
+    await cleanup();
+    restoreNativeApi();
+  }
+});
+
 it("keeps oversized and mixed-line-ending files read-only", async () => {
   const readFile = vi
     .fn()

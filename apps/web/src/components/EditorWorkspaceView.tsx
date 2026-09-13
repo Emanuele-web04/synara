@@ -70,8 +70,8 @@ import {
 } from "./chat/workspaceExplorer";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { WorkspaceFileDiffEditorPane } from "./chat/WorkspaceFileDiffEditorPane";
-import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChrome";
-import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
+import { useQueryClient } from "@tanstack/react-query";
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { WorkspaceFileEditorPane } from "./chat/WorkspaceFileEditorPane";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
@@ -412,48 +412,17 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
   const centerFamily = editorCenterModeFamily(centerMode);
-  const [editDirty, setEditDirty] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
-  // An exit requested during an in-flight save waits for it: the write cannot
-  // be cancelled, so "discard" must not be offered until the outcome is known.
-  const [leaveAfterSave, setLeaveAfterSave] = useState<{ run: () => void } | null>(null);
-  // A confirmed in-editor exit runs only once the dirty flag has cleared and
-  // the route-level guard has unmounted; running it synchronously would let
-  // the still-registered guard intercept the already-confirmed navigation.
-  const [confirmedLeaveEdit, setConfirmedLeaveEdit] = useState<{ run: () => void } | null>(null);
-  const inEditMode = centerMode === "fileEdit" || centerMode === "diffEdit";
-  useEffect(() => {
-    if (confirmedLeaveEdit === null || editDirty) {
-      return;
-    }
-    setConfirmedLeaveEdit(null);
-    confirmedLeaveEdit.run();
-  }, [confirmedLeaveEdit, editDirty]);
-  useEffect(() => {
-    if (leaveAfterSave === null || editSaving) {
-      return;
-    }
-    setLeaveAfterSave(null);
-    if (editDirty) {
-      setPendingLeaveEdit(leaveAfterSave);
-      return;
-    }
-    leaveAfterSave.run();
-  }, [editDirty, editSaving, leaveAfterSave]);
+
+  const queryClient = useQueryClient();
+  const leaveRequestRef = useRef(0);
   const guardLeavingEdit = useCallback(
     (run: () => void) => {
-      if (inEditMode && editSaving) {
-        setLeaveAfterSave({ run });
-        return;
-      }
-      if (inEditMode && editDirty) {
-        setPendingLeaveEdit({ run });
-        return;
-      }
-      run();
+      const request = ++leaveRequestRef.current;
+      void flushWorkspaceEditors(queryClient, props.workspaceRoot).then((saved) => {
+        if (saved && request === leaveRequestRef.current) run();
+      });
     },
-    [editDirty, editSaving, inEditMode],
+    [queryClient, props.workspaceRoot],
   );
   useImperativeHandle(props.leaveGuardRef, () => ({ guardLeavingEdit }), [guardLeavingEdit]);
   const activityBarSelection = (item: EditorActivityBarItem) => ({
@@ -721,8 +690,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   filePath={props.editFilePath}
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
-                  onDirtyChange={setEditDirty}
-                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
@@ -734,8 +701,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
-                  onDirtyChange={setEditDirty}
-                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "file" ? (
@@ -794,28 +759,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           </aside>
         </div>
       </div>
-      <WorkspaceFileEditorDiscardDialog
-        open={pendingLeaveEdit !== null}
-        title="Discard unsaved changes?"
-        description="Leaving this file drops the changes you have not saved yet."
-        confirmLabel="Discard changes"
-        onOpenChange={(open) => {
-          if (!open) {
-            setPendingLeaveEdit(null);
-          }
-        }}
-        onConfirm={() => {
-          setPendingLeaveEdit(null);
-          setEditDirty(false);
-          setConfirmedLeaveEdit(pendingLeaveEdit);
-        }}
-      />
-      {/* Stays mounted for the whole edit session: a confirmed exit deferred
-          behind a save must still reach proceed() after the save clears the
-          dirty flag, which would otherwise unmount the guard first. */}
-      {inEditMode ? (
-        <EditorDirtyRouteGuard enabled={editDirty || editSaving} saving={editSaving} />
-      ) : null}
     </div>
   );
 }
