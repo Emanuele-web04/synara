@@ -54,7 +54,7 @@ function mockHandle(
   options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
 ) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
+    pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
     exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
@@ -124,7 +124,7 @@ function hangingSpawnerLayer(input: {
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(2),
+    pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
     exitCode: Effect.never,
     isRunning: Effect.succeed(true),
     kill: () => Effect.sync(input.onKill),
