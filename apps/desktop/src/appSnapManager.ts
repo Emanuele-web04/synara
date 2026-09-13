@@ -51,6 +51,7 @@ const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
 // Permission checks run through the serialized command queue, so a wedged
 // helper must be killed rather than stall every queued read behind it.
 const PERMISSION_COMMAND_TIMEOUT_MS = 10_000;
+const GUIDE_GRANT_WATCH_MAX_MS = 10 * 60 * 1000;
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
 // Late helper answers to timed-out or interrupted picker requests are dropped
 // instead of being consumed as unsolicited hotkey captures.
@@ -388,7 +389,7 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
   }
   if (
     value.type === "permission-guide" &&
-    (value.state === "shown" || value.state === "closed" || value.state === "granted")
+    (value.state === "closed" || value.state === "granted")
   ) {
     return { type: "permission-guide", state: value.state };
   }
@@ -422,6 +423,14 @@ const APP_SNAP_PERMISSION_KIND_GUIDE_PANES: Record<
   inputMonitoring: "input-monitoring",
   screenRecording: "screen-recording",
 };
+
+// Setup sessions walk panes in this order; the queue build sorts and dedupes
+// into it so callers can pass kinds in any order without respawning a pane.
+const APP_SNAP_PERMISSION_SETUP_ORDER: readonly DesktopAppSnapPermissionKind[] = [
+  "accessibility",
+  "inputMonitoring",
+  "screenRecording",
+];
 
 // The helper defaults to this set when no --permission selectors are passed,
 // so the legacy check can keep running against helpers that predate the flag.
@@ -502,13 +511,16 @@ export class DesktopAppSnapManager {
   // so the manager re-checks through a newly spawned helper on a timer and
   // closes the coach itself when the pane flips.
   #activeGuidePane: DesktopAppSnapSettingsPane | null = null;
-  #guideGrantWatch: { child: AppSnapHelperProcess; timer: NodeJS.Timeout } | null = null;
+  #guideGrantWatch: {
+    child: AppSnapHelperProcess;
+    timer: NodeJS.Timeout;
+    startedAt: number;
+    pending: boolean;
+  } | null = null;
   // A setup session guides each missing pane in turn. A renderer-driven guide
   // leaves this queue empty, so its close never spawns a follow-on coach.
   #guidePaneQueue: DesktopAppSnapSettingsPane[] = [];
   #guideSessionKinds: readonly DesktopAppSnapPermissionKind[] = [];
-  // The grant watch polls every 800ms; dedupe keeps a steady-state guide from
-  // spamming unchanged snapshots over IPC on every tick.
   #lastEmittedStateJson: string | null = null;
   #guideSessionOpensSettings = false;
 
@@ -660,7 +672,13 @@ export class DesktopAppSnapManager {
     if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
       return this.getState();
     }
-    this.#guidePaneQueue = permissions.map((kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]);
+    this.#guidePaneQueue = [...new Set(permissions)]
+      .sort(
+        (left, right) =>
+          APP_SNAP_PERMISSION_SETUP_ORDER.indexOf(left) -
+          APP_SNAP_PERMISSION_SETUP_ORDER.indexOf(right),
+      )
+      .map((kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]);
     this.#guideSessionKinds = [...permissions];
     this.#guideSessionOpensSettings = true;
     this.#advancePermissionGuide();
@@ -900,30 +918,50 @@ export class DesktopAppSnapManager {
    * so without this the coach would stay up after the user flips the toggle.
    * Every tick also re-emits the permission snapshot, which keeps the renderer
    * badges live while a guide is on screen.
+   * The grant watch polls every 800ms; dedupe keeps a steady-state guide from
+   * spamming unchanged snapshots over IPC on every tick.
    */
   #startGuideGrantWatch(child: AppSnapHelperProcess): void {
     this.#stopGuideGrantWatch();
     const timer = setInterval(() => {
-      if (this.#guideProcess !== child) {
+      const watch = this.#guideGrantWatch;
+      if (this.#guideProcess !== child || !watch || watch.child !== child) {
         this.#stopGuideGrantWatch(child);
         return;
       }
+      if (Date.now() - watch.startedAt >= GUIDE_GRANT_WATCH_MAX_MS) {
+        this.#stopGuideGrantWatch(child);
+        this.#lastGuideState = "closed";
+        this.#options.onPermissionGuideState("closed");
+        this.#guidePaneQueue = [];
+        this.#guideSessionKinds = [];
+        this.#guideSessionOpensSettings = false;
+        this.#emitState();
+        this.#stopGuideProcess();
+        return;
+      }
+      if (watch.pending) return;
       const pane = this.#activeGuidePane;
       if (!pane) return;
       const kinds =
         this.#guideSessionKinds.length > 0
           ? this.#guideSessionKinds
           : [APP_SNAP_GUIDE_PANE_PERMISSION_KINDS[pane]];
+      watch.pending = true;
       void this.#runPermissionCommand("--check-permissions", kinds)
         .then(() => {
           if (this.#guideProcess !== child || this.#activeGuidePane !== pane) return;
           if (this.#panePermission(pane) !== "granted") return;
           this.#onGuidePaneGranted(child);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          const latest = this.#guideGrantWatch;
+          if (latest && latest.child === child) latest.pending = false;
+        });
     }, 800);
     timer.unref();
-    this.#guideGrantWatch = { child, timer };
+    this.#guideGrantWatch = { child, timer, startedAt: Date.now(), pending: false };
   }
 
   #stopGuideGrantWatch(child?: AppSnapHelperProcess): void {

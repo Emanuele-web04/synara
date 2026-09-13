@@ -1494,7 +1494,7 @@ describe("AppSnap permission guide", () => {
     try {
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
       await flushPromises();
-      expect(onPermissionGuideState).toHaveBeenCalledWith("shown");
+      expect(onPermissionGuideState).not.toHaveBeenCalledWith("shown");
       guideChild.stdout.write(
         `${JSON.stringify({ type: "permission-guide", state: "granted" })}\n`,
       );
@@ -1537,6 +1537,7 @@ describe("AppSnap permission guide", () => {
     // Accessibility entries cannot be dragged into the pane's list, so opening
     // the accessibility guide must fire the pane's own macOS request for the
     // app to show up there at all.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-ax-"));
     const guideChild = createFakeChildProcess();
     const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
@@ -1577,7 +1578,21 @@ describe("AppSnap permission guide", () => {
         expect.arrayContaining(["--permission-guide", "--pane", "accessibility"]),
         expect.any(Object),
       );
+      // Renderer parity: the AX prompt fires exactly once. Later watch ticks
+      // re-check via --check-permissions (deduped while in flight) and never
+      // re-issue the macOS request dialog.
+      const requestCalls = () =>
+        spawn.mock.calls.filter(([, args]) =>
+          (args as readonly string[]).includes("--request-permissions"),
+        );
+      expect(requestCalls()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      expect(requestCalls()).toHaveLength(1);
     } finally {
+      vi.useRealTimers();
       manager.dispose();
       rmSync(captureDirectory, { recursive: true, force: true });
     }
@@ -1586,7 +1601,10 @@ describe("AppSnap permission guide", () => {
   it("closes the guide when a fresh check sees the grant the coach cannot", async () => {
     // Accessibility grants never reach an already-running process, so the
     // coach's own poll stays false; the manager's fresh-helper watch must
-    // detect the grant and retire the coach instead.
+    // detect the grant and retire the coach instead. Mock timers drive the
+    // 800ms tick deterministically; in-flight dedup keeps overlapping ticks
+    // from queueing a second check while the first is still pending.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-watch-"));
     const guideChild = createFakeChildProcess();
     const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
@@ -1617,11 +1635,149 @@ describe("AppSnap permission guide", () => {
     });
     try {
       manager.showPermissionGuide("accessibility");
-      await vi.waitFor(() => expect(onPermissionGuideState).toHaveBeenCalledWith("granted"), {
-        timeout: 4000,
-      });
+      await flushPromises();
+      expect(onPermissionGuideState).not.toHaveBeenCalledWith("granted");
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      await flushPromises();
+      expect(onPermissionGuideState).toHaveBeenCalledWith("granted");
       expect(lastStdinLine(guideChild)).toBe("close");
     } finally {
+      vi.useRealTimers();
+      manager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("skips overlapping watch ticks while a grant check is in flight", async () => {
+    // In-flight dedup: the second 800ms tick must not spawn a second helper
+    // while the first check has not answered yet; once it resolves, the next
+    // tick may poll again.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-dedup-"));
+    const guideChild = createFakeChildProcess();
+    const checkChildren: FakeChildProcess[] = [];
+    let releaseFirstCheck!: () => void;
+    const firstCheckGate = new Promise<void>((resolve) => {
+      releaseFirstCheck = resolve;
+    });
+    const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
+      if (args.includes("--permission-guide")) return guideChild;
+      const checkChild = createFakeChildProcess();
+      checkChildren.push(checkChild);
+      if (checkChildren.length === 1) {
+        void firstCheckGate.then(() => {
+          checkChild.stdout.end(
+            `${JSON.stringify({ type: "permissions", inputMonitoring: "denied" })}\n`,
+          );
+          checkChild.stderr.end();
+          checkChild.emit("close", 0, null);
+        });
+      } else {
+        setImmediate(() => {
+          checkChild.stdout.end(
+            `${JSON.stringify({ type: "permissions", inputMonitoring: "denied" })}\n`,
+          );
+          checkChild.stderr.end();
+          checkChild.emit("close", 0, null);
+        });
+      }
+      return checkChild;
+    });
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara Test",
+      appBundlePath: "/Applications/Synara Test.app",
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      onPermissionGuideState: vi.fn(),
+    });
+    try {
+      manager.showPermissionGuide("input-monitoring");
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      expect(checkChildren).toHaveLength(1);
+      // Second tick fires while the first check is still pending: no new spawn.
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      expect(checkChildren).toHaveLength(1);
+      releaseFirstCheck();
+      await flushPromises();
+      await flushPromises();
+      // Pending cleared: the next tick polls again.
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      await flushPromises();
+      expect(checkChildren).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      manager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("closes an ungranted guide after the 10-minute watch bound", async () => {
+    // The grant watch must not poll forever: after 10 minutes without a grant
+    // it stops, emits closed honestly via the existing guide-state plumbing,
+    // and pushes the current snapshot via the existing onState path. No new IPC.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-bound-"));
+    const guideChild = createFakeChildProcess();
+    const onState = vi.fn();
+    const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
+      if (args.includes("--permission-guide")) return guideChild;
+      const checkChild = createFakeChildProcess();
+      setImmediate(() => {
+        checkChild.stdout.end(
+          `${JSON.stringify({ type: "permissions", accessibility: "denied" })}\n`,
+        );
+        checkChild.stderr.end();
+        checkChild.emit("close", 0, null);
+      });
+      return checkChild;
+    });
+    const onPermissionGuideState = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appDisplayName: "Synara Test",
+      appBundlePath: "/Applications/Synara Test.app",
+      spawn,
+      onState,
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      onPermissionGuideState,
+    });
+    try {
+      manager.showPermissionGuide("accessibility");
+      await flushPromises();
+      expect(onPermissionGuideState).not.toHaveBeenCalledWith("closed");
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      await flushPromises();
+      await flushPromises();
+      expect(onPermissionGuideState).toHaveBeenCalledWith("closed");
+      expect(lastStdinLine(guideChild)).toBe("close");
+      const closedCalls = onPermissionGuideState.mock.calls.filter(
+        ([state]) => state === "closed",
+      ).length;
+      // Bound cleared on stop: further time never re-emits.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      await flushPromises();
+      expect(onPermissionGuideState.mock.calls.filter(([state]) => state === "closed").length).toBe(
+        closedCalls,
+      );
+    } finally {
+      vi.useRealTimers();
       manager.dispose();
       rmSync(captureDirectory, { recursive: true, force: true });
     }
@@ -1693,7 +1849,10 @@ describe("AppSnap permission setup sessions", () => {
     const { manager, guideChildren, requests, openSettingsPane, dispose } =
       createSessionManager(state);
     try {
-      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      // Callers may pass kinds out of order with dupes: the queue build sorts
+      // into [accessibility, inputMonitoring, screenRecording] and dedupes, so
+      // a single queue with its shift-only consumer still walks each pane once.
+      await manager.startPermissionSetup(["screenRecording", "accessibility", "screenRecording"]);
       await flushPromises();
       // Only the first missing pane is up: its settings page, its OS request,
       // and its coach. The Screen Recording request must not fire yet.

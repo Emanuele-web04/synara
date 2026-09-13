@@ -329,7 +329,7 @@ export function AppSnapPermissionSection({
       })}
       <SettingsRow
         title="Permission status"
-        description="Grant each permission with the steps above."
+        description="Grant each permission with the steps above. If you take longer than 10 minutes, press Set up again."
         control={
           <Button
             type="button"

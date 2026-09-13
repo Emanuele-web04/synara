@@ -23,6 +23,10 @@ export function AppSnapPermissionGuide(props: {
   onRestart: () => void;
 }) {
   const app = props.appDisplayName;
+  const step2 =
+    props.pane === "screen-recording"
+      ? `No dialog will appear. If ${app} is missing, click +, choose Applications, add it, then turn on.`
+      : `Find ${app} in the list and turn on its toggle. Entries cannot be dragged — use the toggle.`;
   const steps = [
     <Button
       key="open-settings"
@@ -33,7 +37,7 @@ export function AppSnapPermissionGuide(props: {
     >
       {`Open ${GUIDE_PANE_LABELS[props.pane]} settings`}
     </Button>,
-    `Find ${app} in the list and turn on its toggle.`,
+    step2,
     `If ${app} is missing, click +, choose Applications, and add it.`,
   ];
 
