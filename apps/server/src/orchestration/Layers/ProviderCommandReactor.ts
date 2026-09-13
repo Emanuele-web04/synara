@@ -1824,6 +1824,37 @@ const make = Effect.gen(function* () {
           nativeResumeSucceeded: false,
           nativeResumeFailed: false,
           nativeSessionRestarted: false,
+          computerControlRestartDeferred: false,
+          forkComputerControl: undefined,
+        };
+      }
+
+      // P1 activation stickiness: a computer-control-only change never restarts
+      // under a live turn. Tearing the session down mid-turn would corrupt the
+      // owner (retargeted input, lost tool catalog negotiation); the change
+      // waits for the terminal turn or session tombstone instead, and the
+      // queued turn behind it dispatches only after that boundary. The caller
+      // keeps the previously provisioned flag cached so the next turn still
+      // observes the change and restarts between turns. Liveness comes from
+      // the runtime, never the projection: terminal-driven drains dispatch
+      // the queued turn before the projector clears the session row, so a
+      // projected running turn here is stale, not live.
+      if (
+        computerControlChanged &&
+        !runtimeModeChanged &&
+        !providerChanged &&
+        !shouldRestartForModelChange &&
+        !shouldRestartForModelSelectionChange &&
+        (yield* hasLiveProviderTurn(threadId))
+      ) {
+        return {
+          activeSessionBeforeEnsure,
+          activeSession: reusableSession,
+          nativeResumeSucceeded: false,
+          nativeResumeFailed: false,
+          nativeSessionRestarted: false,
+          computerControlRestartDeferred: true,
+          forkComputerControl: undefined,
         };
       }
 
@@ -1880,14 +1911,34 @@ const make = Effect.gen(function* () {
         nativeResumeFailed:
           restartedOutcome.nativeResumeAttempted && !restartedOutcome.nativeResumeSucceeded,
         nativeSessionRestarted: true,
+        computerControlRestartDeferred: false,
+        forkComputerControl: undefined,
       };
     }
 
     let bootstrapTranscriptIfResumeFails = false;
     if (providerService.forkThread && thread.forkSourceThreadId) {
+      // P1 activation stickiness: forks mint fresh control state. The child
+      // starts at generation 0 with chat intent if and only if the parent's
+      // chat intent is live; the fork command itself carries no computer
+      // options, so deriving from options would always resolve to off and
+      // silently drop an active computer task at the fork boundary.
+      const parentCanContinueChatControl =
+        Option.isSome(computerService) &&
+        computerService.value.manager.canContinueChatControl(thread.forkSourceThreadId);
+      const forkComputerControl = Option.isSome(computerService)
+        ? yield* Effect.promise(() =>
+            computerService.value.manager.admitControl(
+              threadId,
+              parentCanContinueChatControl ? "chat" : "off",
+              0,
+            ),
+          )
+        : (options?.enableComputerControl ?? false);
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
         sourceThreadId: thread.forkSourceThreadId,
+        enableComputerControl: forkComputerControl,
       });
       if (forked) {
         if (
@@ -1900,9 +1951,7 @@ const make = Effect.gen(function* () {
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
-        if (options?.enableComputerControl !== undefined) {
-          threadSessionComputerControl.set(threadId, options.enableComputerControl);
-        }
+        threadSessionComputerControl.set(threadId, forkComputerControl);
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -1924,6 +1973,8 @@ const make = Effect.gen(function* () {
           nativeResumeSucceeded: false,
           nativeResumeFailed: false,
           nativeSessionRestarted: false,
+          computerControlRestartDeferred: false,
+          forkComputerControl,
         };
       }
       // An existing fork also returns null: wait for its native resume result
@@ -2014,6 +2065,8 @@ const make = Effect.gen(function* () {
       nativeResumeSucceeded: startOutcome.nativeResumeSucceeded,
       nativeResumeFailed: startOutcome.nativeResumeFailed,
       nativeSessionRestarted: true,
+      computerControlRestartDeferred: false,
+      forkComputerControl: undefined,
     };
   });
 
@@ -2146,22 +2199,45 @@ const make = Effect.gen(function* () {
       return;
     }
     const activation = computerActivationMetadata(input);
+    // P1 activation stickiness. A dispatch-path "off" is the composer's
+    // resolved default on every ordinary turn (the composer sends a resolved
+    // mode on each turn and has no persistent switch), so it is
+    // indistinguishable from an explicit chip-off on the wire and must never
+    // clear durable intent: admitControl("off") would wipe chatGeneration via
+    // recordChatIntent(false). Ordinary off turns inherit the live chat intent
+    // instead; only explicit offs clear, through Stop (interruptProviderTurn)
+    // and the revoke/disable paths, never here. A frozen single-shot request
+    // without a live user invocation likewise stays single-shot: only a real
+    // invocation (explicitInvocation) promotes a request to durable chat.
+    const explicitInvocation =
+      input.turnKind !== "goal-continuation" &&
+      (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+      isComputerInvocation({ text: input.messageText, skills: input.skills });
     const enableComputerControl = Option.isNone(computerService)
       ? activation.enableComputerControl
       : input.turnKind === "goal-continuation"
-        ? computerService.value.manager.canContinueChatControl(input.threadId)
-        : input.dispatchMode === "steer" && activation.computerControlMode === "off"
-          ? false // A consumed request chip does not change the live turn's intent.
-          : yield* Effect.promise(() =>
+        ? isComputerInvocation({ text: input.messageText, skills: input.skills })
+          ? yield* Effect.promise(() =>
               computerService.value.manager.admitControl(
                 input.threadId,
                 activation.computerControlMode,
                 activation.computerControlGeneration,
-                input.turnKind !== "goal-continuation" &&
-                  (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
-                  isComputerInvocation({ text: input.messageText, skills: input.skills }),
+                true,
               ),
-            );
+            )
+          : computerService.value.manager.canContinueChatControl(input.threadId)
+        : input.dispatchMode === "steer" && activation.computerControlMode === "off"
+          ? false // A consumed request chip does not change the live turn's intent.
+          : activation.computerControlMode === "off"
+            ? computerService.value.manager.canContinueChatControl(input.threadId)
+            : yield* Effect.promise(() =>
+                computerService.value.manager.admitControl(
+                  input.threadId,
+                  activation.computerControlMode,
+                  activation.computerControlGeneration,
+                  explicitInvocation,
+                ),
+              );
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const selectedProvider =
@@ -2178,6 +2254,8 @@ const make = Effect.gen(function* () {
       nativeResumeSucceeded,
       nativeResumeFailed,
       nativeSessionRestarted,
+      computerControlRestartDeferred,
+      forkComputerControl,
     } = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -2193,8 +2271,14 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
-    if (input.dispatchMode !== "steer") {
-      threadSessionComputerControl.set(input.threadId, enableComputerControl);
+    if (input.dispatchMode !== "steer" && computerControlRestartDeferred !== true) {
+      // A fork provisions the parent-derived flag, not this turn's resolved
+      // value; a deferred control-only restart provisions nothing yet. In both
+      // cases the resolved value must not overwrite the authoritative cache.
+      threadSessionComputerControl.set(
+        input.threadId,
+        forkComputerControl ?? enableComputerControl,
+      );
     }
     // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
     // mentioned-thread context is appended after the assembled provider input
@@ -3814,6 +3898,31 @@ const make = Effect.gen(function* () {
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
     if (!thread) {
       return;
+    }
+
+    // P1 activation stickiness: Stop is an explicit off. A crowded inbox of
+    // queued and steered turns must not resurrect computer control after the
+    // user halted it, so clear the durable chat intent up front. Best-effort:
+    // a consent-store failure must not fail the stop itself (that would leave
+    // the turn running with the button looking dead); it is logged and the
+    // interrupt proceeds. The generation is irrelevant for "off": admission is
+    // unconditionally disabled and the intent unconditionally cleared.
+    if (Option.isSome(computerService)) {
+      yield* Effect.promise(() =>
+        computerService.value.manager.admitControl(input.threadId, "off", 0),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning(
+                "provider command reactor could not clear computer intent on stop",
+                {
+                  threadId: input.threadId,
+                  cause: Cause.pretty(cause),
+                },
+              ).pipe(Effect.asVoid),
+        ),
+      );
     }
 
     const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>

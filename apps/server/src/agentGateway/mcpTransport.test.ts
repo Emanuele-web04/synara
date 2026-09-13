@@ -62,10 +62,22 @@ function makeThread(threadId: string): OrchestrationThreadShell {
   };
 }
 
+export interface McpTransportTestDenial {
+  readonly toolName: string;
+  readonly requiredCapability: string;
+  readonly callerThreadId: string;
+  readonly callerTurnId: string | null;
+}
+
 function makeTransport(input: {
   readonly tools: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
   readonly leaseCapabilities?: AgentGatewayCapabilityInput;
+  /** Thread ids that hold a session lease but no longer exist in the snapshot. */
+  readonly ghostThreads?: ReadonlyArray<string>;
+  /** Computer family names threaded to the transport (absent from tools). */
+  readonly computerToolNames?: ReadonlyArray<string>;
+  readonly onCapabilityDenied?: (denial: McpTransportTestDenial) => Effect.Effect<void>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
   let nextSession = 0;
@@ -138,6 +150,9 @@ function makeTransport(input: {
   input.threads.forEach((thread, index) => {
     startRuntime(String(thread.id), `token-${index + 1}`);
   });
+  (input.ghostThreads ?? []).forEach((threadId, index) => {
+    startRuntime(threadId, `token-ghost-${index + 1}`);
+  });
   const snapshotQuery = {
     getThreadShellById: (threadId: ThreadId) =>
       Effect.succeed(Option.fromNullishOr(threads.get(String(threadId)))),
@@ -152,6 +167,13 @@ function makeTransport(input: {
       const thread = threads.get(threadId);
       return thread ? Effect.succeed(thread) : Effect.fail(new Error("missing thread"));
     },
+    ...(input.onCapabilityDenied ? { onCapabilityDenied: input.onCapabilityDenied } : {}),
+    ...(input.computerToolNames
+      ? {
+          isComputerToolName: (toolName: string) => input.computerToolNames!.includes(toolName),
+          computerControlCapability: "computer:control" as const,
+        }
+      : {}),
   });
   return Object.assign(transport, {
     resolveToken: (token: string) => tokenAliases.get(token) ?? token,
@@ -608,6 +630,217 @@ describe("makeAgentGatewayMcpTransport tools/list", () => {
       // A tool that declares no _meta must not gain an empty one: an MCP client
       // is entitled to treat the key's absence as "no hints".
       assert.isFalse("_meta" in tools[0]!);
+    }),
+  );
+});
+
+const toolCallBody = (name: string, args: Record<string, unknown> = {}) => ({
+  jsonrpc: "2.0",
+  id: `call-${name}`,
+  method: "tools/call",
+  params: { name, arguments: args },
+});
+
+const toolResultErrorOf = (response: { body?: unknown }): Record<string, unknown> => {
+  const body = response.body as { result: { content: Array<{ text: string }> } };
+  return JSON.parse(body.result.content[0]!.text) as Record<string, unknown>;
+};
+
+const rpcErrorOf = (response: { body?: unknown }): { code: number; message: string } =>
+  (response.body as { error: { code: number; message: string } }).error;
+
+const authorityDataOf = (response: { body?: unknown }): { code: string; retry: string } =>
+  (response.body as { data: { code: string; retry: string } }).data;
+
+describe("makeAgentGatewayMcpTransport capability truth", () => {
+  const computerClick: ToolEntry = {
+    definition: {
+      name: "computer_click",
+      description: "Click",
+      inputSchema: { type: "object" },
+    },
+    requiredCapability: "computer:control",
+    requiresActiveTurn: true,
+    handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "clicked" }] }),
+  };
+
+  it.effect(
+    "checks turn authority before capability and keeps the denial hook silent on inactive turns",
+    () =>
+      Effect.gen(function* () {
+        let handlerCalls = 0;
+        const denials: Array<McpTransportTestDenial> = [];
+        const transport = makeTransport({
+          threads: [makeThread("thread-order")],
+          tools: [
+            {
+              ...computerClick,
+              handler: () => {
+                handlerCalls += 1;
+                return Effect.succeed({ content: [{ type: "text" as const, text: "clicked" }] });
+              },
+            },
+          ],
+          onCapabilityDenied: (denial) =>
+            Effect.sync(() => {
+              denials.push(denial);
+            }),
+        });
+        // Active turn, missing capability: deny and surface exactly once.
+        const denied = yield* post(transport, "token-1", toolCallBody("computer_click"));
+        assert.equal(denied.status, 200);
+        assert.equal(
+          (toolResultErrorOf(denied).error as { code: string }).code,
+          "capability_denied",
+        );
+        assert.equal(denials.length, 1);
+        assert.equal(handlerCalls, 0);
+        // Inactive turn, same missing capability: authority wins, hook stays silent.
+        transport.setThreadTurnState("thread-order", "completed");
+        const inactive = yield* post(transport, "token-1", {
+          ...toolCallBody("computer_click"),
+          id: "call-computer_click-inactive",
+        });
+        assert.equal(inactive.status, 200);
+        assert.equal(
+          (toolResultErrorOf(inactive).error as { code: string }).code,
+          "caller_turn_inactive",
+        );
+        assert.equal(denials.length, 1);
+        assert.equal(handlerCalls, 0);
+      }),
+  );
+
+  it.effect("leaves entirely-unknown tool names as Unknown-tool", () =>
+    Effect.gen(function* () {
+      const denials: Array<McpTransportTestDenial> = [];
+      const transport = makeTransport({
+        threads: [makeThread("thread-unknown")],
+        tools: [computerClick],
+        computerToolNames: ["computer_click"],
+        onCapabilityDenied: (denial) =>
+          Effect.sync(() => {
+            denials.push(denial);
+          }),
+      });
+      const response = yield* post(transport, "token-1", toolCallBody("synara_frobnicate"));
+      assert.equal(response.status, 200);
+      const error = rpcErrorOf(response);
+      assert.equal(error.code, -32602);
+      assert.include(error.message, 'Unknown tool "synara_frobnicate".');
+      assert.deepEqual(denials, []);
+    }),
+  );
+
+  it.effect("denies an in-catalog computer name with the hook and explicit capability", () =>
+    Effect.gen(function* () {
+      const denials: Array<McpTransportTestDenial> = [];
+      const transport = makeTransport({
+        threads: [makeThread("thread-denied")],
+        // The computer tool is known to the family but absent from this catalog.
+        tools: [],
+        computerToolNames: ["computer_click"],
+        onCapabilityDenied: (denial) =>
+          Effect.sync(() => {
+            denials.push(denial);
+          }),
+      });
+      const response = yield* post(transport, "token-1", toolCallBody("computer_click"));
+      assert.equal(response.status, 200);
+      const error = toolResultErrorOf(response).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "computer:control");
+      assert.deepEqual(denials, [
+        {
+          toolName: "computer_click",
+          requiredCapability: "computer:control",
+          callerThreadId: "thread-denied",
+          callerTurnId: "turn-thread-denied",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("keeps the denial hook silent for an unknown computer tool on an inactive turn", () =>
+    Effect.gen(function* () {
+      const denials: Array<McpTransportTestDenial> = [];
+      const transport = makeTransport({
+        threads: [makeThread("thread-quiet")],
+        tools: [],
+        computerToolNames: ["computer_click"],
+        onCapabilityDenied: (denial) =>
+          Effect.sync(() => {
+            denials.push(denial);
+          }),
+      });
+      transport.setThreadTurnState("thread-quiet", "completed");
+      const response = yield* post(transport, "token-1", toolCallBody("computer_click"));
+      assert.equal(response.status, 200);
+      assert.equal(
+        (toolResultErrorOf(response).error as { code: string }).code,
+        "caller_turn_inactive",
+      );
+      assert.deepEqual(denials, []);
+    }),
+  );
+
+  it.effect("reports structured authority codes with retry rules and never fires the hook", () =>
+    Effect.gen(function* () {
+      const denials: Array<McpTransportTestDenial> = [];
+      const transport = makeTransport({
+        threads: [
+          makeThread("thread-authority"),
+          {
+            ...makeThread("thread-mismatch"),
+            session: {
+              threadId: ThreadId.makeUnsafe("thread-mismatch"),
+              status: "running",
+              providerName: "claudeAgent",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.makeUnsafe("turn-thread-mismatch"),
+              lastError: null,
+              updatedAt: NOW,
+            },
+          },
+        ],
+        ghostThreads: ["thread-ghost"],
+        tools: [computerClick],
+        computerToolNames: ["computer_click"],
+        onCapabilityDenied: (denial) =>
+          Effect.sync(() => {
+            denials.push(denial);
+          }),
+      });
+      const listBody = { jsonrpc: "2.0", id: "list", method: "tools/list" };
+      const missing = yield* transport({ authorizationHeader: undefined, body: listBody });
+      assert.equal(missing.status, 401);
+      assert.deepEqual(authorityDataOf(missing), {
+        code: "revoked-token",
+        retry: "reauthenticate",
+      });
+      assert.include(rpcErrorOf(missing).message, "Do not retry with this token");
+      const invalid = yield* transport({ authorizationHeader: "Bearer nope", body: listBody });
+      assert.equal(invalid.status, 401);
+      assert.deepEqual(authorityDataOf(invalid), {
+        code: "revoked-token",
+        retry: "reauthenticate",
+      });
+      const gone = yield* post(transport, "token-ghost-1", listBody);
+      assert.equal(gone.status, 401);
+      assert.deepEqual(authorityDataOf(gone), { code: "thread-gone", retry: "do-not-retry" });
+      assert.include(rpcErrorOf(gone).message, "Do not retry");
+      // token-2 leases thread-mismatch as codex, but the live session names claudeAgent.
+      const mismatch = yield* post(transport, "token-2", listBody);
+      assert.equal(mismatch.status, 401);
+      assert.deepEqual(authorityDataOf(mismatch), {
+        code: "provider-mismatch",
+        retry: "re-lease",
+      });
+      assert.include(rpcErrorOf(mismatch).message, "Do not retry with this token");
+      assert.deepEqual(denials, []);
     }),
   );
 });

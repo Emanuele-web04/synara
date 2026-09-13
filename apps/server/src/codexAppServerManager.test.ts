@@ -1724,6 +1724,7 @@ describe("startSession", () => {
           provider: "codex",
           runtimeMode: "full-access",
           cwd: missingCwd,
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
           providerOptions: {
             codex: {
               binaryPath: process.execPath,
@@ -1779,6 +1780,7 @@ describe("startSession", () => {
           provider: "codex",
           runtimeMode: "full-access",
           cwd: process.cwd(),
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         }),
       ).rejects.toThrow(
         "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
@@ -1824,6 +1826,7 @@ describe("startSession", () => {
           provider: "codex",
           runtimeMode: "auto",
           cwd: process.cwd(),
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         }),
       ).rejects.toThrow("Codex Auto version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
@@ -5119,6 +5122,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
         provider: "codex",
         cwd: workspaceDir,
         runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         providerOptions: {
           codex: {
             ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
@@ -5154,6 +5158,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
         cwd: workspaceDir,
         runtimeMode: "approval-required",
         resumeCursor: firstSession.resumeCursor,
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         providerOptions: {
           codex: {
             ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),

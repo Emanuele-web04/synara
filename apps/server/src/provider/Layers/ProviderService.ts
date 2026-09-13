@@ -957,6 +957,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       readonly provider: ProviderRuntimeBinding["provider"];
       readonly turnId: string;
       readonly generation: number;
+      /** Lifecycle generation that owned the dispatch; persisted atomically. */
+      readonly lifecycleGeneration?: string;
       readonly resumeCursor?: unknown;
       readonly modelSelection?: unknown;
       readonly lastRuntimeEvent: string;
@@ -1049,6 +1051,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const enableComputerControl =
             Option.isSome(existingBinding) &&
             readPersistedComputerControl(existingBinding.value.runtimePayload);
+          // The row must keep the generation that owned this dispatch alongside
+          // the computer-control flag, atomically with the turn intent write.
+          // A retained older dispatch settling after a lifecycle rotation must
+          // never regress the row: only persist a generation that is still
+          // current.
+          const dispatchLifecycleGeneration =
+            input.lifecycleGeneration !== undefined &&
+            lifecycle.currentGeneration(input.threadId) === input.lifecycleGeneration
+              ? input.lifecycleGeneration
+              : undefined;
           const completedBeforePersistence = consumeRecentlyCompletedTurn(
             input.threadId,
             input.turnId,
@@ -1070,6 +1082,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               threadId: input.threadId,
               provider: input.provider,
               status: "stopped",
+              ...(dispatchLifecycleGeneration !== undefined
+                ? { lifecycleGeneration: dispatchLifecycleGeneration }
+                : {}),
               ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
               ...(input.modelSelection !== undefined || enableComputerControl
                 ? {
@@ -1094,6 +1109,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             threadId: input.threadId,
             provider: input.provider,
             status: "running",
+            ...(dispatchLifecycleGeneration !== undefined
+              ? { lifecycleGeneration: dispatchLifecycleGeneration }
+              : {}),
             ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             runtimePayload: {
               ...(input.modelSelection !== undefined
@@ -2009,6 +2027,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const previousComputerControl = readPersistedComputerControl(
               persistedBinding.runtimePayload,
             );
+            // The recycled flag is a (value, generation) pair with the restored
+            // lifecycle generation, not the old bool alone: when the failed
+            // replacement turn carried an explicit computer-control value, that
+            // value is fresher than the pre-switch row (the reactor just
+            // admitted it against live durable intent) and wins. Otherwise the
+            // previous binding's value is recycled with its generation.
+            const restoredComputerControl = input.enableComputerControl ?? previousComputerControl;
             const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
             yield* previousAdapter.stopSession(threadId);
 
@@ -2035,7 +2060,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         ...(previousProviderOptions !== undefined
                           ? { providerOptions: previousProviderOptions }
                           : {}),
-                        ...(previousComputerControl ? { enableComputerControl: true } : {}),
+                        ...(restoredComputerControl ? { enableComputerControl: true } : {}),
                         ...(persistedBinding.resumeCursor !== undefined
                           ? { resumeCursor: persistedBinding.resumeCursor }
                           : {}),
@@ -2052,7 +2077,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           lifecycleGeneration: previousGeneration,
                           modelSelection: previousModelSelection,
                           providerOptions: previousProviderOptions,
-                          enableComputerControl: previousComputerControl,
+                          enableComputerControl: restoredComputerControl,
                         }),
                       );
                       // The restored runtime stamps its events with the exact
@@ -2266,6 +2291,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: routed.adapter.provider,
               turnId: String(turn.turnId),
               generation,
+              ...(routed.lifecycleGeneration !== undefined
+                ? { lifecycleGeneration: routed.lifecycleGeneration }
+                : {}),
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
               ...(input.modelSelection !== undefined
                 ? { modelSelection: input.modelSelection }
@@ -2328,6 +2356,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: routed.adapter.provider,
               turnId: String(turn.turnId),
               generation,
+              ...(routed.lifecycleGeneration !== undefined
+                ? { lifecycleGeneration: routed.lifecycleGeneration }
+                : {}),
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
               ...(input.modelSelection !== undefined
                 ? { modelSelection: input.modelSelection }
@@ -2369,6 +2400,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: routed.adapter.provider,
               turnId: String(turn.turnId),
               generation,
+              ...(routed.lifecycleGeneration !== undefined
+                ? { lifecycleGeneration: routed.lifecycleGeneration }
+                : {}),
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
               lastRuntimeEvent: "provider.startReview",
             };

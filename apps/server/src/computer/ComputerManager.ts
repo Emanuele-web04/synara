@@ -1,4 +1,5 @@
 import { ComputerControlState } from "./ComputerControlState.ts";
+import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { CursorActivity } from "./cursorActivity.ts";
 import { waitForWindow } from "./waitForWindow.ts";
 import {
@@ -87,6 +88,15 @@ export const COMPUTER_FRAME_SOCKET_BUDGET_BYTES = 2 * 1024 * 1024;
  * session is being torn down anyway.
  */
 export const COMPUTER_LEASE_IDLE_MS = 300_000;
+
+/**
+ * How long the enable path waits for in-flight stops and the durable
+ * preference write before giving up. The write is a local file store and a
+ * stop is a bounded native round trip, so anything past this is wedged — and
+ * a wedged enable must fail closed (staying disabled) rather than wedge the
+ * caller or open authority on an unrecorded preference.
+ */
+export const COMPUTER_CONTROL_ENABLE_TIMEOUT_MS = 30_000;
 
 /**
  * How long the desktop is given to settle before the screenshot that rides on
@@ -370,7 +380,7 @@ export class ComputerManager {
       });
     return this.physicalRead;
   }
-  private readonly activeAuthorities = new Map<string, AbortController>();
+  private readonly activeAuthorities = new Map<string, Set<AbortController>>();
   private readonly authorityTurns = new Map<string, string>();
 
   private controlDisabled(threadId: string): boolean {
@@ -403,8 +413,17 @@ export class ComputerManager {
       await this.setControlEnabled(threadId, true);
     }
     const enabled = mode !== "off" && this.canActivateControl(threadId, generation);
+    // An admitted one-shot request promotes to durable chat: the turn it opens
+    // spans tool calls and approval waits, and a goal continuation must still
+    // find it afterwards. It persists until an explicit off (or a disable,
+    // which bumps the generation out from under it) — a background request
+    // admitted without an explicit user invocation records nothing.
     try {
-      await this.controlState.recordChatIntent(threadId, enabled && mode === "chat", generation);
+      await this.controlState.recordChatIntent(
+        threadId,
+        enabled && (mode === "chat" || (mode === "request" && explicitInvocation)),
+        generation,
+      );
     } catch (error) {
       this.disabledThreads.add(threadId);
       throw error;
@@ -427,14 +446,18 @@ export class ComputerManager {
     const request = Symbol();
     this.controlRequests.set(threadId, request);
     if (enabled) {
-      await this.pendingControlWrites.get(threadId);
-      await this.pendingStops.get(threadId);
+      // The durable gate stays closed until the new preference is on disk:
+      // `disabledThreads` is held through the write, and a write that hangs
+      // past the timeout throws with the gate still held (fail closed), so
+      // authority can never open on an unrecorded preference.
+      await withControlEnableTimeout(this.pendingControlWrites.get(threadId));
+      await withControlEnableTimeout(this.pendingStops.get(threadId));
       if (this.controlRequests.get(threadId) === request) {
         // Hold the in-memory gate closed until the new preference is durable.
         this.disabledThreads.add(threadId);
         const write = this.controlState.set(threadId, false);
         this.pendingControlWrites.set(threadId, write);
-        await write;
+        await withControlEnableTimeout(write);
         if (this.controlRequests.get(threadId) === request) {
           this.disabledThreads.delete(threadId);
           if (this.authorityRevocations.get(threadId)?.signal.aborted)
@@ -464,6 +487,9 @@ export class ComputerManager {
   }
 
   private revokeControl(threadId: string): Promise<void> {
+    // Settle pending approval prompts synchronously: a mid-turn Off must not
+    // leave a prompt hanging until the gate's five-minute timeout.
+    computerApprovalGate.cancelThread(threadId);
     this.authorityRevocations
       .get(threadId)
       ?.abort(
@@ -471,11 +497,14 @@ export class ComputerManager {
           "Computer control was revoked for this conversation; no new input may be dispatched.",
         ),
       );
-    this.activeAuthorities.get(threadId)?.abort();
+    for (const controller of this.activeAuthorities.get(threadId) ?? []) controller.abort();
     const pending = this.pendingStops.get(threadId);
     if (pending) return pending;
     const stop = (async () => {
-      if (this.lease?.threadId === threadId || this.activeAuthorities.has(threadId))
+      if (
+        this.lease?.threadId === threadId ||
+        (this.activeAuthorities.get(threadId)?.size ?? 0) > 0
+      )
         await this.backend.stopInput?.();
       await this.releaseDesktopControl(threadId);
     })().finally(() => {
@@ -1328,9 +1357,10 @@ export class ComputerManager {
         (cursorPoint ? await this.windowIdAtActionPoint(cursorPoint) : undefined) ??
         preClearFocusId ??
         (await this.agentFocusWindowId());
-      const before = options.observe
-        ? await this.captureForMeasurement(observedWindowId)
-        : undefined;
+      const before =
+        this.backend.agentDialect === "macos" || !options.observe
+          ? undefined
+          : await this.captureForMeasurement(observedWindowId);
 
       let injectedX = 0;
       let injectedY = 0;
@@ -1340,14 +1370,15 @@ export class ComputerManager {
 
       if (this.backend.agentDialect === "macos") {
         // Cua's wheel API is quantized. Its result cannot justify a second
-        // corrective dispatch; observe once and return the actual requested units.
+        // corrective dispatch, and travel correlation against a before-capture
+        // buys nothing its quantized units can use — so no measurement
+        // captures: inject, then take at most the one after-capture the caller
+        // asked to observe with. Nothing here is learned or reported as travel.
         result = await this.injectScroll(resolved, deltaX, deltaY, options.modifiers);
         injectedX = result?.scrollDelta?.deltaX ?? deltaX;
         injectedY = result?.scrollDelta?.deltaY ?? deltaY;
-        if (before) {
-          const leg = await this.settleAndMeasure(observedWindowId, before, injectedY);
-          after = leg.capture;
-          traveledY = leg.traveled;
+        if (options.observe) {
+          after = await this.captureForMeasurement(observedWindowId);
         }
       } else if (
         before !== undefined &&
@@ -1724,6 +1755,12 @@ export class ComputerManager {
   ): Promise<A> {
     assertDesktopOperationAdmission();
     let authority = this.authorityRevocations.get(threadId);
+    if (authority?.signal.aborted) {
+      // A revoked broadcast must not poison later calls: mint fresh so a
+      // re-armed thread is not stillborn on the previous revocation.
+      authority = undefined;
+      this.authorityRevocations.delete(threadId);
+    }
     if (!authority) {
       authority = new AbortController();
       this.authorityRevocations.set(threadId, authority);
@@ -1735,13 +1772,19 @@ export class ComputerManager {
           "Computer control was revoked for this conversation; no input was dispatched.",
         );
       const controller = new AbortController();
-      this.activeAuthorities.set(threadId, controller);
+      let live = this.activeAuthorities.get(threadId);
+      if (!live) {
+        live = new Set();
+        this.activeAuthorities.set(threadId, live);
+      }
+      live.add(controller);
       const owner = agentThreadId(threadId);
       if (owner === undefined) {
         try {
           return await withDesktopOperationSignal(controller.signal, action);
         } finally {
-          this.activeAuthorities.delete(threadId);
+          live.delete(controller);
+          if (live.size === 0) this.activeAuthorities.delete(threadId);
         }
       }
       if (turnId) this.authorityTurns.set(owner, turnId);
@@ -1751,7 +1794,8 @@ export class ComputerManager {
       try {
         return await withDesktopOperationSignal(controller.signal, action);
       } finally {
-        this.activeAuthorities.delete(threadId);
+        live.delete(controller);
+        if (live.size === 0) this.activeAuthorities.delete(threadId);
         const remaining = Math.max(0, (this.agentCallsInFlight.get(owner) ?? 1) - 1);
         if (remaining === 0) {
           this.agentCallsInFlight.delete(owner);
@@ -1802,12 +1846,17 @@ export class ComputerManager {
           "Computer control was revoked for this conversation; no input was dispatched.",
         );
       }
+      // Readiness first: a paused thread is refused before it can take the
+      // lease, clear focus, or announce itself — all of which claimDesktopControl
+      // would otherwise do ahead of a refusal that sends nothing.
+      const pausedState = owner ? this.threads.get(owner) : undefined;
+      if (pausedState?.inputPause) {
+        throw new ComputerBackendError(pausedState.inputPause.message, {
+          inputPause: pausedState.inputPause,
+        });
+      }
       await this.claimDesktopControl(threadId);
       assertDesktopOperationActive();
-      const state = owner ? this.threads.get(owner) : undefined;
-      if (state?.inputPause) {
-        throw new ComputerBackendError(state.inputPause.message, { inputPause: state.inputPause });
-      }
       try {
         return await action();
       } catch (error) {
@@ -1843,6 +1892,9 @@ export class ComputerManager {
       threadId,
       state,
       pause: state.inputPause,
+      // The generation this pause was observed under. A disable/re-enable
+      // between the snapshot and the clear must not launder an old pause away.
+      generation: this.controlState.get(threadId).generation,
     }));
     try {
       await this.backend.checkInputReady(windowId);
@@ -1850,8 +1902,12 @@ export class ComputerManager {
       return; // Read-only perception remains available while input is paused.
     }
     assertDesktopOperationActive();
-    for (const { threadId, state, pause } of snapshots) {
+    for (const { threadId, state, pause, generation } of snapshots) {
       if (this.threads.get(threadId) !== state || state.inputPause !== pause) continue;
+      // The window is ready, but only a still-authorized thread may resume on
+      // that news: a thread revoked (or re-armed to a new generation) while
+      // the readiness probe was in flight keeps its pause.
+      if (!this.canActivateControl(threadId, generation)) continue;
       delete state.inputPause;
       state.lastError = null;
       this.publishCached(threadId);
@@ -2045,12 +2101,18 @@ export class ComputerManager {
   }
 
   async handleThreadRemoved(threadId: string): Promise<void> {
+    // Cancel first, synchronously, before the suspend below can yield: removal
+    // revokes authority, and a prompt admitted a millisecond earlier must
+    // settle now rather than at the gate's timeout.
+    computerApprovalGate.cancelThread(threadId);
     this.suspendedThreads.add(threadId);
     await this.revokeControl(threadId);
     this.publishChains.delete(threadId);
     this.threads.delete(threadId);
     this.threadLabels.delete(threadId);
     this.authorityTurns.delete(threadId);
+    this.authorityRevocations.delete(threadId);
+    this.activeAuthorities.delete(threadId);
     // Deleted after the thread state, so the resulting publish cannot recreate
     // it: a removed thread must not reappear as a lease holder.
     await this.releaseDesktopControl(threadId);
@@ -2338,6 +2400,14 @@ export class ComputerManager {
   ): Promise<T> {
     try {
       assertDesktopOperationActive();
+      // The new-window baseline is taken here — after targeting, immediately
+      // before inject — rather than only at lease claim: the targeting reads
+      // above refreshed the window cache, so diffing against anything older
+      // would report windows this action never opened. The claim-time baseline
+      // stays as the fallback for inputs that never pass through here.
+      if (this.lastKnownWindowIds !== undefined) {
+        this.preActionWindowIds = this.lastKnownWindowIds;
+      }
       return await inject();
     } catch (error) {
       const windowId = target.windowId;
@@ -2859,4 +2929,27 @@ export function errorMessage(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Bounds one enable-path wait. Rejects past the timeout while leaving the
+ * raced promise alone: the caller throws with the in-memory gate still held,
+ * which is the fail-closed outcome the enable path depends on.
+ */
+function withControlEnableTimeout<A>(action: Promise<A> | undefined): Promise<A | undefined> {
+  if (action === undefined) return Promise.resolve(undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new ComputerBackendError(
+          "Enabling computer control timed out; control stays disabled for this conversation.",
+        ),
+      );
+    }, COMPUTER_CONTROL_ENABLE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([action, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }

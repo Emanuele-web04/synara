@@ -17,6 +17,7 @@ import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
+  COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   EventId,
   MessageId,
   ModelSelection,
@@ -72,6 +73,9 @@ import {
   type AgentGatewayOperationRecord,
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayLive } from "./AgentGateway.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
 
@@ -297,6 +301,8 @@ function makeHarnessLayer(
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
     };
+    /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
+    readonly computerService?: Layer.Layer<ComputerService>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -1178,6 +1184,7 @@ function makeHarnessLayer(
     Layer.provide(providerRuntimeEventsLayer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provide(NodeServices.layer),
+    Layer.provide(options.computerService ?? Layer.empty),
   );
 
   const makeHarness = Effect.gen(function* () {
@@ -1695,6 +1702,51 @@ describe("AgentGateway", () => {
         "capability_denied",
       );
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("surfaces one computer-control denial card per tool per turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      computerService: makeComputerServiceLayer({
+        backend: new FakeComputerBackend(),
+        supported: true,
+      }),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const denialCards = () =>
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+        );
+      const callComputerTool = (id: number, name: string) =>
+        harness.postRaw({
+          authorizationHeader: "Bearer token-parent",
+          body: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } },
+        });
+      const deniedErrorOf = (body: unknown) =>
+        JSON.parse(
+          (body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+        ) as { error: { code: string; details: { requiredCapability: string } } };
+      // token-parent was never granted computer control: every computer tool denies.
+      for (const [id, name] of [
+        [11, "computer_click"],
+        [12, "computer_type_text"],
+      ] as const) {
+        const response = yield* callComputerTool(id, name);
+        assert.equal(response.status, 200);
+        const error = deniedErrorOf(response.body).error;
+        assert.equal(error.code, "capability_denied");
+        assert.equal(error.details.requiredCapability, "computer:control");
+      }
+      // Two different tools denied in one turn earn two cards, not one.
+      assert.equal(denialCards().length, 2);
+      // Retrying the first tool in the same turn earns no third card.
+      const repeat = yield* callComputerTool(13, "computer_click");
+      assert.equal(repeat.status, 200);
+      assert.equal(deniedErrorOf(repeat.body).error.code, "capability_denied");
+      assert.equal(denialCards().length, 2);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

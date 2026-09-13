@@ -40,6 +40,15 @@ export function useComputerControlModeChange({
           revokeQueued: mode === "off",
           generation: result.generation ?? 0,
         });
+        // Enabling against a reset server generation leaves control off: the
+        // queued invocation it would have armed is stale, so say so plainly.
+        if (mode !== "off" && !result.enabled && current()) {
+          toastManager.add({
+            title: "Computer control was reset",
+            description: "Control was reset — send /computer-use again with current generation.",
+            type: "error",
+          });
+        }
         const appSnap = window.desktopBridge?.appSnap;
         if (result.enabled && appSnap) {
           settingUp = true;

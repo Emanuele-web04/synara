@@ -38,6 +38,7 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
+  agentGatewayCapabilitiesFor,
   cancelAgentGatewayTurn,
   captureAgentGatewayCapabilityInput,
   type AgentGatewayCapabilityInput,
@@ -133,9 +134,11 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   /**
    * Antigravity leases per prepared turn, not at session start, so the start
    * input is long gone by then. Keep the shared capability projection so the
-   * turn lease derives from the same facts as a session-start lease.
+   * turn lease derives from the same facts as a session-start lease. Refreshed
+   * from the session fact on every dispatched turn, so a computer-control
+   * change between turns reaches the next mint instead of the start snapshot.
    */
-  readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
+  gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;
   readonly enableComputerControl?: boolean;
@@ -2044,6 +2047,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
+        // Refresh the stored capability projection at dispatch: a
+        // computer-control change between turns must reach this turn's mint,
+        // not the start snapshot. Turns carry no per-turn override; the
+        // session fact is the only source.
+        context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+          enableComputerControl: context.enableComputerControl === true,
+        });
         if (context.activeProcess) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2120,10 +2130,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (gatewaySessionLease && !gatewayBootstrapToken) {
           gatewaySessionLease.release();
           yield* Effect.promise(() => fs.rm(runDir, { recursive: true, force: true }));
+          const expectedCapabilities = agentGatewayCapabilitiesFor({
+            enableComputerControl: context.enableComputerControl === true,
+          });
+          const mintedCapabilities = agentGatewayCapabilitiesFor(context.gatewayCapabilityInput);
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "turn/prepare",
-            detail: "The Synara gateway credential is no longer active for this provider turn.",
+            detail: `The Synara gateway credential is no longer active for this provider turn (expected gateway capabilities: ${expectedCapabilities.join(", ") || "none"}; lease minted with: ${mintedCapabilities.join(", ") || "none"}).`,
           });
         }
         if (gatewaySessionLease) context.gatewaySessionLease = gatewaySessionLease;

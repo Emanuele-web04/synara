@@ -1,11 +1,29 @@
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-@@ -143,7 +143,83 @@
+@@ -143,7 +143,101 @@
          daemon_tools_list_from(&self.tools_list)
      }
  
 -    pub async fn invoke_raw(&self, name: &str, arguments: Value) -> Result<Value, String> {
 +    pub async fn invoke_raw(&self, name: &str, mut arguments: Value) -> Result<Value, String> {
++        // Native-side authoritative secure-input refusal for keyboard delivery.
++        // macOS suppresses synthesized key events while a password field holds
++        // secure input, so refuse before target admission: nothing is prepared,
++        // leased or dispatched, and no JS pre-check TOCTOU window remains.
++        #[cfg(target_os = "macos")]
++        if matches!(
++            name,
++            "type_text" | "type_text_chars" | "press_key" | "hotkey"
++        ) {
++            let secure = tokio::task::spawn_blocking(|| {
++                platform_macos::input::target_guard::secure_input_active()
++            })
++            .await
++            .map_err(|error| error.to_string())?;
++            if secure {
++                return Ok(json!({"isError":true,"content":[{"type":"text","text":"Typing is blocked while a password field holds secure input. Focus a normal field and retry; nothing was sent."}],"structuredContent":{"effect":"refused","code":"secure_input_active"}}));
++            }
++        }
 +        #[cfg(target_os = "macos")]
 +        let native_target = if matches!(
 +            name,
@@ -2974,11 +2992,16 @@
  
      // Interpolated drag steps.
      for i in 1..=steps {
-@@ -671,35 +759,29 @@
+@@ -671,35 +759,34 @@
          if flags != CGEventFlags::CGEventFlagNull {
              drag.set_flags(flags);
          }
 -        post_mouse_event(pid, &drag, il, wid, click_group_id, 1, button_number, 0);
++        // Waypoint admission: re-verify the admitted target before the next
++        // segment posts. A Space change or frame drift ends the drag here with
++        // stale_geometry/target_not_on_active_space; the owned release still
++        // posts at the last verified position and the caller must not replay.
++        super::cancellation::gate().check_target()?;
 +        super::cancellation::gate().post(|| {
 +            set_event_position(&up, ix, iy);
 +            release_local.set(il);
@@ -3082,11 +3105,16 @@
      for i in 1..=steps {
          let t = i as f64 / steps as f64;
          let x = from_x + (to_x - from_x) * t;
-@@ -834,24 +930,22 @@
+@@ -834,24 +930,27 @@
              event.set_flags(flags);
          }
          event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
 -        post(&event);
++        // Waypoint admission: re-verify the admitted target before the next
++        // segment posts. A Space change or frame drift ends the drag here with
++        // stale_geometry/target_not_on_active_space; the owned release still
++        // posts at the last verified position and the caller must not replay.
++        super::cancellation::gate().check_target()?;
 +        super::cancellation::gate().post(|| {
 +            set_event_position(&up, x, y);
 +            post(&event);
@@ -3524,11 +3552,13 @@
          let release = make_key_window_record(0x7856_3412, 0x02);
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,428 @@
 +//! Read-only, exact-window input admission. A Space change invalidates only the
 +//! current action; held releases and the generation's cleanup barrier survive.
 +
++use crate::ax::bindings::{copy_element_attr, copy_string_attr, AXUIElementCreateApplication};
 +use crate::windows::{WindowBounds, WindowInfo};
++use core_foundation::base::{CFRelease, CFTypeRef};
 +use cua_driver_core::protocol::ToolResult;
 +use serde::Deserialize;
 +use serde_json::{json, Value};
@@ -3646,6 +3676,15 @@
 +        let window = current_window(target.window_id);
 +        target.verify_snapshot(window.as_ref(), SPACE_EPOCH.load(Ordering::Acquire))?;
 +        target.current_space = window.and_then(|window| window.current_space_id);
++        // Modal-sheet admission: when the target app's focus sits inside a modal
++        // sheet, that sheet owns the keyboard. Refuse before any lease or
++        // dispatch; check_input_ready surfaces the same code through readiness()
++        // so JS can map it into the inputPause set.
++        let roles = focused_ancestor_roles(target.pid);
++        let role_refs: Vec<&str> = roles.iter().map(String::as_str).collect();
++        if let Some(refusal) = focused_sheet_refusal(target.pid, target.window_id, &role_refs) {
++            return Err(refusal);
++        }
 +        Ok(target)
 +    }
 +
@@ -3719,6 +3758,70 @@
 +            .with_structured(json!({"ready":true,"pid":target.pid,"window_id":target.window_id})),
 +        Err(refusal) => refusal.tool_result(),
 +    }
++}
++
++/// Whether macOS is currently suppressing synthesized key events because a
++/// password field holds secure input. Authoritative HIToolbox state, read at
++/// dispatch time so keyboard tools refuse before any target admission.
++pub fn secure_input_active() -> bool {
++    unsafe { IsSecureEventInputEnabled() != 0 }
++}
++
++#[link(name = "Carbon", kind = "framework")]
++extern "C" {
++    fn IsSecureEventInputEnabled() -> u8;
++}
++
++/// AXRole values from the target app's focused element outward, innermost
++/// first and bounded like the selection-ancestor walk. Read-only AX facts; a
++/// missing element or attribute ends the chain as inconclusive.
++fn focused_ancestor_roles(pid: i32) -> Vec<String> {
++    const MAX_FOCUS_ANCESTORS: usize = 8;
++    let mut roles = Vec::new();
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return roles;
++        }
++        let mut current = copy_element_attr(app, "AXFocusedUIElement");
++        CFRelease(app as CFTypeRef);
++        for _ in 0..MAX_FOCUS_ANCESTORS {
++            let Some(element) = current.take() else {
++                break;
++            };
++            roles.push(copy_string_attr(element, "AXRole").unwrap_or_default());
++            current = copy_element_attr(element, "AXParent");
++            CFRelease(element as CFTypeRef);
++        }
++        if let Some(element) = current.take() {
++            CFRelease(element as CFTypeRef);
++        }
++    }
++    roles
++}
++
++/// Pure decision core for the modal-sheet guard: refuse when focus sits inside
++/// a sheet before reaching the enclosing window or application. Only positive
++/// detection refuses; an inconclusive chain never blocks an unrelated action.
++fn focused_sheet_refusal(
++    pid: i32,
++    window_id: u32,
++    ancestor_roles: &[&str],
++) -> Option<TargetRefusal> {
++    for role in ancestor_roles {
++        if *role == "AXSheet" {
++            return Some(TargetRefusal::new(
++                "auth_sheet_focused",
++                "The target app has a modal sheet holding focus. Dismiss the sheet or focus the target window and retry; nothing was sent.",
++                pid,
++                window_id,
++            ));
++        }
++        if *role == "AXWindow" || *role == "AXApplication" {
++            break;
++        }
++    }
++    None
 +}
 +
 +fn install_space_observer() {
@@ -3853,6 +3956,30 @@
 +        assert_eq!(value["structuredContent"]["effect"], "refused");
 +        assert_eq!(value["structuredContent"]["ready"], false);
 +    }
++    #[test]
++    fn focused_sheet_before_its_window_refuses_with_auth_sheet_focused() {
++        let refusal =
++            focused_sheet_refusal(42, 7, &["AXTextField", "AXSheet", "AXWindow"]).unwrap();
++        assert_eq!(refusal.code, "auth_sheet_focused");
++        let value = serde_json::to_value(refusal.tool_result()).unwrap();
++        assert_eq!(value["structuredContent"]["effect"], "refused");
++        assert_eq!(value["structuredContent"]["code"], "auth_sheet_focused");
++        assert_eq!(value["structuredContent"]["ready"], false);
++        assert!(value["structuredContent"]["reason"]
++            .as_str()
++            .unwrap()
++            .contains("nothing was sent"));
++    }
++    #[test]
++    fn focus_without_a_sheet_never_refuses() {
++        assert!(focused_sheet_refusal(42, 7, &[]).is_none());
++        assert!(focused_sheet_refusal(42, 7, &["AXButton", "AXWindow"]).is_none());
++        assert!(
++            focused_sheet_refusal(42, 7, &["AXTextField", "AXWindow", "AXApplication"]).is_none()
++        );
++        // A sheet beyond the enclosing window is not the focus chain.
++        assert!(focused_sheet_refusal(42, 7, &["AXTextField", "AXWindow", "AXSheet"]).is_none());
++    }
 +}
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
@@ -3975,7 +4102,7 @@
 +    fn def(&self) -> &ToolDef {
 +        DEF.get_or_init(|| ToolDef {
 +            name: "check_input_ready".into(),
-+            description: "Read-only exact-window input readiness. Checks owner, active Space, visibility and optional observed bounds. Never captures, activates, moves or sends input.".into(),
++            description: "Read-only exact-window input readiness. Checks owner, active Space, visibility, modal-sheet focus and optional observed bounds. Never captures, activates, moves or sends input.".into(),
 +            input_schema: serde_json::json!({"type":"object","required":["pid","window_id"],"properties":{
 +                "pid":{"type":"integer","minimum":1},"window_id":{"type":"integer","minimum":1},
 +                "expected_window_bounds":{"type":"object","required":["x","y","width","height"],"properties":{

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
-import { ComputerAvailability, ComputerScreenshot } from "@synara/contracts";
+import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@synara/contracts";
 import { Schema } from "effect";
 import {
   CuaTransportError,
@@ -34,6 +34,7 @@ function fixture() {
   let overviewFailure = false;
   let captureWindowId = 20;
   let capturePid = 10;
+  let captureFrameValid = true;
   let visible = true;
   let ready: Record<string, unknown> = { ready: true, pid: 10, window_id: 20 };
   let afterCapture: (() => void) | undefined;
@@ -123,7 +124,7 @@ function fixture() {
           pid: capturePid,
           window_id: captureWindowId,
           window_bounds: bounds,
-          screenshot_frame_valid: true,
+          screenshot_frame_valid: captureFrameValid,
           elements,
         },
         content: [{ type: "image", mimeType: "image/png", data: header.toString("base64") }],
@@ -165,6 +166,9 @@ function fixture() {
       captureWindowId = value;
       capturePid = pid;
     },
+    invalidateCapture: () => {
+      captureFrameValid = false;
+    },
     actionResult: (value: Record<string, unknown>) => {
       actionResult = value;
     },
@@ -176,6 +180,9 @@ function fixture() {
     },
     fail: (error: Error) => {
       failure = error;
+    },
+    unfail: () => {
+      failure = undefined;
     },
     refuse: () => {
       nativeRefusal = true;
@@ -681,6 +688,159 @@ describe("Cua native boundary", () => {
       f.backend.drag({ x: 0, y: 0 }, { x: 10, y: 10 }, 500, "cua:10:20"),
     ).rejects.toMatchObject({ effect: "not-dispatched", code: "foreground_required" });
     expect(f.calls).toHaveLength(0);
+  });
+});
+
+describe("Cua hardening", () => {
+  it("reports a stable build signature on the backend and its availability", async () => {
+    const f = fixture();
+    expect(f.backend.buildSignature()).toBe("unknown");
+    expect(f.backend.buildSignature()).toBe(f.backend.buildSignature());
+    f.denyPermissions();
+    const availability = await f.backend.availability();
+    expect(availability.kind === "permission-required" && availability.buildSignature).toBe(
+      "unknown",
+    );
+  });
+  it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
+    const f = fixture();
+    f.actionResult({
+      effect: "refused",
+      code: "auth_sheet_focused",
+      message: "An authentication sheet has focus.",
+    });
+    await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "auth_sheet_focused",
+      inputPause: { windowId: "cua:10:20" },
+    });
+    await expect(f.backend.getState({ windowId: "cua:10:20" })).resolves.toMatchObject({
+      computerId: "desktop",
+    });
+  });
+  it("flips health on capture failure without blocking input, and heals on refresh", async () => {
+    const f = fixture();
+    f.captureWindow(21);
+    await expect(
+      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
+    ).rejects.toMatchObject({ effect: "not-dispatched" });
+    expect(f.backend.health()).toMatchObject({ status: "unavailable", captureAvailable: false });
+    expect(f.backend.health().consecutiveFailures).toBeGreaterThan(0);
+    // Inputs keep working: health never gates dispatch.
+    f.captureWindow(20);
+    await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
+    // The next refresh re-reads the grants and heals.
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+  });
+  it("returns a preview note instead of failing the observation on preview-only failure", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Equals",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+        actions: ["AXPress"],
+      },
+    ]);
+    f.invalidateCapture();
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+      includeScreenshot: true,
+    });
+    expect(state.screenshot).toBeUndefined();
+    expect(state.previewNote).toContain("Reselect the window to resume");
+    expect(state.root?.children).toHaveLength(1);
+    expect(Schema.decodeUnknownSync(ComputerState)(state)).toMatchObject({
+      previewNote: state.previewNote,
+    });
+    // Input is unaffected: targeting data survived the preview failure.
+    await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
+    await f.backend.dispose();
+  });
+  it("clears window grounding when the owning task ends", async () => {
+    const f = fixture();
+    const task = { threadId: "thread", turnId: "turn" };
+    await withComputerTask(task, () =>
+      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
+    );
+    await withComputerTask(task, () =>
+      expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined(),
+    );
+    await f.backend.endTask("thread", "turn");
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      code: "stale_geometry",
+    });
+    await f.backend.dispose();
+  });
+  it("degrades blind on a mid-task Screen Recording revoke without replaying input", async () => {
+    const f = fixture();
+    // Grounded and driving before the revoke lands.
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    const clicks = f.calls.filter((call) => call.name === "click").length;
+
+    // The revoke lands mid-task: the probe reports the grant missing...
+    f.denyScreenRecording();
+    expect(await f.backend.availability()).toMatchObject({
+      kind: "permission-required",
+      missing: ["screenRecording"],
+    });
+    // ...perception goes blind but stays available: no pixels, no throw, tree intact...
+    const blind = await f.backend.getState({ includeScreenshot: true });
+    expect(blind.screenshot).toBeUndefined();
+    await expect(
+      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    ).resolves.toMatchObject({ computerId: "desktop" });
+    expect(f.backend.health().captureAvailable).toBe(false);
+    // ...and the desktop stays driveable: exactly one native input, never a replay.
+    await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
+    expect(f.calls.filter((call) => call.name === "click")).toHaveLength(clicks);
+    expect(f.calls.filter((call) => isTyping(call.name))).toHaveLength(1);
+    await f.backend.dispose();
+  });
+  it("requires a fresh granted observation to recover from a failed capture", async () => {
+    const f = fixture();
+    // A capture that fails native-side flips health while dispatching zero input...
+    f.failOverview();
+    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow();
+    expect(f.backend.health()).toMatchObject({ status: "unavailable", captureAvailable: false });
+    const overviews = f.calls.filter((call) => call.name === "get_desktop_state").length;
+    expect(f.calls.some((call) => call.name === "click" || isTyping(call.name))).toBe(false);
+    // ...inputs keep working through the outage...
+    await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
+    // ...and a latched heal is not enough: only a fresh successful observation
+    // recovers, so a still-failing capture flips health right back.
+    f.grantPermissions();
+    await f.backend.provision();
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow();
+    expect(f.backend.health()).toMatchObject({ status: "unavailable", captureAvailable: false });
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(overviews + 1);
+    await f.backend.dispose();
+  });
+  it("drops grounding after uncertain delivery but keeps it after a clean refusal", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.fail(new CuaTransportError("timeout", "dispatched-unknown"));
+    await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
+      effect: "dispatched-unknown",
+    });
+    // Uncertain delivery may have moved the window: re-observe first.
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      code: "stale_geometry",
+    });
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.refuse();
+    f.unfail();
+    await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    // A clean refusal dispatched nothing, so the grounding still stands.
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    await f.backend.dispose();
   });
 });
 

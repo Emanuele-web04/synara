@@ -294,8 +294,14 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
-  /** Session-start facts the gateway lease derives its capabilities from. */
-  readonly agentGatewayCapabilityInput?: AgentGatewayCapabilityInput;
+  /**
+   * Session-start facts the gateway lease derives its capabilities from.
+   * Required on purpose: a lease that forgets it fails silently (the
+   * credential is issued, the tools are just missing), so the manager refuses
+   * an omission at its boundary instead of minting a degraded credential.
+   * Pass AGENT_GATEWAY_NO_CAPABILITIES when the session leases nothing.
+   */
+  readonly agentGatewayCapabilityInput: AgentGatewayCapabilityInput;
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -1087,6 +1093,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
+    if (input.agentGatewayCapabilityInput === undefined) {
+      throw new Error(
+        "Codex session start requires an explicit agentGatewayCapabilityInput. Pass AGENT_GATEWAY_NO_CAPABILITIES when the session leases no gateway capabilities.",
+      );
+    }
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
@@ -1140,7 +1151,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context = {
         enableComputerControl:
           gatewaySessionLease !== undefined &&
-          input.agentGatewayCapabilityInput?.enableComputerControl === true,
+          input.agentGatewayCapabilityInput.enableComputerControl === true,
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
@@ -1381,8 +1392,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -1480,8 +1489,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -1525,8 +1532,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
     }
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -1662,8 +1667,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const providerThreadId =
       providerThreadIdOverride ??
       readResumeThreadId({
-        threadId: context.session.threadId,
-        runtimeMode: context.session.runtimeMode,
         resumeCursor: context.session.resumeCursor,
       });
     if (!effectiveTurnId || !providerThreadId) {
@@ -1873,8 +1876,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
     const context = this.requireSession(threadId);
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -1932,12 +1933,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         updatedAt: now,
       };
 
-      const codexOptions = readCodexProviderOptions({
-        threadId,
-        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        runtimeMode: input.runtimeMode,
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-      });
+      const codexOptions = readCodexProviderOptions(
+        input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {},
+      );
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
       await this.assertSupportedCodexCliVersion({
@@ -2052,8 +2050,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async rollbackThread(threadId: ThreadId, numTurns: number): Promise<CodexThreadSnapshot> {
     const context = this.requireSession(threadId);
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -2077,8 +2073,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async compactThread(threadId: ThreadId): Promise<void> {
     const context = this.requireSession(threadId);
     const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
       resumeCursor: context.session.resumeCursor,
     });
     if (!providerThreadId) {
@@ -4052,8 +4046,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const mappedProviderParentThreadId = this.readChildParentProviderThreadId(context, params);
     const activeProviderThreadId = normalizeProviderThreadId(
       readResumeThreadId({
-        threadId: context.session.threadId,
-        runtimeMode: context.session.runtimeMode,
         resumeCursor: context.session.resumeCursor,
       }),
     );
@@ -4272,7 +4264,9 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
   return brandIfNonEmpty(value, (normalized) => normalized);
 }
 
-function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
+function readCodexProviderOptions(input: {
+  readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+}): {
   readonly binaryPath?: string;
   readonly homePath?: string;
 } {
@@ -4561,7 +4555,7 @@ function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   return typeof rawThreadId === "string" ? normalizeProviderThreadId(rawThreadId) : undefined;
 }
 
-function readResumeThreadId(input: CodexAppServerStartSessionInput): string | undefined {
+function readResumeThreadId(input: { readonly resumeCursor?: unknown }): string | undefined {
   return readResumeCursorThreadId(input.resumeCursor);
 }
 

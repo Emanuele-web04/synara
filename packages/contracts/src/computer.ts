@@ -538,6 +538,17 @@ export type ComputerInputPause = typeof ComputerInputPause.Type;
 
 export const ComputerState = Schema.Struct({
   inputPause: Schema.optional(ComputerInputPause),
+  /**
+   * A non-fatal preview note: the window observation behind this state hit a
+   * preview-only failure (the native preview helper errored or the window's
+   * preview could not be established), so there is no screenshot to show.
+   * Input is unaffected and the window list, tree and other fields still stand;
+   * reselecting (observing) the window resumes previews. Absent when previews
+   * are healthy or were never asked for — it never carries an input refusal.
+   */
+  previewNote: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
+  ),
   accessibility: Schema.optional(
     Schema.Struct({
       status: Schema.Literals(["complete", "partial", "unavailable"]),

@@ -2408,8 +2408,13 @@ export default function ChatView({
   // Prepare an explicit invocation from the denial card; the user sends the request.
   const handleEnableComputerControlFromDenial = useCallback(() => {
     handleComputerControlModeChange("request");
-    if (!isComputerInvocation({ text: prompt }))
-      setPrompt(`/computer-use ${prompt.trim() || "Continue the requested desktop task."}`);
+    if (isComputerInvocation({ text: prompt })) return;
+    // Invocation detection reads the first non-empty line, so the command
+    // stays on line 1 and any existing draft follows after a blank line.
+    const [first, ...rest] = prompt.split("\n");
+    const task = (first ?? "").trim() || "Continue the requested desktop task.";
+    const explanation = rest.join("\n").trim();
+    setPrompt(explanation ? `/computer-use ${task}\n\n${explanation}` : `/computer-use ${task}`);
   }, [handleComputerControlModeChange, prompt, setPrompt]);
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.

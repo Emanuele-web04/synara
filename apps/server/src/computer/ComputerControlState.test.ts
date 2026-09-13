@@ -97,7 +97,7 @@ it("a malformed saved consent file disables Computer without breaking ordinary s
   }
 });
 
-it("persists only explicit matching-generation chat intent and clears it on request, off and disable", async () => {
+it("persists only explicit matching-generation chat intent and clears it on background request, off and disable", async () => {
   const dir = await mkdtemp(join(tmpdir(), "synara-chat-intent-"));
   const file = join(dir, "control.json");
   const manager = new ComputerManager({
@@ -121,6 +121,34 @@ it("persists only explicit matching-generation chat intent and clears it on requ
     expect(manager.canContinueChatControl("thread")).toBe(false);
     expect(await manager.admitControl("thread", "chat", 1)).toBe(true);
     expect(new ComputerControlState(file).get("thread").chatGeneration).toBe(1);
+  } finally {
+    await manager.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it("an admitted one-shot request persists as durable chat until explicit off", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "synara-one-shot-"));
+  const file = join(dir, "control.json");
+  const manager = new ComputerManager({
+    backend: new FakeComputerBackend(),
+    controlStatePath: file,
+  });
+  try {
+    // A background request admitted without an explicit invocation records
+    // nothing: only the user's own one-shot promotes.
+    expect(await manager.admitControl("thread", "request", 0)).toBe(true);
+    expect(manager.canContinueChatControl("thread")).toBe(false);
+    expect(new ComputerControlState(file).get("thread").chatGeneration).toBeUndefined();
+    // The explicit one-shot persists across admissions until an explicit off.
+    expect(await manager.admitControl("thread", "request", 0, true)).toBe(true);
+    expect(manager.canContinueChatControl("thread")).toBe(true);
+    expect(new ComputerControlState(file).get("thread").chatGeneration).toBe(0);
+    expect(await manager.admitControl("thread", "request", 0, true)).toBe(true);
+    expect(manager.canContinueChatControl("thread")).toBe(true);
+    await manager.admitControl("thread", "off", 0);
+    expect(manager.canContinueChatControl("thread")).toBe(false);
+    expect(new ComputerControlState(file).get("thread").chatGeneration).toBeUndefined();
   } finally {
     await manager.dispose();
     await rm(dir, { recursive: true, force: true });
@@ -162,4 +190,25 @@ it("failed chat-intent persistence cannot authorize a later goal after re-enable
     await manager.dispose();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("serializes concurrent control writes per thread in call order", async () => {
+  // Queued-dispatch and edit-resend admissions race through admitControl for
+  // the same thread. Without serialization their read-modify-write sequences
+  // interleave and concurrent revocations lose increments (last-writer-wins).
+  const state = new ComputerControlState();
+  await Promise.all([state.set("thread", true), state.set("thread", true)]);
+  expect(state.get("thread")).toMatchObject({ disabled: true, generation: 2 });
+});
+
+it("applies a racing chat intent against the serialized generation", async () => {
+  const state = new ComputerControlState();
+  const record = state.recordChatIntent("thread", true, 0);
+  const disable = state.set("thread", true);
+  await Promise.all([record, disable]);
+  // Call order wins: the intent recorded at generation 0, then the disable
+  // bumped the generation and dropped it. A stale intent never survives a
+  // concurrent revocation.
+  expect(state.get("thread")).toMatchObject({ disabled: true, generation: 1 });
+  expect(state.get("thread").chatGeneration).toBeUndefined();
 });

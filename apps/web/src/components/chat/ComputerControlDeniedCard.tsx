@@ -42,7 +42,7 @@ export function ComputerControlDeniedCard({
           style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
         >
           {enabled
-            ? "Send a message and the agent will pick up where it left off."
+            ? "On. Queued desktop turns stay cancelled — send a fresh message to continue."
             : `The agent tried to act on the desktop${toolName ? ` (${toolName})` : ""} and was stopped.`}
         </p>
       </div>

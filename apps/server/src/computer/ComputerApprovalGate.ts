@@ -13,6 +13,24 @@ interface TaskApproval {
   pending?: Promise<boolean> | undefined;
 }
 
+/** Rejection when no more consent prompts fit, global or for one chat. */
+export const COMPUTER_APPROVAL_QUEUE_FULL_CODE = "approval_queue_full";
+export const COMPUTER_APPROVAL_QUEUE_GLOBAL_LIMIT = 128;
+export const COMPUTER_APPROVAL_QUEUE_THREAD_LIMIT = 8;
+
+export class ComputerApprovalQueueFullError extends Error {
+  readonly code = COMPUTER_APPROVAL_QUEUE_FULL_CODE;
+  readonly retryable = true;
+  constructor(scope: "thread" | "global") {
+    super(
+      scope === "thread"
+        ? "Too many computer approvals are waiting for this chat; try again once an earlier prompt settles."
+        : "Too many computer approvals are waiting.",
+    );
+    this.name = "ComputerApprovalQueueFullError";
+  }
+}
+
 /** Synara-owned Computer consent, scoped to one live turn. Clipboard reads use
  * separate per-call approvals. The runtime routes user decisions here first;
  * restart, Stop and terminal events discard the grant.
@@ -91,7 +109,19 @@ export class ComputerApprovalGate {
     publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
   }): Promise<boolean> {
     input.signal.throwIfAborted();
-    if (this.pending.size >= 128) throw new Error("Too many computer approvals are waiting.");
+    // A stuck turn must not starve every other chat: each thread gets a small
+    // cap inside the shared one, and both refuse retryably so the model waits
+    // instead of treating a full queue as a denial.
+    let threadPending = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.threadId === input.threadId) threadPending += 1;
+    }
+    if (threadPending >= COMPUTER_APPROVAL_QUEUE_THREAD_LIMIT) {
+      throw new ComputerApprovalQueueFullError("thread");
+    }
+    if (this.pending.size >= COMPUTER_APPROVAL_QUEUE_GLOBAL_LIMIT) {
+      throw new ComputerApprovalQueueFullError("global");
+    }
     const requestId = `computer:${randomUUID()}`;
     let settle!: (decision: ProviderApprovalDecision) => void;
     const answer = new Promise<ProviderApprovalDecision>((resolve) => {

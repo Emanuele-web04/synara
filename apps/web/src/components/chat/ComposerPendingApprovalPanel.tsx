@@ -97,9 +97,17 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
               ...action,
               label: "Allow Computer for this task",
               description:
-                "Continue routine desktop actions until this response ends. Stop cancels access.",
+                "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
             }
-          : action,
+          : action.decision === "decline"
+            ? {
+                ...action,
+                description: "Stop desktop for this turn, agent continues without tools",
+              }
+            : {
+                ...action,
+                description: "Stop revokes new input; keys/buttons already sent may still land.",
+              },
       )
     : approval.sessionApprovalAvailable === false
       ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")

@@ -1,5 +1,6 @@
 import type {
   ComputerAvailability,
+  ComputerBuildSignature,
   ComputerCapabilities,
   ComputerHealth,
   ComputerPoint,
@@ -192,6 +193,22 @@ export class CuaComputerBackend implements ComputerBackend {
     this.currentHealth = health;
     for (const listener of this.listeners) listener({ type: "health-changed", health });
   }
+  /**
+   * One unusable capture flips health unavailable. The action verdict stands —
+   * this never rewrites an input result — and inputs keep working: nothing on
+   * the input path gates on health, and the next granted refresh heals this.
+   */
+  private markCaptureFailed(error: unknown): void {
+    this.captureFailed = true;
+    const message = error instanceof Error ? error.message : String(error);
+    this.setHealth({
+      ...this.currentHealth,
+      status: "unavailable",
+      captureAvailable: false,
+      consecutiveFailures: this.currentHealth.consecutiveFailures + 1,
+      lastFailure: { at: new Date().toISOString(), message: message.slice(0, 2048) },
+    });
+  }
   private async host(
     request: Record<string, unknown>,
     mutation = false,
@@ -206,10 +223,25 @@ export class CuaComputerBackend implements ComputerBackend {
     assertDesktopOperationActive();
     const task = request.method === "call" ? currentComputerTask() : undefined;
     if (task) {
-      this.previewTasks.set(cuaComputerTaskKey(task), task);
-      while (this.previewTasks.size > 256)
-        this.previewTasks.delete(this.previewTasks.keys().next().value!);
+      const currentKey = cuaComputerTaskKey(task);
+      // Refresh recency: Map.set alone does not reorder, so a task that
+      // keeps dispatching would otherwise age out while live. Delete first.
+      if (this.previewTasks.has(currentKey)) this.previewTasks.delete(currentKey);
+      this.previewTasks.set(currentKey, task);
+      // Evict oldest first, but never the task dispatching right now:
+      // evicting it would break the taskKey lock the preview helper relies on
+      // and silently drop its later endTask (preview leak).
+      while (this.previewTasks.size > 256) {
+        const oldest = [...this.previewTasks.keys()].find((key) => key !== currentKey);
+        if (oldest === undefined) break;
+        this.previewTasks.delete(oldest);
+      }
     }
+    // Per-operation baseline, captured at dispatch. A newer desktop generation
+    // observed while this call is in flight means the reply predates an
+    // interruption (lock/resume) — even when the reply itself carries the new
+    // generation — so it is rejected rather than trusted as current.
+    const sendBaseline = this.desktopEpoch;
     try {
       const reply = await this.request<CuaReply>(
         this.endpoint,
@@ -230,7 +262,17 @@ export class CuaComputerBackend implements ComputerBackend {
       );
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
-        if (this.desktopEpoch !== undefined && epoch < this.desktopEpoch)
+        if (
+          sendBaseline !== undefined &&
+          this.desktopEpoch !== undefined &&
+          this.desktopEpoch !== sendBaseline
+        )
+          throw new CuaActionError(
+            "The desktop changed while this operation was in flight. Observe again before continuing.",
+            mutation ? "dispatched-unknown" : "not-dispatched",
+            "stale_desktop_epoch",
+          );
+        if (sendBaseline !== undefined && epoch < sendBaseline)
           throw new CuaActionError(
             "The desktop changed while this operation was in flight. Observe again before continuing.",
             mutation ? "dispatched-unknown" : "not-dispatched",
@@ -282,7 +324,9 @@ export class CuaComputerBackend implements ComputerBackend {
       }
       const inputPause =
         refused &&
-        (code === "target_not_on_active_space" || code === "desktop_input_paused") &&
+        (code === "target_not_on_active_space" ||
+          code === "desktop_input_paused" ||
+          code === "auth_sheet_focused") &&
         Number.isSafeInteger(args.pid) &&
         Number.isSafeInteger(args.window_id)
           ? { windowId: `cua:${args.pid}:${args.window_id}`, message }
@@ -337,13 +381,24 @@ export class CuaComputerBackend implements ComputerBackend {
   async missingPermissions() {
     return this.permissions;
   }
+  /**
+   * How this build is code-signed, for the stale-grant advice. The helper only
+   * reports the responsible bundle id, never the signature itself, so the
+   * honest stable answer is `unknown` — and it is stable per build rather than
+   * per probe, so it is a plain method rather than a reading that can flicker.
+   */
+  buildSignature(): ComputerBuildSignature {
+    return "unknown";
+  }
   async provision(): Promise<string> {
     // Let a pre-setup status read settle before invalidating it. Its missing
     // grants must not win the refresh after the user requests permissions.
     await this.snapshot?.catch(() => undefined);
     await this.host({ method: "setup" });
     this.snapshotAt = 0;
-    this.captureFailed = false;
+    // No unconditional capture-failure reset here: only an observed
+    // screen_recording grant clears it, in refresh() below, so a setup that
+    // did not actually restore capture cannot launder the health away.
     await this.refresh(true);
     return this.permissions.length
       ? `Allow ${listComputerPermissions(this.permissions)} for this copy of Synara in System Settings. Return here to check again; if macOS asks you to quit and reopen the app, do so.`
@@ -355,13 +410,15 @@ export class CuaComputerBackend implements ComputerBackend {
     this.snapshot = (async () => {
       const permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
-      const previousPermissions = this.permissions;
       this.permissions = [];
       if (permission.accessibility !== true) this.permissions.push("accessibility");
       if (permission.screen_recording !== true) this.permissions.push("screenRecording");
-      if (previousPermissions.includes("screenRecording") && permission.screen_recording === true)
-        this.captureFailed = false;
+      // A capture failure clears only on an observed Screen Recording grant:
+      // neither a previous-missing transition nor an explicit setup proves
+      // pixels flow again, only a fresh probe saying so does.
+      if (permission.screen_recording === true) this.captureFailed = false;
       const bundleId = text(record(permission.source).host_bundle_id, 256);
+      const signature = this.buildSignature();
       this.setHealth({
         ...this.currentHealth,
         status: this.captureFailed ? "unavailable" : "connected",
@@ -372,11 +429,11 @@ export class CuaComputerBackend implements ComputerBackend {
         ? {
             kind: "permission-required",
             missing: this.permissions,
-            buildSignature: "unknown",
+            buildSignature: signature,
             ...(bundleId ? { bundleId } : {}),
             message: computerPermissionSetupMessage(
               this.permissions,
-              "unknown",
+              signature,
               bundleId || undefined,
             ),
           }
@@ -456,7 +513,12 @@ export class CuaComputerBackend implements ComputerBackend {
   private async target(
     windowId = this.selectedWindow,
     fresh = true,
-  ): Promise<{ pid: number; window_id: number; window: ComputerWindow }> {
+  ): Promise<{
+    pid: number;
+    window_id: number;
+    window: ComputerWindow;
+    baseline: number | undefined;
+  }> {
     if (!windowId || !/^cua:[1-9]\d*:[1-9]\d*$/.test(windowId))
       throw new CuaActionError(
         "Select an exact window before acting.",
@@ -471,7 +533,15 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
-    return { pid: window.pid, window_id: Number(windowId.split(":")[2]), window };
+    // The desktop generation this resolution is grounded in. Checked again at
+    // inject: anything that moved the generation in between (a lock/resume the
+    // reads above did not yet see) must refuse before dispatch, never after.
+    return {
+      pid: window.pid,
+      window_id: Number(windowId.split(":")[2]),
+      window,
+      baseline: this.desktopEpoch,
+    };
   }
   async focusWindow(windowId: string): Promise<void> {
     // Selection sends no input. The actual actuator revalidates the exact
@@ -553,7 +623,8 @@ export class CuaComputerBackend implements ComputerBackend {
       if (generation === this.imageGeneration && this.stills.attached && !this.disposed) {
         this.cachedImage = image;
       }
-      this.captureFailed = false;
+      // No capture-failure reset here: only an observed Screen Recording grant
+      // (in refresh()) proves capture is back, so only it clears the flag.
       this.setHealth({
         ...this.currentHealth,
         status: "connected",
@@ -562,14 +633,7 @@ export class CuaComputerBackend implements ComputerBackend {
       });
       return image;
     } catch (error) {
-      this.captureFailed = true;
-      this.setHealth({
-        ...this.currentHealth,
-        status: "unavailable",
-        captureAvailable: false,
-        consecutiveFailures: this.currentHealth.consecutiveFailures + 1,
-        lastFailure: { at: new Date().toISOString(), message: String(error).slice(0, 2048) },
-      });
+      this.markCaptureFailed(error);
       throw error;
     }
   }
@@ -581,17 +645,25 @@ export class CuaComputerBackend implements ComputerBackend {
         "unsupported_operation",
       );
     const { pid, window_id, window } = await this.target(request.windowId);
-    const result = await this.call("get_window_state", {
-      pid,
-      window_id,
-      include_accessibility_tree: false,
-      include_screenshot: true,
-      max_dimension: request.maxDimension ?? 1536,
-    });
-    this.assertObservedWindow(result, pid, window_id);
-    const image = { ...this.screenshot(result), windowId: window.id };
-    this.observedGeometry.set(window.id, image.region!);
-    return image;
+    try {
+      const result = await this.call("get_window_state", {
+        pid,
+        window_id,
+        include_accessibility_tree: false,
+        include_screenshot: true,
+        max_dimension: request.maxDimension ?? 1536,
+      });
+      this.assertObservedWindow(result, pid, window_id);
+      const image = { ...this.screenshot(result), windowId: window.id };
+      this.observedGeometry.set(window.id, image.region!);
+      return image;
+    } catch (error) {
+      // Targeting failures above never reach here; anything failing past the
+      // target produced no usable pixels, so health flips while the throw —
+      // and any input verdict — stands exactly as before.
+      this.markCaptureFailed(error);
+      throw error;
+    }
   }
   private assertObservedWindow(result: CuaToolResult, pid: number, windowId: number): void {
     const data = result.structuredContent ?? {};
@@ -623,17 +695,25 @@ export class CuaComputerBackend implements ComputerBackend {
     const { pid, window_id, window } = await this.target(options.windowId, false);
     state = { ...state, windows: [window] };
     if (!options.includeTree && !options.includeScreenshot) return state;
-    const result = await this.call("get_window_state", {
-      pid,
-      window_id,
-      include_screenshot: options.includeScreenshot === true,
-      include_accessibility_tree: options.includeTree === true,
-      max_elements: 1024,
-      max_depth: 25,
-      max_dimension: 1536,
-    });
+    let result: CuaToolResult;
+    try {
+      result = await this.call("get_window_state", {
+        pid,
+        window_id,
+        include_screenshot: options.includeScreenshot === true,
+        include_accessibility_tree: options.includeTree === true,
+        max_elements: 1024,
+        max_depth: 25,
+        max_dimension: 1536,
+      });
+      this.assertObservedWindow(result, pid, window_id);
+    } catch (error) {
+      // Past the target, the observation produced no usable pixels, so health
+      // flips while the throw stands exactly as before.
+      this.markCaptureFailed(error);
+      throw error;
+    }
     const data = result.structuredContent ?? {};
-    this.assertObservedWindow(result, pid, window_id);
     const children: ComputerUiNode[] = [];
     if (Array.isArray(data.elements))
       for (const value of data.elements.slice(0, 1024)) {
@@ -671,16 +751,38 @@ export class CuaComputerBackend implements ComputerBackend {
       truncated: data.elements_complete !== true,
       children,
     };
-    const image = options.includeScreenshot
-      ? { ...this.screenshot(result), windowId: window.id }
-      : undefined;
-    if (image?.region) this.observedGeometry.set(window.id, image.region);
+    const image = options.includeScreenshot ? this.previewImage(result, window.id) : undefined;
+    if (image && "screenshot" in image) {
+      if (image.screenshot.region) this.observedGeometry.set(window.id, image.screenshot.region);
+    }
     return {
       ...state,
       root,
       accessibility: { status: "partial", unavailableWindowIds: [] },
-      ...(image ? { screenshot: image } : {}),
+      ...(image && "screenshot" in image ? { screenshot: image.screenshot } : {}),
+      ...(image && "previewNote" in image ? { previewNote: image.previewNote } : {}),
     };
+  }
+  /**
+   * The window's preview image, or a note when only the preview failed. A
+   * preview-only failure must not fail the observation: the tree above still
+   * stands and input is unaffected — reselecting (observing) the window
+   * resumes previews.
+   */
+  private previewImage(
+    result: CuaToolResult,
+    windowId: string,
+  ): { readonly screenshot: ComputerScreenshot } | { readonly previewNote: string } {
+    try {
+      return { screenshot: { ...this.screenshot(result), windowId } };
+    } catch (error) {
+      if (!(error instanceof CuaActionError) || error.code !== "capture_unavailable") throw error;
+      this.markCaptureFailed(error);
+      return {
+        previewNote:
+          "The preview for this window failed; input is unaffected. Reselect the window to resume.",
+      };
+    }
   }
   private async input(
     name: string,
@@ -689,7 +791,7 @@ export class CuaComputerBackend implements ComputerBackend {
     point?: ComputerPoint,
     preparedBounds?: ComputerRect,
   ): Promise<ComputerBackendActionResult> {
-    const { pid, window_id, window } = await this.target(windowId);
+    const { pid, window_id, window, baseline } = await this.target(windowId);
     if (!window.visible) {
       const message =
         "The target window is not available on the current Space. Read its state after it becomes available before continuing.";
@@ -711,6 +813,16 @@ export class CuaComputerBackend implements ComputerBackend {
         "Window geometry changed since observation; obtain a new screenshot.",
         "not-dispatched",
         "stale_geometry",
+      );
+    // Fence the dispatch against the generation the target was resolved in.
+    // The span above is synchronous today, so the operative guard for a
+    // generation that moves mid-flight lives in host(); this refuses before
+    // dispatch whenever resolution and injection ever straddle an await.
+    if (baseline !== undefined && this.desktopEpoch !== undefined && this.desktopEpoch !== baseline)
+      throw new CuaActionError(
+        "The desktop changed after this target was resolved. Observe again before continuing.",
+        "not-dispatched",
+        "stale_desktop_epoch",
       );
     let pixel: Record<string, unknown> = {};
     if (point) {
@@ -745,6 +857,17 @@ export class CuaComputerBackend implements ComputerBackend {
         },
         true,
       );
+    } catch (error) {
+      // A revoke, abort, or uncertain delivery can follow partial input, so the
+      // grounding the next input would check against cannot survive it. Clean
+      // refusals (nothing dispatched) keep it, so a pause recovery does not pay
+      // for a recapture it does not need.
+      if (
+        desktopOperationSignal()?.aborted ||
+        (error instanceof CuaActionError && error.effect === "dispatched-unknown")
+      )
+        this.observedGeometry.clear();
+      throw error;
     } finally {
       // An error can follow partial input, so cached pixels cannot survive it.
       this.clearCachedImage();
@@ -1059,6 +1182,9 @@ export class CuaComputerBackend implements ComputerBackend {
     });
     if (!reply.ok) throw new Error(reply.error ?? "Computer preview did not stop.");
     for (const [key] of matches) this.previewTasks.delete(key);
+    // Task-owned grounding ends with the task: a revoked task's window pixels
+    // must not ground a later claim, so the next input re-observes first.
+    this.observedGeometry.clear();
   }
   async dispose() {
     this.clearCachedImage();

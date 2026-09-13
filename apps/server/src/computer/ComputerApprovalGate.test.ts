@@ -73,6 +73,50 @@ describe("ComputerApprovalGate", () => {
     expect(ids).toHaveLength(2);
   });
 
+  it("re-prompts a declined task next turn without leaking the decision into clipboard", async () => {
+    const gate = new ComputerApprovalGate();
+    const taskPrompts: string[] = [];
+    const clipboardPrompts: string[] = [];
+    const taskInput = (turnId: string) => ({
+      threadId: "a",
+      turnId,
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) taskPrompts.push(id);
+      },
+    });
+    const clipboardInput = () => ({
+      threadId: "a",
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) clipboardPrompts.push(id);
+      },
+    });
+    // Turn one declines the task prompt.
+    const first = gate.requestTask(taskInput("turn-1"));
+    gate.respond("a", taskPrompts[0]!, "decline");
+    expect(await first).toBe(false);
+    // A clipboard approval is a separate per-call consent: the task decline
+    // neither answers it nor suppresses its prompt.
+    const clipboardFirst = gate.request(clipboardInput());
+    expect(clipboardPrompts).toHaveLength(1);
+    gate.respond("a", clipboardPrompts[0]!, "decline");
+    expect(await clipboardFirst).toBe(false);
+    // Turn two re-prompts instead of replaying the decline, and can accept.
+    const second = gate.requestTask(taskInput("turn-2"));
+    expect(taskPrompts).toHaveLength(2);
+    gate.respond("a", taskPrompts[1]!, "accept");
+    expect(await second).toBe(true);
+    // The clipboard decline never touched the task grant: the turn stays approved.
+    expect(await gate.requestTask(taskInput("turn-2"))).toBe(true);
+    expect(taskPrompts).toHaveLength(2);
+    // And the task grant never answers a clipboard prompt either.
+    const clipboardSecond = gate.request(clipboardInput());
+    expect(clipboardPrompts).toHaveLength(2);
+    gate.respond("a", clipboardPrompts[1]!, "accept");
+    expect(await clipboardSecond).toBe(true);
+  });
+
   it("cannot retain consent when Stop races an accepted response", async () => {
     const gate = new ComputerApprovalGate();
     const input = {
@@ -150,5 +194,53 @@ describe("ComputerApprovalGate", () => {
     await expect(result).rejects.toThrow();
     expect(resolved).toEqual([undefined, "cancel"]);
     expect(gate.respond("a", requestId, "accept")).toBe(false);
+  });
+
+  it("refuses a full per-thread queue retryably while other chats still prompt", async () => {
+    const gate = new ComputerApprovalGate();
+    const quiet = {
+      threadId: "busy",
+      signal: new AbortController().signal,
+      publish: async () => {},
+    };
+    for (let i = 0; i < 8; i++) void gate.request(quiet);
+    await expect(gate.request(quiet)).rejects.toMatchObject({
+      code: "approval_queue_full",
+      retryable: true,
+    });
+    // The thread cap is per chat: an uninvolved thread still gets its prompt.
+    let otherId = "";
+    const other = gate.request({
+      threadId: "other",
+      signal: new AbortController().signal,
+      publish: async (id) => {
+        otherId = id;
+      },
+    });
+    gate.respond("other", otherId, "accept");
+    expect(await other).toBe(true);
+    gate.cancelThread("busy");
+  });
+
+  it("refuses past the shared queue cap with the same retryable code", async () => {
+    const gate = new ComputerApprovalGate();
+    const threads = Array.from({ length: 16 }, (_, i) => `thread-${i}`);
+    for (const threadId of threads) {
+      for (let i = 0; i < 8; i++) {
+        void gate.request({
+          threadId,
+          signal: new AbortController().signal,
+          publish: async () => {},
+        });
+      }
+    }
+    await expect(
+      gate.request({
+        threadId: "overflow",
+        signal: new AbortController().signal,
+        publish: async () => {},
+      }),
+    ).rejects.toMatchObject({ code: "approval_queue_full", retryable: true });
+    for (const threadId of threads) gate.cancelThread(threadId);
   });
 });

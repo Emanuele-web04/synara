@@ -7,6 +7,7 @@ import {
   COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
   ComputerBackendError,
 } from "./ComputerBackend.ts";
+import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
@@ -1961,4 +1962,91 @@ it("never re-admits a detached tool continuation after revocation and re-enable"
   await refused;
   expect(backend.callsFor("typeText")).toHaveLength(0);
   await manager.dispose();
+});
+
+it("settles a pending approval prompt when control is switched off mid-turn", async () => {
+  const backend = new FakeComputerBackend();
+  const manager = new ComputerManager({ backend });
+  try {
+    const prompt = computerApprovalGate.request({
+      threadId: "owner",
+      turnId: "turn-1",
+      signal: new AbortController().signal,
+      publish: async () => undefined,
+    });
+    const settled = expect(prompt).resolves.toBe(false);
+    await manager.setControlEnabled("owner", false);
+    // Without the synchronous cancel, this hangs until the gate's timeout.
+    await settled;
+    computerApprovalGate.cancelThread("owner");
+  } finally {
+    await manager.dispose();
+  }
+});
+
+it("keeps a pause when the thread is re-armed while its readiness probe is in flight", async () => {
+  const entered = deferred();
+  const gate = deferred();
+  class PausedBackend extends FakeComputerBackend {
+    ready = false;
+    override async typeText(text: string) {
+      if (!this.ready)
+        throw new ComputerBackendError("Return to the target window.", {
+          inputPause: { windowId: "fake-calculator", message: "Return to the target window." },
+        });
+      return super.typeText(text);
+    }
+    async checkInputReady() {
+      entered.resolve();
+      await gate.promise;
+      if (!this.ready) throw new Error("still unavailable");
+    }
+  }
+  const backend = new PausedBackend();
+  const manager = new ComputerManager({ backend });
+  try {
+    await expect(manager.typeText("thread-a", "hello")).rejects.toHaveProperty("inputPause");
+    const probing = manager.getState({ windowId: "fake-calculator" });
+    await entered.promise;
+    // Re-armed to a new generation while the probe is in flight: the window
+    // may be ready, but this pause was recorded under the older generation.
+    await manager.setControlEnabled("thread-a", false);
+    await manager.setControlEnabled("thread-a", true);
+    backend.ready = true;
+    gate.resolve();
+    await probing;
+    expect((await manager.getThreadState("thread-a")).inputPause).toBeDefined();
+    await expect(manager.typeText("thread-a", "hello")).rejects.toHaveProperty("inputPause");
+  } finally {
+    await manager.dispose();
+  }
+});
+
+it("takes a single after-capture as the observation for a macOS scroll", async () => {
+  class MacosFake extends FakeComputerBackend {
+    readonly agentDialect = "macos" as const;
+  }
+  const backend = new MacosFake();
+  const manager = new ComputerManager({ backend });
+  try {
+    const { result, observation } = await manager.scrollCalibrated(
+      "thread-1",
+      { x: 1_100, y: 200 },
+      0,
+      400,
+      { observe: true },
+    );
+    // No before-capture for measurement on macOS: one inject, one observation.
+    expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
+    expect(observation).toBeDefined();
+    expect(result.scroll?.traveledY).toBeUndefined();
+    expect(result.scroll?.requested).toEqual({ deltaX: 0, deltaY: 400 });
+    const unobserved = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+      observe: false,
+    });
+    expect(unobserved.observation).toBeUndefined();
+    expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
+  } finally {
+    await manager.dispose();
+  }
 });

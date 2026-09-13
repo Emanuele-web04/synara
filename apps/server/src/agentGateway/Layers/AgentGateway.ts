@@ -794,9 +794,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.orElseSucceed(() => null)),
   });
 
-  // One denial activity per (thread, turn): agents typically retry the denied
-  // tool several times in a row, and repeated cards would bury the chat. The
-  // decider appends activities verbatim, so the dedupe lives here.
+  // One denial activity per (thread, turn, tool): agents typically retry the denied
+  // tool several times in a row, and repeated cards would bury the chat — but a
+  // second, different tool denied in the same turn is a different fact and earns
+  // its own card. The decider appends activities verbatim, so the dedupe lives here.
   const surfacedComputerControlDenials = new Set<string>();
   const SURFACED_DENIALS_MAX = 512;
   const surfaceCapabilityDenial: NonNullable<
@@ -805,7 +806,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     // Only computer control has a user-facing switch to point at; other
     // capability denials stay plain tool errors.
     if (denial.requiredCapability !== COMPUTER_CONTROL_CAPABILITY) return Effect.void;
-    const dedupeKey = `${denial.callerThreadId}:${denial.callerTurnId ?? "no-turn"}`;
+    const dedupeKey = `${denial.callerThreadId}:${denial.callerTurnId ?? "no-turn"}:${denial.toolName}`;
     if (surfacedComputerControlDenials.has(dedupeKey)) return Effect.void;
     // FIFO eviction, not a wholesale clear: clearing forgets every live turn's
     // dedupe key at once and would let each of them surface a duplicate card.
@@ -817,6 +818,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       kind: "computer-control-denied",
       threadId: denial.callerThreadId,
       turnId: denial.callerTurnId,
+      // Part of the identity for the same reason it is part of the dedupe key:
+      // two cards naming different tools are two different cards, and sharing
+      // one command id would make the second a replay of the first.
+      toolName: denial.toolName,
     });
     const createdAt = isoNow();
     return orchestrationEngine
@@ -1012,12 +1017,24 @@ export const makeAgentGateway = Effect.gen(function* () {
       : []),
   ];
 
+  // The computer family by name, read off the unfiltered catalog above: a
+  // caller whose session was never granted computer control still gets a
+  // capability_denied (and the denial card) when it calls one of these by
+  // name, even though tools/list never advertised them to it.
+  const computerToolNames = new Set(
+    tools
+      .filter((tool) => tool.requiredCapability === COMPUTER_CONTROL_CAPABILITY)
+      .map((tool) => tool.definition.name),
+  );
+
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({
       credentials,
       snapshotQuery,
       tools,
       onCapabilityDenied: surfaceCapabilityDenial,
+      isComputerToolName: (toolName) => computerToolNames.has(toolName),
+      computerControlCapability: COMPUTER_CONTROL_CAPABILITY,
       instructions: AGENT_GATEWAY_INSTRUCTIONS,
       requireThreadShell,
     }),

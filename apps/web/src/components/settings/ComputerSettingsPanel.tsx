@@ -395,7 +395,7 @@ export function ComputerSettingsPanel({
       <SettingsSection title="Computer control">
         <SettingsRow
           title="How agents use the desktop"
-          description="Invoke /computer-use when you need desktop control. In Full access, routine actions continue automatically; approval mode asks once for the active Computer task. Provider risk reviews and consequential-action confirmations still apply, and clipboard reads remain separate. The model must support images and tool calls. Set up checks system permissions; it does not load Computer tools into ordinary messages."
+          description="Invoke /computer-use when you need desktop control. In Full access, routine actions continue automatically; approval mode asks once for the active Computer task. Provider risk reviews and consequential-action confirmations still apply, and clipboard reads remain separate. The model must support images and tool calls. Set up checks system permissions; it does not load Computer tools into ordinary messages. Looking (windows/state/screenshots) never asks; acting asks once per task, clipboard always asks."
         />
       </SettingsSection>
     </div>

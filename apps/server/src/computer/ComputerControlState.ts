@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+function noop(): void {}
+
 interface ThreadControlState {
   readonly disabled: boolean;
   readonly generation: number;
@@ -12,6 +14,15 @@ interface ThreadControlState {
 export class ComputerControlState {
   private readonly threads = new Map<string, ThreadControlState>();
   private writes = Promise.resolve();
+  /**
+   * Per-thread operation chain. Queued-dispatch and edit-resend admissions for
+   * the same thread race through admitControl concurrently; without
+   * serialization their read-modify-write sequences interleave and the last
+   * writer silently wins. Chaining keeps every mutation ordered per thread
+   * while reads stay synchronous. Entries are removed once their tail settles
+   * so threads do not accumulate here beyond the threads map itself.
+   */
+  private readonly threadChains = new Map<string, Promise<void>>();
   private loadError: Error | undefined;
 
   constructor(private readonly filePath?: string) {
@@ -58,30 +69,53 @@ export class ComputerControlState {
     if (this.loadError) return Promise.reject(this.loadError);
     const previous = this.get(threadId);
     if (!disabled && !previous.disabled) return Promise.resolve();
-    this.threads.set(threadId, {
-      disabled,
-      generation: previous.generation + (disabled ? 1 : 0),
+    return this.serialize(threadId, () => {
+      const current = this.get(threadId);
+      if (!disabled && !current.disabled) return Promise.resolve();
+      this.threads.set(threadId, {
+        disabled,
+        generation: current.generation + (disabled ? 1 : 0),
+      });
+      return this.persist();
     });
-    return this.persist();
   }
 
   recordChatIntent(threadId: string, enabled: boolean, generation: number): Promise<void> {
     if (this.loadError) return enabled ? Promise.reject(this.loadError) : Promise.resolve();
-    const previous = this.get(threadId);
-    const chatGeneration = enabled && this.allows(threadId, generation) ? generation : undefined;
-    if (previous.chatGeneration === chatGeneration) return Promise.resolve();
-    const next = {
-      disabled: previous.disabled,
-      generation: previous.generation,
-      ...(chatGeneration !== undefined ? { chatGeneration } : {}),
-    };
-    this.threads.set(threadId, next);
-    return this.persist().catch((error) => {
-      if (this.threads.get(threadId) === next) {
-        this.threads.set(threadId, { disabled: next.disabled, generation: next.generation });
-      }
-      throw error;
+    return this.serialize(threadId, () => {
+      const previous = this.get(threadId);
+      const chatGeneration = enabled && this.allows(threadId, generation) ? generation : undefined;
+      if (previous.chatGeneration === chatGeneration) return Promise.resolve();
+      const next = {
+        disabled: previous.disabled,
+        generation: previous.generation,
+        ...(chatGeneration !== undefined ? { chatGeneration } : {}),
+      };
+      this.threads.set(threadId, next);
+      return this.persist().catch((error) => {
+        if (this.threads.get(threadId) === next) {
+          this.threads.set(threadId, { disabled: next.disabled, generation: next.generation });
+        }
+        throw error;
+      });
     });
+  }
+
+  /**
+   * Runs the operation after every earlier operation for this thread settles,
+   * successfully or not. The returned promise settles exactly like the
+   * operation itself; the stored tail never rejects so a failure cannot stall
+   * later work.
+   */
+  private serialize(threadId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.threadChains.get(threadId) ?? Promise.resolve();
+    const next = previous.then(operation, operation);
+    const tail = next.then(noop, noop);
+    this.threadChains.set(threadId, tail);
+    void tail.then(() => {
+      if (this.threadChains.get(threadId) === tail) this.threadChains.delete(threadId);
+    });
+    return next;
   }
 
   private persist(): Promise<void> {

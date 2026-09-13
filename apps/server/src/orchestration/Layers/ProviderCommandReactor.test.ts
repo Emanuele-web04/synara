@@ -6047,9 +6047,9 @@ describe("ProviderCommandReactor", () => {
     { mode: "request" as const, after: "none", expected: false },
     { mode: "chat" as const, after: "none", expected: true },
     { mode: "chat" as const, after: "disable-reenable", expected: false },
-    { mode: "chat" as const, after: "ordinary-turn", expected: false },
+    { mode: "chat" as const, after: "ordinary-turn", expected: true },
   ])(
-    "Computer $mode with $after gives goal continuation exposure=$expected",
+    "ordinary follow-ups inherit live chat intent while single-shot requests do not persist (Computer $mode with $after gives goal continuation exposure=$expected)",
     async ({ mode, after, expected }) => {
       const manager = new ComputerManager({ backend: new FakeComputerBackend() });
       const harness = await createHarness({
@@ -6171,56 +6171,274 @@ describe("ProviderCommandReactor", () => {
     expect(sent?.input?.match(/AppSnap image metadata/g)).toHaveLength(1);
   });
 
-  it("removes Computer exposure on the next ordinary turn after request activation", async () => {
-    const harness = await createHarness();
+  it("a frozen single-shot request without a live invocation does not persist to the next ordinary turn", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const createdAt = new Date().toISOString();
-    for (const [index, activation] of [
-      { computerControlMode: "request" as const, computerControlGeneration: 0 },
-      {},
-    ].entries()) {
-      if (index > 0) {
-        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    try {
+      for (const [index, activation] of [
+        { computerControlMode: "request" as const, computerControlGeneration: 0 },
+        {},
+      ].entries()) {
+        if (index > 0) {
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.makeUnsafe(`computer-ready-${index}`),
+              threadId,
+              session: {
+                threadId,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "approval-required",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: createdAt,
+              },
+              createdAt,
+            }),
+          );
+        }
         await Effect.runPromise(
           harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`computer-ready-${index}`),
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`computer-request-${index}`),
             threadId,
-            session: {
-              threadId,
-              status: "ready",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: createdAt,
+            message: {
+              messageId: asMessageId(`computer-message-${index}`),
+              role: "user",
+              text: "Continue",
+              attachments: [],
             },
+            ...activation,
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             createdAt,
           }),
         );
+        await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
       }
+      expect(
+        harness.startSession.mock.calls.map(([, input]) => input.enableComputerControl),
+      ).toEqual([true, false]);
+      // The frozen request admitted this turn but recorded no durable intent:
+      // there is nothing for a follow-up to inherit.
+      expect(manager.canContinueChatControl(threadId)).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("stop clears durable chat intent so the next ordinary turn drops Computer", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    const markSessionReady = () =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(
+            `computer-stop-ready-${harness.sendTurn.mock.calls.length}`,
+          ),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+    try {
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`computer-request-${index}`),
+          commandId: CommandId.makeUnsafe("computer-stop-chat"),
           threadId,
           message: {
-            messageId: asMessageId(`computer-message-${index}`),
+            messageId: asMessageId("computer-stop-message-1"),
             role: "user",
             text: "Continue",
             attachments: [],
           },
-          ...activation,
+          computerControlMode: "chat",
+          computerControlGeneration: 0,
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           createdAt,
         }),
       );
-      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
+      expect(manager.canContinueChatControl(threadId)).toBe(true);
+      await markSessionReady();
+      // Stop is an explicit off: the durable intent is cleared even though no
+      // turn carried computerControlMode "off".
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("computer-stop"),
+          threadId,
+          createdAt,
+        }),
+      );
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      expect(manager.canContinueChatControl(threadId)).toBe(false);
+      await markSessionReady();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("computer-stop-after"),
+          threadId,
+          message: {
+            messageId: asMessageId("computer-stop-message-2"),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(false);
+      expect(manager.canContinueChatControl(threadId)).toBe(false);
+    } finally {
+      await manager.dispose();
     }
-    expect(harness.startSession.mock.calls.map(([, input]) => input.enableComputerControl)).toEqual(
-      [true, false],
-    );
+  });
+
+  it("a fork mints fresh control state from the parent's live chat intent", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const parentId = ThreadId.makeUnsafe("thread-1");
+    const childId = ThreadId.makeUnsafe("thread-fork-child");
+    const orphanId = ThreadId.makeUnsafe("thread-fork-orphan");
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+      forkThreadResult: { threadId: childId, resumeCursor: { sessionId: "fork-child" } },
+    });
+    const createdAt = new Date().toISOString();
+    const startOrdinaryTurn = (id: ThreadId, tag: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`computer-fork-turn-${tag}`),
+          threadId: id,
+          message: {
+            messageId: asMessageId(`computer-fork-message-${tag}`),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+    try {
+      // Parent with live chat intent: the fork inherits it at generation 0.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("computer-fork-parent-chat"),
+          threadId: parentId,
+          message: {
+            messageId: asMessageId("computer-fork-parent-message"),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          computerControlMode: "chat",
+          computerControlGeneration: 0,
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(manager.canContinueChatControl(parentId)).toBe(true);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("computer-fork-create"),
+          threadId: childId,
+          sourceThreadId: parentId,
+          projectId: asProjectId("project-1"),
+          title: "Fork child",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [],
+          createdAt,
+        }),
+      );
+      await startOrdinaryTurn(childId, "child");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.forkThread).toHaveBeenCalledTimes(1);
+      expect(harness.forkThread.mock.calls[0]?.[0]).toMatchObject({
+        sourceThreadId: parentId,
+        enableComputerControl: true,
+      });
+      expect(manager.canContinueChatControl(childId)).toBe(true);
+      // Parent intent revoked: a later fork starts without computer control.
+      await manager.setControlEnabled(parentId, false);
+      await manager.setControlEnabled(parentId, true);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("computer-fork-create-orphan"),
+          threadId: orphanId,
+          sourceThreadId: parentId,
+          projectId: asProjectId("project-1"),
+          title: "Fork orphan",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [],
+          createdAt,
+        }),
+      );
+      await startOrdinaryTurn(orphanId, "orphan");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+      expect(harness.forkThread).toHaveBeenCalledTimes(2);
+      expect(harness.forkThread.mock.calls[1]?.[0]).toMatchObject({
+        sourceThreadId: parentId,
+        enableComputerControl: false,
+      });
+      expect(manager.canContinueChatControl(orphanId)).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it.each([false, true])(
