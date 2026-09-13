@@ -530,10 +530,22 @@ export function providerStartOptionsFromInstance(
     }
     case "claudeAgent": {
       const homePath = trimString(config.homePath);
-      return binaryPath || homePath || environment.environment
+      const configDir = trimString(config.configDir);
+      const secureStorageDir = trimString(config.secureStorageDir);
+      const claudeEnvironment =
+        configDir || secureStorageDir
+          ? {
+              ...(environment.environment ?? {}),
+              ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
+              ...(secureStorageDir
+                ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir }
+                : {}),
+            }
+          : environment.environment;
+      return binaryPath || homePath || claudeEnvironment
         ? {
             claudeAgent: {
-              ...environment,
+              ...(claudeEnvironment !== undefined ? { environment: claudeEnvironment } : {}),
               ...(binaryPath ? { binaryPath } : {}),
               ...(homePath ? { homePath } : {}),
             },

@@ -331,3 +331,58 @@ describe("providerStartOptionsFromInstance codex account isolation", () => {
     expect(options?.codex?.accountId).toBeUndefined();
   });
 });
+
+describe("providerStartOptionsFromInstance Claude profile paths", () => {
+  it("maps first-class config and secure-storage directories into the Claude environment", () => {
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            enabled: true,
+            environment: [{ name: "ANTHROPIC_BASE_URL", value: "https://gateway.example" }],
+            config: {
+              configDir: "/profiles/claude-work",
+              secureStorageDir: "/profiles/claude-auth-work",
+            },
+          },
+        },
+      },
+      { provider: "claudeAgent", instanceId: providerInstanceId("claude_work") },
+    );
+
+    expect(providerStartOptionsFromInstance(resolved!)?.claudeAgent?.environment).toEqual({
+      ANTHROPIC_BASE_URL: "https://gateway.example",
+      CLAUDE_CONFIG_DIR: "/profiles/claude-work",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/profiles/claude-auth-work",
+    });
+  });
+
+  it("gives first-class paths precedence over duplicate advanced environment rows", () => {
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            environment: [
+              { name: "CLAUDE_CONFIG_DIR", value: "/profiles/stale" },
+              { name: "CLAUDE_SECURESTORAGE_CONFIG_DIR", value: "/profiles/stale-auth" },
+            ],
+            config: {
+              configDir: "/profiles/current",
+              secureStorageDir: "/profiles/current-auth",
+            },
+          },
+        },
+      },
+      { provider: "claudeAgent", instanceId: providerInstanceId("claude_work") },
+    );
+
+    expect(providerStartOptionsFromInstance(resolved!)?.claudeAgent?.environment).toMatchObject({
+      CLAUDE_CONFIG_DIR: "/profiles/current",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/profiles/current-auth",
+    });
+  });
+});
