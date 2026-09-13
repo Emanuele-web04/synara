@@ -1,0 +1,60 @@
+name: Chara wire ACP discovery argv
+
+on:
+  push:
+    branches: [codex/generic-acp-provider]
+    paths: [.github/workflows/chara-wire-acp-discovery-args.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/generic-acp-provider
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: "false"
+      - name: Carry argv through model discovery
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("apps/web/src/lib/providerDiscoveryReactQuery.ts")
+          text = p.read_text()
+          replacements = [
+            (
+              '    agentDir: string | null,\n    cwd: string | null,\n  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,',
+              '    agentDir: string | null,\n    cwd: string | null,\n    args: readonly string[] | null = null,\n  ) =>\n    [\n      "provider-discovery",\n      "models",\n      provider,\n      binaryPath,\n      apiEndpoint,\n      agentDir,\n      cwd,\n      args,\n    ] as const,',
+            ),
+            (
+              '  agentDir?: string | null;\n  cwd?: string | null;',
+              '  agentDir?: string | null;\n  args?: readonly string[] | null;\n  cwd?: string | null;',
+            ),
+            (
+              '    input.agentDir ?? null,\n    input.cwd ?? null,\n  );',
+              '    input.agentDir ?? null,\n    input.cwd ?? null,\n    input.args ?? null,\n  );',
+            ),
+            (
+              '            ...(input.agentDir ? { agentDir: input.agentDir } : {}),\n            ...(input.cwd ? { cwd: input.cwd } : {}),',
+              '            ...(input.agentDir ? { agentDir: input.agentDir } : {}),\n            ...(input.args !== undefined && input.args !== null ? { args: [...input.args] } : {}),\n            ...(input.cwd ? { cwd: input.cwd } : {}),',
+            ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"missing expected provider discovery pattern: {old!r}")
+              text = text.replace(old, new, 1)
+          p.write_text(text)
+          PY
+          bunx oxfmt apps/web/src/lib/providerDiscoveryReactQuery.ts
+          bun run typecheck
+          rm -f .github/workflows/chara-wire-acp-discovery-args.yml
+          git config user.name Chara
+          git config user.email legend.alkalex07@gmail.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: carry ACP argv through model discovery"
+          git push origin HEAD:codex/generic-acp-provider
