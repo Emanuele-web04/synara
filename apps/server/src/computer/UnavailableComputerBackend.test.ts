@@ -40,6 +40,15 @@ describe("UnavailableComputerBackend", () => {
     expect(new UnavailableComputerBackend(REASON).capabilities()).toEqual(NO_COMPUTER_CAPABILITIES);
   });
 
+  it("answers to the shared desktop id, so still-frame routes match every other backend", () => {
+    // Cua and Fake both use DEFAULT_COMPUTER_ID ("desktop") while every
+    // pane/frame client asks for "desktop": a "primary" here 404s the route.
+    expect(new UnavailableComputerBackend(REASON).computerId).toBe("desktop");
+    expect(new UnavailableComputerBackend(REASON, { computerId: "custom" }).computerId).toBe(
+      "custom",
+    );
+  });
+
   it("degrades an empty reason rather than emitting a message the contract rejects", async () => {
     const availability = await new UnavailableComputerBackend("   ").availability();
 

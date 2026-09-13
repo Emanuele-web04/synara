@@ -425,6 +425,14 @@ export class ComputerManager {
         generation,
       );
     } catch (error) {
+      // Fail closed and LOUD: a persist failure means durable intent is
+      // unrecorded, so the thread is disabled; without this warning the next
+      // turn's silent canContinue=false looks like a stickiness bug.
+      console.warn("[computer] admitControl persist failed, disabling thread", {
+        threadId,
+        mode,
+        generation,
+      });
       this.disabledThreads.add(threadId);
       throw error;
     }

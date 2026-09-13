@@ -81,6 +81,7 @@ import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { COMPUTER_CONTROL_CAPABILITY, makeAgentGatewayComputerTools } from "../computerTools.ts";
+import { isSynaraComputerToolFamilyName } from "../computerToolPermission.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
@@ -1033,7 +1034,13 @@ export const makeAgentGateway = Effect.gen(function* () {
       snapshotQuery,
       tools,
       onCapabilityDenied: surfaceCapabilityDenial,
-      isComputerToolName: (toolName) => computerToolNames.has(toolName),
+      // Namespace-insensitive: a session that never saw the catalog reaches
+      // for prefixed spellings (synara_computer_click,
+      // mcp__synara__computer_click). Those must deny with the card, never die
+      // as Unknown-tool. The exact set stays as a backstop for any catalog
+      // computer name outside the static family list.
+      isComputerToolName: (toolName) =>
+        computerToolNames.has(toolName) || isSynaraComputerToolFamilyName(toolName),
       computerControlCapability: COMPUTER_CONTROL_CAPABILITY,
       instructions: AGENT_GATEWAY_INSTRUCTIONS,
       requireThreadShell,

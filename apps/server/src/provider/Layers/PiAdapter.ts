@@ -1809,14 +1809,26 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               defineTool: context.gatewayDefineTool,
               ...fetchOptions,
             });
-          } catch {
-            // Mirrors session start: without a usable catalog the lease is
-            // released instead of advertising unavailable control.
-            lease.release();
-            if (context.gatewaySessionLease === lease) delete context.gatewaySessionLease;
-            if (context.gatewayConnection === connection) delete context.gatewayConnection;
-            context.gatewayTools = [];
-            context.gatewayControlAvailable = false;
+          } catch (cause) {
+            // Rotation must never silently drop computer:*: the installed
+            // definitions stay valid through the rotated bearer, so keep them
+            // and stay available. Session start releases the lease on a bad
+            // catalog because nothing is installed yet; here clearing would
+            // revoke working control mid-session.
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi could not refresh the Synara gateway tool catalog after rotation; keeping the previous tools.",
+                detail: { method: "gateway/rotate", cause: toMessage(cause, "refresh failed") },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { cause: cause ?? null },
+              },
+            } satisfies ProviderRuntimeEvent);
             return;
           }
           if (context.stopped || sessions.get(threadId) !== context) return;
@@ -1838,11 +1850,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             rebuiltByName.delete(installed.name);
           }
           // Added tools cannot join the SDK's already-built registry; the
-          // context still tracks them truthfully for future rotations.
+          // context still tracks them truthfully for future rotations, and a
+          // warning names them so a newly-appearing computer:* is never a
+          // silent gap until the session restarts.
+          const addedNames = [...rebuiltByName.keys()];
           for (const added of rebuiltByName.values()) nextInstalled.push(added);
           context.gatewayTools = nextInstalled;
           context.gatewayControlAvailable = nextInstalled.length > 0;
           const removed = [...installedNames].filter((name) => !freshNameSet.has(name));
+          const droppedComputer = removed.filter((name) => name.startsWith("computer"));
+          const addedComputer = addedNames.filter((name) => name.startsWith("computer"));
+          if (addedNames.length > 0 || droppedComputer.length > 0) {
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi gateway tool catalog changed after rotation; added tools need a session restart before the model can call them.",
+                detail: {
+                  method: "gateway/rotate",
+                  ...(addedNames.length > 0 ? { added: addedNames } : {}),
+                  ...(removed.length > 0 ? { removed } : {}),
+                  ...(addedComputer.length > 0 ? { addedComputer } : {}),
+                  ...(droppedComputer.length > 0 ? { droppedComputer } : {}),
+                },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { added: addedNames, removed },
+              },
+            } satisfies ProviderRuntimeEvent);
+          }
           if (removed.length > 0) {
             try {
               context.runtime.session.setActiveToolsByName(

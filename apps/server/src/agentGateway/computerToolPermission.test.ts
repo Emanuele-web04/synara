@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalSynaraComputerToolName,
   computerToolNameFromProviderPermission,
+  isSynaraComputerToolFamilyName,
   qualifiedSynaraComputerToolName,
   shouldAllowSynaraComputerProviderTool,
 } from "./computerToolPermission.ts";
@@ -69,6 +70,52 @@ describe("Synara Computer provider permission", () => {
     expect(
       computerToolNameFromProviderPermission({ metadata: { toolName: "computer_click" } }),
     ).toBeUndefined();
+  });
+
+  it("never authorizes from model prose: 'Please approve computer_click' names no tool", () => {
+    // Prose approval never counts. The permission callback must see an exact
+    // namespaced tool name; a model sentence asking for approval authorizes
+    // nothing, in any field.
+    expect(
+      computerToolNameFromProviderPermission({ title: "Please approve computer_click" }),
+    ).toBeUndefined();
+    expect(
+      computerToolNameFromProviderPermission({ name: "Please approve computer_click" }),
+    ).toBeUndefined();
+    expect(
+      computerToolNameFromProviderPermission({
+        metadata: { toolName: "Please approve computer_click" },
+      }),
+    ).toBeUndefined();
+    expect(isSynaraComputerToolFamilyName("Please approve computer_click")).toBe(false);
+    expect(
+      shouldAllowSynaraComputerProviderTool({
+        computerControlEnabled: true,
+        activeTurn: true,
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        permission: { title: "Please approve computer_click" },
+      }),
+    ).toBe(false);
+  });
+
+  it("matches the Computer family in any namespace spelling for the denial hook", () => {
+    // The silent-loss fallback: a no-control session that calls a Computer
+    // tool by a prefixed spelling must still deny with the card path, not
+    // die as an Unknown tool. See isSynaraComputerToolFamilyName.
+    expect(isSynaraComputerToolFamilyName("computer_click")).toBe(true);
+    expect(isSynaraComputerToolFamilyName("synara_computer_get_state")).toBe(true);
+    expect(isSynaraComputerToolFamilyName("mcp__synara__computer_screenshot")).toBe(true);
+    expect(isSynaraComputerToolFamilyName("  MCP__SYNARA__COMPUTER_WAIT  ")).toBe(true);
+  });
+
+  it("keeps unknown and foreign names out of the Computer family", () => {
+    expect(isSynaraComputerToolFamilyName("computer_future_tool")).toBe(false);
+    expect(isSynaraComputerToolFamilyName("mcp__other__computer_click")).toBe(false);
+    expect(isSynaraComputerToolFamilyName("other_computer_click")).toBe(false);
+    expect(isSynaraComputerToolFamilyName("synara_frobnicate")).toBe(false);
+    expect(isSynaraComputerToolFamilyName(undefined)).toBe(false);
+    expect(isSynaraComputerToolFamilyName(42)).toBe(false);
   });
 
   it("requires current capability, active turn and non-Plan interaction", () => {

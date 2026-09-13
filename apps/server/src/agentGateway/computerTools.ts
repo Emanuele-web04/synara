@@ -1588,7 +1588,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll at an optional target. The target is resolved before the gesture and is never guessed. Scroll distance is measured in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even when it names no coordinates at all — roughly 80 pixels per notch of a physical wheel in a full-resolution window capture. Each request is limited to half the captured width or height so observations overlap; scroll.limitedTo reports any reduced request in desktop pixels. Read the returned image before scrolling again, because screenshot scales may differ. Applications may travel a different distance from the injected wheel units. On macOS Cua quantizes one operation to 120-pixel notches, accepts one axis, and does not support modifiers. Synara reports the injected deltas and any measured scroll.traveledY; it does not issue corrective retries on macOS. A traveledY of 0 means the content did not move at all, which usually means the page is already at its edge — a wheel cannot scroll past the top or bottom. If you are scrolling to hunt for a control, stop and call computer_get_state instead: its elements list names the labeled controls on screen, and one of those may already be targetable by label. ${POINTER_COORDINATE_HINT}`,
+      `Scroll at an optional target. The target is resolved before the gesture and is never guessed. Scroll distance is measured in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even when it names no coordinates at all — roughly 80 pixels per notch of a physical wheel in a full-resolution window capture. Each request is limited to half the captured width or height so observations overlap; scroll.limitedTo reports any reduced request in desktop pixels. Read the returned image before scrolling again, because screenshot scales may differ. Applications may travel a different distance from the injected wheel units. On macOS Cua quantizes one operation to 120-pixel notches up to 50 notches, accepts one axis, and does not support modifiers. Synara reports the injected deltas and any measured scroll.traveledY; it does not issue corrective retries on macOS. A traveledY of 0 means the content did not move at all, which usually means the page is already at its edge — a wheel cannot scroll past the top or bottom. If you are scrolling to hunt for a control, stop and call computer_get_state instead: its elements list names the labeled controls on screen, and one of those may already be targetable by label. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -1759,7 +1759,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_set_value",
       "Set computer value",
-      "Set the value of a uniquely labelled accessible control after a fresh snapshot. The label comes from computer_get_state's elements list; this writes atomically instead of typing keystrokes, so prefer it over click-then-type for any field that appears there. It replaces the control's whole value rather than inserting at the caret.",
+      "Set the value of a uniquely labelled accessible control after a fresh snapshot, through its freshly resolved element token. The label comes from computer_get_state's elements list; this writes atomically instead of typing keystrokes, so prefer it over click-then-type for any field that appears there. It replaces the control's whole value rather than inserting at the caret.",
       {
         type: "object",
         properties: {
@@ -1842,7 +1842,7 @@ function performActionArgumentNote(dialect: ComputerAgentDialect): string {
  */
 function hotkeyFormNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? 'One chord: any number of modifiers plus exactly one other key, pressed together and released together — ["meta", "s"] to save, ["meta", "shift", "z"] to redo. More than one non-modifier key is refused; to press two shortcuts, call this twice.'
+    ? 'One chord: one or more modifiers plus exactly one other key, pressed together and released together — ["meta", "s"] to save, ["meta", "shift", "z"] to redo. More than one non-modifier key is refused; to press two shortcuts, call this twice.'
     : 'One chord: every key is pressed in the order given, held, then released in reverse — ["ctrl", "s"] to save, ["ctrl", "shift", "z"] to redo. It is not a sequence of separate keystrokes: to press two shortcuts, call this twice.';
 }
 

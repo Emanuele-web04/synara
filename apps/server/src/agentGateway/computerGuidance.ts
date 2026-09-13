@@ -1,6 +1,19 @@
 import { COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION } from "../computer/ComputerBackend.ts";
 /** Shared provider-host Computer guidance. Never included in MCP initialize:
  * clients may expand server instructions per tool, and Pi uses native tools.
+ *
+ * Read-only vs mutation split, deliberately not a separate lease: perception
+ * tools (computer_list_windows, computer_get_state, computer_screenshot,
+ * computer_get_screen_size, computer_wait) and mutating tools share one
+ * `computer:control` capability, so every served Computer tool needs an
+ * explicit `/computer-use` task behind it. Always leasing perception would
+ * need a new `computer:control-read` capability in the gateway contract plus
+ * per-tool `requiredCapability` splits in computerTools.ts — a contract and
+ * tool-logic change, out of scope. Smallest safe step instead: the standing
+ * one-line Computer affordance in harnessPolicy.ts (unconditional on the
+ * Computer flag) plus this note, so a session without control routes
+ * desktop-app work to an explicit user invocation rather than substituting
+ * another surface or hallucinating a read-only grant it does not have.
  */
 
 /**

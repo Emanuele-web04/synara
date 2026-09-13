@@ -149,7 +149,9 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_000);
+    // Budget raised for the one-line Computer discoverability affordance
+    // above (173 chars); it still guards against accidental bloat.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_200);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -158,6 +160,29 @@ describe("Synara harness policy", () => {
     // Promising tools this session cannot reach would be a lie.
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
+  });
+
+  it("keeps the Computer discoverability affordance unconditional on the Computer flag", () => {
+    // A session without Computer tools is exactly where the affordance pays:
+    // the model must route desktop-app work to an explicit user invocation
+    // instead of substituting shell/AppleScript/browser/device tools.
+    const affordance =
+      "To operate real macOS/Windows apps (open, click, type, scroll), ask user to invoke Computer (/computer-use <task>); do not substitute shell/AppleScript/browser/device tools.";
+    for (const gatewayControlAvailable of [true, false] as const) {
+      for (const enableComputerControl of [true, false, undefined] as const) {
+        const policy = renderSynaraHarnessPolicy({
+          gatewayControlAvailable,
+          ...(enableComputerControl === undefined ? {} : { enableComputerControl }),
+        });
+        assert.include(policy, affordance, `${gatewayControlAvailable}/${enableComputerControl}`);
+      }
+    }
+    // One line, not the gated guidance: sessions without control must not pay
+    // for the full Computer instructions.
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true }),
+      "## Synara computer use",
+    );
   });
 });
 

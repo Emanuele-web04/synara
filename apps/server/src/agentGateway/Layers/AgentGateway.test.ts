@@ -1750,6 +1750,51 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("denies prefixed computer spellings with a denial card, never Unknown-tool", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      computerService: makeComputerServiceLayer({
+        backend: new FakeComputerBackend(),
+        supported: true,
+      }),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const denialCards = () =>
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+        );
+      const callComputerTool = (id: number, name: string) =>
+        harness.postRaw({
+          authorizationHeader: "Bearer token-parent",
+          body: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } },
+        });
+      const deniedErrorOf = (body: unknown) =>
+        JSON.parse(
+          (body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+        ) as { error: { code: string; details: { requiredCapability: string } } };
+      // token-parent was never granted computer control: prefixed spellings of a
+      // known family name deny with the card instead of dying as Unknown-tool.
+      for (const [id, name] of [
+        [21, "synara_computer_click"],
+        [22, "mcp__synara__computer_click"],
+      ] as const) {
+        const response = yield* callComputerTool(id, name);
+        assert.equal(response.status, 200);
+        const error = deniedErrorOf(response.body).error;
+        assert.equal(error.code, "capability_denied");
+        assert.equal(error.details.requiredCapability, "computer:control");
+      }
+      assert.equal(denialCards().length, 2);
+      // An entirely-unknown name still stays INVALID_PARAMS with no card.
+      const unknown = yield* callComputerTool(23, "foo_bar");
+      assert.equal(unknown.status, 200);
+      assert.equal((unknown.body as { error?: { code: number } }).error?.code, -32602);
+      assert.equal(denialCards().length, 2);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("requires the explicit diagnostics capability for forensic tools", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

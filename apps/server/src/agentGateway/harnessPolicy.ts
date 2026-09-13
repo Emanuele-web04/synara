@@ -61,6 +61,12 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
     "For known local files in user-facing Markdown, use readable labels and absolute file URLs, such as [config.ts](file:///absolute/path/config.ts). Relative links are only for the session working directory; otherwise use plain text and never invent a path.",
     'Synara collapses progress and tools under "Worked for...". Final responses must restate every needed scope, plan, decision, result, caveat, instruction, or question. Never request approval using "this", "the above", or another referent available only in collapsed content.',
     "When a structured user-input tool is available for a genuine decision, prefer it and include all decision context in its question or card.",
+    // Standing discoverability affordance, unconditional on the Computer flag:
+    // a session without Computer tools must still route desktop-app work to an
+    // explicit user invocation instead of faking it with another surface. One
+    // line, kept out of the Computer-gated guidance below so it costs nothing
+    // extra once control is on.
+    "To operate real macOS/Windows apps (open, click, type, scroll), ask user to invoke Computer (/computer-use <task>); do not substitute shell/AppleScript/browser/device tools.",
     ...controlPolicy,
     ...(capabilities.gatewayControlAvailable && capabilities.enableComputerControl === true
       ? [computerToolInstructions()]

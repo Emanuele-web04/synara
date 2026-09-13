@@ -2238,6 +2238,13 @@ const make = Effect.gen(function* () {
                   explicitInvocation,
                 ),
               );
+    yield* Effect.logDebug("provider command reactor computer inputs", {
+      threadId: input.threadId,
+      mode: activation.computerControlMode,
+      generation: activation.computerControlGeneration,
+      explicitInvocation,
+      enableComputerControl,
+    });
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const selectedProvider =

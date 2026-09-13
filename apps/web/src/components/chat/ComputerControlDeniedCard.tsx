@@ -42,8 +42,8 @@ export function ComputerControlDeniedCard({
           style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
         >
           {enabled
-            ? "On. Queued desktop turns stay cancelled — send a fresh message to continue."
-            : `The agent tried to act on the desktop${toolName ? ` (${toolName})` : ""} and was stopped.`}
+            ? "Queued desktop turns stay cancelled — send a fresh message to continue."
+            : `The agent tried to act on the desktop${toolName ? ` (${toolName})` : ""} and was stopped. Choose Enable to draft a /computer-use request, then send it to continue.`}
         </p>
       </div>
       {onEnable && !enabled ? (

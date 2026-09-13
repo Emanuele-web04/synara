@@ -20,6 +20,8 @@ export interface ComputerServiceLiveOptions {
   readonly platform?: NodeJS.Platform;
 }
 
+let warnedMissingControlStatePath = false;
+
 export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {}) {
   return Layer.effect(
     ComputerService,
@@ -44,6 +46,12 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
           { availability: unavailableAvailability },
         );
       const config = yield* Effect.serviceOption(ServerConfig);
+      if (Option.isNone(config) && !warnedMissingControlStatePath) {
+        warnedMissingControlStatePath = true;
+        yield* Effect.logWarning(
+          "computer control state path unavailable; using in-memory control state",
+        );
+      }
       const manager = new ComputerManager({
         backend,
         ...(Option.isSome(config)

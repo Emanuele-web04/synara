@@ -29,12 +29,12 @@ import type {
 import {
   clampComputerMessage,
   ComputerBackendError,
+  DEFAULT_COMPUTER_ID,
   NO_COMPUTER_CAPABILITIES,
   type ComputerBackend,
   type ComputerBackendEventListener,
 } from "./ComputerBackend.ts";
 
-const DEFAULT_COMPUTER_ID = "primary" as ComputerId;
 const FALLBACK_MESSAGE = "The Synara computer backend is unavailable for an unstated reason.";
 
 export interface UnavailableComputerBackendOptions {
