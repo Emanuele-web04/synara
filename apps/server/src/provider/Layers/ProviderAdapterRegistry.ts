@@ -76,11 +76,16 @@ function sessionBelongsToInstance(
 function eventBelongsToInstance(
   event: ProviderRuntimeEvent,
   instanceId: ProviderInstanceId,
+  untaggedClaims: UntaggedSessionClaims,
 ): boolean {
-  return (
-    event.providerInstanceId === instanceId ||
-    (event.providerInstanceId === undefined && instanceId === event.provider)
-  );
+  if (event.providerInstanceId !== undefined) {
+    return event.providerInstanceId === instanceId;
+  }
+  const claimedBy = untaggedClaims.get(event.threadId);
+  if (claimedBy !== undefined) {
+    return claimedBy === instanceId;
+  }
+  return instanceId === event.provider;
 }
 
 function adapterFacadeForInstance(
@@ -89,20 +94,30 @@ function adapterFacadeForInstance(
   untaggedClaims: UntaggedSessionClaims,
 ): ProviderAdapterShape<ProviderAdapterError> {
   const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = (input) =>
-    adapter
-      .startSession({
-        ...input,
-        provider: adapter.provider,
-        providerInstanceId: instanceId,
-      } satisfies ProviderAdapterSessionStartInput)
-      .pipe(
-        Effect.map((session) => {
-          if (session.providerInstanceId === undefined) {
-            untaggedClaims.set(session.threadId, instanceId);
-          }
-          return stampSessionForInstance(session, instanceId);
-        }),
-      );
+    Effect.gen(function* () {
+      const previousClaim = untaggedClaims.get(input.threadId);
+      untaggedClaims.set(input.threadId, instanceId);
+      const session = yield* adapter
+        .startSession({
+          ...input,
+          provider: adapter.provider,
+          providerInstanceId: instanceId,
+        } satisfies ProviderAdapterSessionStartInput)
+        .pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              if (untaggedClaims.get(input.threadId) !== instanceId) return;
+              if (previousClaim === undefined) {
+                untaggedClaims.delete(input.threadId);
+              } else {
+                untaggedClaims.set(input.threadId, previousClaim);
+              }
+            }),
+          ),
+        );
+      untaggedClaims.set(session.threadId, instanceId);
+      return stampSessionForInstance(session, instanceId);
+    });
 
   const listSessions: ProviderAdapterShape<ProviderAdapterError>["listSessions"] = () =>
     adapter.listSessions().pipe(
@@ -146,13 +161,24 @@ function adapterFacadeForInstance(
   // seeing it.
   const forkThread: ProviderAdapterShape<ProviderAdapterError>["forkThread"] = adapter.forkThread
     ? (input) =>
-        adapter.forkThread!(input).pipe(
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              untaggedClaims.set(result.threadId, instanceId);
-            }),
-          ),
-        )
+        Effect.gen(function* () {
+          const previousClaim = untaggedClaims.get(input.threadId);
+          untaggedClaims.set(input.threadId, instanceId);
+          const result = yield* adapter.forkThread!(input).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                if (untaggedClaims.get(input.threadId) !== instanceId) return;
+                if (previousClaim === undefined) {
+                  untaggedClaims.delete(input.threadId);
+                } else {
+                  untaggedClaims.set(input.threadId, previousClaim);
+                }
+              }),
+            ),
+          );
+          untaggedClaims.set(result.threadId, instanceId);
+          return result;
+        })
     : undefined;
 
   return {
@@ -164,7 +190,7 @@ function adapterFacadeForInstance(
     stopAll,
     ...(forkThread ? { forkThread } : {}),
     streamEvents: adapter.streamEvents.pipe(
-      Stream.filter((event) => eventBelongsToInstance(event, instanceId)),
+      Stream.filter((event) => eventBelongsToInstance(event, instanceId, untaggedClaims)),
     ),
   };
 }

@@ -1,7 +1,9 @@
 import {
+  EventId,
   ThreadId,
   type ProviderInstanceId,
   type ProviderKind,
+  type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
 import { expect } from "vitest";
@@ -480,4 +482,56 @@ it("rejects duplicate provider identities while constructing the registry", asyn
   await expect(
     Effect.runPromise(Effect.provide(Effect.void, registryLayer(duplicate))),
   ).rejects.toThrow("Duplicate provider adapter registrations: claudeAgent at index 1.");
+});
+
+it.effect("routes untagged events through the facade that claimed their thread", () => {
+  const workInstanceId = asProviderInstanceId("codex_work");
+  const workThreadId = ThreadId.makeUnsafe("thread-work-event");
+  const defaultThreadId = ThreadId.makeUnsafe("thread-default-event");
+  const now = new Date().toISOString();
+  const events: ProviderRuntimeEvent[] = [workThreadId, defaultThreadId].map((threadId, index) => ({
+    type: "runtime.warning",
+    eventId: EventId.makeUnsafe(`event-${index}`),
+    provider: "codex",
+    threadId,
+    createdAt: now,
+    payload: { message: `warning-${index}` },
+  }));
+  const adapter: CodexAdapterShape = {
+    ...fakeCodexAdapter,
+    startSession: (input) =>
+      Effect.succeed({
+        provider: "codex",
+        status: "ready",
+        runtimeMode: input.runtimeMode,
+        threadId: input.threadId,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    streamEvents: Stream.fromIterable(events),
+  };
+
+  return Effect.gen(function* () {
+    const registry = yield* ProviderAdapterRegistry;
+    assert.ok(registry.getByInstance);
+    const workFacade = yield* registry.getByInstance(workInstanceId);
+    const defaultFacade = yield* registry.getByInstance(asProviderInstanceId("codex"));
+
+    yield* workFacade.startSession({
+      threadId: workThreadId,
+      provider: "codex",
+      runtimeMode: "full-access",
+    });
+
+    const workEvents = yield* Stream.runCollect(workFacade.streamEvents);
+    const defaultEvents = yield* Stream.runCollect(defaultFacade.streamEvents);
+    assert.deepEqual(
+      Array.from(workEvents, (event) => event.threadId),
+      [workThreadId],
+    );
+    assert.deepEqual(
+      Array.from(defaultEvents, (event) => event.threadId),
+      [defaultThreadId],
+    );
+  }).pipe(Effect.provide(registryLayer(adapter)));
 });
