@@ -477,7 +477,10 @@ export function useChatTranscriptScroll({
     if (previous.threadId !== threadId) return;
 
     const insetDeltaPx = composerTranscriptInsetPx - previous.insetPx;
-    if (isInactiveSplitPane || Math.abs(insetDeltaPx) < 0.5) return;
+    // A small upward gesture still falls inside the near-end threshold, but
+    // composer growth must respect the reader's explicit detached position.
+    if (isInactiveSplitPane || isUserScrollDetachedRef.current || Math.abs(insetDeltaPx) < 0.5)
+      return;
 
     const scrollContainer = legendListRef.current?.getScrollableNode?.();
     if (!(scrollContainer instanceof HTMLElement)) return;
