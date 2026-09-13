@@ -9,7 +9,10 @@ import {
   PROVIDER_CLI_COMMAND_BY_KIND,
   providerCliCommandName,
 } from "@synara/shared/providerCliProfiles";
-import { deriveProviderInstances } from "@synara/shared/providerInstances";
+import {
+  deriveProviderInstances,
+  providerProfileDirectoryEnvironment,
+} from "@synara/shared/providerInstances";
 
 import { buildCodexProcessEnv } from "../codexProcessEnv.ts";
 import { resolveExecutable } from "../executableLookup.ts";
@@ -111,16 +114,21 @@ export async function deriveManagedTerminalProfiles(input: {
 
     const configuredEnvironment = nonSensitiveEnvironment(instance);
     const profileDir = readConfigString(instance.config, "profileDir");
-    const profileEnvironment =
-      profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
-        ? instance.driver === "cursor"
-          ? { CURSOR_CONFIG_DIR: expandProviderAccountHomePath(profileDir, input.homeDir) }
-          : instance.driver === "grok"
-            ? { GROK_HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
-            : { HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
-        : {};
+    const profileEnvironment = providerProfileDirectoryEnvironment(
+      instance.driver,
+      profileDir ? expandProviderAccountHomePath(profileDir, input.homeDir) : "",
+    );
     Object.assign(configuredEnvironment, profileEnvironment);
-    const isolated = !instance.isDefault || instance.raw.environment !== undefined;
+    const hasConfiguredProfilePath = [
+      "profileDir",
+      "homePath",
+      "shadowHomePath",
+      "configDir",
+      "secureStorageDir",
+      "agentDir",
+    ].some((key) => readConfigString(instance.config, key) !== undefined);
+    const isolated =
+      !instance.isDefault || instance.raw.environment !== undefined || hasConfiguredProfilePath;
     let environment: Record<string, string> = configuredEnvironment;
 
     if (instance.driver === "codex") {
@@ -177,7 +185,7 @@ export async function deriveManagedTerminalProfiles(input: {
         driver: genericDriver,
         env: input.baseEnv,
         ...(isolated ? { environment: configuredEnvironment } : {}),
-        instanceId: instance.instanceId,
+        ...(instance.isDefault ? {} : { instanceId: instance.instanceId }),
         homeDir: input.homeDir,
         isolationRootDir: input.stateDir,
       });
@@ -195,7 +203,7 @@ export async function deriveManagedTerminalProfiles(input: {
         "devin",
         `instance-${Buffer.from(String(instance.instanceId), "utf8").toString("hex")}`,
       );
-      environment = { ...configuredEnvironment, HOME: homePath };
+      environment = { HOME: homePath, ...configuredEnvironment };
     }
 
     profiles.push({

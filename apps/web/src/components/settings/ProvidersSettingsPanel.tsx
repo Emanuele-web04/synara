@@ -14,8 +14,14 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
-import { providerCliCommandName } from "@synara/shared/providerCliProfiles";
-import { codexAccountInstanceId } from "@synara/shared/providerInstances";
+import {
+  normalizeProviderCliAlias,
+  providerCliCommandName,
+} from "@synara/shared/providerCliProfiles";
+import {
+  codexAccountInstanceId,
+  providerImportedDirectoryConfig,
+} from "@synara/shared/providerInstances";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -964,6 +970,22 @@ function ProviderInstancesControl(props: {
   const provider = props.config.provider;
   const instances = getManageableProviderInstances(props.settings, provider);
   const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
+  const terminalCommandCounts = getProviderInstanceOptions(props.settings).reduce(
+    (counts, option) => {
+      const config = props.settings.providerInstances[String(option.instanceId)]?.config;
+      const command = providerCliCommandName({
+        provider: option.provider,
+        instanceId: option.instanceId,
+        config:
+          config && typeof config === "object" && !Array.isArray(config)
+            ? (config as Record<string, unknown>)
+            : undefined,
+      });
+      counts.set(command, (counts.get(command) ?? 0) + 1);
+      return counts;
+    },
+    new Map<string, number>(),
+  );
 
   const nextInstanceIdentity = () => {
     const prefix = provider === "claudeAgent" ? "claude" : provider;
@@ -1003,21 +1025,10 @@ function ProviderInstancesControl(props: {
     if (!selectedDirectory) return;
     const { instanceId } = nextInstanceIdentity();
     const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
-    const config = providerInstanceLaunchConfig(props.config, props.settings);
-    switch (provider) {
-      case "codex":
-        config.homePath = selectedDirectory;
-        break;
-      case "claudeAgent":
-        config.configDir = selectedDirectory;
-        break;
-      case "pi":
-        config.agentDir = selectedDirectory;
-        break;
-      default:
-        config.profileDir = selectedDirectory;
-        break;
-    }
+    const config = {
+      ...providerInstanceLaunchConfig(props.config, props.settings),
+      ...providerImportedDirectoryConfig(provider, selectedDirectory),
+    };
     updateInstances({
       ...props.settings.providerInstances,
       [instanceId]: {
@@ -1140,6 +1151,10 @@ function ProviderInstancesControl(props: {
               ? (instance.config as Record<string, unknown>)
               : undefined,
         });
+        const cliAlias = readConfigString(instance.config, "cliAlias");
+        const cliAliasInvalid =
+          cliAlias.length > 0 && normalizeProviderCliAlias(cliAlias) === undefined;
+        const cliCommandConflicts = (terminalCommandCounts.get(cliCommand) ?? 0) > 1;
         const instanceStatus = providerInstanceStatusSummary(
           props.providerStatusByInstance.get(instanceId),
         );
@@ -1228,13 +1243,24 @@ function ProviderInstancesControl(props: {
                   size="sm"
                   variant="soft"
                   className="mt-1"
-                  value={readConfigString(instance.config, "cliAlias")}
+                  value={cliAlias}
                   onCommit={(cliAlias) => updateInstance(instanceId, { config: { cliAlias } })}
                   placeholder={cliCommand}
                   spellCheck={false}
                 />
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Available in Synara terminals. Use letters, numbers, dashes, and underscores.
+                <span
+                  className={cn(
+                    "mt-1 block text-xs",
+                    cliAliasInvalid || cliCommandConflicts
+                      ? "text-destructive"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {cliAliasInvalid
+                    ? "Use 1–64 letters, numbers, dashes, or underscores; bare provider commands are reserved."
+                    : cliCommandConflicts
+                      ? "This command is already assigned to another profile. Choose a unique override."
+                      : "Available in Synara terminals for zsh, bash, fish, and scripts."}
                 </span>
               </label>
               {props.config.fields.map((field) => {

@@ -133,6 +133,28 @@ export function defaultInstanceIdForProvider(provider: ProviderKind): ProviderIn
   return provider;
 }
 
+export function providerProfileDirectoryEnvironment(
+  provider: ProviderKind,
+  profileDir: string,
+): Readonly<Record<string, string>> {
+  if (!profileDir || provider === "codex" || provider === "claudeAgent" || provider === "pi") {
+    return {};
+  }
+  if (provider === "cursor") return { CURSOR_CONFIG_DIR: profileDir };
+  if (provider === "grok") return { GROK_HOME: profileDir };
+  return { HOME: profileDir };
+}
+
+export function providerImportedDirectoryConfig(
+  provider: ProviderKind,
+  directory: string,
+): Readonly<Record<string, string>> {
+  if (provider === "codex") return { homePath: directory };
+  if (provider === "claudeAgent") return { configDir: directory };
+  if (provider === "pi") return { agentDir: directory };
+  return { profileDir: directory };
+}
+
 export function inferLegacyProviderKindFromInstanceId(
   instanceId: string | null | undefined,
 ): ProviderKind | undefined {
@@ -499,14 +521,7 @@ export function providerStartOptionsFromInstance(
   const config = instance.config;
   const binaryPath = normalizeBinaryPathOverride(instance.driver, config.binaryPath);
   const profileDir = trimString(config.profileDir);
-  const profileEnvironment =
-    profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
-      ? instance.driver === "cursor"
-        ? { CURSOR_CONFIG_DIR: profileDir }
-        : instance.driver === "grok"
-          ? { GROK_HOME: profileDir }
-          : { HOME: profileDir }
-      : {};
+  const profileEnvironment = providerProfileDirectoryEnvironment(instance.driver, profileDir);
   const environment = providerEnvironmentOption(
     { ...instance.environment, ...profileEnvironment },
     instance.raw.environment !== undefined || profileDir.length > 0,
