@@ -902,6 +902,20 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
+  // Generic ACP agents advertise their live catalog during session setup.
+  acp: [
+    {
+      slug: "default",
+      name: "Agent default",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   cursor: [
     {
       // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
@@ -1149,6 +1163,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
   opencode: "openai/gpt-5",
+  acp: "default",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1310,6 +1325,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  acp: {},
   devin: {
     adaptive: "adaptive",
     auto: "adaptive",
@@ -1366,4 +1382,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
+  acp: "ACP Agent",
 };
