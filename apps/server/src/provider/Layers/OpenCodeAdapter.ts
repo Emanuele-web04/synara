@@ -87,6 +87,7 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { canUseDefaultOpenCodeServerPassword } from "../openCodeServerPassword.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
 import {
@@ -3447,7 +3448,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
           const serverPassword =
             providerOptions?.serverPassword?.trim() ||
-            (options?.resolveServerPassword
+            (options?.resolveServerPassword &&
+            canUseDefaultOpenCodeServerPassword(provider, resolvedProviderInstanceId)
               ? yield* options.resolveServerPassword(provider)
               : undefined);
           const environment = providerOptions?.environment;
@@ -4364,7 +4366,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword =
             providerOptions?.serverPassword?.trim() ||
-            (options?.resolveServerPassword
+            (options?.resolveServerPassword &&
+            canUseDefaultOpenCodeServerPassword(provider, providerInstanceId)
               ? yield* options.resolveServerPassword(provider)
               : undefined);
           const environment = providerOptions?.environment;
@@ -4487,7 +4490,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               const serverUrl = input.serverUrl?.trim();
               const serverPassword =
                 input.serverPassword?.trim() ||
-                (options?.resolveServerPassword
+                (options?.resolveServerPassword &&
+                canUseDefaultOpenCodeServerPassword(provider, input.instanceId)
                   ? yield* options.resolveServerPassword(provider).pipe(
                       Effect.mapError(
                         (cause) =>
