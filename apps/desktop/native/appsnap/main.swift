@@ -78,7 +78,6 @@ do {
                     exit(0)
                 }
             )
-            emitter.emitPermissionGuide(state: "shown")
             return (coach, parentProcessMonitor)
         }
 
