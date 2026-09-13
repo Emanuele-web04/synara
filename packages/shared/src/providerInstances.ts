@@ -498,13 +498,22 @@ export function providerStartOptionsFromInstance(
 ): ProviderStartOptions | undefined {
   const config = instance.config;
   const binaryPath = normalizeBinaryPathOverride(instance.driver, config.binaryPath);
+  const profileDir = trimString(config.profileDir);
+  const profileEnvironment =
+    profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
+    ? instance.driver === "cursor"
+      ? { CURSOR_CONFIG_DIR: profileDir }
+      : instance.driver === "grok"
+        ? { GROK_HOME: profileDir }
+        : { HOME: profileDir }
+    : {};
   const environment = providerEnvironmentOption(
-    instance.environment,
-    instance.raw.environment !== undefined,
+    { ...instance.environment, ...profileEnvironment },
+    instance.raw.environment !== undefined || profileDir.length > 0,
   );
   switch (instance.driver) {
     case "codex": {
-      const homePath = trimString(config.homePath);
+      const homePath = trimString(config.homePath) || profileDir;
       const shadowHomePath = trimString(config.shadowHomePath);
       // A non-default Codex instance must never run against the default
       // account's overlay/auth: seed the instance id as a stable account
@@ -530,7 +539,7 @@ export function providerStartOptionsFromInstance(
     }
     case "claudeAgent": {
       const homePath = trimString(config.homePath);
-      const configDir = trimString(config.configDir);
+      const configDir = trimString(config.configDir) || profileDir;
       const secureStorageDir = trimString(config.secureStorageDir);
       const claudeEnvironment =
         configDir || secureStorageDir
@@ -601,7 +610,7 @@ export function providerStartOptionsFromInstance(
         : undefined;
     }
     case "pi": {
-      const agentDir = trimString(config.agentDir);
+      const agentDir = trimString(config.agentDir) || profileDir;
       return binaryPath || agentDir || environment.environment
         ? {
             pi: {

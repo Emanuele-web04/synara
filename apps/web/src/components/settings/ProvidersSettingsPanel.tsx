@@ -1004,7 +1004,6 @@ function ProviderInstancesControl(props: {
     const { instanceId } = nextInstanceIdentity();
     const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
     const config = providerInstanceLaunchConfig(props.config, props.settings);
-    let environment: ProviderInstanceEnvironment | undefined;
     switch (provider) {
       case "codex":
         config.homePath = selectedDirectory;
@@ -1015,14 +1014,8 @@ function ProviderInstancesControl(props: {
       case "pi":
         config.agentDir = selectedDirectory;
         break;
-      case "cursor":
-        environment = [{ name: "CURSOR_CONFIG_DIR", value: selectedDirectory }];
-        break;
-      case "grok":
-        environment = [{ name: "GROK_HOME", value: selectedDirectory }];
-        break;
       default:
-        environment = [{ name: "HOME", value: selectedDirectory }];
+        config.profileDir = selectedDirectory;
         break;
     }
     updateInstances({
@@ -1032,7 +1025,6 @@ function ProviderInstancesControl(props: {
         displayName: directoryName || `${providerLabel} imported`,
         enabled: true,
         config,
-        ...(environment ? { environment } : {}),
       },
     });
     toastManager.add({
@@ -1358,6 +1350,28 @@ function ProviderInstancesControl(props: {
                     />
                   </label>
                 </>
+              ) : null}
+              {provider !== "codex" && provider !== "claudeAgent" && provider !== "pi" ? (
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-medium text-foreground">
+                    Profile directory
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-profile-dir`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "profileDir")}
+                    onCommit={(profileDir) =>
+                      updateInstance(instanceId, { config: { profileDir } })
+                    }
+                    placeholder="Provider account directory"
+                    spellCheck={false}
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Used as this profile's provider config root without changing your shell files.
+                  </span>
+                </label>
               ) : null}
               <ProviderInstanceEnvironmentEditor
                 instanceId={instanceId}

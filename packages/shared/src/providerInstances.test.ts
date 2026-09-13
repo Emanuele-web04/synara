@@ -386,3 +386,48 @@ describe("providerStartOptionsFromInstance Claude profile paths", () => {
     });
   });
 });
+
+describe("providerStartOptionsFromInstance profile directories", () => {
+  it.each([
+    ["cursor", "CURSOR_CONFIG_DIR"],
+    ["grok", "GROK_HOME"],
+    ["opencode", "HOME"],
+    ["antigravity", "HOME"],
+    ["droid", "HOME"],
+    ["devin", "HOME"],
+  ] as const)("maps %s profileDir to %s", (provider, environmentName) => {
+    const instanceId = providerInstanceId(`${provider}_work`);
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: {
+            driver: provider,
+            config: { profileDir: "/profiles/work" },
+          },
+        },
+      },
+      { provider, instanceId },
+    );
+
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.[provider]?.environment).toMatchObject({
+      [environmentName]: "/profiles/work",
+    });
+  });
+
+  it("uses profileDir as Pi's agent directory", () => {
+    const instanceId = providerInstanceId("pi_work");
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: { driver: "pi", config: { profileDir: "/profiles/pi-work" } },
+        },
+      },
+      { provider: "pi", instanceId },
+    );
+
+    expect(providerStartOptionsFromInstance(resolved!)?.pi?.agentDir).toBe("/profiles/pi-work");
+  });
+});

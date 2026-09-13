@@ -110,11 +110,21 @@ export async function deriveManagedTerminalProfiles(input: {
     if (!targetPath) continue;
 
     const configuredEnvironment = nonSensitiveEnvironment(instance);
+    const profileDir = readConfigString(instance.config, "profileDir");
+    const profileEnvironment =
+      profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
+      ? instance.driver === "cursor"
+        ? { CURSOR_CONFIG_DIR: expandProviderAccountHomePath(profileDir, input.homeDir) }
+        : instance.driver === "grok"
+          ? { GROK_HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
+          : { HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
+      : {};
+    Object.assign(configuredEnvironment, profileEnvironment);
     const isolated = !instance.isDefault || instance.raw.environment !== undefined;
     let environment: Record<string, string> = configuredEnvironment;
 
     if (instance.driver === "codex") {
-      const homePath = readConfigString(instance.config, "homePath");
+      const homePath = readConfigString(instance.config, "homePath") ?? profileDir;
       const shadowHomePath = readConfigString(instance.config, "shadowHomePath");
       const accountId =
         readConfigString(instance.config, "accountId") ??
@@ -133,10 +143,10 @@ export async function deriveManagedTerminalProfiles(input: {
     } else if (instance.driver === "claudeAgent") {
       const configured = {
         ...configuredEnvironment,
-        ...(readConfigString(instance.config, "configDir")
+        ...(readConfigString(instance.config, "configDir") ?? profileDir
           ? {
               CLAUDE_CONFIG_DIR: expandProviderAccountHomePath(
-                readConfigString(instance.config, "configDir")!,
+                (readConfigString(instance.config, "configDir") ?? profileDir)!,
                 input.homeDir,
               ),
             }
@@ -173,7 +183,7 @@ export async function deriveManagedTerminalProfiles(input: {
       });
       environment = selectedProfileEnvironment(generated, configuredEnvironment);
       if (instance.driver === "pi") {
-        const agentDir = readConfigString(instance.config, "agentDir");
+        const agentDir = readConfigString(instance.config, "agentDir") ?? profileDir;
         if (agentDir) {
           environment.PI_CODING_AGENT_DIR = expandProviderAccountHomePath(agentDir, input.homeDir);
         }
