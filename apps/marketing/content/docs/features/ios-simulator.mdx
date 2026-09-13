@@ -69,6 +69,10 @@ Read-only inspection and input actions follow the active provider's tool policy.
   does not prove that the app was built from the intended branch, environment, or source state.
 </Callout>
 
+## Use captured screenshots
+
+Simulator screenshot results render as image previews in the chat, with expand and download controls. Capturing or inspecting an existing image does not make it a generated output. Use the returned screenshot as evidence of the captured device state, and confirm the pane has a fresh live frame before repeating input after a connection problem.
+
 ## Ownership and cleanup
 
 Synara distinguishes simulators it booted from devices that were already running. It can reclaim Synara-owned devices after task cleanup or a crash; it does not automatically shut down a user-owned simulator simply because the pane detaches.
