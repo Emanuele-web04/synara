@@ -45,6 +45,13 @@ export function isProviderCredentialKey(key: string): boolean {
   return PROVIDER_CREDENTIAL_KEYS.has(key.trim().toUpperCase());
 }
 
+/** Removes ambient provider credentials while retaining ordinary process state. */
+export function withoutProviderCredentialEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !isProviderCredentialKey(key)),
+  );
+}
+
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {
   antigravity: new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]),
   claude: new Set([

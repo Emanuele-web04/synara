@@ -32,6 +32,7 @@ import {
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import { compareCodexCliVersions, parseCodexCliVersion } from "../../provider/codexCliVersion.ts";
+import { withoutProviderCredentialEnvironment } from "../../providerChildEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   CodexTextGeneration,
@@ -544,10 +545,16 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
         const resolvedCodexAuthHomePath = resolveCodexAuthHomePath(providerOptions);
         const resolvedCodexAccountId = resolveCodexAccountId(providerOptions);
-        const trustedProcessEnv = { ...process.env };
+        const accountScoped =
+          Boolean(resolvedCodexAccountId) ||
+          (modelSelection?.provider === "codex" && modelSelection.instanceId !== "codex");
+        const explicitProviderEnvironment = providerOptions?.codex?.environment;
+        const trustedProcessEnv = accountScoped
+          ? withoutProviderCredentialEnvironment(process.env)
+          : { ...process.env };
         const instanceLaunchEnv = {
           ...trustedProcessEnv,
-          ...providerOptions?.codex?.environment,
+          ...explicitProviderEnvironment,
         };
         const authTracking = yield* Effect.try({
           try: () =>
@@ -571,10 +578,18 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           operation,
           authTracking.sourceConfigSnapshot,
         );
+        if (accountScoped) {
+          for (const credentialName of isolatedConfig.providerEnvKeys) {
+            if (!Object.hasOwn(explicitProviderEnvironment ?? {}, credentialName)) {
+              delete instanceLaunchEnv[credentialName];
+            }
+          }
+        }
         const hydratedLaunchEnv = hydrateCodexProviderCredentialEnvironment({
           env: instanceLaunchEnv,
           credentialEnvNames: isolatedConfig.providerEnvKeys,
           trustedEnv: trustedProcessEnv,
+          ...(accountScoped ? { readEnvironment: () => ({}) } : {}),
         });
         const schemaPath = yield* acquireSecureTempFile({
           directory: tempDir(),

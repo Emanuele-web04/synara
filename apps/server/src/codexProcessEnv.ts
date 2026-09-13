@@ -137,6 +137,9 @@ export interface CodexAuthTrackingPreparationHooks {
 
 export interface CodexProcessEnvInput {
   readonly env?: NodeJS.ProcessEnv;
+  /** Account-scoped launches may use only credentials supplied by their instance. */
+  readonly isolateProviderCredentials?: boolean;
+  readonly explicitProviderEnvironment?: Readonly<Record<string, string>>;
   readonly homePath?: string;
   readonly shadowHomePath?: string;
   readonly accountId?: string;
@@ -2729,9 +2732,18 @@ export async function buildCodexProcessEnv(
   const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
   if (providerEnvKey) {
     registerProviderCredentialKey(providerEnvKey);
+    if (
+      input.isolateProviderCredentials === true &&
+      !Object.hasOwn(input.explicitProviderEnvironment ?? {}, providerEnvKey)
+    ) {
+      delete effectiveEnv[providerEnvKey];
+    }
   }
 
-  if (platform === "darwin" || platform === "linux") {
+  if (
+    input.isolateProviderCredentials !== true &&
+    (platform === "darwin" || platform === "linux")
+  ) {
     try {
       const shell = resolveLoginShell(platform, effectiveEnv.SHELL);
       if (shell && providerEnvKey && !effectiveEnv[providerEnvKey]?.trim()) {
