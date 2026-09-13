@@ -271,6 +271,12 @@ export function useChatTurnExecution({
         );
         return false;
       }
+      // The wait is over and this send is proceeding. The marker is shared and
+      // ownership-blind: a failed board dispatch clears it on the way out even
+      // though this chat send armed it, leaving the continuing send unguarded.
+      // Re-arm before doing any more work so a board drop in the gap still
+      // defers instead of queueing a duplicate turn.
+      markPendingTurnDispatch(threadIdForSend);
       await (async () => {
         // "Work locally" from the setup card: drop any prepared worktree and
         // point the send (and the thread's metadata) back at the project

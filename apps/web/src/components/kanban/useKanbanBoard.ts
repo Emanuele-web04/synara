@@ -16,7 +16,10 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
 import { isStudioContainerProject } from "../../lib/studioProjects";
 import { useStore } from "../../store";
-import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
+import {
+  createLastActivityTimestampSelector,
+  createSidebarDisplayThreadsSelector,
+} from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { sortProjectsForSidebar } from "../Sidebar.logic";
@@ -53,19 +56,11 @@ export function useKanbanBoard(): KanbanBoard {
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const threadIds = useStore((state) => state.threadIds ?? []);
-  const threadShellById = useStore((state) => state.threadShellById ?? {});
-  const lastActivityTimestampMsByThreadId = useMemo(() => {
-    const result: Record<string, number | null> = {};
-    for (const id of threadIds) {
-      const stamp = threadShellById[id]?.updatedAt;
-      if (stamp) {
-        const parsed = Date.parse(stamp);
-        result[id] = Number.isFinite(parsed) ? parsed : null;
-      }
-    }
-    return result;
-  }, [threadIds, threadShellById]);
+  // Referential stability comes from the selector itself: it returns the
+  // previous result object while no surfaced timestamp actually advanced, so
+  // the board does not re-derive on unrelated shell churn.
+  const selectLastActivityTimestamps = useMemo(() => createLastActivityTimestampSelector(), []);
+  const lastActivityTimestampMsByThreadId = useStore(selectLastActivityTimestamps);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);

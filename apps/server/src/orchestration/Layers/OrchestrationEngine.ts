@@ -69,9 +69,11 @@ import {
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import {
+  discardMaterializedThreadGoalFile,
   isOversizedThreadGoal,
   materializeThreadGoalFile,
   pruneThreadGoalFiles,
+  readMaterializedThreadGoalText,
   threadGoalFileName,
   threadGoalFileReference,
 } from "../threadGoalMaterialization.ts";
@@ -692,6 +694,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
+    // A materialized goal file is a candidate until its command commits: the
+    // write happens before invariants run, so a rejection must drop it instead
+    // of leaving up to the payload bound on disk. `goalFileCommitted` flips only
+    // after the commit transaction resolves — a timed-out command that turns out
+    // to have committed (accepted receipt) keeps its file.
+    let materializedGoalFilePath: string | undefined;
+    let goalFileCommitted = false;
+    const discardUncommittedGoalFile = Effect.gen(function* () {
+      if (materializedGoalFilePath === undefined || goalFileCommitted) {
+        return;
+      }
+      const filePath = materializedGoalFilePath;
+      materializedGoalFilePath = undefined;
+      yield* Effect.promise(() => discardMaterializedThreadGoalFile(filePath));
+    });
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
         eventStore.readFromSequence(dispatchStartSequence),
@@ -835,6 +852,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ),
         });
         materializedGoalFileName = threadGoalFileName(goalCommand.commandId);
+        materializedGoalFilePath = goalFilePath;
         command = { ...goalCommand, goal: threadGoalFileReference(goalFilePath) };
       }
 
@@ -857,7 +875,30 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
       }
 
-      const deciderReadModel = yield* buildDeciderReadModel(command);
+      let deciderReadModel = yield* buildDeciderReadModel(command);
+      if (command.type === "thread.meta.update" && command.goalAchieved === true) {
+        // A completed oversized goal must keep its text durably: the persisted
+        // goal is only a "read this file" reference and the post-commit prune
+        // drops the whole directory on achievement. Resolve the ref into the
+        // read model so the recorded ThreadGoalAchievement holds the real goal.
+        const currentThread = deciderReadModel.threads.find(
+          (entry) => entry.id === command.threadId,
+        );
+        const persistedGoal = currentThread?.goal ?? "";
+        const resolvedGoal = yield* Effect.promise(() =>
+          readMaterializedThreadGoalText({
+            stateDir: serverConfig.stateDir,
+            threadId: command.threadId,
+            goal: persistedGoal,
+          }),
+        );
+        if (resolvedGoal !== null && currentThread !== undefined) {
+          deciderReadModel = overlayThread(deciderReadModel, {
+            ...currentThread,
+            goal: resolvedGoal,
+          });
+        }
+      }
       const eventBase = yield* decideOrchestrationCommand({
         command,
         readModel: deciderReadModel,
@@ -981,6 +1022,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ),
           ),
         );
+      // Commit is durable: the candidate file is now owned by the accepted
+      // update and governed by the post-commit prune, not the failure cleanup.
+      goalFileCommitted = true;
 
       // Goal-file housekeeping only runs once the command committed: the
       // accepted update decides which files still matter — a fresh oversized
@@ -1117,6 +1161,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               })
               .pipe(Effect.catch(() => Effect.void));
           }
+          yield* discardUncommittedGoalFile;
           yield* Deferred.fail(envelope.result, error);
         }),
       ),
@@ -1162,6 +1207,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           const resolvedError = resolvedCrashOutcome.left;
+          yield* discardUncommittedGoalFile;
           yield* Deferred.fail(
             envelope.result,
             Schema.is(OrchestrationCommandTimeoutError)(resolvedError)

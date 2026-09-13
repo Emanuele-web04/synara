@@ -829,7 +829,7 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
     definition: {
       name: "synara_move_kanban_card",
       description:
-        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). A card already in the requested column reports a no-op (alreadyInProgress / alreadyDone). Awaiting-you is a human-attention state: target "inProgress" reports a no-op with awaitingYou=true, and target "done" is prohibited.',
+        'Move a Kanban card between the actionable columns. target "inProgress" starts (or resumes) work on the thread, optionally with a message; target "done" requests that a running turn settle (falls back to interrupting it). A card already in the requested column reports a no-op (alreadyInProgress / alreadyDone). Awaiting-you is a human-attention state: target "inProgress" reports a no-op with awaitingYou=true for pending approval/input or a stuck live turn (a failed card instead restarts through the settled-thread path), and target "done" is prohibited.',
       inputSchema: {
         type: "object",
         properties: {
@@ -879,22 +879,12 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               const caller = yield* requireThreadShell(context.callerThreadId).pipe(
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
               );
-              const card = yield* requireThreadShell(threadId).pipe(
-                Effect.mapError((error) => new ToolInputError(errorText(error))),
-              );
-              if (card.projectId !== caller.projectId) {
-                return yield* Effect.fail(
-                  new ToolInputError(
-                    `Thread "${threadId}" is in a different project. Only your own project "${caller.projectId}" can be driven.`,
-                  ),
-                );
-              }
-              yield* assertCallerMayDriveThread(caller, card);
-              if ((card.archivedAt ?? null) !== null) {
-                return yield* Effect.fail(
-                  new ToolInputError(`Thread "${threadId}" is archived and has no board card.`),
-                );
-              }
+              // Same gate as update/delete: ordinary board-visible project,
+              // same-project membership, caller may drive, not archived. A
+              // container-project thread (managed chat / Studio / legacy) has
+              // no board card, so moving it must fail instead of writing into
+              // a column nothing renders.
+              const card = yield* requireDrivableKanbanCard(caller, threadId);
               const at = now();
               const cardView = deriveCard(card, at, context.callerThreadId);
               const currentColumn = cardView.column;
@@ -904,10 +894,13 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
                 attention: cardView.attention,
               });
               if (target === "inProgress") {
-                if (currentColumn === "awaitingYou") {
-                  // Awaiting-you is human attention: starting a turn here would
-                  // stomp it, so we report a no-op with the attention flag rather
-                  // than silently succeeding or failing.
+                if (currentColumn === "awaitingYou" && !cardView.attention.includes("failed")) {
+                  // Awaiting-you is human attention (pending approval/input, or
+                  // a stuck live turn): starting a turn here would stomp it, so
+                  // we report a no-op with the attention flag rather than
+                  // silently succeeding or failing. A failed card is different —
+                  // its work already settled in error, so it falls through to
+                  // the settled-thread restart path below.
                   return mcpToolResultJson({
                     threadId,
                     target,

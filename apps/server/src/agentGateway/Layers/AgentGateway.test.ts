@@ -1862,7 +1862,12 @@ describe("AgentGateway", () => {
         "synara_update_automation_memory",
         "synara_report_automation_result",
         "synara_read_kanban_board",
+        "synara_read_kanban_card",
         "synara_create_kanban_task",
+        "synara_create_kanban_draft",
+        "synara_update_kanban_card",
+        "synara_set_kanban_goal",
+        "synara_delete_kanban_card",
         "synara_move_kanban_card",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")

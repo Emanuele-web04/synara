@@ -7,6 +7,7 @@
 // Layer: Orchestration command normalization
 // Depends on: contracts thresholds, private path permission helpers.
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -19,8 +20,19 @@ export function isOversizedThreadGoal(goal: string | undefined): goal is string 
 }
 
 // Thread/command ids are server-minted identifier strings; sanitize anyway
-// because they flow straight into a filesystem path.
-const safePathSegment = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/g, "_");
+// because they flow straight into a filesystem path. Sanitization must stay
+// injective — a lossy `:`→`_` mapping would let `a:b` and `a_b` share a goal
+// path, so a rejected update could overwrite (or a cleanup delete) another
+// id's live file. Lossy encodings get a content-hash suffix; clean segments
+// pass through unchanged.
+const safePathSegment = (value: string): string => {
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (sanitized === value) {
+    return sanitized;
+  }
+  const suffix = createHash("sha256").update(value).digest("hex").slice(0, 12);
+  return `${sanitized}-${suffix}`;
+};
 
 /**
  * One immutable file per accepted-update candidate. A shared `goal.md` would
@@ -40,9 +52,11 @@ function threadGoalDirPath(stateDir: string, threadId: string): string {
   return path.join(stateDir, "thread-goals", safePathSegment(threadId));
 }
 
+const THREAD_GOAL_FILE_REF_PREFIX = "Read this file: ";
+
 /** The persisted goal text once the full objective lives on disk. */
 export function threadGoalFileReference(filePath: string): string {
-  return `Read this file: ${filePath}`;
+  return `${THREAD_GOAL_FILE_REF_PREFIX}${filePath}`;
 }
 
 /**
@@ -85,4 +99,40 @@ export async function pruneThreadGoalFiles(input: {
       .filter((entry) => entry !== input.keepFileName)
       .map((entry) => fs.rm(path.join(dirPath, entry), { recursive: true, force: true })),
   );
+}
+
+/**
+ * Deletes one materialized candidate file. A `thread.meta.update` writes the
+ * file before its invariants run, so every rejected/failed/interrupted command
+ * must drop its candidate — otherwise each refusal leaves up to the payload
+ * bound on disk forever. Best-effort; a survivor is swept by the next commit's
+ * prune.
+ */
+export async function discardMaterializedThreadGoalFile(filePath: string): Promise<void> {
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+}
+
+/**
+ * Resolves a persisted goal's "read this file" reference back to its full text,
+ * or null when the goal is not a materialized reference for this thread (or the
+ * file is unreadable). The path must resolve inside this thread's own goal
+ * directory — anything else is an ordinary goal string that happens to start
+ * with the prefix, not a ref we wrote.
+ */
+export async function readMaterializedThreadGoalText(input: {
+  readonly stateDir: string;
+  readonly threadId: string;
+  readonly goal: string;
+}): Promise<string | null> {
+  if (!input.goal.startsWith(THREAD_GOAL_FILE_REF_PREFIX)) {
+    return null;
+  }
+  const refPath = input.goal.slice(THREAD_GOAL_FILE_REF_PREFIX.length).trim();
+  const goalDir = threadGoalDirPath(input.stateDir, input.threadId);
+  const resolved = path.resolve(refPath);
+  const name = path.basename(resolved);
+  if (path.dirname(resolved) !== path.resolve(goalDir) || !/^goal-[a-zA-Z0-9_-]+\.md$/.test(name)) {
+    return null;
+  }
+  return fs.readFile(resolved, "utf8").catch(() => null);
 }

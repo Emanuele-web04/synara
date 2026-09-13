@@ -132,9 +132,11 @@ async function createOrchestrationSystem() {
   const managedAttachmentRepository = await runtime.runPromise(
     Effect.service(ManagedAttachmentRepository),
   );
+  const serverConfig = await runtime.runPromise(Effect.service(ServerConfig));
   return {
     engine,
     managedAttachmentRepository,
+    stateDir: serverConfig.stateDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -968,6 +970,204 @@ describe("OrchestrationEngine", () => {
         ?.goal,
     ).toBe("Ship it");
     await expect(fs.readdir(path.dirname(supersededPath ?? ""))).rejects.toThrow();
+
+    await system.dispose();
+  });
+
+  it("removes the materialized goal file when the update is rejected before commit", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-reject");
+    const stateDir = system.stateDir;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-reject"),
+        projectId: asProjectId("project-goal-reject"),
+        title: "Goal Reject Project",
+        workspaceRoot: "/tmp/project-goal-reject",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-reject-create"),
+        threadId,
+        projectId: asProjectId("project-goal-reject"),
+        title: "goal-reject",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    // The goal file is written before command invariants run: a stale title
+    // sequence rejects the update after its candidate file already exists.
+    const oversizedGoal = `Rejected objective. ${"x".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-reject"),
+          threadId,
+          goal: oversizedGoal,
+          expectedTitleSequence: 9_999,
+        }),
+      ),
+    ).rejects.toThrow("title changed");
+
+    const goalDir = path.join(stateDir, "thread-goals", "thread-goal-reject");
+    const leftover = await fs.readdir(goalDir).catch(() => [] as string[]);
+    expect(leftover).toEqual([]);
+    expect(
+      (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
+        ?.goal,
+    ).not.toBe(`Read this file: ${goalDir}/goal-cmd-goal-reject.md`);
+
+    await system.dispose();
+  });
+
+  it("keeps the committed goal file when a sanitized-colliding command is rejected", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-collision");
+    const projectId = asProjectId("project-goal-collision");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-collision"),
+        projectId,
+        title: "Goal Collision Project",
+        workspaceRoot: "/tmp/project-goal-collision",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-collision-create"),
+        threadId,
+        projectId,
+        title: "goal-collision",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    // Command ids `goal:file` and `goal_file` sanitize to the same segment
+    // under a lossy mapping — a rejected candidate must never share (and thus
+    // delete) the committed update's path.
+    const committedGoal = `Committed objective. ${"c".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("goal:file"),
+        threadId,
+        goal: committedGoal,
+      }),
+    );
+    const committedThread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const committedPath = committedThread?.goal?.replace("Read this file: ", "");
+    await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("goal_file"),
+          threadId,
+          goal: `Rejected objective. ${"r".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`,
+          expectedTitleSequence: 9_999,
+        }),
+      ),
+    ).rejects.toThrow("title changed");
+
+    await expect(fs.readFile(committedPath ?? "", "utf8")).resolves.toBe(committedGoal);
+    await system.dispose();
+  });
+
+  it("records the full oversized goal text in the achievement when the goal completes", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-achieved");
+    const projectId = asProjectId("project-goal-achieved");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-achieved"),
+        projectId,
+        title: "Goal Achieved Project",
+        workspaceRoot: "/tmp/project-goal-achieved",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-create"),
+        threadId,
+        projectId,
+        title: "goal-achieved",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const oversizedGoal = `Durable objective. ${"d".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-set"),
+        threadId,
+        goal: oversizedGoal,
+      }),
+    );
+    const beforeAchieve = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const goalFilePath = beforeAchieve?.goal?.replace("Read this file: ", "");
+    expect(goalFilePath).toContain("thread-goals");
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-achieved-done"),
+        threadId,
+        goalAchieved: true,
+      }),
+    );
+
+    const thread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    // The persisted goal was only a file reference; the achievement must hold
+    // the real text because the post-commit prune drops the whole directory.
+    expect(thread?.goalAchievements?.at(-1)?.goal).toBe(oversizedGoal);
+    expect(thread?.goal ?? "").toBe("");
+    await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
 
     await system.dispose();
   });

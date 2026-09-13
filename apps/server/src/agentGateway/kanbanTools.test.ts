@@ -547,6 +547,73 @@ describe("synara_move_kanban_card", () => {
     expect(started).toHaveLength(0);
     expect(interrupted).toHaveLength(0);
   });
+
+  it("rejects moving a card that lives in a container project with no board", async () => {
+    const { tools, started, interrupted } = makeTools({
+      threads: [
+        // Caller and card share the managed-chat container: same-project
+        // membership alone must not make the thread drivable — the board never
+        // renders cards for container projects.
+        makeThreadShell("thread-caller", "project-chat"),
+        makeThreadShell("thread-container-card", "project-chat"),
+      ],
+      projects: [makeProjectShell("project-chat", "Chats", "/home/tester/chats", "chat")],
+    });
+
+    const result = await move(tools, "thread-container-card", "inProgress", {
+      message: "Start work",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain("container project");
+    expect(started).toHaveLength(0);
+    expect(interrupted).toHaveLength(0);
+  });
+
+  it("restarts a failed awaiting-you card through the settled-thread path", async () => {
+    const { tools, started } = makeTools({
+      threads: [
+        makeSessionShell("thread-failed", "project-a", {
+          latestTurn: {
+            ...makeSessionShell("thread-failed").latestTurn!,
+            state: "error",
+          },
+        }),
+      ],
+    });
+
+    const result = await move(tools, "thread-failed", "inProgress", {
+      message: "Retry the failed work",
+    });
+    expect(result.turnStarted).toBe(true);
+    expect(result.awaitingYou).toBeUndefined();
+    expect(started).toEqual([
+      {
+        threadId: "thread-failed",
+        message: "Retry the failed work",
+        dispatchMode: "queue",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      },
+    ]);
+  });
+
+  it("still requires an explicit message to restart a failed card", async () => {
+    const { tools, started } = makeTools({
+      threads: [
+        makeSessionShell("thread-failed", "project-a", {
+          latestTurn: {
+            ...makeSessionShell("thread-failed").latestTurn!,
+            state: "error",
+          },
+        }),
+      ],
+    });
+
+    const result = await move(tools, "thread-failed", "inProgress");
+    expect(result.isError).toBe(true);
+    expect(result.__errorText).toContain('Argument "message" is required');
+    expect(started).toHaveLength(0);
+  });
 });
 
 describe("kanban write concurrency per card", () => {
