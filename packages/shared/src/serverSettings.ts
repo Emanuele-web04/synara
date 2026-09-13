@@ -28,6 +28,7 @@ export function applyServerSettingsPatch(
     selectionPatch.model ??
     (selectionPatch.provider &&
     selectionPatch.provider !== "pi" &&
+    selectionPatch.provider !== "omp" &&
     selectionPatch.provider !== current.textGenerationModelSelection.provider
       ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
       : current.textGenerationModelSelection.model);
@@ -82,6 +83,10 @@ export function providerStartOptionsFromServerSettings(
     },
     devin: {
       ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),
+    },
+    omp: {
+      ...(providers.omp.binaryPath ? { binaryPath: providers.omp.binaryPath } : {}),
+      ...(providers.omp.agentDir ? { agentDir: providers.omp.agentDir } : {}),
     },
   };
 }

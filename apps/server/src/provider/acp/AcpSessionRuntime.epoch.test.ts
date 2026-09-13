@@ -57,7 +57,7 @@ function makeInMemoryAgentSpawner() {
       Effect.sync(() => {
         connectAgent();
         return ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
+          pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
           exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
           isRunning: Effect.succeed(true),
           kill: () => Effect.void,

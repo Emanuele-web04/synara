@@ -2994,6 +2994,24 @@ describe("resolveDraftFallbackModelSelection", () => {
     ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 
+  it("uses the project default provider when the settings default is omp", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        settingsDefaultProvider: "omp",
+      }),
+    ).toEqual({ provider: "claudeAgent", model: "claude-sonnet-5" });
+  });
+
+  it("falls back to codex when the settings default is omp and no project default exists", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        settingsDefaultProvider: "omp",
+      }),
+    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
+  });
+
   it("uses the settings provider default model when no project default exists", () => {
     expect(
       resolveDraftFallbackModelSelection({

@@ -34,6 +34,7 @@ const EMPTY_MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<Provid
   droid: [],
   opencode: [],
   pi: [],
+  omp: [],
 };
 
 const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
@@ -46,6 +47,7 @@ const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
   droid: [],
   opencode: [],
   pi: [],
+  omp: [],
 };
 
 // ── Slider layout (store-backed) ──────────────────────────────────────
