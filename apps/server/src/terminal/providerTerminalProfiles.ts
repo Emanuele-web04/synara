@@ -60,9 +60,7 @@ function nonSensitiveEnvironment(
   return Object.fromEntries(
     (instance.raw.environment ?? []).flatMap((variable) => {
       const name = variable.name.trim();
-      return name &&
-        typeof variable.value === "string" &&
-        variable.sensitive !== true &&
+      return name && typeof variable.value === "string" && variable.sensitive !== true &&
         variable.valueRedacted !== true
         ? [[name, variable.value ?? ""]]
         : [];
@@ -115,12 +113,12 @@ export async function deriveManagedTerminalProfiles(input: {
     const profileDir = readConfigString(instance.config, "profileDir");
     const profileEnvironment =
       profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
-      ? instance.driver === "cursor"
-        ? { CURSOR_CONFIG_DIR: expandProviderAccountHomePath(profileDir, input.homeDir) }
-        : instance.driver === "grok"
-          ? { GROK_HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
-          : { HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
-      : {};
+        ? instance.driver === "cursor"
+          ? { CURSOR_CONFIG_DIR: expandProviderAccountHomePath(profileDir, input.homeDir) }
+          : instance.driver === "grok"
+            ? { GROK_HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
+            : { HOME: expandProviderAccountHomePath(profileDir, input.homeDir) }
+        : {};
     Object.assign(configuredEnvironment, profileEnvironment);
     const isolated = !instance.isDefault || instance.raw.environment !== undefined;
     let environment: Record<string, string> = configuredEnvironment;

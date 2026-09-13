@@ -243,15 +243,32 @@ function buildWrapperScript(input: {
 }
 
 const PROFILE_INHERITED_ENV_KEYS = [
+  "ALL_PROXY",
+  "CURL_CA_BUNDLE",
   "COLORTERM",
+  "FORCE_COLOR",
+  "GIT_SSL_CAINFO",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "https_proxy",
   "LANG",
+  "LANGUAGE",
   "LC_ALL",
+  "NODE_EXTRA_CA_CERTS",
   "NO_COLOR",
+  "NO_PROXY",
+  "no_proxy",
   "PATH",
+  "REQUESTS_CA_BUNDLE",
   "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
   "SSH_AUTH_SOCK",
   "TERM",
   "TMPDIR",
+  "TZ",
+  "XDG_RUNTIME_DIR",
 ] as const;
 
 export function buildProviderProfileWrapperScript(profile: ManagedTerminalProfile): string {
@@ -261,11 +278,11 @@ export function buildProviderProfileWrapperScript(profile: ManagedTerminalProfil
   const environmentArguments = profile.isolateEnvironment
     ? [
         "exec env -i \\",
-        ...PROFILE_INHERITED_ENV_KEYS.map(
-          (name) => `  ${name}=\"\${${name}:-}\" ` + "\\",
+        ...PROFILE_INHERITED_ENV_KEYS.map((name) =>
+          [`  ${name}=\"\${${name}:-}\" `, "\\"].join(""),
         ),
-        ...fixedEnvironment.map(
-          ([name, value]) => `  ${name}=${shellQuote(value)} ` + "\\",
+        ...fixedEnvironment.map(([name, value]) =>
+          [`  ${name}=${shellQuote(value)} `, "\\"].join(""),
         ),
         `  ${shellQuote(profile.targetPath)} \"$@\"`,
       ]

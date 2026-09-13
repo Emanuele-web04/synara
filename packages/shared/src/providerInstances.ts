@@ -501,12 +501,12 @@ export function providerStartOptionsFromInstance(
   const profileDir = trimString(config.profileDir);
   const profileEnvironment =
     profileDir && !["codex", "claudeAgent", "pi"].includes(instance.driver)
-    ? instance.driver === "cursor"
-      ? { CURSOR_CONFIG_DIR: profileDir }
-      : instance.driver === "grok"
-        ? { GROK_HOME: profileDir }
-        : { HOME: profileDir }
-    : {};
+      ? instance.driver === "cursor"
+        ? { CURSOR_CONFIG_DIR: profileDir }
+        : instance.driver === "grok"
+          ? { GROK_HOME: profileDir }
+          : { HOME: profileDir }
+      : {};
   const environment = providerEnvironmentOption(
     { ...instance.environment, ...profileEnvironment },
     instance.raw.environment !== undefined || profileDir.length > 0,
