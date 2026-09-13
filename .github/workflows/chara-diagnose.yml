@@ -1,0 +1,14 @@
+name: Chara diagnose generic ACP
+
+on:
+  push:
+    branches:
+      - codex/generic-acp-provider
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+      - run: bun run typecheck
