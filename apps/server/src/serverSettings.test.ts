@@ -572,6 +572,33 @@ describe("ServerSettingsService", () => {
     });
   });
 
+  it("forces known provider credential environment variables into secret storage", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        const updated = yield* service.updateSettings({
+          providerInstances: {
+            grok_work: {
+              driver: "grok",
+              enabled: true,
+              environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: false }],
+            },
+          },
+        });
+        const raw = yield* fs.readFileString(settingsPath);
+        return { updated, raw };
+      }),
+    );
+
+    expect(result.raw).not.toContain("secret-token");
+    expect(result.updated.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "secret-token", sensitive: true },
+    ]);
+  });
+
   it("preserves redacted provider-instance config secrets on writeback", async () => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {

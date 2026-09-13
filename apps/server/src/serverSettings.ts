@@ -53,6 +53,7 @@ import {
   ProviderCredentialsLive,
   type ExternalProviderServer,
 } from "./providerCredentials";
+import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 
 export interface ServerSettingsShape {
   readonly start: Effect.Effect<void, ServerSettingsError>;
@@ -340,6 +341,33 @@ function preserveRedactedProviderInstanceEnvironment(
   };
 }
 
+function enforceProviderEnvironmentSensitivity(patch: ServerSettingsPatch): ServerSettingsPatch {
+  if (patch.providerInstances === undefined) {
+    return patch;
+  }
+
+  return {
+    ...patch,
+    providerInstances: Object.fromEntries(
+      Object.entries(patch.providerInstances).map(([instanceId, instance]) => [
+        instanceId,
+        {
+          ...instance,
+          ...(instance.environment === undefined
+            ? {}
+            : {
+                environment: instance.environment.map((variable) =>
+                  isProviderCredentialKey(variable.name)
+                    ? { ...variable, sensitive: true }
+                    : variable,
+                ),
+              }),
+        },
+      ]),
+    ) as NonNullable<ServerSettingsPatch["providerInstances"]>,
+  };
+}
+
 function redactProviderInstanceConfig(config: unknown): unknown {
   if (!isRecord(config)) {
     return config;
@@ -401,7 +429,9 @@ function normalizeSettings(
   current: ServerSettings,
   patch: ServerSettingsPatch,
 ): Effect.Effect<ServerSettings, ServerSettingsError> {
-  const preservedPatch = preserveRedactedProviderInstanceEnvironment(current, patch);
+  const preservedPatch = enforceProviderEnvironmentSensitivity(
+    preserveRedactedProviderInstanceEnvironment(current, patch),
+  );
   return Schema.decodeUnknownEffect(ServerSettings)(
     applyServerSettingsPatch(current, preservedPatch),
   ).pipe(
