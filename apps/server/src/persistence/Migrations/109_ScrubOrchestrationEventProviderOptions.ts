@@ -9,22 +9,24 @@ export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   // These are the only orchestration event payloads whose contract carries
-  // ProviderStartOptions. json_remove is idempotent, so an interrupted or
-  // partially applied migration can safely run again.
+  // ProviderStartOptions. Keep an empty environment isolation marker while
+  // removing its values; both operations are idempotent after a partial run.
   yield* sql`
     UPDATE orchestration_events
     SET payload_json = json_remove(
-      payload_json,
-      '$.providerOptions.codex.environment',
-      '$.providerOptions.claudeAgent.environment',
-      '$.providerOptions.cursor.environment',
-      '$.providerOptions.devin.environment',
-      '$.providerOptions.antigravity.environment',
-      '$.providerOptions.grok.environment',
-      '$.providerOptions.droid.environment',
-      '$.providerOptions.opencode.environment',
-      '$.providerOptions.opencode.serverPassword',
-      '$.providerOptions.pi.environment'
+      json_replace(
+        payload_json,
+        '$.providerOptions.codex.environment', json('{}'),
+        '$.providerOptions.claudeAgent.environment', json('{}'),
+        '$.providerOptions.cursor.environment', json('{}'),
+        '$.providerOptions.devin.environment', json('{}'),
+        '$.providerOptions.antigravity.environment', json('{}'),
+        '$.providerOptions.grok.environment', json('{}'),
+        '$.providerOptions.droid.environment', json('{}'),
+        '$.providerOptions.opencode.environment', json('{}'),
+        '$.providerOptions.pi.environment', json('{}')
+      ),
+      '$.providerOptions.opencode.serverPassword'
     )
     WHERE event_type IN (
       'thread.turn-queued',

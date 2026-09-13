@@ -147,14 +147,15 @@ layer("109_ScrubOrchestrationEventProviderOptions", (it) => {
       assert.deepStrictEqual(queuedPayload.providerOptions, {
         droid: {
           binaryPath: "/usr/local/bin/droid",
+          environment: {},
         },
       });
       const startedPayload = JSON.parse(rows[1]?.payloadJson ?? "{}") as {
         readonly providerOptions?: unknown;
       };
       assert.deepStrictEqual(startedPayload.providerOptions, {
-        codex: { homePath: "/tmp/codex-work" },
-        opencode: { serverUrl: "https://opencode.example.test" },
+        codex: { homePath: "/tmp/codex-work", environment: {} },
+        opencode: { serverUrl: "https://opencode.example.test", environment: {} },
       });
 
       const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
@@ -173,13 +174,14 @@ layer("109_ScrubOrchestrationEventProviderOptions", (it) => {
           {
             droid: {
               binaryPath: "/usr/local/bin/droid",
+              environment: {},
             },
           },
           {
-            codex: { homePath: "/tmp/codex-work" },
-            opencode: { serverUrl: "https://opencode.example.test" },
+            codex: { homePath: "/tmp/codex-work", environment: {} },
+            opencode: { serverUrl: "https://opencode.example.test", environment: {} },
           },
-          { opencode: { serverUrl: "https://opencode.example.test" } },
+          { opencode: { serverUrl: "https://opencode.example.test", environment: {} } },
         ],
       );
     }),

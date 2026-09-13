@@ -353,27 +353,29 @@ function redactProviderOptionsForPersistence(value: unknown): unknown {
   }
   return {
     ...value,
-    ...(value.codex ? { codex: withoutRuntimeEnvironment(value.codex) } : {}),
-    ...(value.claudeAgent ? { claudeAgent: withoutRuntimeEnvironment(value.claudeAgent) } : {}),
-    ...(value.cursor ? { cursor: withoutRuntimeEnvironment(value.cursor) } : {}),
-    ...(value.devin ? { devin: withoutRuntimeEnvironment(value.devin) } : {}),
+    ...(value.codex ? { codex: redactRuntimeEnvironment(value.codex) } : {}),
+    ...(value.claudeAgent ? { claudeAgent: redactRuntimeEnvironment(value.claudeAgent) } : {}),
+    ...(value.cursor ? { cursor: redactRuntimeEnvironment(value.cursor) } : {}),
+    ...(value.devin ? { devin: redactRuntimeEnvironment(value.devin) } : {}),
     ...(value.antigravity
-      ? { antigravity: withoutRuntimeEnvironment(value.antigravity) }
+      ? { antigravity: redactRuntimeEnvironment(value.antigravity) }
       : {}),
-    ...(value.grok ? { grok: withoutRuntimeEnvironment(value.grok) } : {}),
-    ...(value.droid ? { droid: withoutRuntimeEnvironment(value.droid) } : {}),
+    ...(value.grok ? { grok: redactRuntimeEnvironment(value.grok) } : {}),
+    ...(value.droid ? { droid: redactRuntimeEnvironment(value.droid) } : {}),
     ...(value.opencode
-      ? { opencode: withoutServerPassword(withoutRuntimeEnvironment(value.opencode)) }
+      ? { opencode: withoutServerPassword(redactRuntimeEnvironment(value.opencode)) }
       : {}),
-    ...(value.pi ? { pi: withoutRuntimeEnvironment(value.pi) } : {}),
+    ...(value.pi ? { pi: redactRuntimeEnvironment(value.pi) } : {}),
   } satisfies ProviderStartOptions;
 }
 
-function withoutRuntimeEnvironment<T extends { readonly environment?: unknown }>(
+function redactRuntimeEnvironment<T extends { readonly environment?: unknown }>(
   value: T,
-): Omit<T, "environment"> {
-  const { environment: _environment, ...rest } = value;
-  return rest;
+): Omit<T, "environment"> & { readonly environment?: Record<string, never> } {
+  if (!Object.hasOwn(value, "environment")) {
+    return value;
+  }
+  return { ...value, environment: {} };
 }
 
 function withoutServerPassword<T extends { readonly serverPassword?: string | undefined }>(

@@ -43,7 +43,9 @@ function sanitizeProviderOptionsUnknown(value: unknown): unknown {
     let sanitizedOptions: Record<string, unknown> | undefined;
     const mutableOptions = () => (sanitizedOptions ??= { ...rawOptions });
     if (Object.prototype.hasOwnProperty.call(rawOptions, "environment")) {
-      delete mutableOptions().environment;
+      // Preserve an explicit empty environment as an isolation marker. Dropping
+      // the field entirely makes replay inherit the server's ambient account.
+      mutableOptions().environment = {};
     }
     if (
       provider === "opencode" &&
@@ -60,8 +62,9 @@ function sanitizeProviderOptionsUnknown(value: unknown): unknown {
 }
 
 /**
- * Provider environments and server passwords are runtime-only credentials.
- * Keep non-secret routing fields so legacy queued turns still decode and replay.
+ * Provider environment values and server passwords are runtime-only credentials.
+ * Keep the empty environment boundary and non-secret routing fields so legacy
+ * queued turns still decode and cannot fall back to ambient credentials.
  */
 export function sanitizeProviderStartOptionsForPersistence(
   providerOptions: ProviderStartOptions | undefined,

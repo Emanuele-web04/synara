@@ -81,9 +81,9 @@ layer("OrchestrationEventStore", (it) => {
       });
 
       const expectedProviderOptions = {
-        codex: { homePath: "/tmp/codex-work" },
-        droid: { binaryPath: "/usr/local/bin/droid" },
-        opencode: { serverUrl: "https://opencode.example.test" },
+        codex: { homePath: "/tmp/codex-work", environment: {} },
+        droid: { binaryPath: "/usr/local/bin/droid", environment: {} },
+        opencode: { serverUrl: "https://opencode.example.test", environment: {} },
       };
       assert.equal(
         appended.type === "thread.turn-start-requested"
