@@ -234,7 +234,9 @@ function AutomationDetailView() {
   const memory = streamedMemory ?? memoryQuery.data ?? null;
   const providerOptionsForDispatch = getProviderStartOptions(
     settings,
-    definition?.modelSelection.instanceId,
+    definition
+      ? (definition.modelSelection.instanceId ?? definition.modelSelection.provider)
+      : undefined,
   );
 
   if (!definition) {
