@@ -29,6 +29,12 @@ const EMPTY_MODELS_RESULT: ProviderListModelsResult = {
   cached: false,
 };
 
+const MODEL_DISCOVERY_TIMEOUT_RESULT: ProviderListModelsResult = {
+  models: [],
+  source: "timeout",
+  cached: false,
+};
+
 const EMPTY_AGENTS_RESULT: ProviderListAgentsResult = {
   agents: [],
   source: "empty",
@@ -60,6 +66,29 @@ interface ProviderModelDiscoveryTask {
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   readonly abort: () => void;
+}
+
+export const PROVIDER_MODEL_DISCOVERY_CLIENT_TIMEOUT_MS = 50_000;
+
+/**
+ * Final client-side fence for provider discovery. The server has a shorter
+ * deadline, but a wedged desktop/native bridge must not leave model controls
+ * pending forever after the server-side request should already have settled.
+ */
+export async function withProviderModelDiscoveryClientDeadline(
+  discovery: Promise<ProviderListModelsResult>,
+  timeoutMs = PROVIDER_MODEL_DISCOVERY_CLIENT_TIMEOUT_MS,
+): Promise<ProviderListModelsResult> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ProviderListModelsResult>((resolve) => {
+    timeoutId = setTimeout(() => resolve(MODEL_DISCOVERY_TIMEOUT_RESULT), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([discovery, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 const providerModelDiscoveryQueue: ProviderModelDiscoveryTask[] = [];
@@ -219,6 +248,7 @@ function requireDiscoveredModels(
   const isAuthoritativeEmptyCatalog =
     result.source === "disabled" ||
     result.source === "unsupported" ||
+    result.source === "timeout" ||
     (provider === "opencode" &&
       (result.source === "opencode" || result.source === "opencode-cli")) ||
     (provider === "pi" && result.source?.startsWith("pi.sdk") === true);
@@ -416,13 +446,15 @@ export function providerModelsQueryOptions(input: {
         input.priority ?? "background",
         async () => {
           const api = ensureNativeApi();
-          const result = await api.provider.listModels({
-            provider: input.provider,
-            ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-            ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
-            ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-            ...(input.cwd ? { cwd: input.cwd } : {}),
-          });
+          const result = await withProviderModelDiscoveryClientDeadline(
+            api.provider.listModels({
+              provider: input.provider,
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+              ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+            }),
+          );
           const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
           return requireDiscoveredModels(input.provider, result, previous);
         },

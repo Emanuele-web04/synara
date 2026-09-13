@@ -11,6 +11,7 @@ import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
   providerModelsQueryOptions,
+  withProviderModelDiscoveryClientDeadline,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
 
@@ -56,6 +57,18 @@ describe("isInitialModelDiscoveryPending", () => {
         isPlaceholderData: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("withProviderModelDiscoveryClientDeadline", () => {
+  it("settles a stalled desktop bridge request after the client fence", async () => {
+    const stalled = new Promise<never>(() => undefined);
+
+    await expect(withProviderModelDiscoveryClientDeadline(stalled, 5)).resolves.toEqual({
+      models: [],
+      source: "timeout",
+      cached: false,
+    });
   });
 });
 
