@@ -12,6 +12,7 @@ import {
   type AcpServerProviderSettings,
   type ProviderApprovalDecision,
   type ProviderComposerCapabilities,
+  type ProviderInteractionMode,
   type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -129,7 +130,7 @@ interface AcpSessionContext {
   session: ProviderSession;
   modeState: AcpSessionModeState | undefined;
   activeTurnId: TurnId | undefined;
-  activeInteractionMode: "default" | "plan" | undefined;
+  activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnHadAssistantContent: boolean;
   activeTurnFailedToolDetail: string | undefined;
   activeAssistantItemsWithContent: Set<string>;
@@ -508,7 +509,16 @@ export function makeAcpAdapter(settings: GenericAcpRuntimeSettings) {
             pendingUserInputs,
             turns: [],
             session,
-            modeState: yield* acp.getModeState,
+            modeState: yield* acp.getModeState.pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(
+                  PROVIDER,
+                  input.threadId,
+                  "session/get_mode_state",
+                  error,
+                ),
+              ),
+            ),
             activeTurnId: undefined,
             activeInteractionMode: undefined,
             activeTurnHadAssistantContent: false,

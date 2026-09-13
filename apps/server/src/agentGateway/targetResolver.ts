@@ -227,6 +227,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  acp: defineProviderOptionConfig<"acp">({
+    primaryOptionKey: "model",
+    options: {},
+  }),
   devin: defineProviderOptionConfig<"devin">({
     primaryOptionKey: "modelVariant",
     options: {

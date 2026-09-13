@@ -265,7 +265,18 @@ export const providerDiscoveryQueryKeys = {
     apiEndpoint: string | null,
     agentDir: string | null,
     cwd: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
+    args: readonly string[] | null = null,
+  ) =>
+    [
+      "provider-discovery",
+      "models",
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      args,
+    ] as const,
   agentsForProvider: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
   agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
@@ -396,6 +407,7 @@ export function providerModelsQueryOptions(input: {
   binaryPath?: string | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
+  args?: readonly string[] | null;
   cwd?: string | null;
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
@@ -406,6 +418,7 @@ export function providerModelsQueryOptions(input: {
     input.apiEndpoint ?? null,
     input.agentDir ?? null,
     input.cwd ?? null,
+    input.args ?? null,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -421,6 +434,7 @@ export function providerModelsQueryOptions(input: {
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+            ...(input.args !== undefined && input.args !== null ? { args: [...input.args] } : {}),
             ...(input.cwd ? { cwd: input.cwd } : {}),
           });
           const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
