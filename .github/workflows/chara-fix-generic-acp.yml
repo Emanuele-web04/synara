@@ -1,0 +1,80 @@
+name: Chara fix generic ACP contracts
+
+on:
+  push:
+    branches:
+      - codex/generic-acp-provider
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Port ACP contract schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          model = Path("packages/contracts/src/model.ts")
+          text = model.read_text()
+          text = text.replace(
+              'export type PiModelOptions = typeof PiModelOptions.Type;\n\nexport const CursorModelOptions',
+              'export type PiModelOptions = typeof PiModelOptions.Type;\n\n/** ACP model options are intentionally open-ended and negotiated per agent. */\nexport const AcpModelOptions = Schema.Struct({});\nexport type AcpModelOptions = typeof AcpModelOptions.Type;\n\nexport const CursorModelOptions',
+          )
+          text = text.replace(
+              '  pi: Schema.optional(PiModelOptions),\n});',
+              '  pi: Schema.optional(PiModelOptions),\n  acp: Schema.optional(AcpModelOptions),\n});',
+              1,
+          )
+          model.write_text(text)
+
+          orchestration = Path("packages/contracts/src/orchestration.ts")
+          text = orchestration.read_text()
+          text = text.replace(
+              '  AntigravityModelOptions,\n',
+              '  AntigravityModelOptions,\n  AcpModelOptions,\n',
+              1,
+          )
+          text = text.replace(
+              '  "devin",\n]);',
+              '  "devin",\n  "acp",\n]);',
+              1,
+          )
+          text = text.replace(
+              'export type DevinModelSelection = typeof DevinModelSelection.Type;\n\nexport const ModelSelection',
+              'export type DevinModelSelection = typeof DevinModelSelection.Type;\n\nexport const AcpModelSelection = Schema.Struct({\n  provider: Schema.Literal("acp"),\n  model: TrimmedNonEmptyString,\n  options: Schema.optional(AcpModelOptions),\n});\nexport type AcpModelSelection = typeof AcpModelSelection.Type;\n\nexport const ModelSelection',
+              1,
+          )
+          text = text.replace(
+              '  PiModelSelection,\n]);',
+              '  PiModelSelection,\n  AcpModelSelection,\n]);',
+              1,
+          )
+          text = text.replace(
+              'export const DevinProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n});\n\nexport const ProviderStartOptions',
+              'export const DevinProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n});\n\nexport const AcpProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n  args: Schema.optional(Schema.Array(TrimmedNonEmptyString)),\n});\n\nexport const ProviderStartOptions',
+              1,
+          )
+          text = text.replace(
+              '  pi: Schema.optional(PiProviderStartOptions),\n});',
+              '  pi: Schema.optional(PiProviderStartOptions),\n  acp: Schema.optional(AcpProviderStartOptions),\n});',
+              1,
+          )
+          orchestration.write_text(text)
+          PY
+
+          git rm .github/workflows/chara-fix-generic-acp.yml
+          git diff --check
+          git config user.name "cmdr-chara"
+          git config user.email "249489759+cmdr-chara@users.noreply.github.com"
+          git add packages/contracts/src/model.ts packages/contracts/src/orchestration.ts
+          git commit -m "fix: port generic ACP contracts to current provider set"
+          git push origin HEAD:codex/generic-acp-provider
