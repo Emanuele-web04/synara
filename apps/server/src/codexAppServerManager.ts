@@ -85,6 +85,7 @@ import {
   type PreparedCodexAuthTracking,
 } from "./codexProcessEnv.ts";
 import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
+import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -1144,8 +1145,19 @@ function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefine
 function codexProcessEnvInputForOptions(
   options: CodexDiscoveryOptions | undefined,
 ): CodexProcessEnvInput {
+  const accountScoped = Boolean(options?.accountId);
+  const explicitProviderEnvironment = options?.environment;
+  const inheritedEnvironment = accountScoped
+    ? withoutProviderCredentialEnvironment(process.env)
+    : { ...process.env };
   return {
-    ...(options?.environment ? { env: { ...process.env, ...options.environment } } : {}),
+    env: { ...inheritedEnvironment, ...explicitProviderEnvironment },
+    ...(accountScoped
+      ? {
+          isolateProviderCredentials: true,
+          explicitProviderEnvironment: explicitProviderEnvironment ?? {},
+        }
+      : {}),
     ...(options?.homePath ? { homePath: options.homePath } : {}),
     ...(options?.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
     ...(options?.accountId ? { accountId: options.accountId } : {}),
@@ -1229,12 +1241,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     expectedCodexContinuationGeneration?: string,
   ) {
     const processEnvInput = {
-      ...(codexOptions?.environment
-        ? { env: { ...process.env, ...codexOptions.environment } }
-        : {}),
-      ...(codexOptions?.homePath ? { homePath: codexOptions.homePath } : {}),
-      ...(codexOptions?.shadowHomePath ? { shadowHomePath: codexOptions.shadowHomePath } : {}),
-      ...(codexOptions?.accountId ? { accountId: codexOptions.accountId } : {}),
+      ...codexProcessEnvInputForOptions(codexOptions),
       ...(expectedCodexContinuationGeneration
         ? { expectedSharedContinuationGeneration: expectedCodexContinuationGeneration }
         : {}),
@@ -3178,14 +3185,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
       const codexOptions = context.codexOptions;
-      const currentTracking = prepareCodexAuthTracking({
-        ...(codexOptions?.environment
-          ? { env: { ...process.env, ...codexOptions.environment } }
-          : {}),
-        ...(codexOptions?.homePath ? { homePath: codexOptions.homePath } : {}),
-        ...(codexOptions?.shadowHomePath ? { shadowHomePath: codexOptions.shadowHomePath } : {}),
-        ...(codexOptions?.accountId ? { accountId: codexOptions.accountId } : {}),
-      });
+      const currentTracking = prepareCodexAuthTracking(codexProcessEnvInputForOptions(codexOptions));
       return readCodexPreparedAuthTrackingFingerprint(currentTracking) === context.authFingerprint
         ? undefined
         : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
@@ -5106,11 +5106,14 @@ async function runCodexCliVersionGate(input: {
   readonly minimumVersionRequirement?: string;
   readonly expectedSharedContinuationGeneration?: string;
 }): Promise<CodexCliBinaryFingerprint | null> {
-  const env = await buildCodexProcessEnv({
-    ...(input.environment ? { env: { ...process.env, ...input.environment } } : {}),
+  const codexOptions = normalizeCodexDiscoveryOptions({
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.environment ? { environment: input.environment } : {}),
+  });
+  const env = await buildCodexProcessEnv({
+    ...codexProcessEnvInputForOptions(codexOptions),
     ...(input.expectedSharedContinuationGeneration
       ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
       : {}),

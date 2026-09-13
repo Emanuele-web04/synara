@@ -261,6 +261,41 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("removes an account-scoped active provider key unless the instance supplies it", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-explicit-env-"));
+    const codexHome = path.join(root, "codex-home");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      'model_provider = "custom"\n[model_providers.custom]\nenv_key = "ACME_PROVIDER_TOKEN"\n',
+      "utf8",
+    );
+
+    try {
+      const isolated = await buildCodexProcessEnv({
+        env: { HOME: root, ACME_PROVIDER_TOKEN: "ambient-secret" },
+        homePath: codexHome,
+        skipHomeOverlay: true,
+        isolateProviderCredentials: true,
+        explicitProviderEnvironment: {},
+        platform: "win32",
+      });
+      expect(isolated.ACME_PROVIDER_TOKEN).toBeUndefined();
+
+      const explicit = await buildCodexProcessEnv({
+        env: { HOME: root, ACME_PROVIDER_TOKEN: "instance-secret" },
+        homePath: codexHome,
+        skipHomeOverlay: true,
+        isolateProviderCredentials: true,
+        explicitProviderEnvironment: { ACME_PROVIDER_TOKEN: "instance-secret" },
+        platform: "win32",
+      });
+      expect(explicit.ACME_PROVIDER_TOKEN).toBe("instance-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("pins a fresh shared continuation source to one durable generation", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-"));
     const codexHome = path.join(root, "codex-home");
