@@ -1,0 +1,99 @@
+name: Chara fix Copilot contracts
+
+on:
+  push:
+    branches:
+      - agent/copilot-cli-acp
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Port Copilot contract schema and model tables
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          model = Path("packages/contracts/src/model.ts")
+          text = model.read_text()
+          text = text.replace(
+              'export type DroidModelOptions = typeof DroidModelOptions.Type;\n\nexport const DevinModelOptions',
+              'export type DroidModelOptions = typeof DroidModelOptions.Type;\n\nexport const CopilotModelOptions = Schema.Struct({\n  reasoningEffort: Schema.optional(TrimmedNonEmptyString),\n});\nexport type CopilotModelOptions = typeof CopilotModelOptions.Type;\n\nexport const DevinModelOptions',
+              1,
+          )
+          text = text.replace(
+              '  pi: Schema.optional(PiModelOptions),\n});',
+              '  pi: Schema.optional(PiModelOptions),\n  copilot: Schema.optional(CopilotModelOptions),\n});',
+              1,
+          )
+          catalog_marker = '  // Pi discovery owns the live catalog, including auth-gated Anthropic models.\n  pi: [],\n'
+          catalog_replacement = '''  // Pi discovery owns the live catalog, including auth-gated Anthropic models.\n  pi: [],\n  // Copilot discovery owns the account-specific live ACP catalog.\n  copilot: [\n    {\n      slug: "default",\n      name: "Copilot default",\n      capabilities: {\n        reasoningEffortLevels: [],\n        supportsFastMode: false,\n        supportsThinkingToggle: false,\n        promptInjectedEffortLevels: [],\n        contextWindowOptions: [],\n      },\n    },\n  ],\n'''
+          if catalog_marker not in text:
+              raise SystemExit("Copilot catalog insertion point changed")
+          text = text.replace(catalog_marker, catalog_replacement, 1)
+          text = text.replace(
+              '  opencode: "openai/gpt-5",\n};',
+              '  opencode: "openai/gpt-5",\n  copilot: "default",\n};',
+              1,
+          )
+          text = text.replace(
+              '  opencode: {},\n  pi: {},\n  devin: {',
+              '  opencode: {},\n  pi: {},\n  copilot: {},\n  devin: {',
+              1,
+          )
+          text = text.replace(
+              '  opencode: "OpenCode",\n  pi: "Pi",\n};',
+              '  opencode: "OpenCode",\n  pi: "Pi",\n  copilot: "GitHub Copilot",\n};',
+              1,
+          )
+          model.write_text(text)
+
+          orchestration = Path("packages/contracts/src/orchestration.ts")
+          text = orchestration.read_text()
+          text = text.replace(
+              '  CodexModelOptions,\n',
+              '  CodexModelOptions,\n  CopilotModelOptions,\n',
+              1,
+          )
+          text = text.replace(
+              '  "devin",\n]);',
+              '  "devin",\n  "copilot",\n]);',
+              1,
+          )
+          text = text.replace(
+              'export type DevinModelSelection = typeof DevinModelSelection.Type;\n\nexport const ModelSelection',
+              'export type DevinModelSelection = typeof DevinModelSelection.Type;\n\nexport const CopilotModelSelection = Schema.Struct({\n  provider: Schema.Literal("copilot"),\n  model: TrimmedNonEmptyString,\n  options: Schema.optional(CopilotModelOptions),\n});\nexport type CopilotModelSelection = typeof CopilotModelSelection.Type;\n\nexport const ModelSelection',
+              1,
+          )
+          text = text.replace(
+              '  PiModelSelection,\n]);',
+              '  PiModelSelection,\n  CopilotModelSelection,\n]);',
+              1,
+          )
+          text = text.replace(
+              'export const DevinProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n});\n\nexport const ProviderStartOptions',
+              'export const DevinProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n});\n\nexport const CopilotProviderStartOptions = Schema.Struct({\n  binaryPath: Schema.optional(TrimmedNonEmptyString),\n});\n\nexport const ProviderStartOptions',
+              1,
+          )
+          text = text.replace(
+              '  pi: Schema.optional(PiProviderStartOptions),\n});',
+              '  pi: Schema.optional(PiProviderStartOptions),\n  copilot: Schema.optional(CopilotProviderStartOptions),\n});',
+              1,
+          )
+          orchestration.write_text(text)
+          PY
+
+          git rm .github/workflows/chara-fix-copilot-contracts.yml
+          git diff --check
+          git config user.name "cmdr-chara"
+          git config user.email "249489759+cmdr-chara@users.noreply.github.com"
+          git add packages/contracts/src/model.ts packages/contracts/src/orchestration.ts
+          git commit -m "fix: port Copilot contracts to current provider set"
+          git push origin HEAD:agent/copilot-cli-acp
