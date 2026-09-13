@@ -60,8 +60,10 @@ function nonSensitiveEnvironment(
   return Object.fromEntries(
     (instance.raw.environment ?? []).flatMap((variable) => {
       const name = variable.name.trim();
-      const value = variable.value?.trim();
-      return name && value && variable.sensitive !== true && variable.valueRedacted !== true
+      return name &&
+        typeof variable.value === "string" &&
+        variable.sensitive !== true &&
+        variable.valueRedacted !== true
         ? [[name, variable.value ?? ""]]
         : [];
     }),

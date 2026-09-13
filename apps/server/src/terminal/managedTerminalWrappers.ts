@@ -307,7 +307,7 @@ function readProviderProfileManifest(rootDir: string): string[] {
     );
     return Array.isArray(parsed)
       ? parsed.filter((value): value is string =>
-          typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value),
+          typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value),
         )
       : [];
   } catch {
