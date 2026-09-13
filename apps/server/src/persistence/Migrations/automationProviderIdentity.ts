@@ -4,11 +4,14 @@ const PROVIDERS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "antigravity",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
+  "devin",
 ] as const;
 
 type Provider = (typeof PROVIDERS)[number];
@@ -19,11 +22,14 @@ const IDENTITY_KEYS = {
   codex: ["homePath", "shadowHomePath", "environment"],
   claudeAgent: ["homePath", "environment"],
   cursor: ["apiEndpoint", "environment"],
+  antigravity: ["environment"],
   gemini: ["environment"],
   grok: ["environment"],
+  droid: ["environment"],
   kilo: ["serverUrl", "serverPassword", "environment"],
   opencode: ["serverUrl", "serverPassword", "environment"],
   pi: ["agentDir", "environment"],
+  devin: ["environment"],
 } as const satisfies Record<Provider, readonly string[]>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
