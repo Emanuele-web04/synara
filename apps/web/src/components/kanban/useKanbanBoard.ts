@@ -267,6 +267,9 @@ export function useKanbanBoard(): KanbanBoard {
   const needsReviewPrLookup = useThreadPullRequests({
     threads: needsReviewSeedThreads,
     projectCwdById,
+    // Needs-review is a live-confirmed claim: without a resolved git-status
+    // snapshot the persisted "open" PR would keep the flag on stale evidence.
+    requireLiveStatus: true,
   });
   const needsReviewByThreadId = useMemo(() => {
     const map: Record<string, boolean> = {};

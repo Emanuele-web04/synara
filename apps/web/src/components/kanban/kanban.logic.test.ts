@@ -1096,4 +1096,42 @@ describe("buildKanbanBoard v2 mode", () => {
       expect(project.hiddenCount).toBe(hidden);
     },
   );
+
+  it("hides drafts, optimistic dispatches, and promotion-gap cards under needs-review", () => {
+    const reviewThread = makeOpenPrThread("thread-review");
+    const draftId = ThreadId.makeUnsafe("thread-local-draft");
+    const dispatchedId = ThreadId.makeUnsafe("thread-dispatched");
+    const gapId = ThreadId.makeUnsafe("thread-promoting");
+    const optimistic = (threadId: ThreadId): KanbanOptimisticDispatchSnapshot => ({
+      projectId: PROJECT_1,
+      title: "Dispatched",
+      provider: "cursor",
+      baselineTurnId: null,
+      droppedAtMs: FROZEN_NOW_MS,
+    });
+    const project = buildKanbanBoard(
+      makeBoardInput({
+        threads: [reviewThread, makeSidebarThreadSummary({ id: dispatchedId })],
+        draftThreads: [makeDraftThread(draftId)],
+        composerDraftByThreadId: {
+          [draftId]: { prompt: "WIP", hasAttachments: false, provider: "claudeAgent" },
+        },
+        optimisticDispatchByThreadId: {
+          [dispatchedId]: optimistic(dispatchedId),
+          [gapId]: optimistic(gapId),
+        },
+      }),
+      v2Options({
+        needsReviewByThreadId: { "thread-review": true },
+        isNeedsReviewActive: true,
+      }),
+    ).projects[0]!;
+    // Only the live-confirmed review card survives; every unflagged insertion
+    // path — draft column, forced-optimistic In Progress, promotion-gap
+    // synthesis — stays out of the filtered board and the count.
+    expect(project.draft).toHaveLength(0);
+    expect(project.inProgress).toHaveLength(0);
+    expect(project.done.map((card) => card.threadId)).toEqual(["thread-review"]);
+    expect(project.totalCount).toBe(1);
+  });
 });

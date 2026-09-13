@@ -34,7 +34,7 @@ import {
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { waitForKanbanDispatchToSettle } from "../../lib/kanbanDispatch";
-import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
@@ -252,8 +252,25 @@ export function useChatTurnExecution({
       let turnStartSucceeded = false;
       let settledLocalBranchUpdatedForSend = false;
       // A board dispatch racing this send must settle first: two starters must
-      // serialize onto one turn, never queue two. Bounded + fail-open.
-      await waitForKanbanDispatchToSettle(threadIdForSend);
+      // serialize onto one turn, never queue two. Claim the shared pending
+      // marker up front so a board drop that starts after this point defers to
+      // this send (it consults hasPendingTurnDispatch), then wait out any
+      // dispatch already on the wire. Bounded + fail-open on timeout.
+      markPendingTurnDispatch(threadIdForSend);
+      const settledBoardDispatch = await waitForKanbanDispatchToSettle(threadIdForSend);
+      if (settledBoardDispatch?.kind === "dispatched" && settledBoardDispatch.deferred !== true) {
+        // The board drop won and already dispatched this thread's draft prompt —
+        // running the prepared send now would queue a duplicate turn. The
+        // marker stays armed: the board's success path re-armed it for its own
+        // watchdog lifecycle (stream ack or age cap now owns clearing). Settle
+        // the attachment staging; the dispatch already cleared the composer
+        // content, so nothing user-visible is lost.
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        return false;
+      }
       await (async () => {
         // "Work locally" from the setup card: drop any prepared worktree and
         // point the send (and the thread's metadata) back at the project

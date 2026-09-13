@@ -836,9 +836,13 @@ export function buildKanbanBoard(
       if (card.column !== "inProgress") {
         // A drop already dispatched this thread's prompt; show it In Progress while
         // the first runtime signal is in flight and suppress its draft/done duplicates
-        // so the board matches the state the dispatch is about to produce.
-        bucket.inProgress.push(forceOptimisticInProgressCard(card, optimisticEntry));
-        continue;
+        // so the board matches the state the dispatch is about to produce. Under the
+        // needs-review filter the forced overlay is meaningless — the view shows only
+        // flagged cards — so fall through and let the live-confirmed flag decide.
+        if (!needsReviewActive) {
+          bucket.inProgress.push(forceOptimisticInProgressCard(card, optimisticEntry));
+          continue;
+        }
       }
     }
     if (!cardPassesNeedsReviewFilter(card)) {
@@ -858,6 +862,11 @@ export function buildKanbanBoard(
   }
 
   for (const draftThread of input.draftThreads) {
+    // Local drafts cannot carry a live-confirmed review flag, so the filtered
+    // view never shows them.
+    if (needsReviewActive) {
+      continue;
+    }
     const boardProjectId = resolveBoardProjectId(draftThread.projectId);
     // Skip drafts that were already promoted into real threads or live in unknown projects.
     if (threadIds.has(draftThread.threadId) || !knownProjectIds.has(boardProjectId)) {
@@ -886,7 +895,9 @@ export function buildKanbanBoard(
   // Promotion gap: the draft snapshot is gone (promoted, composer cleared) but the
   // durable thread has not reached the store yet — synthesize the In Progress card.
   for (const [threadId, optimisticEntry] of Object.entries(optimisticDispatchByThreadId)) {
-    if (!optimisticEntry || handledOptimisticThreadIds.has(threadId)) {
+    // A promotion-gap card is a just-dispatched draft — it cannot carry a
+    // live-confirmed review flag, so it too stays out of the filtered view.
+    if (needsReviewActive || !optimisticEntry || handledOptimisticThreadIds.has(threadId)) {
       continue;
     }
     const boardProjectId = resolveBoardProjectId(optimisticEntry.projectId);

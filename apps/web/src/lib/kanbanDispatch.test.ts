@@ -5,7 +5,11 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { buildKanbanComposerDraftSnapshot } from "../components/kanban/kanban.logic";
 import { createPastedTextDraft } from "./composerPastedText";
-import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
+import {
+  clearPendingTurnDispatch,
+  hasPendingTurnDispatch,
+  markPendingTurnDispatch,
+} from "../pendingTurnDispatch";
 import type { SidebarThreadSummary } from "../types";
 import {
   dispatchKanbanDraftThread,
@@ -196,8 +200,9 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     expect(isKanbanDispatchInFlight(threadId)).toBe(true);
 
     let waiterDone = false;
-    const waiter = waitForKanbanDispatchToSettle(threadId, 1_000).then(() => {
+    const waiter = waitForKanbanDispatchToSettle(threadId, 1_000).then((settled) => {
       waiterDone = true;
+      return settled;
     });
     // Still gated while the board dispatch is on the wire.
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -205,9 +210,12 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
 
     releaseTurnStart();
     await boardPromise;
-    await waiter;
+    const settled = await waiter;
     expect(waiterDone).toBe(true);
     expect(isKanbanDispatchInFlight(threadId)).toBe(false);
+    // The waiter learns the board outcome so it can abort instead of sending a
+    // duplicate turn.
+    expect(settled).toEqual({ kind: "dispatched" });
   });
 
   it("waitForKanbanDispatchToSettle fails open on timeout", async () => {
@@ -232,10 +240,29 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       defaultProvider: "codex",
       assistantDeliveryMode: "buffered",
     });
-    await expect(waitForKanbanDispatchToSettle(threadId, 60)).resolves.toBeUndefined();
+    await expect(waitForKanbanDispatchToSettle(threadId, 60)).resolves.toBeNull();
     // Board side still owns the guard; only the waiter gave up.
     expect(isKanbanDispatchInFlight(threadId)).toBe(true);
     void boardPromise;
+  });
+
+  it("keeps the pending-turn marker armed after a successful board dispatch", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-watchdog");
+    const projectId = ProjectId.makeUnsafe("project-watchdog");
+    useComposerDraftStore.getState().setPrompt(threadId, "Prompt.");
+    const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
+    const result = await dispatchKanbanDraftThread({
+      threadId,
+      projectId,
+      thread,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    });
+    expect(result.kind).toBe("dispatched");
+    // The turn may not have streamed yet; the watchdog stays armed until the
+    // stream ack or the age cap, mirroring the composer-send path.
+    expect(hasPendingTurnDispatch(threadId)).toBe(true);
+    clearPendingTurnDispatch(threadId);
   });
 });
 

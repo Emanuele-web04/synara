@@ -257,14 +257,30 @@ export const KANBAN_DISPATCH_SETTLE_TIMEOUT_MS = 5_000;
 export async function waitForKanbanDispatchToSettle(
   threadId: ThreadId,
   timeoutMs: number = KANBAN_DISPATCH_SETTLE_TIMEOUT_MS,
-): Promise<void> {
+): Promise<KanbanDraftDispatchResult | null> {
   const deadline = Date.now() + timeoutMs;
+  let settled: KanbanDraftDispatchResult | null = null;
   while (inFlightDispatchByThreadId.has(threadId)) {
     if (Date.now() >= deadline) {
-      return;
+      return settled;
     }
-    await new Promise((resolve) => setTimeout(resolve, KANBAN_DISPATCH_SETTLE_POLL_MS));
+    const inFlight = inFlightDispatchByThreadId.get(threadId);
+    // A rejected in-flight promise settles as non-dispatched — the waiter's own
+    // send proceeds and surfaces its own error if the dispatch truly failed.
+    const outcome = await Promise.race([
+      inFlight?.then(
+        (result) => result,
+        () => null,
+      ) ?? Promise.resolve(null),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), KANBAN_DISPATCH_SETTLE_POLL_MS),
+      ),
+    ]);
+    if (outcome !== null) {
+      settled = outcome;
+    }
   }
+  return settled;
 }
 
 /**
@@ -567,7 +583,12 @@ async function dispatchKanbanDraftThreadOnce(
 
   // The prompt was consumed by the dispatched turn; an open composer for this
   // thread should not keep offering it.
-  clearPendingTurnDispatch(threadId);
+  // Re-arm the pending marker rather than clearing it: the turn RPC resolved
+  // but the stream has not acknowledged the running transition yet, and the
+  // catch-up watchdog needs this marker to recover a lost running event —
+  // same lifecycle as a normal composer send (cleared on stream ack or by the
+  // age cap, cleared above on failure).
+  markPendingTurnDispatch(threadId);
   useComposerDraftStore.getState().clearComposerContent(threadId);
   return { kind: "dispatched", warning: goalWarning };
 }

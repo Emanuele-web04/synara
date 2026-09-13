@@ -584,6 +584,45 @@ describe("kanban write concurrency per card", () => {
     expect(started).toHaveLength(1);
   });
 
+  it("fails fast on a concurrent move of the same card from a different session", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { tools, started } = makeTools({
+      threads: [makeThreadShell("thread-a")],
+      startTurn: () => Effect.promise(() => held.then(() => ({ sequence: 1 }))),
+    });
+    const tool = toolById(tools, "synara_move_kanban_card");
+    const otherSession: ToolContext = {
+      ...context,
+      callerSessionKey: "gateway-session:other",
+    };
+    const first = runHandler(tool, {
+      threadId: "thread-a",
+      target: "inProgress",
+      message: "go",
+    });
+    // Yield so the first call holds its global per-card key before the
+    // cross-session duplicate arrives.
+    await Promise.resolve();
+    const duplicate = await runHandler(
+      tool,
+      { threadId: "thread-a", target: "inProgress", message: "go again" },
+      otherSession,
+    );
+    expect(duplicate.isError).toBe(true);
+    expect((jsonText(duplicate) as { __errorText?: string }).__errorText).toContain(
+      "already in flight",
+    );
+
+    release();
+    const won = jsonText(await first);
+    expect(won.turnStarted).toBe(true);
+    // Exactly one turn started: the second session never dispatched.
+    expect(started).toHaveLength(1);
+  });
+
   it("keeps moves on different cards fully parallel", async () => {
     let release: () => void = () => undefined;
     const held = new Promise<void>((resolve) => {

@@ -241,8 +241,12 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
 
   const MAX_CONCURRENT_KANBAN_WRITES_PER_CALLER = 4;
   const inFlightWriteCounts = new Map<string, number>();
-  // ponytail: per-caller key set, so one stuck caller can never block another session's cards.
-  const inFlightWriteKeys = new Map<string, Set<string>>();
+  // Thread-keyed writes guard the shared card globally — a card move is a
+  // mutation of one server-side thread, so two different caller sessions must
+  // not dispatch it concurrently either. Request-keyed creates stay per-caller:
+  // a requestId is that caller's idempotency scope, not a shared resource.
+  const inFlightThreadWriteKeys = new Set<string>();
+  const inFlightRequestWriteKeys = new Map<string, Set<string>>();
 
   /** In-flight key from a raw threadId arg, null when the arg is absent. */
   const threadInFlightKey = (args: Record<string, unknown>): string | null => {
@@ -322,9 +326,17 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
       Effect.gen(function* () {
         const sessionKey = context.callerSessionKey;
         const inFlightKey = readInFlightKey(args);
-        if (inFlightKey !== null && inFlightWriteKeys.get(sessionKey)?.has(inFlightKey)) {
+        const threadScoped = inFlightKey !== null && inFlightKey.startsWith("thread:");
+        const keyInFlight =
+          inFlightKey !== null &&
+          (threadScoped
+            ? inFlightThreadWriteKeys.has(inFlightKey)
+            : (inFlightRequestWriteKeys.get(sessionKey)?.has(inFlightKey) ?? false));
+        if (keyInFlight) {
           return mcpToolResultError(
-            `Kanban write for "${inFlightKey}" is already in flight from this session; wait for it to settle instead of dispatching twice.`,
+            threadScoped
+              ? `Kanban write for "${inFlightKey}" is already in flight; wait for it to settle instead of dispatching twice.`
+              : `Kanban write for "${inFlightKey}" is already in flight from this session; wait for it to settle instead of dispatching twice.`,
           );
         }
         const active = inFlightWriteCounts.get(sessionKey) ?? 0;
@@ -335,9 +347,13 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
         }
         inFlightWriteCounts.set(sessionKey, active + 1);
         if (inFlightKey !== null) {
-          const owned = inFlightWriteKeys.get(sessionKey) ?? new Set<string>();
-          owned.add(inFlightKey);
-          inFlightWriteKeys.set(sessionKey, owned);
+          if (threadScoped) {
+            inFlightThreadWriteKeys.add(inFlightKey);
+          } else {
+            const owned = inFlightRequestWriteKeys.get(sessionKey) ?? new Set<string>();
+            owned.add(inFlightKey);
+            inFlightRequestWriteKeys.set(sessionKey, owned);
+          }
         }
         return yield* run(args, context).pipe(
           Effect.ensuring(
@@ -346,10 +362,14 @@ export function makeAgentGatewayKanbanTools(input: KanbanToolsInput): ReadonlyAr
               if (next <= 0) inFlightWriteCounts.delete(sessionKey);
               else inFlightWriteCounts.set(sessionKey, next);
               if (inFlightKey !== null) {
-                const owned = inFlightWriteKeys.get(sessionKey);
-                if (owned) {
-                  owned.delete(inFlightKey);
-                  if (owned.size === 0) inFlightWriteKeys.delete(sessionKey);
+                if (threadScoped) {
+                  inFlightThreadWriteKeys.delete(inFlightKey);
+                } else {
+                  const owned = inFlightRequestWriteKeys.get(sessionKey);
+                  if (owned) {
+                    owned.delete(inFlightKey);
+                    if (owned.size === 0) inFlightRequestWriteKeys.delete(sessionKey);
+                  }
                 }
               }
             }),
