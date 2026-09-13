@@ -32,4 +32,26 @@ describe("resolveTextGenerationInputForSelection", () => {
       },
     });
   });
+
+  it("uses the resolved instance driver as the routing authority", () => {
+    expect(
+      resolveTextGenerationInputForSelection(
+        {
+          provider: "codex",
+          instanceId: "work",
+          model: "claude-opus-4-6",
+          options: { reasoningEffort: "high" },
+        },
+        { claudeAgent: { homePath: "/tmp/claude-work" } },
+        "claudeAgent",
+      ),
+    ).toEqual({
+      modelSelection: {
+        provider: "claudeAgent",
+        instanceId: "work",
+        model: "claude-opus-4-6",
+      },
+      providerOptions: { claudeAgent: { homePath: "/tmp/claude-work" } },
+    });
+  });
 });
