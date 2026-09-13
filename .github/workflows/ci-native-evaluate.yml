@@ -1,0 +1,138 @@
+name: CI native and tooling evaluation
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-evidence]
+    paths: [.github/workflows/ci-native-evaluate.yml, .github/scripts/stagehand-probe.mjs]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-native-evaluate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Package pinned local verification tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          echo '{"private":true,"dependencies":{"oxfmt":"0.40.0","oxlint":"1.56.0"}}' > "$RUNNER_TEMP/tools/package.json"
+          bun install --cwd "$RUNNER_TEMP/tools" --ignore-scripts
+          cp "$(command -v node)" "$RUNNER_TEMP/tools/node"
+          cp "$(command -v bun)" "$RUNNER_TEMP/tools/bun"
+          git fetch --depth=1 origin 45ecb1be74cdfb6ad9f76e04e0cad07967a9cb46
+          git archive 45ecb1be74cdfb6ad9f76e04e0cad07967a9cb46 .github > "$RUNNER_TEMP/tools/previous-ci.tar"
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP/tools" actionlint
+          gh api 'repos/Emanuele-web04/synara/actions/runs/34781554241/jobs?per_page=100' > "$RUNNER_TEMP/tools/baseline-jobs.json"
+          gh api repos/Emanuele-web04/synara/actions/runs/34781554241 > "$RUNNER_TEMP/tools/baseline-run.json"
+          "$RUNNER_TEMP/tools/node_modules/.bin/oxfmt" --version
+          tar -czf "$RUNNER_TEMP/tools.tar.gz" -C "$RUNNER_TEMP/tools" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verification-tools
+          path: ${{ runner.temp }}/tools.tar.gz
+          retention-days: 3
+
+  stagehand:
+    name: Stagehand deterministic feasibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Isolate alternative dependencies from the Synara lockfile
+        run: |
+          mkdir -p "$RUNNER_TEMP/stagehand"
+          cp .github/scripts/stagehand-probe.mjs "$RUNNER_TEMP/stagehand/probe.mjs"
+          cd "$RUNNER_TEMP/stagehand"
+          npm init -y
+          npm install --save-exact --ignore-scripts @browserbasehq/stagehand@4.0.0 playwright@1.58.2 zod@4.3.6
+          ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Compare local deterministic controls and actionability
+        run: cd "$RUNNER_TEMP/stagehand" && node probe.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stagehand-feasibility
+          path: |
+            ${{ runner.temp }}/stagehand/stagehand-results.json
+            ${{ runner.temp }}/stagehand/package-lock.json
+          retention-days: 7
+          if-no-files-found: error
+
+  native:
+    name: Native artifact (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Install filtered release tooling
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build actual unsigned artifact
+        shell: bash
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
+          lock="$(node -p 'require("crypto").createHash("sha256").update(require("fs").readFileSync("bun.lock")).digest("hex")')"
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version "$version" --source-commit "$GITHUB_SHA" --lockfile-sha256 "$lock" --verbose
+      - name: Smoke actual packaged startup
+        shell: bash
+        run: |
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version')"
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir release --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version "$version"
+      - name: Probe native device helper
+        if: matrix.platform == 'mac'
+        run: bun run test:device:probe
