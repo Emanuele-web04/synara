@@ -1,0 +1,247 @@
+{
+  "scope": "PR #1185; measurements on 2026-09-13",
+  "method": "Cold install ABBA, two samples per condition on each native runner. Product lifecycle enabled; device ignore-scripts. Small directional samples, not whole-workflow improvements.",
+  "sources": {
+    "installs": 34785503156,
+    "windowsInstalls": 34786076507,
+    "nativeArtifacts": 34785599845,
+    "pairedSequencerAndReadinessAndStagehand": 34789252609
+  },
+  "installTrials": [
+    {
+      "sha": "2441f13d9f2c57896d8f15c11dd90052aa0e6eac",
+      "lock": "6b4524765292bf9557844484d7dfde291ae9a6fa8e7430e9963452eaa77772fe",
+      "runner": "windows-2022",
+      "arch": "x64",
+      "profile": "product",
+      "order": ["full", "filtered", "filtered", "full"],
+      "fullSeconds": [42.157896099999995, 42.76691630000001],
+      "filteredSeconds": [34.529132600000004, 33.900656999999995],
+      "allCommandsPassed": true,
+      "fullInstalledPackages": 1603,
+      "filteredInstalledPackages": 1141
+    },
+    {
+      "runner": "ubuntu-24.04",
+      "arch": "x64",
+      "node": "v24.20.0",
+      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "memory": 16766414848,
+      "profile": "product",
+      "order": ["full", "filtered", "filtered", "full"],
+      "fullSeconds": [33.981298802, 29.268465901000003],
+      "filteredSeconds": [23.808337697000002, 24.925479749000004],
+      "allCommandsPassed": true,
+      "fullInstalledPackages": 1625,
+      "filteredInstalledPackages": 1152
+    },
+    {
+      "runner": "ubuntu-24.04-arm",
+      "arch": "arm64",
+      "node": "v24.20.0",
+      "cpu": "unknown",
+      "memory": 16722010112,
+      "profile": "product",
+      "order": ["full", "filtered", "filtered", "full"],
+      "fullSeconds": [32.013808416, 20.306552297000003],
+      "filteredSeconds": [16.139756890999998, 16.263003889],
+      "allCommandsPassed": true,
+      "fullInstalledPackages": 1625,
+      "filteredInstalledPackages": 1152
+    },
+    {
+      "runner": "macos-14",
+      "arch": "arm64",
+      "node": "v24.20.0",
+      "cpu": "Apple M1 (Virtual)",
+      "memory": 7516192768,
+      "profile": "device",
+      "order": ["full", "filtered", "filtered", "full"],
+      "fullSeconds": [22.520826500000023, 26.198411957999983],
+      "filteredSeconds": [3.725342667000019, 3.991872207999986],
+      "allCommandsPassed": true,
+      "fullInstalledPackages": 1608,
+      "filteredInstalledPackages": 455
+    },
+    {
+      "runner": "macos-15-intel",
+      "arch": "x64",
+      "node": "v24.19.0",
+      "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+      "memory": 15032385536,
+      "profile": "device",
+      "order": ["full", "filtered", "filtered", "full"],
+      "fullSeconds": [61.89526367300004, 65.58925856400002],
+      "filteredSeconds": [10.921200542999896, 8.007087424000026],
+      "allCommandsPassed": true,
+      "fullInstalledPackages": 1608,
+      "filteredInstalledPackages": 455
+    }
+  ],
+  "nativeWindowsArtifactPair": {
+    "sourceSha": "c4456e7c9f1df1223a439b1bd5d71534b308eff9",
+    "scope": "Unsigned native artifact comparison; single pair, not whole-release timings or publication.",
+    "steps": ["install", "package", "provenance", "startup"],
+    "fullSeconds": [129.7162966, 504.24288749999994, 0.4515703999999678, 16.967712699999915],
+    "filteredSeconds": [63.1681968, 479.48604780000005, 0.604425099999993, 15.955349999999976],
+    "allCommandsPassed": true
+  },
+  "linuxArchitecture": {
+    "x64": {
+      "server": {
+        "reportSpanSeconds": 421.76977392578124,
+        "testFiles": 418,
+        "passed": 5003,
+        "failed": 0,
+        "skipped": 24
+      },
+      "browser": {
+        "reportSpanSeconds": 281.4436999511719,
+        "testFiles": 1,
+        "passed": 108,
+        "failed": 0,
+        "skipped": 28
+      }
+    },
+    "arm64": {
+      "server": {
+        "reportSpanSeconds": 413.51660498046874,
+        "testFiles": 418,
+        "passed": 5003,
+        "failed": 0,
+        "skipped": 24
+      },
+      "browser": {
+        "reportSpanSeconds": 287.56730004882814,
+        "testFiles": 1,
+        "passed": 108,
+        "failed": 0,
+        "skipped": 28
+      }
+    },
+    "decision": "Keep x64: single sample per architecture, mixed result. Report spans exclude outer command/setup overhead."
+  },
+  "stagehand": {
+    "version": "4.1.0",
+    "scope": "Synthetic local fill/click/assert fixture, 20 cycles. Same system Chrome, ABBA order, no model calls. Not Synara test equivalence or a migration.",
+    "samples": [
+      {
+        "variant": "playwright",
+        "setupSeconds": 3.684231689,
+        "interactionSeconds": 0.7839337150000001,
+        "status": "passed"
+      },
+      {
+        "variant": "stagehand",
+        "setupSeconds": 1.2520920489999998,
+        "interactionSeconds": 0.7542050829999998,
+        "status": "passed"
+      },
+      {
+        "variant": "stagehand",
+        "setupSeconds": 0.768321492,
+        "interactionSeconds": 0.4891853609999998,
+        "status": "passed"
+      },
+      {
+        "variant": "playwright",
+        "setupSeconds": 0.2634221350000007,
+        "interactionSeconds": 0.7779809169999989,
+        "status": "passed"
+      }
+    ],
+    "decision": "Feasibility demonstrated only; not adopted in required CI. No assertion-preserving Synara test migration or full-CI speedup established."
+  },
+  "serviceAvailability": {
+    "turboToken": false,
+    "turboTeam": false,
+    "browserbase": false
+  },
+  "serverScheduling": {
+    "runId": 34789252609,
+    "headSha": "ad9df877f1f4fbfa473363eb6ad9387c7e72b8b5",
+    "method": "The same two Linux runners each execute baseline and balanced scheduling twice; counterbalanced ABBA/BAAB order, identical installed dependencies and serial worker flags. Command spans exclude workspace setup. This push-workflow source differs from the earlier PR-merge architecture benchmark; compare only within the matched pair.",
+    "coverage": {
+      "disjointWithinEachVariant": true,
+      "sameUnionAcrossVariants": true,
+      "sameAssertionIdentitiesAndStatuses": true,
+      "fileCount": 417,
+      "passed": 4939,
+      "pending": 24,
+      "fileInventorySha256": "8881d7067f36101b8458ce004ec5467d64e33b3a453481fdea36c6a5f9597723"
+    },
+    "meanShardSeconds": {
+      "baseline": [158.68329597800002, 224.4012957265],
+      "balanced": [193.18081890949998, 185.554717927]
+    },
+    "meanSlowestShardReductionPercent": 13.912788121799213,
+    "meanTotalCommandSecondsChangePercent": -1.1352727210064195,
+    "trialGroups": [
+      {
+        "variant": "baseline",
+        "shard": 1,
+        "trialIndices": [0, 3],
+        "seconds": [158.709876122, 158.65671583400004],
+        "allCommandsPassed": true,
+        "passed": 2333,
+        "pending": 8,
+        "fileCount": 209,
+        "fileInventorySha256": "4d522c57b1f7621b847c28962cb58ef2086a9bf039b1d31e856f13d0624203b5"
+      },
+      {
+        "variant": "baseline",
+        "shard": 2,
+        "trialIndices": [1, 2],
+        "seconds": [223.575350553, 225.22724089999997],
+        "allCommandsPassed": true,
+        "passed": 2606,
+        "pending": 16,
+        "fileCount": 208,
+        "fileInventorySha256": "f037eafa36b12e5839ec580ce6a2fd21bcaf66ad04500c0d6d840da98186c3f5"
+      },
+      {
+        "variant": "balanced",
+        "shard": 1,
+        "trialIndices": [1, 2],
+        "seconds": [193.577292835, 192.78434498399997],
+        "allCommandsPassed": true,
+        "passed": 2411,
+        "pending": 6,
+        "fileCount": 208,
+        "fileInventorySha256": "9b0e0655b1df540dab263b2f31cd869a33f50c8e48550f2d12ef6f7d781555fd"
+      },
+      {
+        "variant": "balanced",
+        "shard": 2,
+        "trialIndices": [0, 3],
+        "seconds": [185.46158291600003, 185.647852938],
+        "allCommandsPassed": true,
+        "passed": 2528,
+        "pending": 18,
+        "fileCount": 209,
+        "fileInventorySha256": "d355481e639e020a2d32ddb4dc254b152b6547a8930224da6fb6cefa7a209b01"
+      }
+    ]
+  },
+  "nativeDeviceReadiness": {
+    "runId": 34789252609,
+    "headSha": "ad9df877f1f4fbfa473363eb6ad9387c7e72b8b5",
+    "runners": {
+      "macos-14": "passed probe and sandboxed simulator smoke",
+      "macos-15": "passed probe and sandboxed simulator smoke"
+    },
+    "regressionTests": 7,
+    "scope": "Device helper only; packaged macOS release startup failures are separate baseline failures, not passes."
+  },
+  "implementationCi": {
+    "runId": 34789255312,
+    "headSha": "ad9df877f1f4fbfa473363eb6ad9387c7e72b8b5",
+    "allJobsPassed": 15,
+    "scope": "Complete required CI before documentation/evidence cleanup; the PR verification record identifies the final cleanup commit run."
+  },
+  "excludedChanges": {
+    "macOSRelease": "Full and filtered package/provenance commands passed, but packaged startup failed on both. Release install remains unchanged; not a release PASS.",
+    "linuxRelease": "Both native variants passed, but observed total did not justify a release install change.",
+    "cloudServices": "Expected Turbo and Browserbase configuration absent in presence-only probe; no provisioning or claimed cloud savings."
+  }
+}
