@@ -688,7 +688,7 @@ export function makeAgentGatewayAutomationTools(
     requiresActiveTurn: true,
     definition: {
       name: "synara_update_automation",
-      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, stopAfterConsecutiveFailures, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected. A standalone or dedicated automation may also pass an exact target from synara_capabilities; omitting target preserves the stored selection, and heartbeat targets cannot be switched.`,
+      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, stopAfterConsecutiveFailures, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected. A standalone or dedicated automation may also pass an exact target from synara_capabilities; omitting target preserves the stored selection, and heartbeat targets cannot be switched. A dedicated automation cannot switch away from its established task's provider; create a new automation for another provider.`,
       inputSchema: {
         type: "object",
         properties: {
