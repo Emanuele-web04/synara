@@ -1,8 +1,11 @@
-import { MessageId } from "@synara/contracts";
+import { MessageId, TurnId } from "@synara/contracts";
 import { useRef } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+
+import { deriveTimelineEntries, type WorkLogEntry } from "../../session-logic";
+import type { ChatMessage, ProposedPlan } from "../../types";
 
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
 
@@ -13,8 +16,8 @@ function DelayedLayout({
   messageRevision,
   onFinished,
 }: {
-  contentRevision: number;
-  messageRevision: number;
+  contentRevision: unknown;
+  messageRevision: unknown;
   onFinished: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -117,3 +120,100 @@ it("does not let tool or work activity extend the anchor hold", async () => {
     vi.useRealTimers();
   }
 });
+
+const SEGMENT_DATE = "2026-09-13T00:00:00.000Z";
+const segmentedMessages: ChatMessage[] = [
+  {
+    id: MessageId.makeUnsafe("segmented-assistant"),
+    role: "assistant",
+    text: "ABCD",
+    createdAt: SEGMENT_DATE,
+    turnId: TurnId.makeUnsafe("plan-turn"),
+    streaming: false,
+    textSegments: ["A", "B", "C", "D"].map((text, index) => ({
+      text,
+      sequence: index * 10,
+      startedAt: SEGMENT_DATE,
+      endedAt: SEGMENT_DATE,
+    })),
+  },
+];
+const segmentPlans: ProposedPlan[] = [
+  {
+    id: "plan",
+    turnId: TurnId.makeUnsafe("plan-turn"),
+    planMarkdown: "# Plan",
+    createdAt: SEGMENT_DATE,
+    updatedAt: SEGMENT_DATE,
+    implementedAt: null,
+    implementationThreadId: null,
+  },
+];
+const segmentWork: WorkLogEntry = {
+  id: "intervening-tool",
+  label: "Running tool",
+  tone: "tool",
+  sequence: 15,
+  createdAt: SEGMENT_DATE,
+};
+
+function SourceMessageLayout({
+  messages,
+  plans,
+  work,
+  onFinished,
+}: {
+  messages: ChatMessage[];
+  plans: ProposedPlan[];
+  work: WorkLogEntry[];
+  onFinished: () => void;
+}) {
+  // Match ChatView: the message signal comes from the source array, before
+  // plans and work rows clone or split its presentation entries.
+  const entries = deriveTimelineEntries(messages, plans, work);
+  return (
+    <DelayedLayout contentRevision={entries} messageRevision={messages} onFinished={onFinished} />
+  );
+}
+
+it.each(["plan-linked segment clones", "late tool insertion"])(
+  "releases the message hold despite %s",
+  async (scenario) => {
+    vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onFinished = vi.fn();
+    const plans = scenario === "plan-linked segment clones" ? segmentPlans : [];
+    const initialWork = scenario === "plan-linked segment clones" ? [segmentWork] : [];
+    try {
+      flushSync(() =>
+        root.render(
+          <SourceMessageLayout
+            messages={segmentedMessages}
+            plans={plans}
+            work={initialWork}
+            onFinished={onFinished}
+          />,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(400);
+      flushSync(() =>
+        root.render(
+          <SourceMessageLayout
+            messages={segmentedMessages}
+            plans={plans}
+            work={[{ ...segmentWork, label: "Tool completed" }]}
+            onFinished={onFinished}
+          />,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      expect(onFinished).toHaveBeenCalledTimes(1);
+    } finally {
+      flushSync(() => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
+  },
+);

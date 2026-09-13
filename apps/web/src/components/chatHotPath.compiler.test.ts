@@ -160,11 +160,10 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
   {
     relativePath: "chat/MessagesTimeline.tsx",
-    // `useStableRows` and `useStableMessageTimelineEntries` deliberately read
-    // and rewrite a previous-state ref inside their memo to reuse row/message
-    // identities across streaming updates. That pattern is documented in place
-    // and costs memoization only for those small hooks.
-    allowedBailoutReasons: ["Cannot access refs during render", "Cannot access refs during render"],
+    // `useStableRows` deliberately reads and rewrites a previous-state ref inside
+    // its memo to reuse row identities across streaming updates. That pattern is
+    // documented in place and costs memoization only for that one small hook.
+    allowedBailoutReasons: ["Cannot access refs during render"],
   },
   { relativePath: "chat/TimelineWorkEntryRow.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ChatTranscriptPane.tsx", allowedBailoutReasons: [] },

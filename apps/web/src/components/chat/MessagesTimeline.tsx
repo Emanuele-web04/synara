@@ -37,7 +37,6 @@ import {
   formatClockDuration,
   formatClockElapsed,
   isFileChangeWorkLogEntry,
-  type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
 import {
@@ -443,6 +442,8 @@ interface MessagesTimelineProps {
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
+  /** Stable source messages, before plans/tools reshape the presentation rows. */
+  messageChangeSignal?: unknown;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
@@ -531,6 +532,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   forkSource: forkSourceProp,
   isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
+  messageChangeSignal: messageChangeSignalProp,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
   expandedWorkGroups,
@@ -731,7 +733,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     activeFindMatchRef.current = findHighlight?.activeMatch ?? null;
   }, [findHighlight]);
   const observeTimelineRow = useTimelineRowOverlapGuard();
-  const messageTimelineEntries = useStableMessageTimelineEntries(timelineEntries);
   useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
@@ -741,7 +742,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
-    messageChangeSignal: messageTimelineEntries,
+    messageChangeSignal: messageChangeSignalProp ?? timelineEntries,
     animateAnchorSlide: !followLiveOutput,
   });
 
@@ -2616,87 +2617,6 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   });
 
   return useMemo(() => reconcileStableTimelineRows(rows, previousStateRef), [rows]);
-}
-
-// Only message and message-segment entries should change the tail-anchor hold.
-// `timelineEntries` is rebuilt on every render, so a plain `.filter()` would
-// return a new array even when the messages themselves are unchanged. Reuse the
-// previous filtered result when the message subset is identical so the hook's
-// `messageChangeSignal` stays stable across tool/work-only timeline updates.
-type MessageTimelineEntry = Extract<
-  TimelineEntry,
-  { kind: "message" } | { kind: "message-segment" }
->;
-
-function isMessageTimelineEntry(entry: TimelineEntry): entry is MessageTimelineEntry {
-  return entry.kind === "message" || entry.kind === "message-segment";
-}
-
-function useStableMessageTimelineEntries(
-  timelineEntries: ReturnType<typeof deriveTimelineEntries>,
-): readonly MessageTimelineEntry[] {
-  const previousRef = useRef<readonly MessageTimelineEntry[] | null>(null);
-
-  return useMemo(
-    () => reconcileMessageTimelineEntries(timelineEntries, previousRef),
-    [timelineEntries],
-  );
-}
-
-function tailAnchorMessagesEqual(
-  left: MessageTimelineEntry["message"],
-  right: MessageTimelineEntry["message"],
-): boolean {
-  // Compare by value, not reference: deriveTimelineEntries clones assistant
-  // messages linked to a proposed plan to strip plan markup, so a work-only
-  // update produces a new object with identical content. Reference equality
-  // here would mistake that clone for a real message change and extend the
-  // anchor hold. `textSegments` is passed through by spread, so its reference
-  // only changes when the source message actually updated.
-  return (
-    left.id === right.id &&
-    left.role === right.role &&
-    left.text === right.text &&
-    left.streaming === right.streaming &&
-    left.createdAt === right.createdAt &&
-    left.turnId === right.turnId &&
-    left.textSegments === right.textSegments
-  );
-}
-
-function messageTimelineEntriesEqual(
-  left: MessageTimelineEntry,
-  right: MessageTimelineEntry,
-): boolean {
-  if (
-    left.id !== right.id ||
-    left.kind !== right.kind ||
-    left.createdAt !== right.createdAt ||
-    !tailAnchorMessagesEqual(left.message, right.message)
-  ) {
-    return false;
-  }
-  if (left.kind === "message-segment" && right.kind === "message-segment") {
-    return left.segmentIndex === right.segmentIndex;
-  }
-  return true;
-}
-
-function reconcileMessageTimelineEntries(
-  timelineEntries: readonly TimelineEntry[],
-  previousRef: RefObject<readonly MessageTimelineEntry[] | null>,
-): readonly MessageTimelineEntry[] {
-  const filtered = timelineEntries.filter(isMessageTimelineEntry);
-  const previous = previousRef.current;
-  if (
-    previous != null &&
-    previous.length === filtered.length &&
-    filtered.every((entry, index) => messageTimelineEntriesEqual(entry, previous[index]!))
-  ) {
-    return previous;
-  }
-  previousRef.current = filtered;
-  return filtered;
 }
 
 // The reconciliation reads and rewrites the previous-state cache during the memo,
