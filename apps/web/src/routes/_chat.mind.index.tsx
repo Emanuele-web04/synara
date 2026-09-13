@@ -8,7 +8,7 @@ import {
 import { pluralize } from "@synara/shared/text";
 import { type VariantProps } from "class-variance-authority";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -465,7 +465,10 @@ function MindRouteView() {
           }),
     enabled: searchActive,
     staleTime: 15_000,
-    placeholderData: keepPreviousData,
+    // Hold prior results across keystrokes but never across project scopes —
+    // placeholder rows from project A must not render under project B's chip.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === (projectFilter ?? "") ? previousData : undefined,
   });
 
   // Optimistic removal: the row disappears immediately; the server's forget is
