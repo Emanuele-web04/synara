@@ -7,11 +7,7 @@ import { Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect, it } from "vitest";
 
-import {
-  makeOpenCodeRuntimeLive,
-  OpenCodeRuntime,
-  OPENCODE_CLI_SPEC,
-} from "./opencodeRuntime.ts";
+import { makeOpenCodeRuntimeLive, OpenCodeRuntime, OPENCODE_CLI_SPEC } from "./opencodeRuntime.ts";
 
 const encoder = new TextEncoder();
 
