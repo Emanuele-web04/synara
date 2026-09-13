@@ -501,6 +501,49 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
 it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
   "OpenCodeTextGenerationServiceLive with configured server URL",
   (it) => {
+    it.effect("does not lend the default server password to a custom instance", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* OpenCodeTextGeneration;
+
+        yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/opencode-work",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: {
+            provider: "opencode",
+            instanceId: "opencode_work",
+            model: "openai/gpt-5",
+          },
+          providerOptions: {
+            opencode: { serverUrl: "http://127.0.0.1:9999" },
+          },
+        });
+        yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/opencode-work-explicit",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: {
+            provider: "opencode",
+            instanceId: "opencode_work",
+            model: "openai/gpt-5",
+          },
+          providerOptions: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:9999",
+              serverPassword: "work-password",
+            },
+          },
+        });
+
+        expect(runtimeMock.state.authHeaders).toEqual([
+          null,
+          `Basic ${btoa("opencode:work-password")}`,
+        ]);
+      }),
+    );
+
     it.effect("reuses a configured OpenCode server URL without spawning or applying idle TTL", () =>
       Effect.gen(function* () {
         const textGeneration = yield* OpenCodeTextGeneration;

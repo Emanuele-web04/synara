@@ -31,6 +31,7 @@ import {
   toOpenCodeFileParts,
 } from "../../provider/opencodeRuntime.ts";
 import { TextGenerationError } from "../Errors.ts";
+import { canUseDefaultOpenCodeServerPassword } from "../../provider/openCodeServerPassword.ts";
 import {
   type TextGenerationOperation,
   type TextGenerationShape,
@@ -404,9 +405,16 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const providerOptions = input.providerOptions?.[config.provider];
       const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
       const serverUrl = providerOptions?.serverUrl?.trim() || "";
-      const serverPassword = config.resolveServerPassword
-        ? ((yield* config.resolveServerPassword(config.provider)) ?? "")
-        : "";
+      const explicitServerPassword = providerOptions?.serverPassword?.trim();
+      const serverPassword =
+        explicitServerPassword ||
+        (config.resolveServerPassword &&
+        canUseDefaultOpenCodeServerPassword(
+          config.provider,
+          input.modelSelection.instanceId,
+        )
+          ? ((yield* config.resolveServerPassword(config.provider)) ?? "")
+          : "");
       const experimentalWebSockets = providerOptions?.experimentalWebSockets === true;
       const environment = providerOptions?.environment;
       const environmentKey = openCodeTextGenerationEnvironmentFingerprint(environment);
