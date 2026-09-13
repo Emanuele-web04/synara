@@ -22,7 +22,9 @@ function mockPooledOpenCodeServerSpawnerLayer(state: {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { options?: { cwd?: string } };
+      const cmd = command as unknown as {
+        options?: { cwd?: string };
+      };
       const url = `http://127.0.0.1:${59000 + state.spawnUrls.length}`;
       const pid = 59_000 + state.spawnUrls.length;
       state.spawnUrls.push(url);
