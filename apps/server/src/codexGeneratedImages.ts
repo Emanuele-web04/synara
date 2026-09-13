@@ -168,7 +168,10 @@ export function codexConfiguredHomePathsFromSettings(
     // Keep the full account/shadow/environment context. Collapsing this to a
     // plain home path loses the instance-specific overlay root.
     const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
-    addCandidate(codexOptions);
+    // An enabled default instance with no overrides still needs an explicit
+    // empty context. Once the HTTP route receives a configured allowlist it no
+    // longer falls back to ambient CODEX_HOME on its own.
+    addCandidate(codexOptions ?? {});
   }
   return [...candidates.values()];
 }
