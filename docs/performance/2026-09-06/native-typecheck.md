@@ -116,8 +116,9 @@ separate run does not replace the original Bun 1.3.12 measurements above.
 The new default reduced median latency by 77.8% cold (4.50x) and 74.5%
 incrementally (3.93x). All twelve runs passed all seven workspaces. As in the
 original qualification, `packages/contracts` and `packages/shared` emit no
-incremental caches, so their cold and incremental samples are identical and the
-cold/incremental contrast reflects the other five workspaces. A temporary
+incremental caches and perform a full check in both states. Only the other five
+workspaces exercise compiler incremental-cache reuse; all timings remain subject
+to OS cache effects and measurement variability. A temporary
 web source mutation also confirmed that both the workspace and root default
 commands fail on invalid optional properties (TS2375), unchecked indexed access
 (TS2322), and an unused Effect (TS377001). The mutation was removed before
