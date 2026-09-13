@@ -1753,14 +1753,23 @@ export async function createPiModelRuntime(
   if (hasAccountBoundary) {
     await runtime.refresh({ allowNetwork: false });
   }
-  await refreshPiOpenCodeCatalog(runtime, { signal });
+  await refreshPiOpenCodeCatalog(runtime, { signal, environment: runtimeEnvironment });
   return runtime;
 }
 
-export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<void> {
+export async function refreshPiOpenRouterModels(
+  runtime: ModelRuntime,
+  options: {
+    readonly environment?: Readonly<NodeJS.ProcessEnv> | undefined;
+    readonly instanceId?: string | undefined;
+  } = {},
+): Promise<void> {
+  const environment =
+    options.environment ??
+    (options.instanceId !== undefined && options.instanceId !== PROVIDER ? {} : process.env);
   // Explicit extension catalogs and custom endpoints own their model metadata.
   if (
-    process.env.PI_OFFLINE !== undefined ||
+    environment.PI_OFFLINE !== undefined ||
     runtime.getRegisteredProviderIds().includes("openrouter") ||
     !runtime.hasConfiguredAuth("openrouter") ||
     runtime.getProvider("openrouter")?.baseUrl !== OPENROUTER_BASE_URL
@@ -3005,7 +3014,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           requested?.provider === "openrouter" &&
           !registry.find(requested.provider, requested.id)
         ) {
-          await refreshPiOpenRouterModels(services.modelRuntime);
+          await refreshPiOpenRouterModels(services.modelRuntime, {
+            environment: input.environment,
+            instanceId: input.instanceId,
+          });
         }
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
@@ -3691,7 +3703,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             modelRuntime,
             ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
           });
-          await refreshPiOpenRouterModels(services.modelRuntime);
+          await refreshPiOpenRouterModels(services.modelRuntime, {
+            environment: input.environment,
+            instanceId: input.instanceId,
+          });
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
           const models = getPiDiscoverableModels(registry).flatMap((model) => {
