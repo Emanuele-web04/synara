@@ -11,9 +11,48 @@ import { normalizePersistedModelSelection } from "./modelSelectionCompatibility.
 it("preserves canonical Pi model selections", () => {
   assert.deepEqual(normalizePersistedModelSelection({ provider: "pi", model: "openai/gpt-5.5" }), {
     provider: "pi",
-    instanceId: "pi",
     model: "openai/gpt-5.5",
   });
+});
+
+it("preserves explicit provider instance ids during compatibility normalization", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    }),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "claude-sonnet-4-6",
+    },
+  );
+});
+
+it("uses settings to resolve opaque provider instance ids", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection(
+      {
+        instanceId: "work",
+        model: "company-model",
+      },
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      },
+    ),
+    {
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "company-model",
+    },
+  );
 });
 
 it("migrates legacy Kilo provider values and labels to OpenCode", () => {
