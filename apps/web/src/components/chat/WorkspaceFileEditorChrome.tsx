@@ -144,6 +144,9 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
 
       <span className="shrink-0 text-[11px] text-muted-foreground/70">{props.title}</span>
 
+      <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+        {props.saving ? "Saving..." : props.dirty ? "Unsaved changes" : "Saved"}
+      </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.actions}
         <Button

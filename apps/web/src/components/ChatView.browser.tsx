@@ -79,6 +79,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -2930,6 +2931,78 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each([false, true])(
+    "flushes editor changes before sending and preserves the prompt on failure=%s",
+    async (failSave) => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotWithLongAssistantResponse(),
+      });
+      let unsubscribe = () => {};
+      try {
+        let finish!: () => void;
+        const writeFile = vi.fn(
+          () =>
+            new Promise<{ relativePath: string; version: string }>((resolve, reject) => {
+              finish = () =>
+                failSave
+                  ? reject(new Error("Editor write failed"))
+                  : resolve({ relativePath: "file.ts", version: "sha256:saved" });
+            }),
+        );
+        const api = readNativeApi()!;
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: { ...api, projects: { ...api.projects, writeFile } },
+        });
+        const session = getWorkspaceEditorSession(
+          mounted.router.options.context.queryClient,
+          "/repo/project",
+          "file.ts",
+        );
+        unsubscribe = session.subscribe(() => undefined);
+        session.load({
+          relativePath: "file.ts",
+          contents: "original",
+          version: "sha256:initial",
+          encoding: "utf8",
+          lineEnding: "lf",
+          truncated: false,
+        });
+        session.change("editor draft");
+        const prompt = "use the saved editor changes";
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+        const turnStarts = () =>
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              (request.command as { type?: string } | undefined)?.type === "thread.turn.start",
+          );
+        const before = turnStarts().length;
+        (await waitForSendButton()).click();
+        await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+        expect(turnStarts()).toHaveLength(before);
+        finish();
+        if (failSave) {
+          await vi.waitFor(() =>
+            expect(document.body.textContent).toContain("Could not save editor changes"),
+          );
+          expect(turnStarts()).toHaveLength(before);
+          expect(session.getSnapshot().value).toBe("editor draft");
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
+        } else {
+          await vi.waitFor(() => expect(turnStarts()).toHaveLength(before + 1));
+          expect(session.dirty).toBe(false);
+        }
+      } finally {
+        unsubscribe();
+        restoreNativeApi();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   // Leaving a thread you just sent in and coming back must not replay the
   // send-time anchor slide: the transcript is remounted with no scroll history,

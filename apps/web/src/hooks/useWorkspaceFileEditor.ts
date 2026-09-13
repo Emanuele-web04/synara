@@ -1,22 +1,16 @@
-import { isWorkspaceFileWriteConflictError } from "@synara/shared/workspaceFileWrite";
+import type { ProjectReadFileResult } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
-import { invalidateGitQueriesForCwds } from "~/lib/gitReactQuery";
-import {
-  invalidateProjectFileQueriesForCwds,
-  projectReadFileQueryOptions,
-} from "~/lib/projectReactQuery";
+import { projectReadFileQueryOptions, refetchFreshProjectFileQuery } from "~/lib/projectReactQuery";
+import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
+import { useProjectFileChangeSubscription } from "./useProjectFileChangeSubscription";
+import { getWorkspaceEditorSession } from "~/lib/workspaceEditorSession";
 import {
   INITIAL_WORKSPACE_FILE_EDITOR_STATE,
   isWorkspaceFileEditorDirty,
-  resolveWorkspaceFileEditorFormat,
   resolveWorkspaceFileEditorReadOnlyReason,
-  workspaceFileEditorKey,
-  workspaceFileEditorReducer,
-  type WorkspaceFileEditorState,
 } from "~/lib/workspaceFileEditor";
-import { ensureNativeApi } from "~/nativeApi";
 
 export interface UseWorkspaceFileEditorInput {
   cwd: string | null;
@@ -24,160 +18,85 @@ export interface UseWorkspaceFileEditorInput {
   enabled: boolean;
 }
 
-export interface WorkspaceFileEditorController {
-  state: WorkspaceFileEditorState;
-  dirty: boolean;
-  loading: boolean;
-  loadError: string | null;
-  /** Why the loaded file cannot be edited in place, or null when it can. */
-  readOnlyReason: string | null;
-  canEdit: boolean;
-  handleChange: (value: string) => void;
-  save: () => void;
-  overwrite: () => void;
-  reloadFromDisk: () => void;
-  dismissConflict: () => void;
-}
+const subscribeEmpty = () => () => undefined;
+const readEmpty = () => INITIAL_WORKSPACE_FILE_EDITOR_STATE;
 
-export function useWorkspaceFileEditor(
-  input: UseWorkspaceFileEditorInput,
-): WorkspaceFileEditorController {
-  const { cwd, enabled, filePath } = input;
-  const queryClient = useQueryClient();
-  const [state, dispatch] = useReducer(
-    workspaceFileEditorReducer,
-    INITIAL_WORKSPACE_FILE_EDITOR_STATE,
+/** The preview already owns its file query (including path relocation). Both
+ * entry points attach to the same canonical buffer and serialized writer. */
+export function useWorkspaceFileEditorBuffer(
+  input: UseWorkspaceFileEditorInput & {
+    file: ProjectReadFileResult | undefined;
+  },
+) {
+  const { cwd, enabled, file, filePath } = input;
+  const client = useQueryClient();
+  const relativePath = file?.relativePath ?? filePath;
+  const session = useMemo(
+    () =>
+      enabled && cwd !== null && relativePath !== null
+        ? getWorkspaceEditorSession(client, cwd, relativePath)
+        : null,
+    [client, cwd, enabled, relativePath],
   );
-  const editorKey = workspaceFileEditorKey(cwd, filePath);
-  const queryOptions = projectReadFileQueryOptions({
-    cwd,
-    relativePath: filePath,
-    enabled: enabled && cwd !== null && filePath !== null,
-  });
-  const fileQuery = useQuery(queryOptions);
-  const file = fileQuery.data;
+  const state = useSyncExternalStore(
+    session?.subscribe ?? subscribeEmpty,
+    session?.getSnapshot ?? readEmpty,
+    readEmpty,
+  );
+  useEffect(() => {
+    if (file) session?.load(file);
+  }, [file, session]);
   const readOnlyReason = file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file);
-  const resolvedRelativePath = file?.relativePath ?? filePath;
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const resolvedRelativePathRef = useRef(resolvedRelativePath);
-  resolvedRelativePathRef.current = resolvedRelativePath;
-
-  useEffect(() => {
-    if (editorKey === null || file === undefined) {
-      return;
-    }
-    const format = resolveWorkspaceFileEditorFormat(file);
-    if (format === null) {
-      return;
-    }
-    dispatch({ type: "loaded", key: editorKey, contents: file.contents, format });
-  }, [editorKey, file]);
-
-  useEffect(() => {
-    if (editorKey === null) {
-      dispatch({ type: "closed" });
-    }
-  }, [editorKey]);
-
-  const handleChange = useCallback((value: string) => {
-    dispatch({ type: "changed", value });
-  }, []);
-
-  const writeContents = useCallback(
-    async (options: { guarded: boolean }) => {
-      const current = stateRef.current;
-      const relativePath = resolvedRelativePathRef.current;
-      if (
-        cwd === null ||
-        relativePath === null ||
-        current.key === null ||
-        current.format === null ||
-        current.saving
-      ) {
-        return;
-      }
-      const nextContents = current.value;
-      dispatch({ type: "saveStarted" });
-      try {
-        const api = ensureNativeApi();
-        // The server re-encodes every save with the file's original encoding
-        // and line endings, so CRLF/BOM files keep their format. A guarded save
-        // also verifies the version it issued; Overwrite deliberately skips that
-        // guard so it stays an escape hatch when the file changed on disk.
-        const writeResult = await api.projects.writeFile({
-          cwd,
-          relativePath,
-          contents: nextContents,
-          encoding: current.format.encoding,
-          lineEnding: current.format.lineEnding,
-          ...(options.guarded ? { expectedVersion: current.format.expectedVersion } : {}),
-        });
-        dispatch({
-          type: "saveSucceeded",
-          contents: nextContents,
-          expectedVersion: writeResult.version,
-        });
-        queryClient.setQueryData(queryOptions.queryKey, (previous) =>
-          previous
-            ? { ...previous, contents: nextContents, version: writeResult.version }
-            : previous,
-        );
-        await Promise.all([
-          invalidateGitQueriesForCwds(queryClient, [cwd]),
-          invalidateProjectFileQueriesForCwds(queryClient, [cwd]),
-        ]);
-      } catch (error) {
-        dispatch({
-          type: "saveFailed",
-          message: error instanceof Error ? error.message : "Could not save the file.",
-          conflict: isWorkspaceFileWriteConflictError(error),
-        });
-      }
-    },
-    [cwd, queryClient, queryOptions.queryKey],
-  );
-
-  const save = useCallback(() => {
-    void writeContents({ guarded: true });
-  }, [writeContents]);
-
-  const overwrite = useCallback(() => {
-    void writeContents({ guarded: false });
-  }, [writeContents]);
-
+  const flush = useCallback(() => session?.flush() ?? Promise.resolve(true), [session]);
   const reloadFromDisk = useCallback(() => {
-    if (editorKey === null) {
-      return;
-    }
-    // The reload does not block input: if the user typed while the fetch was
-    // in flight, applying it now would silently erase those edits.
-    const valueAtReloadStart = stateRef.current.value;
-    void queryClient
-      .fetchQuery({ ...queryOptions, staleTime: 0 })
-      .then((result) => {
-        const format = resolveWorkspaceFileEditorFormat(result);
-        if (stateRef.current.value !== valueAtReloadStart || format === null) {
-          return;
-        }
-        dispatch({ type: "reloaded", key: editorKey, contents: result.contents, format });
-      })
-      .catch((error: unknown) => {
-        dispatch({
-          type: "saveFailed",
-          message: error instanceof Error ? error.message : "Could not reload the file.",
-          conflict: false,
-        });
-      });
-  }, [editorKey, queryClient, queryOptions]);
-
-  const dismissConflict = useCallback(() => {
-    dispatch({ type: "conflictDismissed" });
-  }, []);
-
+    void session?.reload();
+  }, [session]);
+  const handleChange = useCallback((value: string) => session?.change(value), [session]);
+  const save = useCallback(() => session?.save(), [session]);
+  const overwrite = useCallback(() => session?.overwrite(), [session]);
+  const dismissConflict = useCallback(() => session?.dismissConflict(), [session]);
+  const pauseAutosave = useCallback(() => session?.pause(), [session]);
+  const resumeAutosave = useCallback(() => session?.resume(), [session]);
   return {
     state,
     dirty: isWorkspaceFileEditorDirty(state),
+    readOnlyReason,
+    canEdit:
+      session !== null && state.key !== null && file !== undefined && readOnlyReason === null,
+    handleChange,
+    save,
+    overwrite,
+    reloadFromDisk,
+    dismissConflict,
+    flush,
+    pauseAutosave,
+    resumeAutosave,
+  };
+}
+
+export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
+  const client = useQueryClient();
+  const fileQuery = useQuery(
+    projectReadFileQueryOptions({
+      cwd: input.cwd,
+      relativePath: input.filePath,
+      enabled: input.enabled,
+    }),
+  );
+  const controller = useWorkspaceFileEditorBuffer({ ...input, file: fileQuery.data });
+  const onFileChange = useCallback(() => {
+    if (!input.cwd) return;
+    void refetchFreshProjectFileQuery(client, { cwd: input.cwd, relativePath: input.filePath });
+    void refreshGitAfterFileWrite(client, input.cwd).catch(() => undefined);
+  }, [client, input.cwd, input.filePath]);
+  useProjectFileChangeSubscription({
+    cwd: input.cwd,
+    relativePath: fileQuery.data?.relativePath ?? null,
+    enabled: input.enabled,
+    onChange: onFileChange,
+  });
+  return {
+    ...controller,
     loading: fileQuery.isLoading,
     loadError:
       fileQuery.error instanceof Error
@@ -185,12 +104,7 @@ export function useWorkspaceFileEditor(
         : fileQuery.error
           ? "Could not read file."
           : null,
-    readOnlyReason,
-    canEdit: state.key !== null && state.key === editorKey && readOnlyReason === null,
-    handleChange,
-    save,
-    overwrite,
-    reloadFromDisk,
-    dismissConflict,
   };
 }
+
+export type WorkspaceFileEditorController = ReturnType<typeof useWorkspaceFileEditor>;
