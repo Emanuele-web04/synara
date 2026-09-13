@@ -700,13 +700,42 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // after the commit transaction resolves — a timed-out command that turns out
     // to have committed (accepted receipt) keeps its file.
     let materializedGoalFilePath: string | undefined;
+    let materializedGoalFileWrite: Promise<string> | undefined;
     let goalFileCommitted = false;
     const discardUncommittedGoalFile = Effect.gen(function* () {
-      if (materializedGoalFilePath === undefined || goalFileCommitted) {
+      if (goalFileCommitted) {
         return;
+      }
+      // An interrupt can land while the write is still in flight — the yield
+      // assignment in the command body then never runs, and unlinking first
+      // would race the write. Await it so the cleanup sees the settled path.
+      const pendingWrite = materializedGoalFileWrite;
+      if (pendingWrite !== undefined) {
+        const settledPath = yield* Effect.promise(() =>
+          pendingWrite.then(
+            (path) => path,
+            () => undefined,
+          ),
+        );
+        materializedGoalFilePath ??= settledPath;
+        materializedGoalFileWrite = undefined;
       }
       const filePath = materializedGoalFilePath;
       materializedGoalFilePath = undefined;
+      if (filePath === undefined) {
+        return;
+      }
+      // The flag alone cannot prove non-commit: an interrupt delivered inside
+      // the commit transaction can land the write without the flag statement
+      // ever running. The accepted receipt is the source of truth — a command
+      // with one owns its file; only a command with none loses the candidate.
+      const receiptExit = yield* Effect.exit(
+        commandReceiptRepository.getByCommandId({ commandId: envelope.command.commandId }),
+      );
+      const receipt = receiptExit._tag === "Success" ? receiptExit.value : Option.none();
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        return;
+      }
       yield* Effect.promise(() => discardMaterializedThreadGoalFile(filePath));
     });
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
@@ -837,14 +866,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         // still points at; the reference only commits if the command does.
         const goalCommand = command;
         const oversizedGoal = command.goal;
+        // Keep the write promise reachable from cleanup: an interrupt during
+        // the await must not unlink underneath a write that still lands.
+        const goalFileWrite = materializeThreadGoalFile({
+          stateDir: serverConfig.stateDir,
+          threadId: goalCommand.threadId,
+          commandId: goalCommand.commandId,
+          goal: oversizedGoal,
+        });
+        materializedGoalFileWrite = goalFileWrite;
         const goalFilePath = yield* Effect.tryPromise({
-          try: () =>
-            materializeThreadGoalFile({
-              stateDir: serverConfig.stateDir,
-              threadId: goalCommand.threadId,
-              commandId: goalCommand.commandId,
-              goal: oversizedGoal,
-            }),
+          try: () => goalFileWrite,
           catch: () =>
             makeCommandInternalError(
               goalCommand,
@@ -1049,11 +1081,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               threadId: goalFilesDropThreadId,
               keepFileName: materializedGoalFileName,
             }),
-          catch: () => undefined,
+          catch: (error) => error,
         }).pipe(
-          Effect.catch(() =>
+          Effect.catch((error) =>
             Effect.logWarning("Thread goal file cleanup failed.", {
               threadId: goalFilesDropThreadId,
+              error: error instanceof Error ? error.message : String(error),
             }),
           ),
         );
@@ -1106,6 +1139,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
+      // Interrupts never surface as a typed failure, so they need their own
+      // cleanup hook. This finalizer is scoped to the gen, so it runs both when
+      // the timeout race interrupts it and on an external worker interrupt —
+      // after inner transaction finalizers, so the receipt read is definitive:
+      // an accepted receipt means the commit landed and owns the file.
+      Effect.onInterrupt(() => discardUncommittedGoalFile),
       Effect.timeoutOption(remainingBudgetMs),
       Effect.flatMap((outcome) =>
         Option.match(outcome, {

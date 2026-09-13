@@ -47,3 +47,32 @@ export function hasPendingTurnDispatch(threadId: ThreadId): boolean {
   }
   return true;
 }
+
+// A strictly-scoped mutual-exclusion signal, distinct from the watchdog marker
+// above: it lives only from dispatch begin until the turn-start RPC settles
+// (success or failure). The watchdog marker deliberately outlives the RPC — it
+// must cover a lost running event until stream ack or the age cap — so using it
+// for exclusion would lock out valid drops for its full 30s lifetime. Ownership
+// ends the moment the attempt resolves: by then the draft content is already
+// consumed, so a racing drop finds nothing to dispatch.
+const turnDispatchOwnershipByThreadId = new Map<ThreadId, number>();
+
+export function beginTurnDispatchOwnership(threadId: ThreadId): void {
+  turnDispatchOwnershipByThreadId.set(threadId, Date.now());
+}
+
+export function endTurnDispatchOwnership(threadId: ThreadId): void {
+  turnDispatchOwnershipByThreadId.delete(threadId);
+}
+
+export function hasTurnDispatchOwnership(threadId: ThreadId): boolean {
+  const armedAt = turnDispatchOwnershipByThreadId.get(threadId);
+  if (armedAt === undefined) {
+    return false;
+  }
+  if (Date.now() - armedAt > PENDING_TURN_DISPATCH_MAX_AGE_MS) {
+    turnDispatchOwnershipByThreadId.delete(threadId);
+    return false;
+  }
+  return true;
+}

@@ -30,8 +30,10 @@ import { useKanbanUiStore } from "../kanbanUiStore";
 import { readNativeApi } from "../nativeApi";
 import type { ComposerFileAttachment } from "../composerDraftDomain";
 import {
+  beginTurnDispatchOwnership,
   clearPendingTurnDispatch,
-  hasPendingTurnDispatch,
+  endTurnDispatchOwnership,
+  hasTurnDispatchOwnership,
   markPendingTurnDispatch,
 } from "../pendingTurnDispatch";
 import { useStore } from "../store";
@@ -45,7 +47,9 @@ import {
 } from "./browserAnnotations";
 import {
   stageUploadComposerAttachments,
+  findPendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
+  hydratePendingBlobComposerAttachments,
   resolvePromptEffortFromModelSelection,
 } from "./composerSend";
 import { appendFileCommentsToPrompt, formatFileCommentTitleSeed } from "./fileComments";
@@ -218,10 +222,13 @@ function dispatchKanbanDraftThreadInternal(
   if (existing) {
     return existing;
   }
-  if (hasPendingTurnDispatch(input.threadId)) {
+  if (hasTurnDispatchOwnership(input.threadId)) {
     // A chat send for this thread is already in flight — defer to it instead
     // of queueing a second turn. Marked deferred so callers never report this
     // as their own dispatch: the chat send owns the turn (and its failure).
+    // The probe is the short-lived ownership signal, not the watchdog marker:
+    // the marker stays armed after the turn RPC settles (stream-ack coverage),
+    // which would otherwise block valid follow-up drops for its 30s lifetime.
     const raced = inFlightDispatchByThreadId.get(input.threadId);
     if (raced) {
       return raced;
@@ -245,14 +252,21 @@ export function isKanbanDispatchInFlight(threadId: ThreadId): boolean {
 }
 
 const KANBAN_DISPATCH_SETTLE_POLL_MS = 25;
-/** Upper bound a chat send waits for a racing board dispatch. Fail-open. */
+/**
+ * Upper bound a chat send POLLS for a racing board dispatch. Past the bound the
+ * waiter joins the in-flight dispatch instead of proceeding — starting a turn
+ * while a board dispatch is still on the wire would queue a duplicate.
+ */
 export const KANBAN_DISPATCH_SETTLE_TIMEOUT_MS = 5_000;
 
 /**
- * Chat-send companion to isKanbanDispatchInFlight: wait (bounded) for a board
- * dispatch on this thread to settle before starting a chat turn, so the two
- * starters serialize instead of queueing two turns. Fail-open — on timeout the
- * chat send proceeds, never locking the composer forever.
+ * Chat-send companion to isKanbanDispatchInFlight: wait for a board dispatch on
+ * this thread to settle before starting a chat turn, so the two starters
+ * serialize instead of queueing two turns. The poll is bounded — but past the
+ * bound with a dispatch still on the wire the waiter JOINS it instead of
+ * failing open: the board already passed its pending-marker check, so
+ * proceeding would queue a duplicate turn. The join is bounded in practice by
+ * the turn-start RPC's own deadline.
  */
 export async function waitForKanbanDispatchToSettle(
   threadId: ThreadId,
@@ -261,12 +275,20 @@ export async function waitForKanbanDispatchToSettle(
   const deadline = Date.now() + timeoutMs;
   let settled: KanbanDraftDispatchResult | null = null;
   while (inFlightDispatchByThreadId.has(threadId)) {
-    if (Date.now() >= deadline) {
-      return settled;
-    }
     const inFlight = inFlightDispatchByThreadId.get(threadId);
-    // A rejected in-flight promise settles as non-dispatched — the waiter's own
-    // send proceeds and surfaces its own error if the dispatch truly failed.
+    if (Date.now() >= deadline) {
+      // A rejected in-flight promise settles as non-dispatched — the waiter's
+      // own send proceeds and surfaces its own error if the dispatch failed.
+      const outcome =
+        (await inFlight?.then(
+          (result) => result,
+          () => null,
+        )) ?? null;
+      if (outcome !== null) {
+        settled = outcome;
+      }
+      continue;
+    }
     const outcome = await Promise.race([
       inFlight?.then(
         (result) => result,
@@ -364,7 +386,20 @@ async function dispatchKanbanDraftThreadOnce(
     DEFAULT_INTERACTION_MODE;
   const skills = draftComposerState?.skills ?? [];
   const mentions = draftComposerState?.mentions ?? [];
-  const composerImages = draftComposerState?.images ?? [];
+  // Persisted AppSnap captures hydrate into `images` asynchronously after a
+  // reload; a drop that lands before hydration must not drop them from the
+  // turn (and then have the composer clear delete their blobs). Match the
+  // chat send: hydrate pending blobs before capacity/staging so they are
+  // counted exactly once. Per-attachment failures are skipped by the helper,
+  // never rejecting the dispatch.
+  const liveComposerImages = draftComposerState?.images ?? [];
+  const hydratedPendingImages = await hydratePendingBlobComposerAttachments(
+    findPendingBlobComposerAttachments({
+      persistedAttachments: draftComposerState?.persistedAttachments ?? [],
+      images: liveComposerImages,
+    }),
+  );
+  const composerImages = [...liveComposerImages, ...hydratedPendingImages];
   const composerFiles = draftComposerState?.files ?? [];
   const composerAssistantSelections = draftComposerState?.assistantSelections ?? [];
   const composerBrowserAnnotations = draftComposerState?.browserAnnotations ?? [];
@@ -448,7 +483,10 @@ async function dispatchKanbanDraftThreadOnce(
   // Claim the shared turn-start guard so a concurrent chat send for this
   // thread defers to this dispatch instead of queueing a second turn. Claimed
   // after validation so empty/non-dispatchable drops never hold the guard.
+  // Ownership (the defer probe) ends when the turn RPC settles below; the
+  // watchdog marker is re-armed on success and cleared on failure.
   markPendingTurnDispatch(threadId);
+  beginTurnDispatchOwnership(threadId);
 
   // Optimistic move: show the card In Progress before any round-trip. Provider
   // session init can take seconds; runtime events confirm the move (reconciliation
@@ -504,6 +542,7 @@ async function dispatchKanbanDraftThreadOnce(
         );
         kanbanUi.clearOptimisticDispatch(threadId);
         clearPendingTurnDispatch(threadId);
+        endTurnDispatchOwnership(threadId);
         return { kind: "unavailable" };
       }
       if (project?.kind === "chat") {
@@ -569,6 +608,7 @@ async function dispatchKanbanDraftThreadOnce(
     );
     kanbanUi.clearOptimisticDispatch(threadId);
     clearPendingTurnDispatch(threadId);
+    endTurnDispatchOwnership(threadId);
     // A turn failure after the goal command was accepted must not lose the
     // user's text: keep the composer prompt (restoring it when something
     // cleared it mid-flight) and un-hide a promoted local draft so the draft
@@ -587,8 +627,10 @@ async function dispatchKanbanDraftThreadOnce(
   // but the stream has not acknowledged the running transition yet, and the
   // catch-up watchdog needs this marker to recover a lost running event —
   // same lifecycle as a normal composer send (cleared on stream ack or by the
-  // age cap, cleared above on failure).
+  // age cap, cleared above on failure). Exclusion ends here though: the RPC
+  // settled, so further drops are follow-ups queueing behind this turn.
   markPendingTurnDispatch(threadId);
+  endTurnDispatchOwnership(threadId);
   useComposerDraftStore.getState().clearComposerContent(threadId);
   return { kind: "dispatched", warning: goalWarning };
 }

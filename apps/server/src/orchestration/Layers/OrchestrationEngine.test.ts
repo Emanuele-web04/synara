@@ -25,6 +25,7 @@ import {
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -53,6 +54,16 @@ vi.mock("../commandFingerprint.ts", async (importOriginal) => {
       }
       return actual.fingerprintOrchestrationCommand(command);
     },
+  };
+});
+
+// Goal-file pruning is wrapped in vi.fn so a test can inject a one-shot
+// rejection; every other materialization helper delegates to the real module.
+vi.mock("../threadGoalMaterialization.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../threadGoalMaterialization.ts")>();
+  return {
+    ...actual,
+    pruneThreadGoalFiles: vi.fn(actual.pruneThreadGoalFiles),
   };
 });
 
@@ -1030,6 +1041,77 @@ describe("OrchestrationEngine", () => {
       (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
         ?.goal,
     ).not.toBe(`Read this file: ${goalDir}/goal-cmd-goal-reject.md`);
+
+    await system.dispose();
+  });
+
+  it("still commits the goal update when post-commit goal-file pruning fails", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-goal-prune-fail");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-goal-prune-fail"),
+        projectId: asProjectId("project-goal-prune-fail"),
+        title: "Goal Prune Fail Project",
+        workspaceRoot: "/tmp/project-goal-prune-fail",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-create"),
+        threadId,
+        projectId: asProjectId("project-goal-prune-fail"),
+        title: "goal-prune-fail",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const firstGoal = `First objective. ${"a".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-first"),
+        threadId,
+        goal: firstGoal,
+      }),
+    );
+    const firstPath = (await system.run(engine.getReadModel())).threads
+      .find((entry) => entry.id === threadId)
+      ?.goal?.replace("Read this file: ", "");
+
+    // Pruning is best-effort: a rejection must be logged and contained, never
+    // fail the committed command or strand the new reference.
+    vi.mocked(pruneThreadGoalFiles).mockRejectedValueOnce(new Error("EACCES: locked"));
+    const secondGoal = `Second objective. ${"b".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
+    await system.run(
+      engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-prune-fail-second"),
+        threadId,
+        goal: secondGoal,
+      }),
+    );
+
+    const thread = (await system.run(engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    const secondPath = thread?.goal?.replace("Read this file: ", "");
+    expect(secondPath).not.toBe(firstPath);
+    await expect(fs.readFile(secondPath ?? "", "utf8")).resolves.toBe(secondGoal);
+    // The failed prune leaves the superseded file on disk rather than hiding it.
+    await expect(fs.readFile(firstPath ?? "", "utf8")).resolves.toBe(firstGoal);
 
     await system.dispose();
   });

@@ -1,15 +1,21 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { buildKanbanComposerDraftSnapshot } from "../components/kanban/kanban.logic";
 import { createPastedTextDraft } from "./composerPastedText";
 import {
+  beginTurnDispatchOwnership,
   clearPendingTurnDispatch,
+  endTurnDispatchOwnership,
   hasPendingTurnDispatch,
+  hasTurnDispatchOwnership,
   markPendingTurnDispatch,
 } from "../pendingTurnDispatch";
+import * as composerImageBlobStore from "./composerImageBlobStore";
+import { createEmptyThreadDraft } from "../composerDraftDomain";
+import type { PersistedComposerImageAttachment } from "../composerDraftStore";
 import type { SidebarThreadSummary } from "../types";
 import {
   dispatchKanbanDraftThread,
@@ -21,7 +27,10 @@ import {
 const nativeApiMocks = vi.hoisted(() => ({
   dispatchCommand: vi.fn(async (..._args: unknown[]) => undefined),
   cleanup: vi.fn(),
-  stagedUploads: [] as Array<{ files?: ReadonlyArray<unknown> | undefined }>,
+  stagedUploads: [] as Array<{
+    files?: ReadonlyArray<unknown> | undefined;
+    images?: ReadonlyArray<unknown> | undefined;
+  }>,
   runWithDispatch: vi.fn(async (fn: (attachments: unknown) => Promise<unknown>) => {
     await fn([]);
   }),
@@ -69,7 +78,10 @@ vi.mock("./composerSend", async () => {
   return {
     ...actual,
     stageUploadComposerAttachments: vi.fn(
-      async (input: { files?: ReadonlyArray<unknown> | undefined }) => {
+      async (input: {
+        files?: ReadonlyArray<unknown> | undefined;
+        images?: ReadonlyArray<unknown> | undefined;
+      }) => {
         nativeApiMocks.stagedUploads.push(input);
         return {
           runWithDispatch: nativeApiMocks.runWithDispatch,
@@ -135,8 +147,10 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     useComposerDraftStore.getState().setPrompt(threadId, prompt);
     const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
 
-    // Simulate the chat send holding the shared turn guard.
+    // Simulate the chat send holding the dispatch guard: it arms the watchdog
+    // marker and claims dispatch ownership for the turn-start RPC window.
     markPendingTurnDispatch(threadId);
+    beginTurnDispatchOwnership(threadId);
     try {
       const deferred = await dispatchKanbanDraftThread({
         threadId,
@@ -155,6 +169,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(prompt);
     } finally {
       clearPendingTurnDispatch(threadId);
+      endTurnDispatchOwnership(threadId);
     }
 
     const retry = await dispatchKanbanDraftThread({
@@ -170,6 +185,37 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
         ([command]) => commandType(command) === "thread.turn.start",
       ),
     ).toHaveLength(1);
+  });
+
+  it("dispatches a follow-up drop while only the watchdog marker is armed", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-marker-no-owner");
+    const projectId = ProjectId.makeUnsafe("project-marker-no-owner");
+    const prompt = "Follow-up drafted while the watchdog marker is still live";
+    useComposerDraftStore.getState().setPrompt(threadId, prompt);
+    const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
+
+    // After a send's turn RPC settles, the watchdog marker stays armed until
+    // stream ack or the age cap — but ownership is already released. A drop in
+    // that window is a valid follow-up, not a duplicate, and must dispatch.
+    markPendingTurnDispatch(threadId);
+    try {
+      const result = await dispatchKanbanDraftThread({
+        threadId,
+        projectId,
+        thread,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      });
+      expect(result.kind).toBe("dispatched");
+      expect(
+        nativeApiMocks.dispatchCommand.mock.calls.filter(
+          ([command]) => commandType(command) === "thread.turn.start",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      clearPendingTurnDispatch(threadId);
+      endTurnDispatchOwnership(threadId);
+    }
   });
 
   it("waitForKanbanDispatchToSettle waits out a board dispatch, then proceeds", async () => {
@@ -218,17 +264,22 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     expect(settled).toEqual({ kind: "dispatched" });
   });
 
-  it("waitForKanbanDispatchToSettle fails open on timeout", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-settle-timeout");
-    const projectId = ProjectId.makeUnsafe("project-settle-timeout");
-    useComposerDraftStore.getState().setPrompt(threadId, "Stuck board dispatch never locks chat");
+  it("waitForKanbanDispatchToSettle joins a slow board dispatch past the poll deadline", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-settle-join");
+    const projectId = ProjectId.makeUnsafe("project-settle-join");
+    useComposerDraftStore
+      .getState()
+      .setPrompt(threadId, "Slow board dispatch is joined, not bypassed");
     const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
 
-    // Never release: the waiter must give up and let the chat send proceed.
+    let releaseTurnStart: () => void = () => undefined;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurnStart = resolve;
+    });
     nativeApiMocks.dispatchCommand.mockImplementation(async (...args: unknown[]) => {
       const [command] = args;
       if (commandType(command) === "thread.turn.start") {
-        await new Promise(() => undefined);
+        await turnGate;
       }
       return undefined;
     });
@@ -240,10 +291,57 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       defaultProvider: "codex",
       assistantDeliveryMode: "buffered",
     });
-    await expect(waitForKanbanDispatchToSettle(threadId, 60)).resolves.toBeNull();
-    // Board side still owns the guard; only the waiter gave up.
     expect(isKanbanDispatchInFlight(threadId)).toBe(true);
-    void boardPromise;
+
+    let waiterDone = false;
+    const waiter = waitForKanbanDispatchToSettle(threadId, 60).then((settled) => {
+      waiterDone = true;
+      return settled;
+    });
+    // Well past the 60ms poll bound, the dispatch is still on the wire — the
+    // waiter must keep waiting on it instead of failing open into a duplicate.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(waiterDone).toBe(false);
+    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
+
+    releaseTurnStart();
+    await boardPromise;
+    await expect(waiter).resolves.toEqual({ kind: "dispatched" });
+    expect(isKanbanDispatchInFlight(threadId)).toBe(false);
+  });
+
+  it("waitForKanbanDispatchToSettle returns the settled board failure", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-settle-fail");
+    const projectId = ProjectId.makeUnsafe("project-settle-fail");
+    useComposerDraftStore.getState().setPrompt(threadId, "Failing board dispatch settles the wait");
+    const thread = { id: threadId, projectId } as unknown as SidebarThreadSummary;
+
+    nativeApiMocks.dispatchCommand.mockImplementation(async (...args: unknown[]) => {
+      const [command] = args;
+      if (commandType(command) === "thread.turn.start") {
+        throw new Error("provider exploded");
+      }
+      return undefined;
+    });
+
+    const boardPromise = dispatchKanbanDraftThread({
+      threadId,
+      projectId,
+      thread,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    });
+    expect(isKanbanDispatchInFlight(threadId)).toBe(true);
+
+    // The rejected dispatch resolves as its error result — never a rejection —
+    // so the waiting chat send learns the board did not dispatch and proceeds.
+    const [boardResult, settled] = await Promise.all([
+      boardPromise,
+      waitForKanbanDispatchToSettle(threadId, 1_000),
+    ]);
+    expect(boardResult.kind).toBe("error");
+    expect(settled).toEqual(boardResult);
+    expect(isKanbanDispatchInFlight(threadId)).toBe(false);
   });
 
   it("keeps the pending-turn marker armed after a successful board dispatch", async () => {
@@ -262,7 +360,69 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
     // The turn may not have streamed yet; the watchdog stays armed until the
     // stream ack or the age cap, mirroring the composer-send path.
     expect(hasPendingTurnDispatch(threadId)).toBe(true);
+    // Exclusion ended when the turn RPC settled: a later drop is a follow-up.
+    expect(hasTurnDispatchOwnership(threadId)).toBe(false);
     clearPendingTurnDispatch(threadId);
+    endTurnDispatchOwnership(threadId);
+  });
+});
+
+describe("kanbanDispatch persisted image attachments", () => {
+  const originalCreateObjectUrl = URL.createObjectURL;
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+    nativeApiMocks.dispatchCommand.mockReset();
+    nativeApiMocks.stagedUploads.length = 0;
+    nativeApiMocks.runWithDispatch.mockClear();
+    URL.createObjectURL = vi.fn((file: Blob) => `blob:${(file as File).name}`);
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectUrl;
+    vi.restoreAllMocks();
+  });
+
+  it("hydrates persisted blob images a reload has not restored yet", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-persisted-image");
+    const projectId = ProjectId.makeUnsafe("project-persisted-image");
+    useComposerDraftStore.getState().setPrompt(threadId, "Prompt with a saved screenshot");
+    const persisted: PersistedComposerImageAttachment = {
+      id: "appsnap-saved-1",
+      name: "saved-capture.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+      blobKey: "thread-persisted-image:appsnap-saved-1",
+    };
+    useComposerDraftStore.setState((state) => {
+      const draft = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+      return {
+        draftsByThreadId: {
+          ...state.draftsByThreadId,
+          [threadId]: { ...draft, persistedAttachments: [persisted] },
+        },
+      };
+    });
+    const blobFile = new File(["png"], "saved-capture.png", { type: "image/png" });
+    vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(blobFile);
+
+    const result = await dispatchKanbanDraftThread({
+      threadId,
+      projectId,
+      thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    });
+
+    expect(result.kind).toBe("dispatched");
+    // The staged turn carries the hydrated image — it is not silently dropped
+    // before the composer clear deletes its persisted blob.
+    const stagedImages = nativeApiMocks.stagedUploads.at(-1)?.images as
+      | ReadonlyArray<{ id: string; file: File }>
+      | undefined;
+    expect(stagedImages).toHaveLength(1);
+    expect(stagedImages?.[0]?.id).toBe("appsnap-saved-1");
+    expect(stagedImages?.[0]?.file).toBe(blobFile);
   });
 });
 

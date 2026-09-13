@@ -8,7 +8,12 @@ import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
-import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
+import {
+  beginTurnDispatchOwnership,
+  clearPendingTurnDispatch,
+  endTurnDispatchOwnership,
+  markPendingTurnDispatch,
+} from "../pendingTurnDispatch";
 import {
   buildSourceProposedPlanReference,
   findLatestProposedPlan,
@@ -82,6 +87,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         : undefined;
 
     markPendingTurnDispatch(input.threadId);
+    beginTurnDispatchOwnership(input.threadId);
     try {
       await persistQueuedTurnThreadSettings({
         api,
@@ -113,9 +119,11 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt,
       });
+      endTurnDispatchOwnership(input.threadId);
       return true;
     } catch {
       clearPendingTurnDispatch(input.threadId);
+      endTurnDispatchOwnership(input.threadId);
       return false;
     }
   }
@@ -167,6 +175,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   });
 
   markPendingTurnDispatch(input.threadId);
+  beginTurnDispatchOwnership(input.threadId);
   try {
     await persistQueuedTurnThreadSettings({
       api,
@@ -202,6 +211,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         createdAt,
       }),
     );
+    endTurnDispatchOwnership(input.threadId);
     return true;
   } catch {
     await turnAttachmentsPromise.then(
@@ -209,6 +219,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
       () => undefined,
     );
     clearPendingTurnDispatch(input.threadId);
+    endTurnDispatchOwnership(input.threadId);
     return false;
   }
 }

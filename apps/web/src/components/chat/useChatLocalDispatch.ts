@@ -1,6 +1,6 @@
 import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { markPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { endTurnDispatchOwnership, markPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { derivePhase } from "../../session-logic";
 import { type ChatMessage, type Thread, type WorktreeSetupResolutionAction } from "../../types";
 import {
@@ -162,8 +162,10 @@ export function useChatLocalDispatch({
     // The turn RPC has resolved, so the server provably owns a turn. Re-arm
     // the cross-component watchdog marker here: pre-dispatch work (worktree
     // creation, attachment uploads) can outlive the marker's age cap, and this
-    // is the moment its clock should restart.
+    // is the moment its clock should restart. Exclusion ends at the same
+    // instant — the attempt settled, so later drops are valid follow-ups.
     markPendingTurnDispatch(threadIdForSend);
+    endTurnDispatchOwnership(threadIdForSend);
     const armedStartedAt = localDispatchStartedAtRef.current;
     if (armedStartedAt === null) {
       return;
