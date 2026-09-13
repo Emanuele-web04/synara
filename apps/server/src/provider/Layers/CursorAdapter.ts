@@ -1900,6 +1900,9 @@ export function makeCursorAdapter(
                   ...(providerCursorOptions?.apiEndpoint !== undefined
                     ? { apiEndpoint: providerCursorOptions.apiEndpoint }
                     : {}),
+                  ...(providerCursorOptions?.environment !== undefined
+                    ? { environment: providerCursorOptions.environment }
+                    : {}),
                 },
                 childProcessSpawner,
                 cwd: sourceCwd,

@@ -6322,6 +6322,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               "The source Claude session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
           });
         }
+        const claudeOptions = input.providerOptions?.claudeAgent;
+        const requiresScopedSessionStore =
+          (input.modelSelection?.instanceId !== undefined &&
+            input.modelSelection.instanceId !== "claudeAgent") ||
+          claudeOptions?.homePath !== undefined ||
+          claudeOptions?.environment !== undefined;
+        if (!liveSource && requiresScopedSessionStore) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "A stopped account-scoped Claude session cannot be forked safely through the default SDK store; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
         const sourceState = readClaudeResumeState(input.sourceResumeCursor);
         const sourceSessionId = liveSource?.resumeSessionId ?? sourceState?.resume;
         if (!sourceSessionId) {

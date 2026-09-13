@@ -11831,6 +11831,44 @@ describe("ClaudeAdapterLive forkThread", () => {
     );
   });
 
+  it.effect("falls back for stopped account-scoped sessions instead of using the default store", () => {
+    let forkCalls = 0;
+    const layer = makeForkLayer(async () => {
+      forkCalls += 1;
+      return { sessionId: "unexpected" };
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          instanceId: "work",
+          model: "claude-opus-4-8",
+        },
+        providerOptions: {
+          claudeAgent: { homePath: "/tmp/claude-work" },
+        },
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+        },
+      }).pipe(Effect.result);
+
+      assert.equal(forkCalls, 0);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure" && result.failure instanceof ProviderAdapterValidationError) {
+        assert.include(result.failure.issue, "default SDK store");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("maps a native fork failure to a session/fork request error", () => {
     const layer = makeForkLayer(async () => {
       throw new Error("session file missing");
