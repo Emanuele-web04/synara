@@ -174,7 +174,7 @@ describe("theme share strings", () => {
     expect(() => parseThemeShareString("codex-theme-v1:notjson")).toThrow(
       /does not contain valid JSON/i,
     );
-    expect(() => parseThemeShareString('codex-theme-v1:{}')).toThrow(/codeThemeId/i);
+    expect(() => parseThemeShareString("codex-theme-v1:{}")).toThrow(/codeThemeId/i);
   });
 
   it("updates only the matching variant pack when importing", () => {
