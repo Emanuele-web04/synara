@@ -165,6 +165,13 @@ describe("codexConfiguredHomePathsFromSettings", () => {
     if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
     else process.env.SYNARA_HOME = previousSynaraHome;
   });
+
+  it("keeps the enabled default Codex home when it has no overrides", () => {
+    const candidates = codexConfiguredHomePathsFromSettings(DEFAULT_SERVER_SETTINGS);
+
+    assert.deepEqual(candidates, [{}]);
+  });
+
   it("includes the env-scoped write home for instances relocating the overlay root", () => {
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,
