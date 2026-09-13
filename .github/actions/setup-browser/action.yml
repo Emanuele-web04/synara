@@ -1,0 +1,25 @@
+name: Setup browser runtime
+description: Share the web suite's versioned Chromium cache and required OS setup
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve installed Playwright version
+      id: version
+      shell: bash
+      run: node -e 'console.log("value=" + require("./apps/web/node_modules/playwright/package.json").version)' >> "$GITHUB_OUTPUT"
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.version.outputs.value }}
+
+    # Browser archives do not contain apt dependencies. Keep --with-deps even
+    # on cache hits, and use the workspace binary rather than resolving bunx.
+    - name: Install browser test runtime
+      shell: bash
+      working-directory: apps/web
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: ./node_modules/.bin/playwright install --with-deps chromium
