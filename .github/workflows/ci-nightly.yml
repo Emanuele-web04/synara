@@ -1,8 +1,5 @@
-# Nightly quarantine: pixel/font/layout comparisons tracked explicitly in
-# apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
-# Moved out of the blocking CI lane (CI speedup Phase 1a) so the PR gate stays
-# green and fast. Steps are UNCHANGED from the old CI quarantine step, still
-# continue-on-error here so flakes never page anyone.
+# Only explicitly quarantined Linux geometry tests live here. Every stable
+# browser test remains blocking in ci.yml; setup is shared, not test policy.
 name: CI Nightly
 
 on:
@@ -11,8 +8,10 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
 
-# Unlike CI (which spares main), nightly always cancels stale runs, including
-# scheduled main runs: only the newest quarantine signal matters.
+permissions:
+  contents: read
+
+# Only the newest scheduled quarantine signal matters.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -27,28 +26,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
-
-      # Run the workspace-local playwright binary directly: bunx stalled after
-      # the chromium download on hosted runners. The step timeout stops any
-      # remaining apt/download stalls from eating the whole job budget.
-      - name: Install browser test runtime
+      - name: Setup browser runtime
         timeout-minutes: 15
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          cd apps/web
-          ./node_modules/.bin/playwright install --with-deps chromium
+        uses: ./.github/actions/setup-browser
 
-      # All untagged browser tests run in the blocking stable shards in CI.
       - name: Browser test (Linux geometry quarantine)
         continue-on-error: true
         timeout-minutes: 10

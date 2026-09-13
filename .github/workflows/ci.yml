@@ -78,9 +78,11 @@ jobs:
       # is forgiven: the job remains red and the gate checks merged outcomes.
       - name: Validate GitHub Actions syntax and expressions
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.changes.outputs.full == 'true' }}
-        uses: docker://rhysd/actionlint:1.7.12
-        with:
-          args: -color .github/workflows/ci.yml .github/workflows/ci-nightly.yml
+        run: |
+          docker run --rm --network none --volume "$PWD:/repo:ro" --workdir /repo \
+            rhysd/actionlint:1.7.12 -color \
+            .github/workflows/ci.yml .github/workflows/ci-nightly.yml \
+            .github/workflows/validate-marketing.yml
 
       - name: Verify Synara identity
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -302,6 +304,12 @@ jobs:
             if (plan[flag] !== "true" && plan[flag] !== "false") {
               errors.push(`Invalid admission output ${flag}: ${plan[flag]}`);
             }
+          }
+          expect("product/unit admission", plan.unit, plan.product);
+          expect("product/build admission", plan.build, plan.product);
+          if (plan.product === "true") expect("product/typecheck admission", plan.typecheck, "true");
+          for (const flag of ["browser", "windows"]) {
+            if (plan[flag] === "true") expect(`${flag}/product admission`, plan.product, "true");
           }
           expect("static-fast", needs["static-fast"]?.result, "success");
           for (const [lane, flag] of Object.entries({

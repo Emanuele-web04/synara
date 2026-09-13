@@ -9,9 +9,14 @@ on:
     paths: &marketing_paths
       - "apps/marketing/**"
       - ".github/workflows/validate-marketing.yml"
-      # The site installs from the root lockfile, so a dependency bump can
-      # break it without touching apps/marketing.
+      # Installation is workspace-wide: include manifests and patches, not
+      # just the lockfile, even when no marketing source changed.
       - "bun.lock"
+      - "package.json"
+      - "apps/*/package.json"
+      - "packages/*/package.json"
+      - "scripts/package.json"
+      - "patches/**"
   push:
     branches:
       - main
@@ -23,7 +28,7 @@ permissions:
 
 concurrency:
   group: validate-marketing-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   validate:

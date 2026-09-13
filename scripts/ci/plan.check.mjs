@@ -8,7 +8,10 @@ import { test } from "node:test";
 import { changedFiles, isProse, planChanges, readWorkspaces } from "./plan.mjs";
 
 const workspace = (directory, name, dependencies = [], hasTests = true) => ({
-  directory, name: `@synara/${name}`, dependencies: dependencies.map((dep) => `@synara/${dep}`), test: hasTests,
+  directory,
+  name: `@synara/${name}`,
+  dependencies: dependencies.map((dep) => `@synara/${dep}`),
+  test: hasTests,
 });
 const graph = [
   workspace("packages/contracts", "contracts"),
@@ -22,32 +25,103 @@ const graph = [
 const keys = ["typecheck", "product", "unit", "browser", "build", "windows"];
 const scenarios = [
   ["Markdown only", "README.md", [false, false, false, false, false, false], ["core"]],
-  ["Marketing content", "apps/marketing/content/docs/start.mdx", [true, false, false, false, false, false], ["core"]],
-  ["Web", "apps/web/src/routes/index.tsx", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["Browser test", "apps/web/src/components/ChatView.browser.tsx", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
+  [
+    "Marketing content",
+    "apps/marketing/content/docs/start.mdx",
+    [true, false, false, false, false, false],
+    ["core"],
+  ],
+  [
+    "Web",
+    "apps/web/src/routes/index.tsx",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Browser test",
+    "apps/web/src/components/ChatView.browser.tsx",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
   ["Desktop", "apps/desktop/src/main.ts", [true, true, true, true, true, true], ["core"]],
-  ["Server CLI", "apps/server/src/index.ts", [true, true, true, false, true, true], ["core", "server 1/2", "server 2/2"]],
-  ["Windows process", "packages/shared/src/processRuntime.ts", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["Migration", "apps/server/src/persistence/Migrations.ts", [true, true, true, false, true, true], ["core", "server 1/2", "server 2/2"]],
-  ["Shared", "packages/shared/src/model.ts", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["Contracts", "packages/contracts/src/index.ts", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["Dependencies", "bun.lock", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["CI workflow", ".github/workflows/ci.yml", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
-  ["Release tooling", "scripts/release-smoke.ts", [true, true, true, true, true, true], ["core", "web", "server 1/2", "server 2/2"]],
+  [
+    "Server CLI",
+    "apps/server/src/index.ts",
+    [true, true, true, false, true, true],
+    ["core", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Windows process",
+    "packages/shared/src/processRuntime.ts",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Migration",
+    "apps/server/src/persistence/Migrations.ts",
+    [true, true, true, false, true, true],
+    ["core", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Shared",
+    "packages/shared/src/model.ts",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Contracts",
+    "packages/contracts/src/index.ts",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Dependencies",
+    "bun.lock",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "CI workflow",
+    ".github/workflows/ci.yml",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
+  [
+    "Release tooling",
+    "scripts/release-smoke.ts",
+    [true, true, true, true, true, true],
+    ["core", "web", "server 1/2", "server 2/2"],
+  ],
 ];
 for (const [name, file, flags, matrix] of scenarios) {
   test(name, () => {
     const plan = planChanges([file], graph);
-    assert.deepEqual(keys.map((key) => plan[key]), flags);
-    assert.deepEqual(plan.unit_matrix.include.map((entry) => entry.pkg), matrix);
+    assert.deepEqual(
+      keys.map((key) => plan[key]),
+      flags,
+    );
+    assert.deepEqual(
+      plan.unit_matrix.include.map((entry) => entry.pkg),
+      matrix,
+    );
   });
 }
 
 test("Unknown files, package manifests and dependency patches select full validation", () => {
-  for (const file of ["new-root/tool.ts", "apps/new/feature.ts", "apps/web/package.json", "patches/runtime.patch", "docs/example.ts", "turbo.json"]) {
+  for (const file of [
+    "new-root/tool.ts",
+    "apps/new/feature.ts",
+    "apps/web/package.json",
+    "patches/runtime.patch",
+    "docs/example.ts",
+    "turbo.json",
+  ]) {
     const plan = planChanges([file], graph);
     assert.ok(plan.full, file);
-    assert.ok(keys.every((key) => plan[key]), file);
+    assert.ok(
+      keys.every((key) => plan[key]),
+      file,
+    );
   }
 });
 
@@ -82,26 +156,49 @@ test("Real workspace manifests match the current routing expectations", () => {
   const actual = readWorkspaces(root);
   for (const [, file, flags, matrix] of scenarios) {
     const plan = planChanges([file], actual);
-    assert.deepEqual(keys.map((key) => plan[key]), flags, file);
-    assert.deepEqual(plan.unit_matrix.include.map((entry) => entry.pkg), matrix, file);
+    assert.deepEqual(
+      keys.map((key) => plan[key]),
+      flags,
+      file,
+    );
+    assert.deepEqual(
+      plan.unit_matrix.include.map((entry) => entry.pkg),
+      matrix,
+      file,
+    );
   }
 });
 
 test("Manifest reader includes every dependency section and rejects unsupported patterns", () => {
   const root = mkdtempSync(resolve(tmpdir(), "synara-ci-manifests-"));
   try {
-    writeFileSync(resolve(root, "package.json"), JSON.stringify({ workspaces: { packages: ["apps/*", "packages/*", "scripts"] } }));
+    writeFileSync(
+      resolve(root, "package.json"),
+      JSON.stringify({ workspaces: { packages: ["apps/*", "packages/*", "scripts"] } }),
+    );
     for (const pkg of graph) {
       mkdirSync(resolve(root, pkg.directory), { recursive: true });
-      writeFileSync(resolve(root, pkg.directory, "package.json"), JSON.stringify({
-        name: pkg.name, scripts: pkg.test ? { test: "vitest run" } : {},
-        devDependencies: Object.fromEntries(pkg.dependencies.map((name) => [name, "workspace:*"])),
-        optionalDependencies: { "@synara/optional": "workspace:*" },
-        peerDependencies: { "@synara/peer": "workspace:*" },
-      }));
+      writeFileSync(
+        resolve(root, pkg.directory, "package.json"),
+        JSON.stringify({
+          name: pkg.name,
+          scripts: pkg.test ? { test: "vitest run" } : {},
+          devDependencies: Object.fromEntries(
+            pkg.dependencies.map((name) => [name, "workspace:*"]),
+          ),
+          optionalDependencies: { "@synara/optional": "workspace:*" },
+          peerDependencies: { "@synara/peer": "workspace:*" },
+        }),
+      );
     }
     const actual = readWorkspaces(root);
-    assert.ok(actual.every((pkg) => pkg.dependencies.includes("@synara/optional") && pkg.dependencies.includes("@synara/peer")));
+    assert.ok(
+      actual.every(
+        (pkg) =>
+          pkg.dependencies.includes("@synara/optional") &&
+          pkg.dependencies.includes("@synara/peer"),
+      ),
+    );
     writeFileSync(resolve(root, "package.json"), JSON.stringify({ workspaces: ["**"] }));
     assert.throws(() => readWorkspaces(root), /Unsupported workspace pattern/);
   } finally {
@@ -111,7 +208,12 @@ test("Manifest reader includes every dependency section and rejects unsupported 
 
 test("NUL-delimited diff preserves deletion/rename sources and unusual filenames", () => {
   const root = mkdtempSync(resolve(tmpdir(), "synara-ci-diff-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   try {
     git("init", "--quiet");
     git("config", "user.email", "ci-test@example.invalid");
@@ -134,4 +236,14 @@ test("NUL-delimited diff preserves deletion/rename sources and unusual filenames
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// The dedicated marketing workflow has its own path admission. A future local
+// dependency must update that admission rather than silently missing fan-out.
+test("Marketing remains independently validated", () => {
+  const actual = readWorkspaces(resolve(import.meta.dirname, "../.."));
+  const names = new Set(actual.map((pkg) => pkg.name));
+  const marketing = actual.find((pkg) => pkg.name === "@synara/marketing");
+  assert.ok(marketing);
+  assert.equal(marketing.dependencies.some((name) => names.has(name)), false);
 });

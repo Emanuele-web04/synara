@@ -60,7 +60,11 @@ export function readWorkspaces(root) {
 export function isProse(file) {
   // Never treat arbitrary Markdown/MDX inside runtime source or fixtures as docs.
   if (/^[^/]+\.md$/.test(file)) return true;
-  if (/^(?:docs|plans|audit|advisor-plans|\.plans|\.docs)\/.*\.(?:md|mdx|png|jpe?g|gif|svg|webp|ico)$/.test(file)) {
+  if (
+    /^(?:docs|plans|audit|advisor-plans|\.plans|\.docs)\/.*\.(?:md|mdx|png|jpe?g|gif|svg|webp|ico)$/.test(
+      file,
+    )
+  ) {
     return true;
   }
   if (/^\.github\/.*\.(?:md|png|jpe?g|gif|svg|webp|ico)$/.test(file)) return true;
@@ -150,7 +154,9 @@ export function changedFiles(root, base, head = "HEAD") {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-  }).split("\0").filter(Boolean);
+  })
+    .split("\0")
+    .filter(Boolean);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -165,6 +171,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     }
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI admission plan\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`);
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## CI admission plan\n\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`,
+    );
   }
 }
