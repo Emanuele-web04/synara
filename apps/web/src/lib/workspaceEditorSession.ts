@@ -205,12 +205,6 @@ export class WorkspaceEditorSession {
     }
   };
 
-  dismissConflict = () => {
-    // Dismissing an error must not re-enable autosave over an external edit.
-    this.pause();
-    this.dispatch({ type: "conflictDismissed" });
-  };
-
   save = () => {
     this.paused = false;
     void this.flush();

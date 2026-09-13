@@ -17,6 +17,8 @@ vi.mock("../nativeApi", () => ({
 
 import { useWorkspaceFileEditorSession } from "./useWorkspaceFileEditorSession";
 import { projectQueryKeys } from "../lib/projectReactQuery";
+import { flushWorkspaceEditors } from "../lib/workspaceEditorSession";
+import { WorkspaceFileEditorConflictBar } from "../components/chat/WorkspaceFileEditorChrome";
 
 const CWD = "/repo";
 const FILE = "src/app.ts";
@@ -56,7 +58,14 @@ function Session({ onClose }: { onClose: () => void }) {
         onChange={(e) => session.handleChange(e.target.value)}
       />
       <button onClick={session.save}>Save</button>
-      <button onClick={session.overwrite}>Overwrite</button>
+      {session.state.saveError ? (
+        <WorkspaceFileEditorConflictBar
+          message={session.state.saveError}
+          conflict={session.state.conflict}
+          onReload={session.requestReload}
+          onOverwrite={session.overwrite}
+        />
+      ) : null}
       <button onClick={session.requestClose}>Close</button>
       <button onClick={session.requestReload}>Reload</button>
       <button onClick={session.cancelPendingDiscard}>Cancel discard</button>
@@ -174,3 +183,51 @@ it("does not replace text typed while an explicit reload is pending", async () =
   await expect.element(page.getByRole("textbox")).toHaveValue("typed during reload\n");
   await view.unmount();
 });
+
+it.each([false, true])(
+  "keeps failed saves visible and offers confirmed reload (conflict: %s)",
+  async (conflict) => {
+    const { client, view, onClose } = await mount();
+    try {
+      api.projects.writeFile.mockRejectedValue(
+        Object.assign(
+          new Error(conflict ? "Changed on disk" : "Permission denied"),
+          conflict ? { code: "WORKSPACE_FILE_CONFLICT" } : {},
+        ),
+      );
+      await page.getByRole("textbox").fill("unsaved draft\n");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect
+        .element(page.getByTestId("error"))
+        .toHaveTextContent(conflict ? "Changed on disk" : "Permission denied");
+      await expect
+        .element(page.getByRole("button", { name: "Dismiss", exact: true }))
+        .not.toBeInTheDocument();
+      expect(await flushWorkspaceEditors(client, CWD)).toBe(false);
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      const reload = page.getByRole("button", { name: "Reload from disk", exact: true });
+      await reload.click();
+      await expect.element(page.getByTestId("intent")).toHaveTextContent("reload");
+      await page.getByRole("button", { name: "Cancel discard", exact: true }).click();
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      expect(onClose).not.toHaveBeenCalled();
+      await reload.click();
+      api.projects.readFile.mockRejectedValueOnce(new Error("Read temporarily unavailable"));
+      await page.getByRole("button", { name: "Confirm discard", exact: true }).click();
+      await expect
+        .element(page.getByTestId("error"))
+        .toHaveTextContent("Read temporarily unavailable");
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      await reload.click();
+      api.projects.readFile.mockResolvedValue(loaded("disk contents\n"));
+      await page.getByRole("button", { name: "Confirm discard", exact: true }).click();
+      await expect.element(page.getByRole("textbox")).toHaveValue("disk contents\n");
+      await expect.element(page.getByTestId("dirty")).toHaveTextContent("false");
+      expect(await flushWorkspaceEditors(client, CWD)).toBe(true);
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      await view.unmount();
+    }
+  },
+);

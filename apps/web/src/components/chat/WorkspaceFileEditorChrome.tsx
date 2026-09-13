@@ -208,7 +208,6 @@ interface WorkspaceFileEditorConflictBarProps {
   conflict: boolean;
   onReload: () => void;
   onOverwrite: () => void;
-  onDismiss: () => void;
 }
 
 export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflictBarProps) {
@@ -221,38 +220,26 @@ export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflic
       <p className="min-w-0 flex-1 truncate text-[11px] text-foreground/85" title={props.message}>
         {props.message}
       </p>
-      {props.conflict ? (
-        <>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onReload}
-          >
-            Reload from disk
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onOverwrite}
-          >
-            Overwrite
-          </Button>
-        </>
-      ) : null}
-      <ChatHeaderIconButton
+      <Button
         type="button"
-        tone="plain"
-        label="Dismiss"
-        title="Dismiss"
-        className="!size-6"
-        onClick={props.onDismiss}
+        size="xs"
+        variant="chrome-outline"
+        className="!h-6 shrink-0 rounded-md text-[11px]"
+        onClick={props.onReload}
       >
-        <XIcon aria-hidden="true" className="size-3" />
-      </ChatHeaderIconButton>
+        Reload from disk
+      </Button>
+      {props.conflict ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="chrome-outline"
+          className="!h-6 shrink-0 rounded-md text-[11px]"
+          onClick={props.onOverwrite}
+        >
+          Overwrite
+        </Button>
+      ) : null}
     </div>
   );
 }

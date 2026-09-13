@@ -192,7 +192,8 @@ changes; they do not stage the file. Switching files, navigating to another
 page, and sending a prompt wait for pending editor saves.
 
 If a write fails or the file has changed on disk, autosave stops and keeps the
-draft. Resolve the error or reload from disk before leaving or sending. Reload
+draft. Save errors stay visible until resolved. Retry Save after fixing the cause,
+or use Reload from disk and confirm discarding the draft before leaving or sending. Reload
 discards the draft; an explicit Overwrite action in the full editor bypasses the
 version check. Drafts retained after a panel closes live only in the current app
 session, so they are not crash recovery backups.

@@ -54,7 +54,6 @@ export function useWorkspaceFileEditorBuffer(
   const handleChange = useCallback((value: string) => session?.change(value), [session]);
   const save = useCallback(() => session?.save(), [session]);
   const overwrite = useCallback(() => session?.overwrite(), [session]);
-  const dismissConflict = useCallback(() => session?.dismissConflict(), [session]);
   const pauseAutosave = useCallback(() => session?.pause(), [session]);
   const resumeAutosave = useCallback(() => session?.resume(), [session]);
   return {
@@ -67,7 +66,6 @@ export function useWorkspaceFileEditorBuffer(
     save,
     overwrite,
     reloadFromDisk,
-    dismissConflict,
     flush,
     pauseAutosave,
     resumeAutosave,
