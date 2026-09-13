@@ -1,0 +1,161 @@
+name: Chara port Copilot server integration
+
+on:
+  push:
+    branches: [agent/copilot-cli-acp]
+    paths: [.github/workflows/chara-port-copilot-server.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/copilot-cli-acp
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: "false"
+      - name: Port Copilot server seams
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def patch(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              found = text.count(old)
+              if found < count:
+                  raise SystemExit(f"{path}: expected at least {count} occurrences, found {found}: {old!r}")
+              p.write_text(text.replace(old, new, count))
+
+          # Restore the prefetch test that a previous repair attempt over-wrote,
+          # then make the one intended fixture addition.
+          import subprocess
+          restored = subprocess.check_output(
+              ["git", "show", "5b92bf3:apps/web/src/lib/providerModelPrefetch.test.ts"],
+              text=True,
+          )
+          old = '    piAgentDir: "",\n    ...overrides,'
+          if old not in restored:
+              raise SystemExit("providerModelPrefetch.test.ts: makeSettings fixture not found")
+          restored = restored.replace(old, '    piAgentDir: "",\n    copilotBinaryPath: "",\n    ...overrides,', 1)
+          Path("apps/web/src/lib/providerModelPrefetch.test.ts").write_text(restored)
+
+          # Translate the ACP mode-state request into the adapter error domain.
+          patch(
+              "apps/server/src/provider/Layers/CopilotAdapter.ts",
+              '            modeState: yield* acp.getModeState,',
+              '            modeState: yield* acp.getModeState.pipe(\n              Effect.mapError((error) =>\n                mapAcpToAdapterError(\n                  PROVIDER,\n                  input.threadId,\n                  "session/get_mode_state",\n                  error,\n                ),\n              ),\n            ),',
+          )
+
+          # Current ACP runtime uses on-demand auth: unauthenticated session setup is
+          # attempted first, then the advertised auth method is resolved only when needed.
+          path = "apps/server/src/provider/acp/CopilotAcpSupport.ts"
+          patch(path,
+              '  "authMethodId" | "resolveAuthMethodId" | "authentication" | "spawn"\n>',
+              '  "authMethodId" | "resolveAuthMethodId" | "authPolicy" | "spawn"\n>')
+          patch(path,
+              'export const resolveCopilotAcpAuthMethodId = (\n  initializeResult: Acp.InitializeResponse,\n): Effect.Effect<string | undefined> =>\n  Effect.succeed(\n    (initializeResult.authMethods ?? []).map((method) => method.id.trim()).find(Boolean),\n  );',
+              'export const resolveCopilotAcpAuthMethodId = (\n  initializeResult: Acp.InitializeResponse,\n): Effect.Effect<string, AcpErrors.AcpError> => {\n  const methodId = (initializeResult.authMethods ?? [])\n    .map((method) => method.id.trim())\n    .find(Boolean);\n  return methodId\n    ? Effect.succeed(methodId)\n    : Effect.fail(\n        new AcpErrors.AcpRequestError({\n          code: -32000,\n          errorMessage: "Copilot requires authentication but advertised no authentication methods.",\n        }),\n      );\n};')
+          patch(path,
+              '        resolveAuthMethodId: resolveCopilotAcpAuthMethodId,\n        authentication: "when-advertised",',
+              '        resolveAuthMethodId: resolveCopilotAcpAuthMethodId,\n        authPolicy: "on-demand",')
+          patch(
+              "apps/server/src/provider/acp/CopilotAcpSupport.test.ts",
+              '  it("allows BYOK sessions when Copilot advertises no client-driven auth method", async () => {\n    const methodId = await Effect.runPromise(\n      resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([])),\n    );\n    expect(methodId).toBeUndefined();\n  });',
+              '  it("fails auth-method resolution when authentication is required but none is advertised", async () => {\n    await expect(\n      Effect.runPromise(resolveCopilotAcpAuthMethodId(initializeWithAuthMethods([]))),\n    ).rejects.toThrow("advertised no authentication methods");\n  });')
+
+          # Registry test layer must provide and assert every required adapter service.
+          path = "apps/server/src/provider/Layers/ProviderAdapterRegistry.test.ts"
+          patch(path,
+              'import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";\n',
+              'import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";\nimport { CopilotAdapter, CopilotAdapterShape } from "../Services/CopilotAdapter.ts";\n')
+          fake = '''\nconst fakeCopilotAdapter: CopilotAdapterShape = {\n  provider: "copilot",\n  capabilities: { sessionModelSwitch: "in-session" },\n  startSession: vi.fn(),\n  sendTurn: vi.fn(),\n  interruptTurn: vi.fn(),\n  respondToRequest: vi.fn(),\n  respondToUserInput: vi.fn(),\n  stopSession: vi.fn(),\n  listSessions: vi.fn(),\n  hasSession: vi.fn(),\n  readThread: vi.fn(),\n  rollbackThread: vi.fn(),\n  stopAll: vi.fn(),\n  streamEvents: Stream.empty,\n};\n'''
+          patch(path, 'const fakeClaudeAdapter: ClaudeAdapterShape = {', fake + '\nconst fakeClaudeAdapter: ClaudeAdapterShape = {')
+          patch(path,
+              '        Layer.succeed(CodexAdapter, codexAdapter),\n        Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),',
+              '        Layer.succeed(CodexAdapter, codexAdapter),\n        Layer.succeed(CopilotAdapter, fakeCopilotAdapter),\n        Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),')
+          patch(path,
+              '      const codex = yield* registry.getByProvider("codex");\n      const claude =',
+              '      const codex = yield* registry.getByProvider("codex");\n      const copilot = yield* registry.getByProvider("copilot");\n      const claude =')
+          patch(path,
+              '      assert.equal(codex, fakeCodexAdapter);\n      assert.equal(claude,',
+              '      assert.equal(codex, fakeCodexAdapter);\n      assert.equal(copilot, fakeCopilotAdapter);\n      assert.equal(claude,')
+          patch(path,
+              '        "codex",\n        "claudeAgent",',
+              '        "codex",\n        "claudeAgent",')
+          # Registry order follows the live implementation, where Copilot is appended.
+          patch(path,
+              '        "opencode",\n        "pi",\n      ]);',
+              '        "opencode",\n        "pi",\n        "copilot",\n      ]);')
+
+          # Provider health: current architecture, plus the Copilot-specific probe/update metadata.
+          path = "apps/server/src/provider/Layers/ProviderHealth.ts"
+          patch(path,
+              'const PI_PROVIDER = "pi" as const;\ntype ProviderStatuses',
+              'const PI_PROVIDER = "pi" as const;\nconst COPILOT_PROVIDER = "copilot" as const;\ntype ProviderStatuses')
+          patch(path,
+              '  PI_PROVIDER,\n] as const satisfies ReadonlyArray<ProviderKind>;',
+              '  PI_PROVIDER,\n  COPILOT_PROVIDER,\n] as const satisfies ReadonlyArray<ProviderKind>;')
+          patch(path,
+              'const providerChildKind = (provider: ProviderKind): ProviderChildKind =>\n  provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider;',
+              'const providerChildKind = (provider: ProviderKind): ProviderChildKind =>\n  provider === CLAUDE_AGENT_PROVIDER\n    ? "claude"\n    : provider === COPILOT_PROVIDER\n      ? "acp"\n      : provider;')
+          patch(path,
+              '  pi: {\n    provider: PI_PROVIDER,\n    binaryName: "pi",\n    npmPackageName: "@earendil-works/pi-coding-agent",\n    homebrew: null,\n    nativeUpdate: {\n      executable: "pi",\n      args: () => ["update"],\n      lockKey: "pi-native",\n      strategy: "always",\n    },\n  },\n};',
+              '  pi: {\n    provider: PI_PROVIDER,\n    binaryName: "pi",\n    npmPackageName: "@earendil-works/pi-coding-agent",\n    homebrew: null,\n    nativeUpdate: {\n      executable: "pi",\n      args: () => ["update"],\n      lockKey: "pi-native",\n      strategy: "always",\n    },\n  },\n  copilot: {\n    provider: COPILOT_PROVIDER,\n    binaryName: "copilot",\n    npmPackageName: "@github/copilot",\n    homebrew: { name: "copilot-cli", kind: "cask" },\n    nativeUpdate: {\n      executable: "copilot",\n      args: () => ["update"],\n      lockKey: "copilot-native",\n      strategy: "always",\n    },\n  },\n};')
+          health = '''\n\n// ── GitHub Copilot CLI health check ─────────────────────────────\n\nexport const checkCopilotProviderStatus = (\n  binaryPath?: string,\n): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>\n  Effect.gen(function* () {\n    const checkedAt = new Date().toISOString();\n    const executable = nonEmptyTrimmed(binaryPath) ?? "copilot";\n    const versionProbe = yield* probeProviderCliVersion(\n      runProviderCommand(executable, ["--version"], providerCommandEnv(COPILOT_PROVIDER)),\n      DEFAULT_TIMEOUT_MS,\n    );\n\n    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {\n      const error = versionProbe.cause;\n      return {\n        provider: COPILOT_PROVIDER,\n        status: "error" as const,\n        available: false,\n        authStatus: "unknown" as const,\n        checkedAt,\n        message:\n          versionProbe.outcome === "missing"\n            ? "GitHub Copilot CLI is not installed or not available on PATH."\n            : `GitHub Copilot CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,\n      } satisfies ServerProviderStatus;\n    }\n    if (versionProbe.outcome === "timeout") {\n      return {\n        provider: COPILOT_PROVIDER,\n        status: "error" as const,\n        available: false,\n        authStatus: "unknown" as const,\n        checkedAt,\n        message: "GitHub Copilot CLI timed out while Synara checked its version.",\n      } satisfies ServerProviderStatus;\n    }\n    if (versionProbe.outcome === "nonzero") {\n      const detail = detailFromResult(versionProbe.result);\n      return {\n        provider: COPILOT_PROVIDER,\n        status: "error" as const,\n        available: false,\n        authStatus: "unknown" as const,\n        checkedAt,\n        message: detail\n          ? `GitHub Copilot CLI failed to run. ${detail}`\n          : "GitHub Copilot CLI failed to run.",\n      } satisfies ServerProviderStatus;\n    }\n    return {\n      provider: COPILOT_PROVIDER,\n      status: "ready" as const,\n      available: true,\n      authStatus: "unknown" as const,\n      version: parseGenericCliVersion(`${versionProbe.result.stdout}\\n${versionProbe.result.stderr}`),\n      checkedAt,\n      message:\n        "GitHub Copilot CLI is installed. Authentication is negotiated when the ACP session starts.",\n    } satisfies ServerProviderStatus;\n  });\n'''
+          patch(path, '\n// ── Snapshot helpers ────────────────────────────────────────────────\n', health + '\n// ── Snapshot helpers ────────────────────────────────────────────────\n')
+          patch(path,
+              '          case "devin":\n            return settings.providers.devin.binaryPath;\n        }',
+              '          case "devin":\n            return settings.providers.devin.binaryPath;\n          case "copilot":\n            return settings.providers.copilot.binaryPath;\n        }')
+          patch(path,
+              '                checkProviderWhenEnabled(\n                  settings,\n                  PI_PROVIDER,\n                  checkPiProviderStatus(\n                    settings.providers.pi.agentDir,\n                    settings.providers.pi.binaryPath,\n                  ),\n                ),\n              ],',
+              '                checkProviderWhenEnabled(\n                  settings,\n                  PI_PROVIDER,\n                  checkPiProviderStatus(\n                    settings.providers.pi.agentDir,\n                    settings.providers.pi.binaryPath,\n                  ),\n                ),\n                checkProviderWhenEnabled(\n                  settings,\n                  COPILOT_PROVIDER,\n                  checkCopilotProviderStatus(settings.providers.copilot.binaryPath),\n                ),\n              ],')
+
+          # Copilot has no Synara-owned skill directory; it can still consume portable roots.
+          patch(
+              "apps/server/src/provider/skillsCatalog.ts",
+              '  devin: ["devin", "claude", "agents"],\n} as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;',
+              '  devin: ["devin", "claude", "agents"],\n  copilot: [],\n} as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;',
+          )
+          PY
+      - name: Format changed source
+        run: >-
+          bunx oxfmt
+          apps/web/src/lib/providerModelPrefetch.test.ts
+          apps/server/src/provider/Layers/CopilotAdapter.ts
+          apps/server/src/provider/Layers/ProviderAdapterRegistry.test.ts
+          apps/server/src/provider/Layers/ProviderHealth.ts
+          apps/server/src/provider/acp/CopilotAcpSupport.ts
+          apps/server/src/provider/acp/CopilotAcpSupport.test.ts
+          apps/server/src/provider/skillsCatalog.ts
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: bun run typecheck
+      - name: Clean temporary workflows
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/chara-diagnose.yml
+          rm -f .github/workflows/chara-restore-copilot-prefetch-test.yml
+          rm -f .github/workflows/chara-finish-copilot-prefetch-restore.yml
+          rm -f .github/workflows/chara-port-copilot-server.yml
+      - name: Commit port
+        if: always()
+        shell: bash
+        run: |
+          git config user.name Chara
+          git config user.email legend.alkalex07@gmail.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: integrate Copilot into current server provider architecture"
+          git push origin HEAD:agent/copilot-cli-acp
+      - name: Fail if typecheck still fails
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
