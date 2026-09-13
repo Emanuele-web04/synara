@@ -39,6 +39,10 @@ Chrome extension may be unavailable; `playwright` is a devDependency of `apps/we
 
 ## Real provider feature verification
 
+The Mind- and Kanban-specific bullets below describe the feature branches
+under test (`agent/mind-feature-rebased`, `agent/kanban-v2-clean`), not
+mainline UI — run them while checking out or merging those branches.
+
 - Use an installed, authorized provider/model, selected explicitly in the UI.
   Wait for model discovery to resolve before sending; a new composer can briefly
   display loading placeholders or default to a different model than expected.
