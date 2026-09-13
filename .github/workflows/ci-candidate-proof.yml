@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  mac-device:
-    name: Native device (${{ matrix.os }})
+  mac-device-baseline:
+    name: Full-install device baseline (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -20,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: 8feb6c4691dff692b9f3643ec7eaf6142fed569e
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
@@ -27,13 +28,21 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: package.json
-      - name: Install the committed device dependency profile
-        run: node .github/scripts/install-workspace.mjs device
+      - name: Full installation matching the existing device workflow
+        run: bun install --frozen-lockfile --ignore-scripts
       - name: Native capability probe
         run: bun run test:device:probe
       - name: Native simulator smoke
         timeout-minutes: 15
-        run: bun run test:device
+        run: |
+          set -o pipefail
+          bun run test:device 2>&1 | tee "$RUNNER_TEMP/device-smoke.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: device-baseline-${{ matrix.os }}
+          path: ${{ runner.temp }}/device-smoke.log
+          retention-days: 14
   measurements:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -46,12 +55,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/ci-results"
-          for run in 34785599800 34786794723; do
+          for run in 34785599800 34786794723 34787600386; do
             gh api "repos/Emanuele-web04/synara/actions/runs/$run" > "$RUNNER_TEMP/ci-results/run-$run.json"
             gh api "repos/Emanuele-web04/synara/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/ci-results/jobs-$run.json"
           done
       - uses: actions/upload-artifact@v7
         with:
-          name: ci-before-balancing
+          name: ci-with-balancing
           path: ${{ runner.temp }}/ci-results
           retention-days: 14

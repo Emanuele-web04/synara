@@ -26,8 +26,10 @@ export default class TimingSequencer extends BaseSequencer {
       if (!selected) throw new Error("Invalid shard index");
       return selected;
     } catch (error) {
-      console.warn("Timing data unavailable; using Vitest's complete default partition.", error);
-      return super.shard(files);
+      // A per-runner I/O failure must not produce a different partition on one
+      // runner. Running everything here preserves coverage with healthy peers.
+      console.warn("Timing data unavailable; running the complete server suite.", error);
+      return files;
     }
   }
 }
