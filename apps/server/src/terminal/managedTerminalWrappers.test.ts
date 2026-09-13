@@ -132,6 +132,40 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
     expect(wrapper).toContain("HOME='/accounts/work'");
     expect(wrapper).toContain(targetPath);
   });
+
+  it("removes stale provider profile wrappers on refresh", () => {
+    const targetPath = installFakeCli("pi");
+    prepareManagedTerminalWrappers({
+      baseEnv: { PATH: binDir },
+      rootDir,
+      zshRootDir,
+      profiles: [
+        {
+          commandName: "pi-old",
+          targetPath,
+          environment: { PI_CODING_AGENT_DIR: "/accounts/old" },
+          isolateEnvironment: true,
+        },
+      ],
+    });
+
+    prepareManagedTerminalWrappers({
+      baseEnv: { PATH: binDir },
+      rootDir,
+      zshRootDir,
+      profiles: [
+        {
+          commandName: "pi-new",
+          targetPath,
+          environment: { PI_CODING_AGENT_DIR: "/accounts/new" },
+          isolateEnvironment: true,
+        },
+      ],
+    });
+
+    expect(() => readFileSync(path.join(rootDir, "pi-old"), "utf8")).toThrow();
+    expect(readFileSync(path.join(rootDir, "pi-new"), "utf8")).toContain("/accounts/new");
+  });
 });
 
 describe("buildProviderProfileWrapperScript", () => {

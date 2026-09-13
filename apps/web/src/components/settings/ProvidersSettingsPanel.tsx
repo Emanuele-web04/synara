@@ -1109,7 +1109,18 @@ function ProviderInstancesControl(props: {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" size="xs" variant="outline" onClick={importInstance}>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={importInstance}
+            disabled={typeof window === "undefined" || !window.desktopBridge}
+            title={
+              typeof window === "undefined" || !window.desktopBridge
+                ? "Directory import is available in the Synara desktop app."
+                : "Reference an existing provider directory without moving it."
+            }
+          >
             <FolderOpenIcon className="size-3.5" />
             Import directory
           </Button>
@@ -1348,6 +1359,10 @@ function ProviderInstancesControl(props: {
                       placeholder="Optional shared credential directory"
                       spellCheck={false}
                     />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Advanced Claude CLI compatibility setting. Leave blank unless your setup
+                      already uses a separate secure-storage directory.
+                    </span>
                   </label>
                 </>
               ) : null}
