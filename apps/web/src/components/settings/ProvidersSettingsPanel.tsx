@@ -1111,7 +1111,8 @@ function ProviderInstancesControl(props: {
             {provider === "codex"
               ? "Add a separately routed Codex instance with its own home or shadow auth home."
               : provider === "claudeAgent"
-                ? "Add a separate Claude account with its own HOME directory."
+                ? "Add a separate Claude account with its own config directory and optional " +
+                  "credential directory."
                 : provider === "opencode"
                   ? "Add launch profiles for separate external servers or local runtime settings."
                   : provider === "pi"
