@@ -714,26 +714,26 @@ export default function DevicePanel(props: {
       return <DeviceEmptyScreen message="Choose a simulator to start streaming it here." />;
     }
 
-    // Anything that is not yet a picture belongs on the boot screen, which
-    // names the device: the canvas has nothing to paint, and a blank rectangle
-    // for the length of a cold boot is what made the pane look broken.
-    if (videoStatus.kind !== "streaming" && attachStatusLabel) {
-      return <DeviceBootingScreen deviceName={attachedDevice.name} label={attachStatusLabel} />;
-    }
-
     return (
       <>
         {/*
+          Keep the canvas mounted under the attach overlay: the frame socket
+          can deliver the helper's only idle-screen frame before attach metadata
+          clears. Dropping that frame can leave the pane connecting forever.
           biome-ignore lint/a11y/noNoninteractiveElementInteractions: the canvas
           is the device surface; pointer and key handlers are the feature.
         */}
         <canvas
+          key={attachedDevice.udid}
           ref={canvasRef}
           tabIndex={0}
           aria-label={`${attachedDevice.name} screen`}
           // object-cover so the frame is filled edge to edge: the canvas already
           // carries the device's own aspect ratio, so nothing is actually cropped.
-          className="h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70"
+          className={cn(
+            "h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70",
+            videoStatus.kind !== "streaming" && "invisible",
+          )}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={() => {
@@ -742,7 +742,13 @@ export default function DevicePanel(props: {
           onKeyDown={(event) => handleKey(event, "down")}
           onKeyUp={(event) => handleKey(event, "up")}
         />
-        {videoStatus.kind !== "streaming" ? (
+        {runtimeMode === "live" &&
+        (videoStatus.kind === "idle" || videoStatus.kind === "connecting") &&
+        attachStatusLabel ? (
+          <div className="pointer-events-none absolute inset-0">
+            <DeviceBootingScreen deviceName={attachedDevice.name} label={attachStatusLabel} />
+          </div>
+        ) : videoStatus.kind !== "streaming" ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-[12%]">
             <DeviceVideoOverlay
               status={videoStatus}
