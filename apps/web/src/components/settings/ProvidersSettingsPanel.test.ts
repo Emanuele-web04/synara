@@ -60,6 +60,7 @@ describe("createProviderInstallResetPatch", () => {
         "claudeBinaryPath",
         "codexBinaryPath",
         "codexHomePath",
+        "copilotBinaryPath",
         "cursorApiEndpoint",
         "cursorBinaryPath",
         "devinBinaryPath",

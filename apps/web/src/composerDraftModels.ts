@@ -39,6 +39,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "droid",
   "opencode",
   "pi",
+  "copilot",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
@@ -218,6 +219,8 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
+    case "copilot":
+      return { provider, model };
   }
 }
 
