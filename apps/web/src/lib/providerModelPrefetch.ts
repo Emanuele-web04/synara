@@ -35,7 +35,8 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
->;
+> &
+  Partial<Pick<AppSettings, "acpBinaryPath" | "acpArgs">>;
 
 /**
  * Providers whose model catalogs are runtime-discovered (not static) and thus
@@ -179,6 +180,13 @@ export function providerModelsPrefetchQueryOptions(input: {
         agentDir: settings.piAgentDir || null,
         cwd,
         priority,
+      });
+    case "acp":
+      return providerModelsQueryOptions({
+        provider: "acp",
+        binaryPath: settings.acpBinaryPath || null,
+        ...(settings.acpArgs !== undefined ? { args: parseAcpArgs(settings.acpArgs) } : {}),
+        cwd,
       });
   }
 }
