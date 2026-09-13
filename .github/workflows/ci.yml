@@ -45,7 +45,7 @@ jobs:
           node-version-file: package.json
 
       - name: Test CI planning and gate contracts
-        run: node --test .github/scripts/ci-plan.test.mjs
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Plan affected lanes
         id: plan
@@ -103,7 +103,8 @@ jobs:
         run: bun run typecheck
 
   # Retain both measured server shards and the shared short-suite runner.
-  # Turbo still executes build prerequisites; test results remain uncached.
+  # Source tests do not consume build products. The independent build lane owns
+  # all four production build tasks; never rebuild them on every test runner.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
@@ -119,18 +120,16 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
-        with:
-          turbo: "true"
 
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli'
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+        run: bunx turbo run test ${{ matrix.filters }} --only -- ${{ matrix.test-args }}
 
-  # Setup is small relative to testing; reducing these four runners would
-  # serialize substantial stable coverage. Do not change their partition here.
+  # Keep four runners. Measured ChatView cases are balanced between its two
+  # complementary partitions; component file shards remain unchanged.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
@@ -155,6 +154,8 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          profile: runtime
 
       - name: Cache Playwright browsers
         uses: actions/cache@v5
@@ -189,6 +190,7 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
+          profile: runtime
           electron: "true"
           turbo: "true"
 
@@ -212,6 +214,8 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          profile: runtime
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs

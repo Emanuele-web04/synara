@@ -262,6 +262,9 @@ test("Workflow retains the gate name, native checks, partitions and frozen insta
     new URL("../actions/setup-workspace/action.yml", import.meta.url),
     "utf8",
   );
-  assert.match(setup, /bun install --frozen-lockfile/);
+  assert.match(
+    readFileSync(new URL("./ci-install.mjs", import.meta.url), "utf8"),
+    /"install", "--frozen-lockfile"/,
+  );
   assert.match(setup, /runner.os != 'Windows' && steps.modules.outputs.cache-hit != 'true'/);
 });

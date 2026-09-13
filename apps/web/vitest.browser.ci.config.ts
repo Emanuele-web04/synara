@@ -1,13 +1,12 @@
 import { defineConfig } from "vitest/config";
 
 import stableConfig from "./vitest.browser.stable.config";
+import { chatPatterns } from "./vitest.browser.partitions";
 
 const chatViewFile = "src/components/ChatView.browser.tsx";
 const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
 const stablePattern = testNamePattern as RegExp;
-// This parameterized full-app matrix costs about 100s on hosted runners.
-// Complementary patterns keep every new stable ChatView case in exactly one lane.
-const followPattern = "restores streaming follow";
+const patterns = chatPatterns(stablePattern);
 
 export default defineConfig({
   ...stableConfig,
@@ -24,7 +23,7 @@ export default defineConfig({
         test: {
           name: "chat-follow",
           include: [chatViewFile],
-          testNamePattern: new RegExp(`${stablePattern.source}(?=.*${followPattern})`),
+          testNamePattern: patterns.follow,
         },
       },
       {
@@ -32,7 +31,7 @@ export default defineConfig({
         test: {
           name: "chat-workflows",
           include: [chatViewFile],
-          testNamePattern: new RegExp(`${stablePattern.source}(?!.*${followPattern})`),
+          testNamePattern: patterns.workflows,
         },
       },
       {
