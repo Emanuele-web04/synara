@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applyManagedTerminalAgentWrapperEnv,
+  buildProviderProfileWrapperScript,
   prepareManagedTerminalWrappers,
 } from "./managedTerminalWrappers.ts";
 
@@ -107,5 +108,44 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
     expect(env.Path?.split(path.delimiter)[0]).toBe(rootDir);
     expect(env.PATH).toBeUndefined();
     expect(env.SYNARA_MANAGED_BIN_DIR).toBe(rootDir);
+  });
+
+  it("writes provider profiles even when Codex and Claude are not installed", () => {
+    const targetPath = installFakeCli("opencode");
+    const state = prepareManagedTerminalWrappers({
+      baseEnv: { PATH: binDir },
+      rootDir,
+      zshRootDir,
+      profiles: [
+        {
+          commandName: "opencode-work",
+          targetPath,
+          environment: { HOME: "/accounts/work", OPENCODE_CONFIG_DIR: "/accounts/work/config" },
+          isolateEnvironment: true,
+        },
+      ],
+    });
+
+    expect(state.binDir).toBe(rootDir);
+    const wrapper = readFileSync(path.join(rootDir, "opencode-work"), "utf8");
+    expect(wrapper).toContain("exec env -i");
+    expect(wrapper).toContain("HOME='/accounts/work'");
+    expect(wrapper).toContain(targetPath);
+  });
+});
+
+describe("buildProviderProfileWrapperScript", () => {
+  it("does not serialize omitted sensitive values", () => {
+    const wrapper = buildProviderProfileWrapperScript({
+      commandName: "pi-work",
+      targetPath: "/usr/local/bin/pi",
+      environment: { HOME: "/accounts/pi-work" },
+      isolateEnvironment: true,
+      omittedSensitiveEnvironmentNames: ["OPENAI_API_KEY"],
+    });
+
+    expect(wrapper).toContain("OPENAI_API_KEY");
+    expect(wrapper).not.toContain("secret-value");
+    expect(wrapper).toContain('PATH="${PATH:-}"');
   });
 });
