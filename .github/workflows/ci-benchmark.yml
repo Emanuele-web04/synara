@@ -1,0 +1,129 @@
+name: CI cross-platform benchmark
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci-benchmark.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/ci-cross-platform'
+    name: Benchmark (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Matched cold install trials
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.os }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { cpus, totalmem } from 'node:os';
+          const root = process.cwd();
+          const evidence = join(process.env.RUNNER_TEMP, 'ci-evidence');
+          mkdirSync(evidence, { recursive: true });
+          const result = { runner: process.env.RUNNER_LABEL, arch: process.arch, node: process.version,
+            cpu: cpus()[0]?.model, memory: totalmem(), samples: [] };
+          const product = ['--filter', './', '--filter', '@synara/cli...', '--filter', '@synara/desktop...', '--filter', '@synara/scripts...'];
+          const device = ['--filter', './', '--filter', '@synara/scripts...'];
+          const profiles = process.platform === 'darwin' ? ['product', 'device'] : ['product'];
+          const candidates = {};
+          for (const profile of profiles) {
+            for (const [index, variant] of ['full', 'filtered', 'filtered', 'full'].entries()) {
+              const name = `${profile}-${index}-${variant}`;
+              const cwd = join(process.env.RUNNER_TEMP, `ci-${name}`);
+              const cache = join(process.env.RUNNER_TEMP, `cache-${name}`);
+              const checkout = spawnSync('git', ['worktree', 'add', '--detach', cwd, 'HEAD'], { cwd: root, encoding: 'utf8' });
+              if (checkout.status !== 0) throw new Error(checkout.stderr);
+              const args = ['install', '--frozen-lockfile', ...(profile === 'device' ? ['--ignore-scripts'] : []),
+                ...(variant === 'filtered' ? (profile === 'device' ? device : product) : [])];
+              const start = performance.now();
+              const run = spawnSync('bun', args, { cwd, encoding: 'utf8', timeout: 300_000,
+                maxBuffer: 32 * 1024 * 1024, env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache, ELECTRON_SKIP_BINARY_DOWNLOAD: '1' } });
+              const seconds = (performance.now() - start) / 1000;
+              const log = `${run.stdout ?? ''}\n${run.stderr ?? ''}`;
+              writeFileSync(join(evidence, `${name}.log`), log);
+              const sample = { profile, variant, index, seconds, status: run.status,
+                installed: log.match(/(\d+) packages? installed/)?.[1],
+                packages: readdirSync(join(cwd, 'node_modules', '.bun')).length };
+              result.samples.push(sample);
+              console.log(JSON.stringify(sample));
+              writeFileSync(join(evidence, 'installs.json'), JSON.stringify(result, null, 2));
+              if (run.status !== 0) throw new Error(`${name}: ${run.error ?? log.slice(-8000)}`);
+              // Preserve one candidate for the unchanged validation workload.
+              if (index === 2) candidates[profile] = cwd;
+              else {
+                const cleanup = spawnSync('git', ['worktree', 'remove', '--force', cwd], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+                if (cleanup.status !== 0) throw new Error(cleanup.stderr);
+              }
+              rmSync(cache, { recursive: true, force: true, maxRetries: 3 });
+            }
+          }
+          for (const [profile, cwd] of Object.entries(candidates)) writeFileSync(join(evidence, `candidate-${profile}.txt`), cwd);
+          console.log('INSTALL_RESULT=' + JSON.stringify(result));
+          NODE
+      - name: Unchanged Linux workload and timing inventory
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const dir = join(process.env.RUNNER_TEMP, 'ci-evidence');
+          const cwd = readFileSync(join(dir, 'candidate-product.txt'), 'utf8');
+          const tasks = [
+            ['server', 'bun', ['run', 'test', '--filter=@synara/cli', '--', '--reporter=json', `--outputFile=${join(dir, 'server-tests.json')}`]],
+            ['chromium', 'bun', ['run', '--cwd', 'apps/web', 'test:browser:install']],
+            ['chat-workflows', 'bun', ['run', '--cwd', 'apps/web', 'test:browser:ci', '--', '--project=chat-workflows', '--shard=1/1', '--reporter=json', `--outputFile=${join(dir, 'browser-tests.json')}`]],
+          ];
+          for (const [name, command, args] of tasks) {
+            const start = performance.now();
+            const run = spawnSync(command, args, { cwd, encoding: 'utf8', timeout: 900_000, maxBuffer: 64 * 1024 * 1024,
+              env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096', DEBIAN_FRONTEND: 'noninteractive' } });
+            const log = `${run.stdout ?? ''}\n${run.stderr ?? ''}`;
+            writeFileSync(join(dir, `${name}.log`), log);
+            console.log(JSON.stringify({ task: name, seconds: (performance.now() - start) / 1000, status: run.status }));
+            if (run.status !== 0) throw new Error(`${name}: ${run.error ?? log.slice(-10000)}`);
+          }
+          const report = JSON.parse(readFileSync(join(dir, 'server-tests.json'), 'utf8'));
+          console.log('SERVER_TIMINGS=' + JSON.stringify(report.testResults.map(t => ({ path: t.name.split('/apps/server/').pop(), ms: t.endTime - t.startTime }))));
+          NODE
+      - name: Validate filtered native macOS device helper
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd "$(cat "$RUNNER_TEMP/ci-evidence/candidate-device.txt")"
+          bun run test:device:probe > "$RUNNER_TEMP/ci-evidence/device-probe.log" 2>&1 || { tail -80 "$RUNNER_TEMP/ci-evidence/device-probe.log"; exit 1; }
+          tail -15 "$RUNNER_TEMP/ci-evidence/device-probe.log"
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-benchmark-${{ matrix.os }}
+          path: ${{ runner.temp }}/ci-evidence
+          retention-days: 14
