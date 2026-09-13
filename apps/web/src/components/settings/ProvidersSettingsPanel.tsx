@@ -14,6 +14,7 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
+import { providerCliCommandName } from "@synara/shared/providerCliProfiles";
 import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { pluralize } from "@synara/shared/text";
 import {
@@ -57,7 +58,16 @@ import {
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { CentralIcon } from "~/lib/central-icons";
-import { DownloadIcon, ExternalLinkIcon, Loader2Icon, PlusIcon, XIcon } from "~/lib/icons";
+import {
+  CopyIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  FolderOpenIcon,
+  Loader2Icon,
+  PlusIcon,
+  XIcon,
+} from "~/lib/icons";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { providerSetupStatusLabel } from "~/lib/providerSetupStatus";
 import {
   hasReconciledServerProviderStatuses,
@@ -1019,17 +1029,8 @@ function ProviderInstancesControl(props: {
   const instances = getManageableProviderInstances(props.settings, provider);
   const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
 
-  const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
-    props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
-  };
-  const addInstance = () => {
-    const next = { ...props.settings.providerInstances } as Record<
-      string,
-      ProviderInstanceConfig
-    >;
+  const nextInstanceIdentity = () => {
     const prefix = provider === "claudeAgent" ? "claude" : provider;
-    // Derived instances share this namespace with explicit entries. Reusing a
-    // derived id would mutate that account instead of creating a new profile.
     const existingIds = new Set(
       getProviderInstanceOptions(props.settings).map((option) => String(option.instanceId)),
     );
@@ -1039,6 +1040,20 @@ function ProviderInstancesControl(props: {
       index += 1;
       instanceId = `${prefix}_${index}`;
     }
+    return { index, instanceId };
+  };
+
+  const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
+    props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
+  };
+  const addInstance = () => {
+    const next = { ...props.settings.providerInstances } as Record<
+      string,
+      ProviderInstanceConfig
+    >;
+    // Derived instances share this namespace with explicit entries. Reusing a
+    // derived id would mutate that account instead of creating a new profile.
+    const { index, instanceId } = nextInstanceIdentity();
     next[instanceId] = {
       driver: provider,
       displayName: `${providerLabel} ${index}`,
@@ -1046,6 +1061,49 @@ function ProviderInstancesControl(props: {
       config: providerInstanceLaunchConfig(props.config, props.settings),
     };
     updateInstances(next);
+  };
+  const importInstance = async () => {
+    const selectedDirectory = await ensureNativeApi().dialogs.pickFolder();
+    if (!selectedDirectory) return;
+    const { instanceId } = nextInstanceIdentity();
+    const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
+    const config = providerInstanceLaunchConfig(props.config, props.settings);
+    let environment: ProviderInstanceEnvironment | undefined;
+    switch (provider) {
+      case "codex":
+        config.homePath = selectedDirectory;
+        break;
+      case "claudeAgent":
+        config.configDir = selectedDirectory;
+        break;
+      case "pi":
+        config.agentDir = selectedDirectory;
+        break;
+      case "cursor":
+        environment = [{ name: "CURSOR_CONFIG_DIR", value: selectedDirectory }];
+        break;
+      case "grok":
+        environment = [{ name: "GROK_HOME", value: selectedDirectory }];
+        break;
+      default:
+        environment = [{ name: "HOME", value: selectedDirectory }];
+        break;
+    }
+    updateInstances({
+      ...props.settings.providerInstances,
+      [instanceId]: {
+        driver: provider,
+        displayName: directoryName || `${providerLabel} imported`,
+        enabled: true,
+        config,
+        ...(environment ? { environment } : {}),
+      },
+    });
+    toastManager.add({
+      type: "success",
+      title: `${providerLabel} profile imported`,
+      description: "Synara references the selected directory; no files were moved or copied.",
+    });
   };
   const updateInstance = (
     instanceId: string,
@@ -1122,13 +1180,27 @@ function ProviderInstancesControl(props: {
                     : "Add launch profiles with provider-specific paths and isolated environments."}
           </span>
         </div>
-        <Button type="button" size="xs" variant="outline" onClick={addInstance}>
-          <PlusIcon className="size-3.5" />
-          Add
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="xs" variant="outline" onClick={importInstance}>
+            <FolderOpenIcon className="size-3.5" />
+            Import directory
+          </Button>
+          <Button type="button" size="xs" variant="outline" onClick={addInstance}>
+            <PlusIcon className="size-3.5" />
+            Add
+          </Button>
+        </div>
       </div>
 
       {instances.map(({ instanceId, instance }) => {
+        const cliCommand = providerCliCommandName({
+          provider,
+          instanceId,
+          config:
+            instance.config && typeof instance.config === "object" && !Array.isArray(instance.config)
+              ? (instance.config as Record<string, unknown>)
+              : undefined,
+        });
         const instanceStatus = providerInstanceStatusSummary(
           props.providerStatusByInstance.get(instanceId),
         );
@@ -1190,6 +1262,41 @@ function ProviderInstancesControl(props: {
                   placeholder="Work"
                   spellCheck={false}
                 />
+              </label>
+              <label className="block">
+                <span className="block text-xs font-medium text-foreground">Terminal command</span>
+                <div className="mt-1 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-xs">
+                    {cliCommand}
+                  </code>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`Copy ${cliCommand}`}
+                    onClick={() => void copyTextToClipboard(cliCommand)}
+                  >
+                    <CopyIcon className="size-3.5" />
+                  </Button>
+                </div>
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="block text-xs font-medium text-foreground">
+                  Command override
+                </span>
+                <DebouncedSettingTextInput
+                  id={`provider-instance-${instanceId}-cli-alias`}
+                  size="sm"
+                  variant="soft"
+                  className="mt-1"
+                  value={readConfigString(instance.config, "cliAlias")}
+                  onCommit={(cliAlias) => updateInstance(instanceId, { config: { cliAlias } })}
+                  placeholder={cliCommand}
+                  spellCheck={false}
+                />
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Available in Synara terminals. Use letters, numbers, dashes, and underscores.
+                </span>
               </label>
               {props.config.fields.map((field) => {
                 const configKey = providerInstanceConfigKey(field);
@@ -1277,6 +1384,44 @@ function ProviderInstancesControl(props: {
                     spellCheck={false}
                   />
                 </label>
+              ) : null}
+              {provider === "claudeAgent" ? (
+                <>
+                  <label className="block">
+                    <span className="block text-xs font-medium text-foreground">
+                      Claude config directory
+                    </span>
+                    <DebouncedSettingTextInput
+                      id={`provider-instance-${instanceId}-config-dir`}
+                      size="sm"
+                      variant="soft"
+                      className="mt-1"
+                      value={readConfigString(instance.config, "configDir")}
+                      onCommit={(configDir) =>
+                        updateInstance(instanceId, { config: { configDir } })
+                      }
+                      placeholder="~/.claude-work"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-medium text-foreground">
+                      Claude credential directory
+                    </span>
+                    <DebouncedSettingTextInput
+                      id={`provider-instance-${instanceId}-secure-storage-dir`}
+                      size="sm"
+                      variant="soft"
+                      className="mt-1"
+                      value={readConfigString(instance.config, "secureStorageDir")}
+                      onCommit={(secureStorageDir) =>
+                        updateInstance(instanceId, { config: { secureStorageDir } })
+                      }
+                      placeholder="Optional shared credential directory"
+                      spellCheck={false}
+                    />
+                  </label>
+                </>
               ) : null}
               <ProviderInstanceEnvironmentEditor
                 instanceId={instanceId}
