@@ -4010,7 +4010,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         // Playwright dispatches wheel input before native scrolling has settled.
-        await waitForScrollLayoutToSettle(container);
+        if (action !== "find") await waitForScrollLayoutToSettle(container);
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
@@ -4030,9 +4030,19 @@ describe("ChatView transcript geometry (full app)", () => {
             .querySelectorAll("p, li")
             [anchorIndex]!.getBoundingClientRect().top;
         const detachedTop = readAnchorTop();
+        const readScrollGeometry = () => ({
+          top: container.scrollTop,
+          height: container.scrollHeight,
+          viewport: container.clientHeight,
+          anchor: readAnchorTop(),
+          row: container.querySelector(anchorSelector)!.getBoundingClientRect().top,
+          padding: getComputedStyle(container).paddingBottom,
+        });
+        const geometry = [readScrollGeometry()];
         for (let index = 0; index < 3; index += 1) {
           grow();
           await waitForLayout();
+          geometry.push(readScrollGeometry());
         }
         if (keyboardKey !== null || action === "find") {
           syncThread((thread) => ({
@@ -4055,7 +4065,7 @@ describe("ChatView transcript geometry (full app)", () => {
         }
         // The list may compensate scrollTop as estimated rows settle. The text
         // the reader is looking at must remain at the same viewport position.
-        expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
+        expect(readAnchorTop(), JSON.stringify({ action, geometry })).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
           await mounted.router.navigate({
             to: "/$threadId",
