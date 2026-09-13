@@ -1,0 +1,137 @@
+name: CI native and alternative experiments
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-optimization]
+    paths:
+      - .github/workflows/ci-native-experiments.yml
+      - .github/scripts/ci-native-benchmark.mjs
+      - .github/scripts/stagehand-feasibility.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  artifact:
+    name: Native ${{ matrix.os }} (${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [full, runtime]
+        include:
+          - os: macos-14
+            platform: mac
+            arch: arm64
+            target: dmg
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+            target: dmg
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            target: AppImage
+          - os: windows-2022
+            platform: win
+            arch: x64
+            target: nsis
+        os: [macos-14, macos-15-intel, ubuntu-24.04, windows-2022]
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Frozen install, real artifact, provenance and packaged startup
+        run: node .github/scripts/ci-native-benchmark.mjs artifact ${{ matrix.profile }} ${{ matrix.platform }} ${{ matrix.arch }} ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/ci-native-results
+          retention-days: 7
+  windows:
+    name: Windows root install (${{ matrix.profile }}, ${{ matrix.sample }})
+    runs-on: windows-2022
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [full, runtime]
+        sample: [1, 2]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: node .github/scripts/ci-native-benchmark.mjs windows ${{ matrix.profile }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-root-${{ matrix.profile }}-${{ matrix.sample }}
+          path: ${{ runner.temp }}/ci-native-results
+          retention-days: 7
+  device:
+    name: Device smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: node .github/scripts/ci-native-benchmark.mjs device tools
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: device-${{ matrix.os }}
+          path: ${{ runner.temp }}/ci-native-results
+          retention-days: 7
+  alternatives:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Stagehand deterministic local feasibility without models or credentials
+        env:
+          RESULT_FILE: ${{ runner.temp }}/stagehand/results.json
+        run: |
+          mkdir -p "$RUNNER_TEMP/stagehand"
+          cp .github/scripts/stagehand-feasibility.mjs "$RUNNER_TEMP/stagehand/probe.mjs"
+          cd "$RUNNER_TEMP/stagehand"
+          npm install --ignore-scripts --no-audit --no-fund @browserbasehq/stagehand@4.1.0 playwright@1.62.1
+          CHROME_PATH="$(command -v google-chrome)" node probe.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stagehand-feasibility
+          path: ${{ runner.temp }}/stagehand/results.json
+          retention-days: 7
