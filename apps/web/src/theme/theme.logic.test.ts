@@ -10,6 +10,7 @@ import {
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
+  canParseThemeShareString,
   createThemeShareString,
   getCodeThemeSeed,
   getCodeThemeSeedPatch,
@@ -153,6 +154,13 @@ describe("theme share strings", () => {
     expect(() => parseThemeShareStringForVariant(PROVIDED_THEME_STRING, "light")).toThrow(
       /variant mismatch/i,
     );
+  });
+
+  it("rejects malformed percent-encoding with the designed parse error", () => {
+    expect(() => parseThemeShareString("codex-theme-v1:%zz")).toThrow(
+      /does not contain valid JSON/i,
+    );
+    expect(canParseThemeShareString("codex-theme-v1:%zz")).toBe(false);
   });
 
   it("updates only the matching variant pack when importing", () => {
