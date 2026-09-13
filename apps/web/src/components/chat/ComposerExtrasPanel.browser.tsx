@@ -264,6 +264,57 @@ describe("ComposerExtrasPanel", () => {
     expect(menu.onClose).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "prefers its titled document over an untitled overlay",
+      titled: true,
+      identity: true,
+      expected: 44,
+    },
+    {
+      name: "keeps its untitled window instead of another app's document",
+      titled: false,
+      identity: true,
+      expected: 42,
+    },
+    {
+      name: "does not guess an app identity from a shared name",
+      titled: true,
+      identity: false,
+      expected: 42,
+    },
+  ])("$name", async ({ titled, identity, expected }) => {
+    const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
+    const frontmost = {
+      windowId: 42,
+      appName: "Ghostty",
+      bundleIdentifier: identity ? "com.mitchellh.ghostty" : null,
+      windowTitle: null,
+      appIconDataUrl: null,
+    };
+    setDesktopBridge(
+      appSnapBridge({
+        captureWindow,
+        listWindows: async () => [
+          frontmost,
+          {
+            ...frontmost,
+            windowId: 43,
+            bundleIdentifier: "com.apple.finder",
+            windowTitle: "Downloads",
+          },
+          { ...frontmost, windowId: 44, windowTitle: titled ? "dev" : null },
+        ],
+      }),
+    );
+    await using menu = await mountMenu({ threadId });
+
+    await page.getByText("Attach Ghostty").click();
+
+    await vi.waitFor(() => expect(captureWindow).toHaveBeenCalledWith({ windowId: expected }));
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the full window list from the row's arrow and captures the picked window", async () => {
     const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
     setDesktopBridge(appSnapBridge({ captureWindow }));

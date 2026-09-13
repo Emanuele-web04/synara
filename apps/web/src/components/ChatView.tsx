@@ -88,6 +88,7 @@ import {
 } from "../composerDraftStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import {
+  buildGoalSlashCommandPrompt,
   canExecuteSideSlashCommand,
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -4270,26 +4271,24 @@ export default function ChatView({
     editorActions: slashEditorActions,
   });
 
-  // `+` panel Goal row: prefixes the draft with `/goal ` so it goes through the same
-  // slash-command chip and persistence path as typing the command.
+  // Keep Goal menu drafts literal while reusing slash-command chips and persistence.
   const insertGoalSlashCommandInComposer = useCallback(() => {
     const currentPrompt = promptRef.current;
     if (/^\s*\/goal\b/i.test(currentPrompt)) {
       scheduleComposerFocus();
       return;
     }
-    const draft = currentPrompt.trim();
-    setComposerPromptValue(draft.length > 0 ? `/goal ${draft}` : "/goal ");
+    setComposerPromptValue(buildGoalSlashCommandPrompt(currentPrompt));
   }, [promptRef, scheduleComposerFocus, setComposerPromptValue]);
 
-  // Prefills "/goal <current text>" so editing reuses the same slash-command path
+  // Prefills a literal goal so editing reuses the same slash-command path
   // that created the goal, mirroring how queued turns restore into the composer.
   const editThreadGoalInComposer = useCallback(() => {
     const currentGoal = activeThread?.goal?.trim();
     if (!activeThread || !currentGoal) {
       return;
     }
-    const nextPrompt = `/goal ${currentGoal}`;
+    const nextPrompt = buildGoalSlashCommandPrompt(currentGoal);
     promptRef.current = nextPrompt;
     clearComposerDraftContent(activeThread.id);
     setComposerDraftPrompt(activeThread.id, nextPrompt);

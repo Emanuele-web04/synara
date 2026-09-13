@@ -86,7 +86,15 @@ export function ComposerExtrasPanel(props: {
     open: true,
     ...(props.threadId === undefined ? {} : { threadId: props.threadId }),
   });
-  const frontmostWindow = appSnap.windows?.[0] ?? null;
+  const firstWindow = appSnap.windows?.[0] ?? null;
+  // An app can place untitled auxiliary windows above its document. Stay within
+  // the first app's public identity; without it, do not guess from the app name.
+  const frontmostWindow =
+    (firstWindow?.bundleIdentifier
+      ? appSnap.windows?.find(
+          (entry) => entry.bundleIdentifier === firstWindow.bundleIdentifier && entry.windowTitle,
+        )
+      : null) ?? firstWindow;
 
   const openWindows = () => {
     setView("windows");
