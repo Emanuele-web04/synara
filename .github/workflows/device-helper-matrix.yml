@@ -10,6 +10,10 @@
 name: Device Helper Matrix
 
 on:
+  # Temporary branch-only verification; removed after the matrix is validated.
+  push:
+    branches: [codex/ci-cross-platform-evidence]
+    paths: [.github/workflows/device-helper-matrix.yml]
   schedule:
     # Mondays 05:00 UTC, before the week starts.
     - cron: "0 5 * * 1"
@@ -20,28 +24,14 @@ on:
         type: boolean
         default: true
 
-jobs:
-  # Inventory only: prints what each image actually ships so the pinned pairs in
-  # `probe` can be refreshed when an image drops or adds a version. Kept separate
-  # from the probe jobs so it still reports even when a probe fails.
-  discover:
-    name: Discover Xcodes (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-14, macos-15, macos-26]
-    steps:
-      - name: List installed Xcodes
-        run: |
-          echo "Runner image: ${{ matrix.runner }}"
-          ls -d /Applications/Xcode*.app 2>/dev/null || echo "none found"
-          echo "Selected: $(xcode-select -p)"
-          xcodebuild -version
-          echo "iOS runtimes:"
-          xcrun simctl list runtimes 2>/dev/null || echo "simctl unavailable"
+permissions:
+  contents: read
 
+concurrency:
+  group: device-helper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
   probe:
     name: Probe ${{ matrix.runner }} / ${{ matrix.xcode }}
     runs-on: ${{ matrix.runner }}
@@ -73,6 +63,16 @@ jobs:
           - runner: macos-26
             xcode: default
     steps:
+      # Inventory must precede resolution so missing toolchains and failed probes
+      # retain diagnostics without three additional macOS runner allocations.
+      - name: Discover installed Xcodes and runtimes
+        run: |
+          echo "Runner image: ${{ matrix.runner }}"
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "none found"
+          echo "Selected: $(xcode-select -p)"
+          xcodebuild -version || echo "Default Xcode unavailable; explicit resolution follows."
+          xcrun simctl list runtimes 2>/dev/null || echo "simctl unavailable"
+
       - name: Resolve the toolchain
         id: toolchain
         run: |
@@ -117,7 +117,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.toolchain.outputs.present == 'true'
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: node .github/scripts/ci-install.mjs device --ignore-scripts
 
       # The blocking check: compile against this toolchain and ask the helper
       # which capabilities resolved. A moved symbol fails here, needs no
@@ -158,7 +158,7 @@ jobs:
         if: >-
           steps.toolchain.outputs.present == 'true' &&
           steps.runtime.outputs.available == 'true' &&
-          (github.event_name == 'schedule' || inputs.full_smoke)
+          (github.event_name == 'schedule' || github.event_name == 'push' || inputs.full_smoke)
         timeout-minutes: 15
         env:
           DEVELOPER_DIR: ${{ steps.toolchain.outputs.developer_dir }}

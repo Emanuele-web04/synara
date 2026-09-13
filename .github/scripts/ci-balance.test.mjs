@@ -11,13 +11,7 @@ test("Timing sharding is a disjoint cover including new and renamed files", () =
     assert.deepEqual(buckets.flat().sort(), [...files].sort());
     assert.equal(new Set(buckets.flat()).size, files.length);
     assert.deepEqual(
-      balance(
-        [...files].reverse(),
-        count,
-        key,
-        { "file-4.test.ts": 20_000, deleted: 90_000 },
-        301,
-      ),
+      balance([...files].reverse(), count, key, { "file-4.test.ts": 20_000, deleted: 90_000 }, 301),
       buckets,
     );
   }

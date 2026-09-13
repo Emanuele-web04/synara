@@ -4,8 +4,7 @@ import { chatPatterns } from "../../apps/web/vitest.browser.partitions.ts";
 import { planChanges, readGraph } from "./ci-plan.mjs";
 
 const patterns = chatPatterns(/^(?!.*\[geometry:linux\])/);
-const ownership = (name) =>
-  Object.values(patterns).filter((pattern) => pattern.test(name)).length;
+const ownership = (name) => Object.values(patterns).filter((pattern) => pattern.test(name)).length;
 test("All stable browser cases have exactly one owner; quarantine has none", () => {
   for (const name of [
     "new regression with a previously unknown name",
