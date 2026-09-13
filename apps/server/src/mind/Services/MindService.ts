@@ -59,9 +59,9 @@ export interface MindRememberResult {
 export interface MindRecallRequest {
   readonly projectId: ProjectId;
   /** Without a query the digest (top memories by effective weight) is returned. */
-  readonly query?: string;
+  readonly query?: string | undefined;
   /** Bounds a query recall; the result itself never exceeds the contracts' 8-item cap. */
-  readonly limit?: number;
+  readonly limit?: number | undefined;
 }
 
 export interface MindConfirmRequest {

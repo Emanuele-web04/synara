@@ -111,6 +111,7 @@ import {
   type SidebarNavItemId,
 } from "../sidebarNavOrdering";
 import { isElectron } from "../env";
+import { mindListQueryKey } from "../lib/mindListQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
   isMacNavigatorPlatform,
@@ -1452,10 +1453,10 @@ export default function Sidebar() {
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
-  // Mind count shares the ["mind"] cache with the Mind view, so the sidebar
-  // badge never adds a request the page would not already make.
+  // Mind count shares the global ["mind","list","all"] cache with the Mind
+  // view, so the sidebar badge never adds a request the page would not make.
   const mindListQuery = useQuery({
-    queryKey: ["mind"],
+    queryKey: mindListQueryKey(null),
     queryFn: () => ensureNativeApi().mind.list({}),
     staleTime: 30_000,
   });

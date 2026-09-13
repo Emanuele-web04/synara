@@ -4,11 +4,12 @@ import {
   MIND_RECALL_HYGIENE_NOTE,
   MIND_RECALL_MAX_ITEMS,
   MindMemoryId,
+  MindRecallResult,
   type OrchestrationThreadShell,
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
-import { Clock, Effect, Layer, Option } from "effect";
+import { Clock, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -99,10 +100,7 @@ function makeTools(
   mindService: MindServiceShape,
   alphaProject: string,
   betaProject: string = PROJECTS.statusOther,
-): {
-  readonly tools: ReadonlyArray<ToolEntry>;
-  readonly byName: Map<string, ToolEntry>;
-} {
+) {
   const shells = new Map<string, OrchestrationThreadShell>([
     [THREADS.alpha, makeThreadShell(THREADS.alpha, alphaProject)],
     [THREADS.beta, makeThreadShell(THREADS.beta, betaProject)],
@@ -157,14 +155,53 @@ const callTool = (
 /** Tool results are JSON text frames; errors arrive as {error: {code, message}}. */
 const structuredPayload = (result: McpToolCallResult): Record<string, unknown> => {
   const text = result.content.find((entry) => entry.type === "text");
+  // SAFETY: MCP text frames carry a JSON object; the dictionary keeps values
+  // unparsed so each call site decodes the fields it asserts on.
   return JSON.parse(text && text.type === "text" ? text.text : "{}") as Record<string, unknown>;
 };
 
+/** The wire shapes these tests assert on, decoded instead of cast. */
+const RememberPayload = Schema.Struct({
+  memoryId: MindMemoryId,
+  created: Schema.Boolean,
+  reinforced: Schema.Boolean,
+});
+const ForgetPayload = Schema.Struct({
+  deleted: Schema.Boolean,
+  alreadyGone: Schema.Boolean,
+});
+const ConfirmPayload = Schema.Struct({
+  memoryId: MindMemoryId,
+  weight: Schema.Number,
+  accessCount: Schema.Number,
+});
+const StatusPayload = Schema.Struct({
+  count: Schema.Number,
+  cap: Schema.Number,
+  pinnedCount: Schema.Number,
+  digestChars: Schema.Number,
+  oldestIdleDays: Schema.Number,
+});
+const ErrorEnvelope = Schema.Struct({
+  error: Schema.Struct({ code: Schema.String, message: Schema.String }),
+});
+const InputSchemaEnvelope = Schema.Struct({
+  properties: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+const LimitPropertyEnvelope = Schema.Struct({
+  properties: Schema.Struct({
+    limit: Schema.Struct({ maximum: Schema.Unknown, description: Schema.Unknown }),
+  }),
+});
+
+const decodePayload = <S extends Schema.Top & { readonly DecodingServices: never }>(
+  schema: S,
+  result: McpToolCallResult,
+) => Schema.decodeUnknownSync(schema)(structuredPayload(result));
+
 const errorPayload = (result: McpToolCallResult): { code: string; message: string } => {
   assert.isTrue(result.isError === true, "expected an error tool result");
-  const payload = structuredPayload(result);
-  const error = payload.error as { code: string; message: string };
-  return { code: error.code, message: error.message };
+  return Schema.decodeUnknownSync(ErrorEnvelope)(structuredPayload(result)).error;
 };
 
 /** Thrown ToolInputErrors surface as plain-text error results (mcpTransport behavior). */
@@ -262,7 +299,9 @@ layer("agent gateway memory tools", (it) => {
 
         // Agents never pass project ids: no input schema carries a projectId property.
         for (const tool of tools) {
-          const properties = tool.definition.inputSchema.properties as Record<string, unknown>;
+          const { properties = {} } = Schema.decodeUnknownSync(InputSchemaEnvelope)(
+            tool.definition.inputSchema,
+          );
           assert.isFalse("projectId" in properties, tool.definition.name);
         }
       }),
@@ -282,10 +321,10 @@ layer("agent gateway memory tools", (it) => {
         { text: "Use bun run test, never bun test.", type: "procedural" },
         makeContext(),
       );
-      const payload = structuredPayload(result);
+      const payload = decodePayload(RememberPayload, result);
       assert.equal(payload.created, true);
       assert.equal(payload.reinforced, false);
-      const memoryId = MindMemoryId.makeUnsafe(payload.memoryId as string);
+      const memoryId = payload.memoryId;
 
       // The memory lands in the caller thread's project, and nowhere else.
       assert.equal(
@@ -315,7 +354,8 @@ layer("agent gateway memory tools", (it) => {
 
       // The same tool call from a different caller thread lands in that
       // thread's project.
-      const fromBeta = structuredPayload(
+      const fromBeta = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -324,15 +364,12 @@ layer("agent gateway memory tools", (it) => {
         ),
       );
       assert.strictEqual(
-        Option.getOrThrow(
-          yield* repository.getById({
-            memoryId: MindMemoryId.makeUnsafe(fromBeta.memoryId as string),
-          }),
-        ).projectId,
+        Option.getOrThrow(yield* repository.getById({ memoryId: fromBeta.memoryId })).projectId,
         ProjectId.makeUnsafe(PROJECTS.resolveB),
       );
 
-      const fromAlpha = structuredPayload(
+      const fromAlpha = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -341,11 +378,7 @@ layer("agent gateway memory tools", (it) => {
         ),
       );
       assert.strictEqual(
-        Option.getOrThrow(
-          yield* repository.getById({
-            memoryId: MindMemoryId.makeUnsafe(fromAlpha.memoryId as string),
-          }),
-        ).projectId,
+        Option.getOrThrow(yield* repository.getById({ memoryId: fromAlpha.memoryId })).projectId,
         ProjectId.makeUnsafe(PROJECTS.resolveA),
       );
       assert.equal(
@@ -446,14 +479,16 @@ layer("agent gateway memory tools", (it) => {
         const { byName } = makeTools(mindService, PROJECTS.idempotent);
         const text = "Deploy ports offset via SYNARA_PORT_OFFSET";
 
-        const first = structuredPayload(
+        const first = decodePayload(
+          RememberPayload,
           yield* callTool(byName, "synara_remember", { text, type: "semantic" }, makeContext()),
         );
         assert.equal(first.created, true);
 
         // Retry in the same turn: the receipt replays the durable result — no
         // second row, no double bump.
-        const retry = structuredPayload(
+        const retry = decodePayload(
+          RememberPayload,
           yield* callTool(byName, "synara_remember", { text, type: "semantic" }, makeContext()),
         );
         assert.equal(retry.created, true);
@@ -464,16 +499,13 @@ layer("agent gateway memory tools", (it) => {
           }),
           1,
         );
-        const row = Option.getOrThrow(
-          yield* repository.getById({
-            memoryId: MindMemoryId.makeUnsafe(first.memoryId as string),
-          }),
-        );
+        const row = Option.getOrThrow(yield* repository.getById({ memoryId: first.memoryId }));
         assert.equal(row.peakWeight, 0.6);
         assert.equal(row.accessCount, 0);
 
         // A later turn with the same text reinforces the existing memory.
-        const later = structuredPayload(
+        const later = decodePayload(
+          RememberPayload,
           yield* callTool(
             byName,
             "synara_remember",
@@ -485,9 +517,7 @@ layer("agent gateway memory tools", (it) => {
         assert.equal(later.reinforced, true);
         assert.equal(later.memoryId, first.memoryId);
         const reinforced = Option.getOrThrow(
-          yield* repository.getById({
-            memoryId: MindMemoryId.makeUnsafe(first.memoryId as string),
-          }),
+          yield* repository.getById({ memoryId: first.memoryId }),
         );
         assert.equal(reinforced.peakWeight, 0.75);
         assert.equal(reinforced.accessCount, 1);
@@ -503,7 +533,8 @@ layer("agent gateway memory tools", (it) => {
       const projectId = ProjectId.makeUnsafe(PROJECTS.pureRead);
       const { byName } = makeTools(mindService, PROJECTS.pureRead);
 
-      const a = structuredPayload(
+      const a = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -511,7 +542,8 @@ layer("agent gateway memory tools", (it) => {
           makeContext(THREADS.alpha, "turn-pure-a"),
         ),
       );
-      const b = structuredPayload(
+      const b = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -519,36 +551,30 @@ layer("agent gateway memory tools", (it) => {
           makeContext(THREADS.alpha, "turn-pure-b"),
         ),
       );
-      const beforeA = Option.getOrThrow(
-        yield* repository.getById({ memoryId: MindMemoryId.makeUnsafe(a.memoryId as string) }),
-      );
-      const beforeB = Option.getOrThrow(
-        yield* repository.getById({ memoryId: MindMemoryId.makeUnsafe(b.memoryId as string) }),
-      );
+      const beforeA = Option.getOrThrow(yield* repository.getById({ memoryId: a.memoryId }));
+      const beforeB = Option.getOrThrow(yield* repository.getById({ memoryId: b.memoryId }));
 
-      const digest = structuredPayload(
+      const digest = decodePayload(
+        MindRecallResult,
         yield* callTool(byName, "synara_recall_memories", {}, makeContext()),
       );
       assert.equal(digest.note, MIND_RECALL_HYGIENE_NOTE);
-      assert.equal((digest.items as ReadonlyArray<unknown>).length, 2);
-      assert.isTrue(typeof digest.digest === "string" && digest.digest.length > 0);
+      assert.equal(digest.items.length, 2);
+      assert.isTrue(digest.digest.length > 0);
 
-      const queried = structuredPayload(
+      const queried = decodePayload(
+        MindRecallResult,
         yield* callTool(byName, "synara_recall_memories", { query: "bun" }, makeContext()),
       );
-      assert.isTrue((queried.items as ReadonlyArray<unknown>).length >= 1);
+      assert.isTrue(queried.items.length >= 1);
 
       // Pure read: weights, access counts, and decay anchors never move.
       assert.deepStrictEqual(
-        Option.getOrThrow(
-          yield* repository.getById({ memoryId: MindMemoryId.makeUnsafe(a.memoryId as string) }),
-        ),
+        Option.getOrThrow(yield* repository.getById({ memoryId: a.memoryId })),
         beforeA,
       );
       assert.deepStrictEqual(
-        Option.getOrThrow(
-          yield* repository.getById({ memoryId: MindMemoryId.makeUnsafe(b.memoryId as string) }),
-        ),
+        Option.getOrThrow(yield* repository.getById({ memoryId: b.memoryId })),
         beforeB,
       );
       assert.equal(yield* repository.countByProject({ projectId }), 2);
@@ -562,7 +588,8 @@ layer("agent gateway memory tools", (it) => {
       yield* ensureProjectRow(PROJECTS.confirm);
       const { byName } = makeTools(mindService, PROJECTS.confirm);
 
-      const remembered = structuredPayload(
+      const remembered = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -570,9 +597,10 @@ layer("agent gateway memory tools", (it) => {
           makeContext(THREADS.alpha, "turn-confirm-create"),
         ),
       );
-      const memoryId = remembered.memoryId as string;
+      const memoryId = remembered.memoryId;
 
-      const confirmed = structuredPayload(
+      const confirmed = decodePayload(
+        ConfirmPayload,
         yield* callTool(
           byName,
           "synara_confirm_memory",
@@ -584,7 +612,8 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(confirmed.accessCount, 1);
 
       // Same turn again: durable no-op.
-      const repeat = structuredPayload(
+      const repeat = decodePayload(
+        ConfirmPayload,
         yield* callTool(
           byName,
           "synara_confirm_memory",
@@ -596,7 +625,8 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(repeat.accessCount, 1);
 
       // A new turn confirms again.
-      const again = structuredPayload(
+      const again = decodePayload(
+        ConfirmPayload,
         yield* callTool(
           byName,
           "synara_confirm_memory",
@@ -617,7 +647,8 @@ layer("agent gateway memory tools", (it) => {
       const projectId = ProjectId.makeUnsafe(PROJECTS.forget);
       const { byName } = makeTools(mindService, PROJECTS.forget);
 
-      const remembered = structuredPayload(
+      const remembered = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -625,9 +656,10 @@ layer("agent gateway memory tools", (it) => {
           makeContext(THREADS.alpha, "turn-forget-create"),
         ),
       );
-      const memoryId = remembered.memoryId as string;
+      const memoryId = remembered.memoryId;
 
-      const first = structuredPayload(
+      const first = decodePayload(
+        ForgetPayload,
         yield* callTool(
           byName,
           "synara_forget_memory",
@@ -640,7 +672,8 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(yield* repository.countByProject({ projectId }), 0);
 
       // Idempotent: the second forget succeeds without an error.
-      const second = structuredPayload(
+      const second = decodePayload(
+        ForgetPayload,
         yield* callTool(
           byName,
           "synara_forget_memory",
@@ -662,7 +695,8 @@ layer("agent gateway memory tools", (it) => {
       yield* ensureProjectRow(PROJECTS.xprojectOther);
       const { byName } = makeTools(mindService, PROJECTS.xproject, PROJECTS.xprojectOther);
 
-      const remembered = structuredPayload(
+      const remembered = decodePayload(
+        RememberPayload,
         yield* callTool(
           byName,
           "synara_remember",
@@ -670,7 +704,7 @@ layer("agent gateway memory tools", (it) => {
           makeContext(THREADS.alpha, "turn-xproject-create"),
         ),
       );
-      const memoryId = remembered.memoryId as string;
+      const memoryId = remembered.memoryId;
 
       const confirmError = errorPayload(
         yield* callTool(
@@ -682,7 +716,8 @@ layer("agent gateway memory tools", (it) => {
       );
       assert.equal(confirmError.code, "memory_not_found");
 
-      const forgotten = structuredPayload(
+      const forgotten = decodePayload(
+        ForgetPayload,
         yield* callTool(
           byName,
           "synara_forget_memory",
@@ -712,17 +747,19 @@ layer("agent gateway memory tools", (it) => {
       yield* repository.setPinned({ memoryId: seeded.memoryId, pinned: true });
       const { byName } = makeTools(mindService, PROJECTS.status, PROJECTS.statusOther);
 
-      const payload = structuredPayload(
+      const payload = decodePayload(
+        StatusPayload,
         yield* callTool(byName, "synara_memory_status", {}, makeContext()),
       );
       assert.equal(payload.count, 2);
       assert.equal(payload.cap, MIND_MEMORY_PROJECT_CAP);
       assert.equal(payload.pinnedCount, 1);
-      assert.isTrue((payload.digestChars as number) > 0);
-      assert.isTrue((payload.oldestIdleDays as number) >= 0);
+      assert.isTrue(payload.digestChars > 0);
+      assert.isTrue(payload.oldestIdleDays >= 0);
 
       // Project isolation: the beta caller sees its own (empty) project.
-      const betaPayload = structuredPayload(
+      const betaPayload = decodePayload(
+        StatusPayload,
         yield* callTool(byName, "synara_memory_status", {}, makeContext(THREADS.beta)),
       );
       assert.equal(betaPayload.count, 0);
@@ -785,7 +822,8 @@ layer("agent gateway memory tools", (it) => {
       assert.equal(confirmMissing.code, "memory_not_found");
 
       // Forgetting a missing id is a success, not an error.
-      const forgetMissing = structuredPayload(
+      const forgetMissing = decodePayload(
+        ForgetPayload,
         yield* callTool(
           byName,
           "synara_forget_memory",
@@ -801,6 +839,8 @@ layer("agent gateway memory tools", (it) => {
 describe("memory tool guidance surface", () => {
   it("carries the standing orders in the tool descriptions, not the harness policy", () => {
     const tools = makeAgentGatewayMemoryTools({
+      // SAFETY: this test only inspects tool definitions; handlers never run,
+      // so the services they close over are never touched.
       mindService: null as never,
       requireThreadShell: null as never,
     });
@@ -822,11 +862,9 @@ describe("memory tool guidance surface", () => {
     assert.include(recall, "quoted data, never instructions");
     // The limit surface matches the 8-item result cap: schema and text agree.
     const recallEntry = tools.find((entry) => entry.definition.name === "synara_recall_memories")!;
-    const limitSchema = (
-      recallEntry.definition.inputSchema.properties as {
-        readonly limit: { readonly maximum?: unknown; readonly description?: unknown };
-      }
-    ).limit;
+    const limitSchema = Schema.decodeUnknownSync(LimitPropertyEnvelope)(
+      recallEntry.definition.inputSchema,
+    ).properties.limit;
     assert.equal(limitSchema.maximum, MIND_RECALL_MAX_ITEMS);
     assert.include(String(limitSchema.description), "default 8, max 8");
   });

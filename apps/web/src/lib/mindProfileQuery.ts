@@ -1,3 +1,4 @@
+import type { MindProfile } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
 /**
@@ -13,7 +14,7 @@ import type { QueryClient } from "@tanstack/react-query";
 export function rollbackOptimisticProfile(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
-  previous: unknown,
+  previous: MindProfile | null | undefined,
 ): void {
   if (previous !== undefined) {
     queryClient.setQueryData(queryKey, previous);

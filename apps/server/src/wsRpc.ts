@@ -4,7 +4,6 @@ import {
   CommandId,
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
-  MIND_MEMORY_PROJECT_CAP,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
@@ -2056,26 +2055,12 @@ const makeWsRpcHandlersLayer = () =>
 
         [WS_METHODS.mindList]: (input) =>
           rpcEffect(
+            // The Mind view is project-agnostic: `listAll` returns one
+            // weight-desc global page (capped, `count` the true total so the
+            // UI can tell when the page is truncated).
             input.projectId !== undefined
               ? mindService.list({ projectId: input.projectId })
-              : Effect.gen(function* () {
-                  // The Mind view is project-agnostic: list every memory across
-                  // all projects (including projects no longer in the
-                  // projection) merged into one weight-desc page. The merged
-                  // array stays inside the contracts' cap by keeping only the
-                  // top slice; `count` stays the true total so the UI can tell
-                  // when the page is truncated.
-                  const all = yield* mindService.listAll();
-                  const memories = all.memories
-                    .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
-                    .slice(0, MIND_MEMORY_PROJECT_CAP);
-                  return {
-                    memories,
-                    count: all.count,
-                    cap: MIND_MEMORY_PROJECT_CAP,
-                    ...(all.skipped === undefined ? {} : { skipped: all.skipped }),
-                  };
-                }),
+              : mindService.listAll(),
             "Failed to list memories",
           ),
         [WS_METHODS.mindSearch]: (input) =>
@@ -2123,7 +2108,7 @@ const makeWsRpcHandlersLayer = () =>
               projectId: input.projectId,
               memoryId: input.memoryId,
               text: input.text,
-              ...(input.type === undefined ? {} : { type: input.type }),
+              type: input.type,
               // The UI has no thread context; journal actor is the plain user.
               actor: { kind: "user" },
               threadId: null,

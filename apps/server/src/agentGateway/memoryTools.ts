@@ -7,7 +7,7 @@ import {
   type OrchestrationThreadShell,
   ThreadId,
 } from "@synara/contracts";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 import type { MindServiceError, MindServiceShape } from "../mind/Services/MindService.ts";
 import {
@@ -66,17 +66,18 @@ function memoryToolError(error: MindServiceError): GatewayToolError {
 
 function readMindType(args: Record<string, unknown>): MindMemoryType {
   const raw = readStringArg(args, "type", { required: true })!;
-  if (!(MIND_MEMORY_TYPES as ReadonlyArray<string>).includes(raw)) {
+  const match = MIND_MEMORY_TYPES.find((type) => type === raw);
+  if (match === undefined) {
     throw new ToolInputError(`Argument "type" must be one of ${MIND_MEMORY_TYPES.join(", ")}.`);
   }
-  return raw as MindMemoryType;
+  return match;
 }
 
 /** An absent or blank query means the digest; anything longer than the cap is rejected. */
 function readRecallQuery(args: Record<string, unknown>): string | undefined {
   const value = args.query;
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") {
+  if (!Schema.is(Schema.String)(value)) {
     throw new ToolInputError('Argument "query" must be a string.');
   }
   const query = value.trim();
@@ -206,13 +207,11 @@ export function makeAgentGatewayMemoryTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const projectId = yield* requireCallerProjectId(context.callerThreadId);
-        const query = readRecallQuery(args);
-        const limit = readRecallLimit(args);
         const result = yield* mindService
           .recall({
             projectId,
-            ...(query === undefined ? {} : { query }),
-            ...(limit === undefined ? {} : { limit }),
+            query: readRecallQuery(args),
+            limit: readRecallLimit(args),
           })
           .pipe(Effect.mapError(memoryToolError));
         return mcpToolResultJson(result);

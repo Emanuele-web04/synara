@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { assert, it } from "@effect/vitest";
 import {
   MIND_MEMORY_PROJECT_CAP,
@@ -89,6 +91,10 @@ const PROJECTS = {
   search: "project-mind-service-search",
   searchOther: "project-mind-service-search-other",
   recallOutage: "project-mind-service-recall-outage",
+  sweepIsolate: "project-mind-service-sweep-isolate",
+  updateReceipt: "project-mind-service-update-receipt",
+  globalList: "project-mind-service-global-list",
+  globalListOther: "project-mind-service-global-list-other",
 } as const;
 
 let memoryCounter = 0;
@@ -1433,6 +1439,204 @@ layer("MindService", (it) => {
           }).pipe(Effect.orDie),
         ),
       );
+    }),
+  );
+
+  it.effect(
+    "a failed sweep cannot fail the committed mutation, and a failed prune journal rolls the delete back",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* MindService;
+        const repository = yield* MindRepository;
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const projectId = ProjectId.makeUnsafe(PROJECTS.sweepIsolate);
+        yield* ensureProjectRow(PROJECTS.sweepIsolate);
+        const aged = new Date((yield* Clock.currentTimeMillis) - 46 * DAY_MS).toISOString();
+        const eligible = yield* seedMemory({
+          projectId: ProjectId.makeUnsafe(PROJECTS.sweepIsolate),
+          textHash: "sweep-isolate-eligible",
+          text: "old weak fact",
+          peakWeight: 0.05,
+          accessCount: 0,
+          createdAt: aged,
+          lastAccessedAt: aged,
+        });
+        const healthy = yield* seedMemory({
+          projectId: ProjectId.makeUnsafe(PROJECTS.sweepIsolate),
+          textHash: "sweep-isolate-healthy",
+          text: "healthy fact",
+        });
+        // Poison only the sweep's journal insert: op 'confirm' rows still write.
+        yield* sql`
+          CREATE TRIGGER mind_test_fail_prune_journal
+          BEFORE INSERT ON mind_journal
+          WHEN NEW.op = 'prune'
+          BEGIN SELECT RAISE(FAIL, 'journal poisoned'); END
+        `;
+        // The post-commit sweep fails on the journal insert: the delete+journal
+        // pair rolls back (the eligible row survives, unjournaled) and the
+        // committed confirm still reports success instead of a cleanup error.
+        const confirmed = yield* service.confirm({
+          memoryId: healthy.memoryId,
+          projectId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+        assert.strictEqual(confirmed.memoryId, healthy.memoryId);
+        assert.strictEqual(confirmed.accessCount, 1);
+        assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: eligible.memoryId })));
+        assert.isTrue(
+          Option.isNone(
+            yield* repository.findJournalOp({
+              memoryId: eligible.memoryId,
+              op: "prune",
+              turnId: null,
+            }),
+          ),
+        );
+
+        // The failure left the sweep un-armed, so the next mutation retries it:
+        // with the journal healthy again the eligible row prunes for real.
+        yield* sql`DROP TRIGGER mind_test_fail_prune_journal`;
+        yield* service.confirm({
+          memoryId: healthy.memoryId,
+          projectId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+        assert.isTrue(Option.isNone(yield* repository.getById({ memoryId: eligible.memoryId })));
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`DROP TRIGGER IF EXISTS mind_test_fail_prune_journal`;
+          }).pipe(Effect.orDie),
+        ),
+      ),
+  );
+
+  it.effect(
+    "update with already-matching content records a durable receipt instead of inferring replay",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* MindService;
+        const repository = yield* MindRepository;
+        yield* runMigrations();
+        const projectId = ProjectId.makeUnsafe(PROJECTS.updateReceipt);
+        yield* ensureProjectRow(PROJECTS.updateReceipt);
+        const remembered = yield* service.remember(
+          rememberRequest(projectId, "Receipt target fact", { turnId: "turn-receipt-create" }),
+        );
+        // A UI edit (turnId null) leaves the text this turn will request — the
+        // matching content is not evidence this turn applied anything.
+        yield* service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "Receipt target revised",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+        const updated = yield* service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "Receipt target revised",
+          actor: agentActor,
+          threadId,
+          turnId: "turn-receipt-match",
+        });
+        assert.strictEqual(updated.text, "Receipt target revised");
+        // The satisfied op leaves a durable receipt — and no revision noise.
+        const textHash = createHash("sha256").update("Receipt target revised").digest("hex");
+        assert.isTrue(
+          Option.isSome(
+            yield* repository.getReceipt({
+              projectId,
+              operationId: `update:turn-receipt-match:${remembered.memoryId}:${textHash}`,
+            }),
+          ),
+        );
+        const revisions = yield* repository.listRevisions({
+          memoryId: remembered.memoryId,
+        });
+        assert.lengthOf(revisions, 1);
+
+        // The receipt keeps a later retry consistent even after the content
+        // moved on: the turn replays the current row rather than re-applying.
+        yield* service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "Moved on",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+        const replay = yield* service.update({
+          projectId,
+          memoryId: remembered.memoryId,
+          text: "Receipt target revised",
+          actor: agentActor,
+          threadId,
+          turnId: "turn-receipt-match",
+        });
+        assert.strictEqual(replay.text, "Moved on");
+      }),
+  );
+
+  it.effect("listAll ranks one global page by effective weight across projects", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      yield* runMigrations();
+      yield* ensureProjectRow(PROJECTS.globalList);
+      yield* ensureProjectRow(PROJECTS.globalListOther);
+      const nowMillis = yield* Clock.currentTimeMillis;
+      const daysAgo = (days: number) => new Date(nowMillis - days * DAY_MS).toISOString();
+      const pinnedMid = yield* seedMemory({
+        projectId: ProjectId.makeUnsafe(PROJECTS.globalList),
+        textHash: "global-list-pinned",
+        text: "pinned mid fact",
+        type: "semantic",
+        peakWeight: 0.7,
+        pinned: true,
+      });
+      // 2 days idle on a decision (6-day stability): weight ~e^(-1/3)≈0.72 —
+      // it must outrank the fresh and pinned rows below it; a recency
+      // ordering would bury it.
+      const agedStrong = yield* seedMemory({
+        projectId: ProjectId.makeUnsafe(PROJECTS.globalListOther),
+        textHash: "global-list-strong",
+        text: "aged strong fact",
+        type: "decision",
+        peakWeight: 1,
+        lastAccessedAt: daysAgo(2),
+        createdAt: daysAgo(2),
+      });
+      const recentLow = yield* seedMemory({
+        projectId: ProjectId.makeUnsafe(PROJECTS.globalListOther),
+        textHash: "global-list-low",
+        text: "recent low fact",
+        type: "semantic",
+        peakWeight: 0.62,
+      });
+
+      const result = yield* service.listAll();
+      // The shared suite database holds other tests' rows; assert the relative
+      // order of this test's rows inside the global page (all three outrank the
+      // ~0.6 fresh-noise floor, so the cap cannot cut them).
+      const mine = new Set([pinnedMid.memoryId, agedStrong.memoryId, recentLow.memoryId]);
+      assert.deepStrictEqual(
+        result.memories.filter((memory) => mine.has(memory.memoryId)).map((m) => m.memoryId),
+        [agedStrong.memoryId, pinnedMid.memoryId, recentLow.memoryId],
+      );
+      // And the page itself is weight-desc: a recency page would surface fresh
+      // low-weight rows ahead of aged strong ones.
+      const weights = result.memories.map((memory) => memory.weight);
+      assert.isTrue(weights.every((weight, index) => index === 0 || weights[index - 1]! >= weight));
+      assert.isAtLeast(result.count, 3);
+      assert.strictEqual(result.cap, MIND_MEMORY_PROJECT_CAP);
     }),
   );
 });

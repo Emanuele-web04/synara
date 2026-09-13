@@ -46,6 +46,12 @@ import {
   sortMindMemories,
 } from "~/lib/mindList";
 import { rollbackOptimisticProfile } from "~/lib/mindProfileQuery";
+import {
+  MIND_LIST_QUERY_ROOT,
+  mindListQueryKey,
+  restoreMindLists,
+  snapshotMindLists,
+} from "~/lib/mindListQuery";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
@@ -58,7 +64,7 @@ export const Route = createFileRoute("/_chat/mind/")({
   component: MindRouteView,
 });
 
-const mindQueryKey = ["mind"] as const;
+const mindQueryKey = MIND_LIST_QUERY_ROOT;
 
 /** Matches WorkspaceSearchPalette's cadence: fast enough to feel live. */
 const MIND_SEARCH_DEBOUNCE_MS = 100;
@@ -67,12 +73,12 @@ const EMPTY_MIND_LIST: MindListResult = { memories: [], count: 0, cap: 0 };
 
 /** Quiet color coding for the four memory types, from the shared badge variants. */
 type MindBadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
-const MIND_TYPE_BADGE_VARIANT: Record<MindMemoryType, MindBadgeVariant> = {
+const MIND_TYPE_BADGE_VARIANT = {
   decision: "info",
   procedural: "secondary",
   semantic: "outline",
   episodic: "warning",
-};
+} satisfies Record<MindMemoryType, MindBadgeVariant>;
 
 /**
  * Provenance in human words, agent rows only. Humans have no save surface,
@@ -157,7 +163,11 @@ function MindListRow({
               <select
                 aria-label="Edit memory type"
                 value={draftType}
-                onChange={(event) => setDraftType(event.target.value as MindMemoryType)}
+                onChange={(event) =>
+                  // SAFETY: the select only offers the four MindMemoryType options
+                  // below, so the submitted value is always a valid memory type.
+                  setDraftType(event.target.value as MindMemoryType)
+                }
                 className="rounded-md border border-input bg-background px-1.5 py-1 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="semantic">semantic</option>
@@ -222,13 +232,14 @@ function MindListRow({
                     </button>
                   </span>
                 ) : (
-                  (historyQuery.data?.entries ?? []).map((entry, index) => (
-                    <span key={`${entry.createdAt}-${entry.op}-${index}`}>
-                      {formatMindHistoryOpLabel(entry.op)} ·{" "}
-                      {formatMindHistoryActorLabel(entry.actor)} ·{" "}
-                      {formatRelativeTime(entry.createdAt)}
-                    </span>
-                  ))
+                  <span className="whitespace-pre-line">
+                    {(historyQuery.data?.entries ?? [])
+                      .map(
+                        (entry) =>
+                          `${formatMindHistoryOpLabel(entry.op)} · ${formatMindHistoryActorLabel(entry.actor)} · ${formatRelativeTime(entry.createdAt)}`,
+                      )
+                      .join("\n")}
+                  </span>
                 )}
               </span>
             </DisclosureRegion>
@@ -430,9 +441,15 @@ function MindRouteView() {
   const [debouncedSearch] = useDebouncedValue(trimmedSearch, { wait: MIND_SEARCH_DEBOUNCE_MS });
   const searchActive = debouncedSearch.length > 0;
 
+  // One cache entry per scope: "all" shares the sidebar badge's global page,
+  // a selected project fetches its own per-project page (the global page is
+  // capped across projects, so filtering it could hide the project's rows).
   const mindQuery = useQuery({
-    queryKey: mindQueryKey,
-    queryFn: () => ensureNativeApi().mind.list({}),
+    queryKey: mindListQueryKey(projectFilter),
+    queryFn: () =>
+      ensureNativeApi().mind.list(
+        projectFilter === null ? {} : { projectId: ProjectId.makeUnsafe(projectFilter) },
+      ),
     // Matches the sidebar Mind badge and provider catalog queries: fresh
     // enough to feel live, cached enough to survive route remounts.
     // Polls the bounded page while open so agent saves appear without refresh.
@@ -448,10 +465,12 @@ function MindRouteView() {
   const searchQuery = useQuery({
     queryKey: ["mind", "search", projectFilter ?? "", debouncedSearch] as const,
     queryFn: () =>
-      ensureNativeApi().mind.search({
-        query: debouncedSearch,
-        ...(projectFilter === null ? {} : { projectId: ProjectId.makeUnsafe(projectFilter) }),
-      }),
+      projectFilter === null
+        ? ensureNativeApi().mind.search({ query: debouncedSearch })
+        : ensureNativeApi().mind.search({
+            query: debouncedSearch,
+            projectId: ProjectId.makeUnsafe(projectFilter),
+          }),
     enabled: searchActive,
     staleTime: 15_000,
     placeholderData: keepPreviousData,
@@ -460,14 +479,14 @@ function MindRouteView() {
   // Optimistic removal: the row disappears immediately; the server's forget is
   // idempotent, so the invalidate-on-settle only converges the count/cap meta.
   // While the page is truncated the count is the true total and stays put —
-  // the refetch converges it (see optimisticForgetCount).
+  // the refetch converges it (see optimisticForgetCount). The write fans out
+  // to every cached list scope (global plus selected projects).
   const forgetMutation = useMutation({
     mutationFn: (memory: MindMemory) =>
       ensureNativeApi().mind.forget({ projectId: memory.projectId, memoryId: memory.memoryId }),
     onMutate: async (memory) => {
-      await queryClient.cancelQueries({ queryKey: mindQueryKey });
-      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
-      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+      const previous = await snapshotMindLists(queryClient);
+      queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
               memories: prev.memories.filter((item) => item.memoryId !== memory.memoryId),
@@ -478,12 +497,14 @@ function MindRouteView() {
       );
       return { previous };
     },
-    onSuccess: (_data, memory) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      // A forgotten row must leave any cached search page too.
+      void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({ type: "success", title: "Memory forgotten" });
     },
     onError: (error, _memory, context) => {
-      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      restoreMindLists(queryClient, context?.previous);
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -494,9 +515,8 @@ function MindRouteView() {
     mutationFn: (memory: MindMemory) =>
       ensureNativeApi().mind.affirm({ projectId: memory.projectId, memoryId: memory.memoryId }),
     onMutate: async (memory) => {
-      await queryClient.cancelQueries({ queryKey: mindQueryKey });
-      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
-      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+      const previous = await snapshotMindLists(queryClient);
+      queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
               ...prev,
@@ -519,7 +539,7 @@ function MindRouteView() {
       toastManager.add({ type: "success", title: "Memory affirmed" });
     },
     onError: (error, _memory, context) => {
-      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      restoreMindLists(queryClient, context?.previous);
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -540,9 +560,8 @@ function MindRouteView() {
         type: input.type,
       }),
     onMutate: async (input) => {
-      await queryClient.cancelQueries({ queryKey: mindQueryKey });
-      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
-      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+      const previous = await snapshotMindLists(queryClient);
+      queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
               ...prev,
@@ -558,10 +577,12 @@ function MindRouteView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      // An edited row's text may enter or leave cached search pages.
+      void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({ type: "success", title: "Saved" });
     },
     onError: (error, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      restoreMindLists(queryClient, context?.previous);
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -574,9 +595,8 @@ function MindRouteView() {
         pinned: input.pinned,
       }),
     onMutate: async (input) => {
-      await queryClient.cancelQueries({ queryKey: mindQueryKey });
-      const previous = queryClient.getQueryData<MindListResult>(mindQueryKey);
-      queryClient.setQueryData<MindListResult>(mindQueryKey, (prev) =>
+      const previous = await snapshotMindLists(queryClient);
+      queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
         prev
           ? {
               ...prev,
@@ -596,7 +616,7 @@ function MindRouteView() {
       });
     },
     onError: (error, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(mindQueryKey, context.previous);
+      restoreMindLists(queryClient, context?.previous);
       toastManager.add({ type: "error", title: error.message });
     },
   });
@@ -635,15 +655,13 @@ function MindRouteView() {
   const sortedMemories = useMemo(() => sortMindMemories(data.memories), [data.memories]);
   const filteredMemories = useMemo(() => {
     // Search is server-side FTS on memory text; results arrive project-scoped
-    // and weight-desc. Project names are not in the FTS index — narrowing by
-    // project is the chips' job.
+    // and weight-desc. Outside search the list query itself is scoped by the
+    // selected chip, so the page needs no local filter.
     if (searchActive) {
       return sortMindMemories(searchQuery.data?.memories ?? []);
     }
-    return projectFilter === null
-      ? sortedMemories
-      : sortedMemories.filter((memory) => memory.projectId === projectFilter);
-  }, [searchActive, searchQuery.data, sortedMemories, projectFilter]);
+    return sortedMemories;
+  }, [searchActive, searchQuery.data, sortedMemories]);
 
   // Day groups for the loaded page: newest day first, weight-desc inside a day.
   const groupedMemories = useMemo(
@@ -658,11 +676,11 @@ function MindRouteView() {
       formatMindDigestSuffix({
         staleCount: countStaleMindMemories(data.memories),
         count: data.count,
-        // The global count spans projects, so the per-project cap is not a
-        // meaningful denominator here.
-        cap: 0,
+        // The global count spans projects, so the per-project cap is only a
+        // meaningful denominator once a project chip scopes the list.
+        cap: projectFilter === null ? 0 : data.cap,
       }),
-    [data.memories, data.count],
+    [data.memories, data.count, data.cap, projectFilter],
   );
 
   const renderMindList = () => (

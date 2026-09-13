@@ -7,12 +7,12 @@ export const INITIAL_WEIGHT = 0.6;
 export const MAX_WEIGHT = 1;
 export const STABILITY_BASE_DAYS = 3;
 export const STABILITY_PER_ACCESS_DAYS = 14;
-export const TYPE_FACTORS: Record<MindMemoryType, number> = {
+export const TYPE_FACTORS = {
   semantic: 1,
   episodic: 0.75,
   procedural: 1.5,
   decision: 2,
-};
+} satisfies Record<MindMemoryType, number>;
 export const PRUNE_WEIGHT_THRESHOLD = 0.1;
 export const PRUNE_MIN_ACCESS_COUNT = 2;
 export const PRUNE_GRACE_DAYS = 45;

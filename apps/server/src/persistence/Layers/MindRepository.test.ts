@@ -3,6 +3,7 @@ import { MIND_MEMORY_PROJECT_CAP, MindMemoryId, ProjectId, ThreadId } from "@syn
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { effectiveWeight } from "../../mind/scoring.ts";
 import { runMigrations } from "../Migrations.ts";
 import {
   buildMindFtsMatchExpr,
@@ -33,6 +34,8 @@ const PROJECTS = {
   poison: "project-mind-poison",
   bound: "project-mind-bound",
   desync: "project-mind-desync",
+  rankAll: "project-mind-rank-all",
+  rankAllOther: "project-mind-rank-all-other",
 } as const;
 
 let memoryCounter = 0;
@@ -337,8 +340,9 @@ layer("MindRepository", (it) => {
       }
 
       // The default page never exceeds the cap even though the project holds more.
-      assert.strictEqual((yield* repository.listAll()).length, MIND_MEMORY_PROJECT_CAP);
-      assert.strictEqual((yield* repository.listAll({ limit: 2 })).length, 2);
+      const nowIso = new Date().toISOString();
+      assert.strictEqual((yield* repository.listAll({ nowIso })).length, MIND_MEMORY_PROJECT_CAP);
+      assert.strictEqual((yield* repository.listAll({ nowIso, limit: 2 })).length, 2);
       assert.isTrue((yield* repository.countAll()) >= MIND_MEMORY_PROJECT_CAP + 5);
     }),
   );
@@ -591,6 +595,82 @@ layer("MindRepository", (it) => {
           ...receipt,
           projectId: ProjectId.makeUnsafe(PROJECTS.receiptOther),
         }),
+      );
+    }),
+  );
+
+  it.effect("listAll ranks the global page by the scoring.ts effective weight", () =>
+    Effect.gen(function* () {
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const rankAll = ProjectId.makeUnsafe(PROJECTS.rankAll);
+      const rankAllOther = ProjectId.makeUnsafe(PROJECTS.rankAllOther);
+      const nowIso = "2026-09-20T00:00:00.000Z";
+      // Spread across two projects and every scoring input: type factor,
+      // access-count stability, idle decay, pin floor.
+      const seeds = [
+        memoryInput({
+          projectId: rankAll,
+          text: "r-semantic-old-strong",
+          type: "semantic",
+          peakWeight: 0.9,
+          lastAccessedAt: "2026-09-10T00:00:00.000Z",
+        }),
+        memoryInput({
+          projectId: rankAll,
+          text: "r-decision-aged",
+          type: "decision",
+          peakWeight: 0.8,
+          accessCount: 3,
+          lastAccessedAt: "2026-09-05T00:00:00.000Z",
+        }),
+        memoryInput({
+          projectId: rankAllOther,
+          text: "r-pinned-mid",
+          type: "episodic",
+          peakWeight: 0.4,
+          pinned: true,
+          lastAccessedAt: "2026-08-01T00:00:00.000Z",
+        }),
+        memoryInput({
+          projectId: rankAllOther,
+          text: "r-fresh-low",
+          type: "procedural",
+          peakWeight: 0.25,
+          lastAccessedAt: "2026-09-20T00:00:00.000Z",
+        }),
+        memoryInput({
+          projectId: rankAllOther,
+          text: "r-episodic-decayed",
+          type: "episodic",
+          peakWeight: 0.85,
+          accessCount: 1,
+          lastAccessedAt: "2026-08-20T00:00:00.000Z",
+        }),
+        memoryInput({
+          projectId: rankAll,
+          text: "r-fresh-top",
+          type: "semantic",
+          peakWeight: 0.95,
+          lastAccessedAt: "2026-09-20T00:00:00.000Z",
+        }),
+      ];
+      for (const seed of seeds) {
+        yield* repository.insert(seed);
+      }
+
+      const page = yield* repository.listAll({ nowIso });
+      const mine = new Set(seeds.map((seed) => seed.memoryId));
+      const expected = [...seeds].sort(
+        (a, b) =>
+          effectiveWeight(b, nowIso) - effectiveWeight(a, nowIso) ||
+          a.memoryId.localeCompare(b.memoryId),
+      );
+      // The shared suite database holds other tests' rows; parity is checked
+      // on this test's rows inside the global page.
+      assert.deepStrictEqual(
+        page.filter((row) => mine.has(row.memoryId)).map((row) => row.memoryId),
+        expected.map((row) => row.memoryId),
       );
     }),
   );

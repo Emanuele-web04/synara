@@ -23,7 +23,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type PersistenceSqlError, toPersistenceSqlError } from "../../persistence/Errors.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import { Clock, Effect, Layer, Option } from "effect";
+import { Clock, Effect, Layer, Option, Schema } from "effect";
 
 import {
   buildMindFtsMatchExpr,
@@ -193,45 +193,45 @@ const isFtsQueryError = (error: PersistenceSqlError): boolean =>
   FTS_QUERY_ERROR_PATTERN.test(error.detail);
 
 /**
- * Tolerates proven FTS query-expression failures as "no matches" (tokenizer
- * edges on exotic input are best-effort), but rethrows every other
- * PersistenceSqlError so a storage outage never masquerades as zero hits.
+ * Tolerates proven FTS query-expression failures by degrading to the caller's
+ * fallback (tokenizer edges on exotic input are best-effort), but rethrows
+ * every other PersistenceSqlError so a storage outage never masquerades as
+ * zero hits.
  */
 const tolerateFtsQueryError = <A, R>(
-  effect: Effect.Effect<ReadonlyArray<A>, MindRepositoryError, R>,
-): Effect.Effect<ReadonlyArray<A>, MindRepositoryError, R> =>
+  effect: Effect.Effect<A, MindRepositoryError, R>,
+  fallback: A,
+): Effect.Effect<A, MindRepositoryError, R> =>
   effect.pipe(
     Effect.catchTag("PersistenceSqlError", (error) =>
       isFtsQueryError(error)
-        ? Effect.logWarning("Mind FTS search failed; returning no matches.", {
+        ? Effect.logWarning("Mind FTS query failed; degrading to the fallback.", {
             error: error.message,
-          }).pipe(Effect.as([] as ReadonlyArray<A>))
+          }).pipe(Effect.as(fallback))
         : Effect.fail(error),
     ),
   );
 
+/** Receipt payload written by `remember` (`replayed` is stamped on read-back). */
+const RememberReceiptPayload = Schema.Struct({
+  memoryId: Schema.String,
+  created: Schema.Boolean,
+  reinforced: Schema.Boolean,
+});
+
 const decodeRememberReceipt = (resultJson: string): MindRememberResult | undefined => {
   try {
-    const parsed: unknown = JSON.parse(resultJson);
-    if (typeof parsed === "object" && parsed !== null) {
-      const record = parsed as Record<string, unknown>;
-      if (
-        typeof record.memoryId === "string" &&
-        typeof record.created === "boolean" &&
-        typeof record.reinforced === "boolean"
-      ) {
-        return {
-          memoryId: MindMemoryId.makeUnsafe(record.memoryId),
-          created: record.created,
-          reinforced: record.reinforced,
-          replayed: true,
-        };
-      }
-    }
+    const payload = Schema.decodeUnknownSync(RememberReceiptPayload)(JSON.parse(resultJson));
+    return {
+      memoryId: MindMemoryId.makeUnsafe(payload.memoryId),
+      created: payload.created,
+      reinforced: payload.reinforced,
+      replayed: true,
+    };
   } catch {
     // A malformed receipt falls through to the live path; the journal lookup still guards.
+    return undefined;
   }
-  return undefined;
 };
 
 const makeMindService = Effect.gen(function* () {
@@ -269,20 +269,35 @@ const makeMindService = Effect.gen(function* () {
         .slice(0, SWEEP_MAX_DELETES);
       let pruned = 0;
       for (const memoryId of pruneIds) {
-        const deleted = yield* repository.deleteById({ memoryId });
-        if (deleted) {
-          pruned += 1;
-          yield* repository.appendJournal({
-            projectId,
-            memoryId,
-            op: "prune",
-            // Prune is system hygiene, not an agent or user action.
-            actor: { kind: "user" },
-            threadId: null,
-            turnId: null,
-            createdAt: nowIso,
-          });
-        }
+        // Delete and its prune journal entry commit as one transaction: a
+        // journal failure rolls the deletion back, so a pruned memory can
+        // never lose its audit record.
+        const deleted = yield* sqlClient
+          .withTransaction(
+            Effect.gen(function* () {
+              const wasDeleted = yield* repository.deleteById({ memoryId });
+              if (wasDeleted) {
+                yield* repository.appendJournal({
+                  projectId,
+                  memoryId,
+                  op: "prune",
+                  // Prune is system hygiene, not an agent or user action.
+                  actor: { kind: "user" },
+                  threadId: null,
+                  turnId: null,
+                  createdAt: nowIso,
+                });
+              }
+              return wasDeleted;
+            }),
+          )
+          .pipe(
+            Effect.catchIf(
+              (error): error is SqlError => error._tag === "SqlError",
+              (error) => Effect.fail(toPersistenceSqlError("MindService.maybeSweep:prune")(error)),
+            ),
+          );
+        if (deleted) pruned += 1;
       }
       const receiptsPruned = yield* repository.pruneReceipts({
         projectId,
@@ -298,6 +313,20 @@ const makeMindService = Effect.gen(function* () {
       }
       lastSweepAtByProject.set(projectId, nowMillis);
     });
+
+  // Hygiene must never change a committed mutation's result: a post-commit
+  // sweep failure is logged and swallowed here, otherwise a cleanup error
+  // would surface as a failed RPC and a retried UI action (turnId is null, so
+  // no receipt guards it) would apply the mutation a second time.
+  const maybeSweepSafely = (projectId: ProjectId) =>
+    maybeSweep(projectId).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Mind hygiene sweep failed; the next mutation retries it.", {
+          projectId,
+          error: error.message,
+        }),
+      ),
+    );
 
   // The remember mutation serialized in its own transaction (check-then-act:
   // receipt lookup, text-hash dedupe, cap count, insert) so concurrent retries
@@ -491,11 +520,12 @@ const makeMindService = Effect.gen(function* () {
   // Hygiene runs BEFORE the mutation transaction, never inside it: pruned
   // rows free cap slots for the cap check, and the bounded sweep never holds
   // the write transaction open. Both halves are lazy effect descriptions, so
-  // `andThen` runs the sweep strictly before the transaction runs.
+  // `andThen` runs the sweep strictly before the transaction runs. The
+  // failure-isolated wrapper keeps a cleanup outage from blocking a save.
   const remember = (
     input: MindRememberRequest,
   ): Effect.Effect<MindRememberResult, MindServiceError> =>
-    Effect.andThen(maybeSweep(input.projectId), rememberInTransaction(input));
+    Effect.andThen(maybeSweepSafely(input.projectId), rememberInTransaction(input));
 
   const recall = (input: MindRecallRequest): Effect.Effect<MindRecallResult, MindServiceError> =>
     Effect.gen(function* () {
@@ -525,6 +555,7 @@ const makeMindService = Effect.gen(function* () {
           matchExpr: buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS)),
           limit: MIND_RECALL_CANDIDATE_MAX_ITEMS,
         }),
+        [],
       );
       // rankCandidates sorts ascending by score. bm25 is negative/lower-is-better and
       // the weight factor is a positive multiplier, so the best match carries the most
@@ -623,7 +654,7 @@ const makeMindService = Effect.gen(function* () {
               createdAt: nowIso,
             });
           }
-          // Sweep after the mutation: the just-confirmed row is fresh and exempt,
+          // Sweep runs after the commit so the just-confirmed row is fresh and exempt.
           return toMindMemory(updated.value, nowIso);
         }),
       )
@@ -633,7 +664,7 @@ const makeMindService = Effect.gen(function* () {
           (error) => Effect.fail(toPersistenceSqlError("MindService.confirm:transaction")(error)),
         ),
       )
-      .pipe(Effect.tap((memory) => maybeSweep(memory.projectId)));
+      .pipe(Effect.tap((memory) => maybeSweepSafely(memory.projectId)));
 
   const forget = (input: MindForgetRequest): Effect.Effect<MindForgetResult, MindServiceError> =>
     sqlClient
@@ -701,7 +732,9 @@ const makeMindService = Effect.gen(function* () {
           (error) => Effect.fail(toPersistenceSqlError("MindService.forget:transaction")(error)),
         ),
       )
-      .pipe(Effect.tap((result) => (result.deleted ? maybeSweep(input.projectId) : Effect.void)));
+      .pipe(
+        Effect.tap((result) => (result.deleted ? maybeSweepSafely(input.projectId) : Effect.void)),
+      );
 
   const status = (input: MindStatusRequest): Effect.Effect<MindStatusResult, MindServiceError> =>
     Effect.gen(function* () {
@@ -718,7 +751,7 @@ const makeMindService = Effect.gen(function* () {
         pinnedCount: rows.filter((row) => row.pinned).length,
         digestChars: renderDigestWithProfile(digestItems, optedInProfileText(profile)).length,
         oldestIdleDays: roundTo(oldestIdleDays, 2),
-        ...(Option.isSome(profile) ? { profileOptedIn: profile.value.optedIn } : {}),
+        profileOptedIn: Option.isSome(profile) ? profile.value.optedIn : undefined,
       };
     });
 
@@ -742,31 +775,22 @@ const makeMindService = Effect.gen(function* () {
       const memories = rows
         .map((row) => toMindMemory(row, nowIso))
         .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
-      return {
-        memories,
-        count: total,
-        cap: MIND_MEMORY_PROJECT_CAP,
-        ...(skipped > 0 ? { skipped } : {}),
-      };
+      return skipped > 0
+        ? { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP, skipped }
+        : { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP };
     });
 
-  // Global list for the project-agnostic Mind view: fetch each project's
-  // bounded candidate set, rank the combined decoded rows, then apply the
-  // global page limit. This prevents a recent low-weight row from displacing a
-  // stronger memory before service-side effective-weight ranking.
+  // Global list for the project-agnostic Mind view: one SQL page ranked by
+  // the persisted scoring inputs (the repository mirrors effectiveWeight), so
+  // the read stays O(page) no matter how many projects hold memories.
   const listAll = (): Effect.Effect<MindListResult, MindServiceError> =>
     Effect.gen(function* () {
       const nowIso = yield* nowIsoNow;
-      const projectIds = yield* repository.listProjectIds();
-      const rows = (yield* Effect.forEach(
-        projectIds,
-        (projectId) => repository.listByProject({ projectId }),
-        {
-          concurrency: 1,
-        },
-      )).flat();
+      const rows = yield* repository.listAll({ nowIso });
       const total = yield* repository.countAll();
-      const skipped = Math.max(0, total - rows.length);
+      // A shortfall below the expected page means undecodable rows were
+      // skipped read-side (never fatal) — same accounting as `list`.
+      const skipped = Math.max(0, Math.min(MIND_MEMORY_PROJECT_CAP, total) - rows.length);
       if (skipped > 0) {
         yield* Effect.logWarning("Mind list skipped undecodable rows.", {
           shown: rows.length,
@@ -776,14 +800,10 @@ const makeMindService = Effect.gen(function* () {
       }
       const memories = rows
         .map((row) => toMindMemory(row, nowIso))
-        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
-        .slice(0, MIND_MEMORY_PROJECT_CAP);
-      return {
-        memories,
-        count: total,
-        cap: MIND_MEMORY_PROJECT_CAP,
-        ...(skipped > 0 ? { skipped } : {}),
-      };
+        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
+      return skipped > 0
+        ? { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP, skipped }
+        : { memories, count: total, cap: MIND_MEMORY_PROJECT_CAP };
     });
 
   /**
@@ -801,28 +821,37 @@ const makeMindService = Effect.gen(function* () {
         return { memories: [], count: 0, cap: MIND_MEMORY_PROJECT_CAP };
       }
       const matchExpr = buildMindFtsMatchExpr(query.slice(0, MIND_RECALL_QUERY_MAX_CHARS));
-      const scope: ReadonlyArray<ProjectId> =
-        input.projectId !== null ? [input.projectId] : yield* repository.listProjectIds();
-      // Candidate bound = the per-project memory cap, not the recall bound: a
-      // project can never hold more rows, so `count` below is the true match
-      // total rather than a truncated estimate.
-      const candidates = (yield* Effect.forEach(
-        scope,
-        (projectId) =>
-          tolerateFtsQueryError(
-            repository.searchCandidates({
-              projectId,
-              matchExpr,
-              limit: MIND_MEMORY_PROJECT_CAP,
-            }),
-          ),
-        { concurrency: 1 },
-      )).flat();
+      if (input.projectId !== null) {
+        // Scoped: the cap-sized bound fetches every match (a project can never
+        // hold more rows than the cap), so candidates.length is the true total.
+        const candidates = yield* tolerateFtsQueryError(
+          repository.searchCandidates({
+            projectId: input.projectId,
+            matchExpr,
+            limit: MIND_MEMORY_PROJECT_CAP,
+          }),
+          [],
+        );
+        const memories = candidates
+          .map((candidate) => toMindMemory(candidate.memory, nowIso))
+          .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
+        return { memories, count: candidates.length, cap: MIND_MEMORY_PROJECT_CAP };
+      }
+      // Global: one weight-ranked FTS page plus one match count — no
+      // per-project scan, so the query stays O(page) like `listAll`.
+      const candidates = yield* tolerateFtsQueryError(
+        repository.searchAllCandidates({
+          matchExpr,
+          nowIso,
+          limit: MIND_MEMORY_PROJECT_CAP,
+        }),
+        [],
+      );
+      const count = yield* tolerateFtsQueryError(repository.countSearchMatches({ matchExpr }), 0);
       const memories = candidates
         .map((candidate) => toMindMemory(candidate.memory, nowIso))
-        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
-        .slice(0, MIND_MEMORY_PROJECT_CAP);
-      return { memories, count: candidates.length, cap: MIND_MEMORY_PROJECT_CAP };
+        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
+      return { memories, count, cap: MIND_MEMORY_PROJECT_CAP };
     });
 
   const setPinned = (input: MindSetPinnedRequest): Effect.Effect<MindMemory, MindServiceError> =>
@@ -907,7 +936,7 @@ const makeMindService = Effect.gen(function* () {
           (error) => Effect.fail(toPersistenceSqlError("MindService.setPinned:transaction")(error)),
         ),
       )
-      .pipe(Effect.tap((memory) => maybeSweep(memory.projectId)));
+      .pipe(Effect.tap((memory) => maybeSweepSafely(memory.projectId)));
 
   // The edit mutation serialized in its own transaction (check-then-act:
   // receipt lookup, collision check, row update, revision insert) so
@@ -990,8 +1019,20 @@ const makeMindService = Effect.gen(function* () {
           const nextType = input.type ?? row.type;
           if (normalized === row.text && nextType === row.type) {
             if (operationId !== null) {
-              // Crash-recovery replay: the receipt is missing but the row
-              // already holds the target content, so this turn already applied.
+              // The row write and its receipt commit atomically, so a missing
+              // receipt means THIS turn never applied the update — some other
+              // write already left the target content in place. The operation
+              // is still satisfied (the row holds the requested text), so
+              // record the receipt now: later retries replay durably instead
+              // of re-deriving "already applied" from whatever content happens
+              // to be stored then.
+              yield* repository.putReceipt({
+                projectId: row.projectId,
+                operationId,
+                op: "update",
+                resultJson: JSON.stringify({ memoryId: input.memoryId, textHash }),
+                createdAt: nowIso,
+              });
               return toMindMemory(row, nowIso);
             }
             // The UI passes no turn, so every save applies: touch the decay
@@ -1059,7 +1100,7 @@ const makeMindService = Effect.gen(function* () {
   const update = (input: MindUpdateRequest): Effect.Effect<MindMemory, MindServiceError> =>
     Effect.gen(function* () {
       const result = yield* updateInTransaction(input);
-      yield* maybeSweep(result.projectId);
+      yield* maybeSweepSafely(result.projectId);
       return result;
     });
 
@@ -1157,7 +1198,7 @@ const makeMindService = Effect.gen(function* () {
       // Op timeline only — journal and revision rows never carry memory text.
       const entries: MindHistoryResult["entries"] = [
         ...journal.map((entry) => ({
-          op: entry.op as MindHistoryResult["entries"][number]["op"],
+          op: entry.op,
           actor: entry.actor,
           createdAt: entry.createdAt,
         })),
@@ -1179,7 +1220,7 @@ const makeMindService = Effect.gen(function* () {
       return { entries };
     });
 
-  const shape: MindServiceShape = {
+  return {
     remember,
     recall,
     confirm,
@@ -1201,8 +1242,7 @@ const makeMindService = Effect.gen(function* () {
     history,
     profileGet,
     profileSet,
-  };
-  return shape;
+  } satisfies MindServiceShape;
 });
 
 export const MindServiceLive = Layer.effect(MindService, makeMindService);
