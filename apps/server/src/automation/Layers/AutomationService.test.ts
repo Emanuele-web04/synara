@@ -596,7 +596,11 @@ layer("AutomationService", (it) => {
         runtimeMode: "auto",
         modelSelection: resolved,
       });
-      assert.deepEqual(created.modelSelection, { ...target, supportsAutoMode: true });
+      assert.deepEqual(created.modelSelection, {
+        provider: "claudeAgent",
+        model: target.model,
+        supportsAutoMode: true,
+      });
       const updated = yield* service.update({
         id: created.id,
         modelSelection: resolved,
@@ -606,7 +610,7 @@ layer("AutomationService", (it) => {
       const listed = yield* service.list({ projectId });
       assert.deepEqual(
         listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-        { ...target, supportsAutoMode: true },
+        { provider: "claudeAgent", model: target.model, supportsAutoMode: true },
       );
     }),
   );
