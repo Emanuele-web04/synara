@@ -150,9 +150,20 @@ function adapterFacadeForInstance(
   const stopAll: ProviderAdapterShape<ProviderAdapterError>["stopAll"] = () =>
     listSessions().pipe(
       Effect.flatMap((sessions) =>
-        Effect.forEach(sessions, (session) => adapter.stopSession(session.threadId), {
-          discard: true,
-        }),
+        Effect.forEach(
+          sessions,
+          (session) =>
+            adapter.stopSession(session.threadId).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (untaggedClaims.get(session.threadId) === instanceId) {
+                    untaggedClaims.delete(session.threadId);
+                  }
+                }),
+              ),
+            ),
+          { discard: true },
+        ),
       ),
     );
 

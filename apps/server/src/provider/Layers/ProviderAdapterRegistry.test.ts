@@ -377,6 +377,11 @@ layer("ProviderAdapterRegistryLive", (it) => {
       vi.mocked(fakeOpenCodeAdapter.listSessions).mockImplementation(() =>
         Effect.succeed([...openCodeSessions.values()]),
       );
+      vi.mocked(fakeOpenCodeAdapter.stopSession).mockImplementation((threadId) =>
+        Effect.sync(() => {
+          openCodeSessions.delete(threadId);
+        }),
+      );
       vi.mocked(fakeOpenCodeAdapter.hasSession).mockImplementation((threadId) =>
         Effect.succeed(openCodeSessions.has(threadId)),
       );
@@ -462,6 +467,20 @@ layer("ProviderAdapterRegistryLive", (it) => {
       );
       assert.equal(workSessions[0]?.providerInstanceId, workInstanceId);
       assert.deepEqual(defaultSessions, []);
+
+      yield* workFacade.stopAll();
+      openCodeSessions.set(targetThreadId, {
+        provider: "opencode",
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId: targetThreadId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      assert.deepEqual(
+        (yield* defaultFacade.listSessions()).map((session) => session.threadId),
+        [targetThreadId],
+      );
     }),
   );
 });
