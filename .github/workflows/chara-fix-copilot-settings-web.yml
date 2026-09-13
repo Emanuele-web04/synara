@@ -1,0 +1,201 @@
+name: Chara fix Copilot settings integration
+
+on:
+  push:
+    branches:
+      - agent/copilot-cli-acp
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Port Copilot settings and discovery integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f"{label} insertion point changed")
+              return text.replace(old, new, 1)
+
+          # Shared settings contract.
+          path = Path("packages/contracts/src/settings.ts")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''export const DevinServerProviderSettings = Schema.Struct({\n  ...ProviderSettingsBase,\n  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "devin")),\n});\nexport type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;\n''',
+              '''export const DevinServerProviderSettings = Schema.Struct({\n  ...ProviderSettingsBase,\n  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "devin")),\n});\nexport type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;\n\nexport const CopilotServerProviderSettings = Schema.Struct({\n  ...ProviderSettingsBase,\n  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "copilot")),\n});\nexport type CopilotServerProviderSettings = typeof CopilotServerProviderSettings.Type;\n''',
+              "Copilot server settings",
+          )
+          text = replace_once(
+              text,
+              '    pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),\n',
+              '    pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),\n    copilot: CopilotServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),\n',
+              "Copilot provider settings",
+          )
+          text = replace_once(
+              text,
+              '      devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),\n',
+              '      devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),\n      copilot: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),\n',
+              "Copilot settings patch",
+          )
+          path.write_text(text)
+
+          # Provider discovery contract.
+          path = Path("packages/contracts/src/providerDiscovery.ts")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '  "devin",\n]);',
+              '  "devin",\n  "copilot",\n]);',
+              "Copilot discovery kind",
+          )
+          path.write_text(text)
+
+          # Web settings projection.
+          path = Path("apps/web/src/appSettings.ts")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '  | "customOpenCodeModels"\n  | "customPiModels";',
+              '  | "customOpenCodeModels"\n  | "customPiModels"\n  | "customCopilotModels";',
+              "Copilot custom model key",
+          )
+          text = replace_once(
+              text,
+              '  pi: new Set(getModelOptions("pi").map((option) => option.slug)),\n};',
+              '  pi: new Set(getModelOptions("pi").map((option) => option.slug)),\n  copilot: new Set(getModelOptions("copilot").map((option) => option.slug)),\n};',
+              "Copilot built-in model set",
+          )
+          text = replace_once(
+              text,
+              '  "opencode",\n  "pi",\n]).pipe(',
+              '  "opencode",\n  "pi",\n  "copilot",\n]).pipe(',
+              "Copilot persisted provider kind",
+          )
+          text = replace_once(
+              text,
+              '  piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),\n  openCodeServerUrl:',
+              '  piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),\n  copilotBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),\n  openCodeServerUrl:',
+              "Copilot binary setting",
+          )
+          text = replace_once(
+              text,
+              '  customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),\n  customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),',
+              '  customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),\n  customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),\n  customCopilotModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),',
+              "Copilot custom models schema",
+          )
+          text = replace_once(
+              text,
+              '''  pi: {\n    provider: "pi",\n    settingsKey: "customPiModels",\n    defaultSettingsKey: "customPiModels",\n    title: "Pi",\n    description: "Save additional Pi model slugs for the picker and provider runtime.",\n    placeholder: "provider/model",\n    example: "anthropic/claude-sonnet-4-5",\n  },\n};''',
+              '''  pi: {\n    provider: "pi",\n    settingsKey: "customPiModels",\n    defaultSettingsKey: "customPiModels",\n    title: "Pi",\n    description: "Save additional Pi model slugs for the picker and provider runtime.",\n    placeholder: "provider/model",\n    example: "anthropic/claude-sonnet-4-5",\n  },\n  copilot: {\n    provider: "copilot",\n    settingsKey: "customCopilotModels",\n    defaultSettingsKey: "customCopilotModels",\n    title: "GitHub Copilot",\n    description: "Save additional Copilot CLI model slugs alongside the live ACP catalog.",\n    placeholder: "model-slug",\n    example: "claude-sonnet-4.5",\n  },\n};''',
+              "Copilot model editor config",
+          )
+          text = replace_once(
+              text,
+              '    piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),\n    uiDensity:',
+              '    piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),\n    copilotBinaryPath: normalizeProviderBinaryPathOverride("copilot", settings.copilotBinaryPath),\n    uiDensity:',
+              "Copilot normalization",
+          )
+          text = replace_once(
+              text,
+              '    customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),\n    customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),',
+              '    customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),\n    customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),\n    customCopilotModels: normalizeCustomModelSlugs(settings.customCopilotModels, "copilot"),',
+              "Copilot custom model normalization",
+          )
+          text = replace_once(
+              text,
+              '    piAgentDir: settings.providers.pi.agentDir,\n    piBinaryPath: settings.providers.pi.binaryPath,',
+              '    piAgentDir: settings.providers.pi.agentDir,\n    piBinaryPath: settings.providers.pi.binaryPath,\n    copilotBinaryPath: settings.providers.copilot.binaryPath,',
+              "Copilot server-to-app settings",
+          )
+          text = replace_once(
+              text,
+              '    customOpenCodeModels: settings.providers.opencode.customModels,\n    customPiModels: settings.providers.pi.customModels,',
+              '    customOpenCodeModels: settings.providers.opencode.customModels,\n    customPiModels: settings.providers.pi.customModels,\n    customCopilotModels: settings.providers.copilot.customModels,',
+              "Copilot server custom models",
+          )
+          text = replace_once(
+              text,
+              '    hasOwn(patch, "piAgentDir") ||\n    hasOwn(patch, "disabledProviders")',
+              '    hasOwn(patch, "piAgentDir") ||\n    hasOwn(patch, "copilotBinaryPath") ||\n    hasOwn(patch, "disabledProviders")',
+              "Copilot discovery invalidation",
+          )
+          text = replace_once(
+              text,
+              '''  if (hasOwn(patch, "disabledProviders")) {''',
+              '''  if (hasOwn(patch, "copilotBinaryPath") || hasOwn(patch, "customCopilotModels")) {\n    providers.copilot = {\n      ...(hasOwn(patch, "copilotBinaryPath")\n        ? { binaryPath: patch.copilotBinaryPath ?? "" }\n        : {}),\n      ...(hasOwn(patch, "customCopilotModels")\n        ? { customModels: patch.customCopilotModels ?? [] }\n        : {}),\n    };\n  }\n  if (hasOwn(patch, "disabledProviders")) {''',
+              "Copilot server patch projection",
+          )
+          text = replace_once(
+              text,
+              '    "piBinaryPath",\n    "textGenerationModel",',
+              '    "piBinaryPath",\n    "copilotBinaryPath",\n    "textGenerationModel",',
+              "Copilot migration scalar key",
+          )
+          text = replace_once(
+              text,
+              '    "customOpenCodeModels",\n    "customPiModels",\n  ] as const)',
+              '    "customOpenCodeModels",\n    "customPiModels",\n    "customCopilotModels",\n  ] as const)',
+              "Copilot migration model key",
+          )
+          text = replace_once(
+              text,
+              '    pi: getCustomModelsForProvider(settings, "pi"),\n  };',
+              '    pi: getCustomModelsForProvider(settings, "pi"),\n    copilot: getCustomModelsForProvider(settings, "copilot"),\n  };',
+              "Copilot custom model map",
+          )
+          text = replace_once(
+              text,
+              '    pi: getAppModelOptions("pi", customModelsByProvider.pi),\n  };',
+              '    pi: getAppModelOptions("pi", customModelsByProvider.pi),\n    copilot: getAppModelOptions("copilot", customModelsByProvider.copilot),\n  };',
+              "Copilot option map",
+          )
+          text = replace_once(
+              text,
+              '    | "piAgentDir"\n    | "piBinaryPath"\n  >,',
+              '    | "piAgentDir"\n    | "piBinaryPath"\n    | "copilotBinaryPath"\n  >,',
+              "Copilot start option settings type",
+          )
+          text = replace_once(
+              text,
+              '  const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);\n  const hasOpenCodeStartOptions',
+              '  const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);\n  const copilotBinaryPath = normalizeProviderBinaryPathOverride("copilot", settings.copilotBinaryPath);\n  const hasOpenCodeStartOptions',
+              "Copilot start option normalization",
+          )
+          text = replace_once(
+              text,
+              '''    ...(piBinaryPath || settings.piAgentDir\n      ? {\n          pi: {\n            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),\n            ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),\n          },\n        }\n      : {}),\n  };''',
+              '''    ...(piBinaryPath || settings.piAgentDir\n      ? {\n          pi: {\n            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),\n            ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),\n          },\n        }\n      : {}),\n    ...(copilotBinaryPath ? { copilot: { binaryPath: copilotBinaryPath } } : {}),\n  };''',
+              "Copilot start options",
+          )
+          text = replace_once(
+              text,
+              '    | "openCodeBinaryPath"\n    | "piBinaryPath"\n  >,',
+              '    | "openCodeBinaryPath"\n    | "piBinaryPath"\n    | "copilotBinaryPath"\n  >,',
+              "Copilot binary path settings type",
+          )
+          text = replace_once(
+              text,
+              '    case "pi":\n      return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);\n  }',
+              '    case "pi":\n      return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);\n    case "copilot":\n      return normalizeProviderBinaryPathOverride(provider, settings.copilotBinaryPath);\n  }',
+              "Copilot binary path switch",
+          )
+          path.write_text(text)
+          PY
+
+          git rm .github/workflows/chara-fix-copilot-settings-web.yml
+          git diff --check
+          git config user.name "cmdr-chara"
+          git config user.email "249489759+cmdr-chara@users.noreply.github.com"
+          git add packages/contracts/src/settings.ts packages/contracts/src/providerDiscovery.ts apps/web/src/appSettings.ts
+          git commit -m "fix: port Copilot settings integration"
+          git push origin HEAD:agent/copilot-cli-acp
