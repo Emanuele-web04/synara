@@ -9,6 +9,8 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type AntigravityModelOptions,
   type AntigravityModelSelection,
+  type AcpModelOptions,
+  type AcpModelSelection,
   type ClaudeModelOptions,
   type ClaudeModelSelection,
   type CodexModelOptions,
@@ -430,6 +432,11 @@ export function buildModelSelection(
   options?: DevinModelOptions | null | undefined,
 ): DevinModelSelection;
 export function buildModelSelection(
+  provider: "acp",
+  model: string,
+  options?: AcpModelOptions | null | undefined,
+): AcpModelSelection;
+export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -511,6 +518,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "acp":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as AcpModelOptions,
           }
         : { provider, model };
   }

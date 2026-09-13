@@ -9,7 +9,7 @@
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { AppSettings } from "../appSettings";
+import { parseAcpArgs, type AppSettings } from "../appSettings";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
 import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
@@ -187,6 +187,7 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.acpBinaryPath || null,
         ...(settings.acpArgs !== undefined ? { args: parseAcpArgs(settings.acpArgs) } : {}),
         cwd,
+        priority,
       });
   }
 }

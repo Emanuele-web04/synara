@@ -681,6 +681,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        acpBinaryPath: "",
+        acpArgs: "--acp",
         devinBinaryPath: "/usr/local/bin/devin",
       }),
     ).toEqual({
@@ -722,6 +724,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        acpBinaryPath: "",
+        acpArgs: "--acp",
         devinBinaryPath: "",
       }),
     ).toBeUndefined();
@@ -744,6 +748,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        acpBinaryPath: "cline",
+        acpArgs: "--acp",
       }),
     ).toBeUndefined();
   });

@@ -58,6 +58,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
+    case "acp":
+      return normalizeCustomBinaryPath(providerOptions?.acp?.binaryPath);
   }
 }
 interface ChatProviderStatusInput {
