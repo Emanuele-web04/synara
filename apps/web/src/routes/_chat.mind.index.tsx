@@ -10,7 +10,7 @@ import { type VariantProps } from "class-variance-authority";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
@@ -307,14 +307,14 @@ function MindProfileCard({
   const saved: MindProfile | null = profileQuery.data ?? null;
   const [draftText, setDraftText] = useState("");
   const [optedIn, setOptedIn] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
+  const hydrated = useRef(false);
   useEffect(() => {
-    if (!hydrated && profileQuery.data !== undefined) {
+    if (!hydrated.current && profileQuery.data !== undefined) {
       setDraftText(profileQuery.data?.text ?? "");
       setOptedIn(profileQuery.data?.optedIn ?? false);
-      setHydrated(true);
+      hydrated.current = true;
     }
-  }, [hydrated, profileQuery.data]);
+  }, [profileQuery.data]);
 
   // Optimistic save, same rollback shape as the memory rows: the card shows
   // the draft eagerly and the invalidate-on-settle refetch converges it. An
@@ -529,6 +529,8 @@ function MindRouteView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      // An affirmed row's weight/recall also render inside search results.
+      void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({ type: "success", title: "Memory affirmed" });
     },
     onError: (error) => {
@@ -601,6 +603,8 @@ function MindRouteView() {
     },
     onSuccess: (_data, input) => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      // A pin change reorders rows inside search results too.
+      void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({
         type: "success",
         title: input.pinned ? "Memory pinned" : "Memory unpinned",

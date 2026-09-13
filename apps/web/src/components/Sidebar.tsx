@@ -214,7 +214,7 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -339,7 +339,6 @@ import {
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
-  type ThreadStatusPill,
   type SidebarDerivedProjectData,
   type SidebarActionBadge,
   type SidebarView,
@@ -1463,7 +1462,10 @@ export default function Sidebar() {
   const mindBadge = useMemo(() => {
     const count = mindListQuery.data?.count;
     if (!count) return null;
-    return { text: String(count), accessibleLabel: `${count} memories` };
+    return {
+      text: String(count),
+      accessibleLabel: `${count} ${pluralize(count, "memory", "memories")}`,
+    };
   }, [mindListQuery.data]);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
