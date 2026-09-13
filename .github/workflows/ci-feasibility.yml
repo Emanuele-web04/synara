@@ -1,0 +1,76 @@
+name: CI feasibility diagnostics
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-optimization]
+    paths: [.github/workflows/ci-feasibility.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-lock:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Diagnose without weakening frozen production installation
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          mkdir -p diagnostics
+          bun install --lockfile-only --ignore-scripts
+          git diff -- bun.lock | tee diagnostics/windows-lock.patch
+          cp bun.lock diagnostics/windows.lock
+          bun install --frozen-lockfile
+          git diff --check
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-lock-diagnostic
+          path: diagnostics
+          retention-days: 7
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Export public source and exact formatting tools for offline review
+        run: |
+          mkdir -p diagnostics/tooling
+          git archive --format=tar.gz HEAD > diagnostics/source.tar.gz
+          git fetch --depth=1 origin 45ecb1be74cdfb6ad9f76e04e0cad07967a9cb46
+          git archive --format=tar.gz FETCH_HEAD .github > diagnostics/previous-ci.tar.gz
+          cp "$(command -v node)" diagnostics/tooling/node
+          cp "$(command -v bun)" diagnostics/tooling/bun
+          npm install --prefix diagnostics/tooling --ignore-scripts --no-audit --no-fund oxfmt@0.40.0 oxlint@1.56.0
+          tar -czf diagnostics/tooling.tar.gz -C diagnostics tooling
+          rm -rf diagnostics/tooling
+      - name: Record Stagehand registry availability
+        run: |
+          npm view @browserbasehq/stagehand dist-tags versions --json | tee diagnostics/stagehand-registry.json
+          npm view @browserbasehq/stagehand@4 version engines exports --json | tee diagnostics/stagehand-v4.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: offline-review-and-stagehand-feasibility
+          path: diagnostics
+          retention-days: 7
