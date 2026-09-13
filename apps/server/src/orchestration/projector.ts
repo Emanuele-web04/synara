@@ -1,3 +1,4 @@
+import { retainProviderHandoffHistory } from "@synara/shared/providerHandoff";
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
 import {
   OrchestrationCheckpointSummary,
@@ -262,7 +263,7 @@ function upsertThreadActivity(
   if (existingIndex >= 0 && compareThreadActivities(activities[existingIndex]!, activity) === 0) {
     const next = [...activities];
     next[existingIndex] = activity;
-    return next.slice(-MAX_THREAD_ACTIVITIES);
+    return retainProviderHandoffHistory(next, MAX_THREAD_ACTIVITIES);
   }
 
   const withoutExisting =
@@ -271,7 +272,7 @@ function upsertThreadActivity(
       : [...activities.slice(0, existingIndex), ...activities.slice(existingIndex + 1)];
   const last = withoutExisting.at(-1);
   if (!last || compareThreadActivities(last, activity) <= 0) {
-    return [...withoutExisting, activity].slice(-MAX_THREAD_ACTIVITIES);
+    return retainProviderHandoffHistory([...withoutExisting, activity], MAX_THREAD_ACTIVITIES);
   }
 
   let low = 0;
@@ -284,8 +285,9 @@ function upsertThreadActivity(
       high = middle;
     }
   }
-  return [...withoutExisting.slice(0, low), activity, ...withoutExisting.slice(low)].slice(
-    -MAX_THREAD_ACTIVITIES,
+  return retainProviderHandoffHistory(
+    [...withoutExisting.slice(0, low), activity, ...withoutExisting.slice(low)],
+    MAX_THREAD_ACTIVITIES,
   );
 }
 

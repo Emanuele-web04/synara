@@ -21,6 +21,7 @@ export type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
+      | "thread.provider-handoff-requested"
       | "thread.session-stop-requested";
   }
 >;
@@ -43,6 +44,7 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.user-input-response-requested",
   "thread.conversation-rollback-requested",
   "thread.message-edit-resend-requested",
+  "thread.provider-handoff-requested",
   "thread.session-stop-requested",
 ]);
 
@@ -57,6 +59,10 @@ export const isProviderIntentEvent = (event: OrchestrationEvent): event is Provi
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.created" ||
   event.type === "thread.archived" ||
+  // Provider handoff is a durable mini-saga: request/completion/failure activity
+  // ids and projection commands are deterministic, and the provider switch is
+  // serialized by ProviderService with rollback on rejected replacement.
+  event.type === "thread.provider-handoff-requested" ||
   // The claimed handler only performs the idempotent durable enqueue. Queue
   // draining runs after the delivery settles, so replay never repeats provider
   // dispatch as part of this claim.

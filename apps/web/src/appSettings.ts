@@ -328,6 +328,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableContinuousProviderHandoff: Schema.Boolean.pipe(withDefaults(() => false)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
@@ -682,6 +683,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    enableContinuousProviderHandoff: settings.enableContinuousProviderHandoff,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
@@ -776,6 +778,9 @@ export function appSettingsPatchToServerSettingsPatch(
 
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
+  }
+  if (hasOwn(patch, "enableContinuousProviderHandoff")) {
+    serverPatch.enableContinuousProviderHandoff = Boolean(patch.enableContinuousProviderHandoff);
   }
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
@@ -939,6 +944,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "enableContinuousProviderHandoff",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
     "antigravityBinaryPath",

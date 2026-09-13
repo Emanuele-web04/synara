@@ -55,6 +55,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
 
   return {
     enableAssistantStreaming: false,
+    enableContinuousProviderHandoff: false,
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",

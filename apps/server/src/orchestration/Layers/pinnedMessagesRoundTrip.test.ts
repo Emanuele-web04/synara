@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   CommandId,
+  EventId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ProjectId,
@@ -236,6 +237,158 @@ describe("thread annotations round-trip", () => {
       expect("notes" in (shellThread ?? {})).toBe(false);
     } finally {
       await system.dispose();
+    }
+  });
+});
+
+describe("continuous provider handoff round-trip", () => {
+  it("hydrates completed messages for handoff validation after a server restart", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-handoff-roundtrip-"));
+    const dbPath = path.join(stateDir, "state.sqlite");
+    let system = await createSystem(dbPath);
+    const createdAt = "2026-09-10T00:00:00.000Z";
+    const projectId = ProjectId.makeUnsafe("project-provider-handoff");
+    const threadId = ThreadId.makeUnsafe("thread-provider-handoff");
+
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-provider-handoff-project"),
+          projectId,
+          title: "Provider handoff",
+          workspaceRoot: "/tmp/provider-handoff",
+          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-provider-handoff-thread"),
+          threadId,
+          projectId,
+          title: "Provider handoff thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.messages.import",
+          commandId: CommandId.makeUnsafe("cmd-provider-handoff-import"),
+          threadId,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe("message-provider-handoff"),
+              role: "user",
+              text: "Continue this conversation with another provider.",
+              createdAt,
+              updatedAt: createdAt,
+            },
+          ],
+          createdAt,
+        }),
+      );
+
+      await system.dispose();
+      system = await createSystem(dbPath);
+
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.provider.handoff",
+            commandId: CommandId.makeUnsafe("cmd-provider-handoff-after-restart"),
+            threadId,
+            expectedSourceProvider: "codex",
+            targetModelSelection: { provider: "grok", model: "grok-code" },
+            createdAt: "2026-09-10T00:01:00.000Z",
+          }),
+        ),
+      ).resolves.toMatchObject({ sequence: expect.any(Number) });
+
+      // Work logs must not evict a pending transition or the permanent provider path.
+      for (let index = 0; index < 2_010; index += 1) {
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`handoff-noise-${index}`),
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`handoff-noise-${index}`),
+              kind: "tool.completed",
+              tone: "tool",
+              summary: "Tool completed",
+              payload: {},
+              turnId: null,
+              createdAt,
+            },
+            createdAt,
+          }),
+        );
+      }
+      await system.dispose();
+      system = await createSystem(dbPath);
+      const detail = Option.getOrNull(await system.run(system.query.getThreadDetailById(threadId)));
+      expect(
+        detail?.activities.find((activity) => activity.kind === "provider.handoff.requested"),
+      ).toMatchObject({
+        kind: "provider.handoff.requested",
+        payload: {
+          sourceModelSelection: { provider: "codex" },
+          targetModelSelection: { provider: "grok" },
+        },
+      });
+      const snapshot = await system.run(system.query.getSnapshot());
+      expect(
+        snapshot.threads[0]?.activities.some(
+          (activity) => activity.kind === "provider.handoff.requested",
+        ),
+      ).toBe(true);
+      await expect(
+        system.run(
+          system.engine.dispatch({
+            type: "thread.provider.handoff",
+            commandId: CommandId.makeUnsafe("duplicate-after-capped-restart"),
+            threadId,
+            expectedSourceProvider: "codex",
+            targetModelSelection: { provider: "grok", model: "grok-code" },
+            createdAt,
+          }),
+        ),
+      ).rejects.toThrow("still switching");
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.provider.handoff.complete",
+          commandId: CommandId.makeUnsafe("complete-after-capped-restart"),
+          threadId,
+          handoffCommandId: CommandId.makeUnsafe("cmd-provider-handoff-after-restart"),
+          handoffEventId: EventId.makeUnsafe("handoff-after-capped-restart"),
+          sourceModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          targetModelSelection: { provider: "grok", model: "grok-code" },
+          createdAt,
+        }),
+      );
+      await system.dispose();
+      system = await createSystem(dbPath);
+      const completed = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(completed.id).toBe(threadId);
+      expect(completed.modelSelection.provider).toBe("grok");
+      expect(completed.messages).toHaveLength(1);
+      expect(
+        completed.activities
+          .filter((activity) => activity.kind.startsWith("provider.handoff."))
+          .map((activity) => activity.kind),
+      ).toEqual(["provider.handoff.requested", "provider.handoff.completed"]);
+    } finally {
+      await system.dispose();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 });

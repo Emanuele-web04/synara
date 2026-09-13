@@ -70,6 +70,57 @@ const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationComma
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
 
+it.effect("decodes continuous provider handoff commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.provider.handoff",
+      commandId: "cmd-provider-handoff",
+      threadId: "thread-1",
+      expectedSourceProvider: "claudeAgent",
+      targetModelSelection: { provider: "grok", model: "grok-code" },
+      createdAt: "2026-09-10T10:00:00.000Z",
+    });
+    assert.equal(command.type, "thread.provider.handoff");
+
+    const completionInput = {
+      type: "thread.provider.handoff.complete",
+      commandId: "server:complete-provider-handoff",
+      threadId: "thread-1",
+      handoffCommandId: "cmd-provider-handoff",
+      handoffEventId: "event-provider-handoff",
+      sourceModelSelection: { provider: "claudeAgent", model: "claude-sonnet" },
+      targetModelSelection: { provider: "grok", model: "grok-code" },
+      createdAt: "2026-09-10T10:00:00.000Z",
+    };
+    const completion = yield* decodeOrchestrationCommand(completionInput);
+    assert.equal(completion.type, "thread.provider.handoff.complete");
+    assert.equal(
+      (yield* Effect.exit(decodeClientOrchestrationCommand(completionInput)))._tag,
+      "Failure",
+    );
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-provider-handoff",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.provider-handoff-requested",
+      occurredAt: "2026-09-10T10:00:00.000Z",
+      commandId: "cmd-provider-handoff",
+      causationEventId: null,
+      correlationId: "cmd-provider-handoff",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        sourceModelSelection: { provider: "claudeAgent", model: "claude-sonnet" },
+        targetModelSelection: { provider: "grok", model: "grok-code" },
+        createdAt: "2026-09-10T10:00:00.000Z",
+      },
+    });
+    assert.equal(event.type, "thread.provider-handoff-requested");
+  }),
+);
+
 it.effect("decodes last-known PRs persisted before draft/mergeability/diff fields existed", () =>
   Effect.gen(function* () {
     const legacy = yield* decodeThreadPullRequest({

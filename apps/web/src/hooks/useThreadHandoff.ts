@@ -3,10 +3,11 @@
 // Layer: Web hook
 // Exports: useThreadHandoff
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ProviderKind } from "@synara/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useAppSettings } from "../appSettings";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
@@ -18,7 +19,9 @@ import {
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
-import { serverSettingsQueryOptions } from "../lib/serverReactQuery";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
+import { providerModelsPrefetchQueryOptions } from "../lib/providerModelPrefetch";
+import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -26,11 +29,53 @@ import { type Thread } from "../types";
 
 export function useThreadHandoff() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+
+  const resolveTargetModelSelection = async (
+    thread: Thread,
+    targetProvider: ProviderKind,
+    projectDefaultModelSelection: Thread["modelSelection"] | null | undefined,
+    stickyModelSelectionByProvider: Partial<Record<ProviderKind, Thread["modelSelection"]>>,
+  ): Promise<Thread["modelSelection"]> => {
+    const hasKnownPiSelection =
+      targetProvider !== "pi" ||
+      stickyModelSelectionByProvider.pi?.provider === "pi" ||
+      projectDefaultModelSelection?.provider === "pi";
+    let discoveredFallbackModel: string | null = null;
+
+    if (!hasKnownPiSelection) {
+      const project = projects.find((entry) => entry.id === thread.projectId);
+      const cwd = resolveProviderDiscoveryCwd({
+        activeThreadWorktreePath: thread.worktreePath ?? null,
+        activeProjectCwd: project?.cwd ?? null,
+        serverCwd: serverConfigQuery.data?.cwd ?? null,
+      });
+      const discovered = await queryClient.fetchQuery(
+        providerModelsPrefetchQueryOptions({
+          provider: "pi",
+          settings,
+          cwd,
+          priority: "prefetch",
+        }),
+      );
+      discoveredFallbackModel = discovered.models[0]?.slug ?? null;
+    }
+
+    return resolveThreadHandoffModelSelection({
+      sourceThread: thread,
+      targetProvider,
+      projectDefaultModelSelection,
+      stickyModelSelectionByProvider,
+      discoveredFallbackModel,
+    });
+  };
 
   const createThreadHandoff = async (
     thread: Thread,
@@ -83,12 +128,12 @@ export function useThreadHandoff() {
       sourceThreadId: thread.id,
       projectId: thread.projectId,
       title: resolveThreadHandoffTitle(thread),
-      modelSelection: resolveThreadHandoffModelSelection({
-        sourceThread: thread,
+      modelSelection: await resolveTargetModelSelection(
+        thread,
         targetProvider,
-        projectDefaultModelSelection: project.defaultModelSelection,
+        project.defaultModelSelection,
         stickyModelSelectionByProvider,
-      }),
+      ),
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),
@@ -126,7 +171,63 @@ export function useThreadHandoff() {
     return nextThreadId;
   };
 
+  const continueThreadWithProvider = async (
+    thread: Thread,
+    targetProvider: ProviderKind,
+  ): Promise<Thread["id"]> => {
+    const api = readNativeApi();
+    if (!api) {
+      throw new Error("Native API not found");
+    }
+
+    const project = projects.find((entry) => entry.id === thread.projectId);
+    if (!project) {
+      throw new Error("Project not found for provider handoff.");
+    }
+    if (!canCreateThreadHandoff({ thread })) {
+      throw new Error("This thread cannot switch providers yet.");
+    }
+
+    const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
+      provider: targetProvider,
+      statuses: providerStatuses,
+      refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+    });
+    if (
+      !isEligibleHandoffTargetProvider({
+        sourceProvider: thread.modelSelection.provider,
+        targetProvider,
+        targetProviderEnabled: serverSettingsQuery.data?.providers[targetProvider].enabled,
+        targetProviderStatus: targetAvailability.status,
+      })
+    ) {
+      throw new Error(
+        targetAvailability.usable
+          ? "This provider is not available for the current thread."
+          : targetAvailability.unavailableReason,
+      );
+    }
+
+    const { stickyModelSelectionByProvider } = useComposerDraftStore.getState();
+    await api.orchestration.dispatchCommand({
+      type: "thread.provider.handoff",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      expectedSourceProvider: thread.modelSelection.provider,
+      targetModelSelection: await resolveTargetModelSelection(
+        thread,
+        targetProvider,
+        project.defaultModelSelection,
+        stickyModelSelectionByProvider,
+      ),
+      createdAt: new Date().toISOString(),
+    });
+
+    return thread.id;
+  };
+
   return {
     createThreadHandoff,
+    continueThreadWithProvider,
   };
 }
