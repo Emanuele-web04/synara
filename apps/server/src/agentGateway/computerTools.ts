@@ -797,6 +797,18 @@ export function makeAgentGatewayComputerTools(
    */
   const elementDigests = new Map<string, ComputerActionableElements>();
 
+  /**
+   * Digests key on thread × window × filter, and nothing purges them when a
+   * thread ends — over a long session they would grow without bound. The cap
+   * is far above the scopes one session realistically diffs; eviction loses
+   * only diff granularity, never a read the model is holding.
+   */
+  const rememberDigest = (key: string, elements: ComputerActionableElements) => {
+    elementDigests.delete(key);
+    elementDigests.set(key, elements);
+    while (elementDigests.size > 64) elementDigests.delete(elementDigests.keys().next().value!);
+  };
+
   /** Apps whose guidance note a thread has already been shown. */
   const appHintsSeen = new Set<string>();
 
@@ -1711,7 +1723,7 @@ export function makeAgentGatewayComputerTools(
           ? actionableElements(root, lastWindowId === undefined ? {} : { windowId: lastWindowId })
           : undefined;
         if (elements) {
-          elementDigests.set(digestScopeKey(threadId, lastWindowId, undefined), elements);
+          rememberDigest(digestScopeKey(threadId, lastWindowId, undefined), elements);
         }
         return {
           state: {
@@ -1856,7 +1868,7 @@ export function makeAgentGatewayComputerTools(
         // comparison is always against what this thread last saw in the scope.
         const digestKey = digestScopeKey(context.callerThreadId, windowId, labelContains);
         const before = elementDigests.get(digestKey);
-        if (elements) elementDigests.set(digestKey, elements);
+        if (elements) rememberDigest(digestKey, elements);
         const appHint = (() => {
           if (windowId === undefined) return undefined;
           const appName = rest.windows
@@ -1865,6 +1877,9 @@ export function makeAgentGatewayComputerTools(
           const note = appName === undefined ? undefined : APP_GUIDANCE[appName];
           const seenKey = JSON.stringify([context.callerThreadId, appName]);
           if (note === undefined || appHintsSeen.has(seenKey)) return undefined;
+          // Thread-keyed, never purged on thread end — bounded like the
+          // digests; eviction only re-shows a hint a stale entry suppressed.
+          while (appHintsSeen.size >= 256) appHintsSeen.delete(appHintsSeen.keys().next().value!);
           appHintsSeen.add(seenKey);
           return note;
         })();
@@ -2280,6 +2295,10 @@ export function makeAgentGatewayComputerTools(
         const resultWindow = outcome.result.windowId ?? capturedWindow?.windowId ?? incomingWindow;
         if (traveledY === 0 || willBeUnchanged) {
           const current = unchangedScrolls.get(threadId);
+          // One entry per thread, never purged on thread end — bounded like
+          // the digests; losing a streak only resets the repeated-scroll nudge.
+          while (unchangedScrolls.size >= 256 && !unchangedScrolls.has(threadId))
+            unchangedScrolls.delete(unchangedScrolls.keys().next().value!);
           if (current && current.windowId === resultWindow) {
             unchangedScrolls.set(threadId, { windowId: resultWindow, count: current.count + 1 });
           } else {
