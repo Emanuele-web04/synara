@@ -1,4 +1,9 @@
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
+import {
+  resolveQueuedTurnDispatchSettings,
+  queuedChatTurnDispatchFields,
+  queuedPlanFollowUpDispatchFields,
+} from "../ChatView.logic";
 import { useCallback } from "react";
 import {
   filterPromptProviderMentionReferences,
@@ -46,6 +51,8 @@ import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
 
 export function useChatTurnSubmission({
+  turnDispatchSettings,
+  setComposerDraftComputerControl,
   threadId,
   hasLiveTurn,
   lateComposerSendHandlersRef,
@@ -53,9 +60,6 @@ export function useChatTurnSubmission({
   isConnecting,
   sendPreflightInFlightRef,
   sendInFlightRef,
-  runtimeMode,
-  interactionMode,
-  envMode,
   showPlanFollowUpPrompt,
   activeProposedPlan,
   hasQueueableLiveTurn,
@@ -156,8 +160,6 @@ export function useChatTurnSubmission({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  providerOptionsForDispatch,
   pendingAutomationConversationRef,
   setPendingAutomationConversation,
   pendingAutomationConversation,
@@ -359,13 +361,18 @@ export function useChatTurnSubmission({
       const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
       const selectedPromptEffortForSend =
         queuedChatTurn?.selectedPromptEffort ?? selectedPromptEffort;
-      const selectedModelSelectionForSend =
-        queuedChatTurn?.modelSelection ?? selectedModelSelection;
-      const providerOptionsForDispatchForSend =
-        queuedChatTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
-      let interactionModeForSend = queuedChatTurn?.interactionMode ?? interactionMode;
-      const envModeForSend = queuedChatTurn?.envMode ?? envMode;
+      // A queued turn replays the settings it froze when it was queued; a live send
+      // uses the composer's current ones.
+      const dispatchSettingsForSend = resolveQueuedTurnDispatchSettings(
+        turnDispatchSettings,
+        queuedChatTurn,
+      );
+      const selectedModelSelectionForSend = dispatchSettingsForSend.modelSelection;
+      const providerOptionsForDispatchForSend = dispatchSettingsForSend.providerOptions;
+      const enableComputerControlForSend = dispatchSettingsForSend.enableComputerControl;
+      const runtimeModeForSend = dispatchSettingsForSend.runtimeMode;
+      let interactionModeForSend = dispatchSettingsForSend.interactionMode;
+      const envModeForSend = dispatchSettingsForSend.envMode;
       const {
         trimmedPrompt: trimmed,
         sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -432,9 +439,7 @@ export function useChatTurnSubmission({
               selectedProvider,
               selectedModel,
               selectedPromptEffort,
-              modelSelection: selectedModelSelection,
-              ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-              runtimeMode,
+              ...queuedPlanFollowUpDispatchFields(dispatchSettingsForSend),
             });
             return true;
           }
@@ -595,14 +600,14 @@ export function useChatTurnSubmission({
           selectedProvider: selectedProviderForSend,
           selectedModel: selectedModelForSend,
           selectedPromptEffort: selectedPromptEffortForSend,
-          modelSelection: selectedModelSelectionForSend,
-          ...(providerOptionsForDispatchForSend
-            ? { providerOptionsForDispatch: providerOptionsForDispatchForSend }
-            : {}),
-          ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-          runtimeMode: runtimeModeForSend,
-          interactionMode: interactionModeForSend,
-          envMode: envModeForSend,
+          ...queuedChatTurnDispatchFields(
+            {
+              ...dispatchSettingsForSend,
+              // A plan follow-up carrying attachments rewrites the mode mid-send.
+              interactionMode: interactionModeForSend,
+            },
+            sourceProposedPlanForSend,
+          ),
         });
         return true;
       }
@@ -811,6 +816,17 @@ export function useChatTurnSubmission({
           description: toastCopy.description,
         });
       }
+      // A chat's first send records the new-chat computer-control default as the
+      // chat's own choice, so a later change to the machine-wide setting leaves
+      // this chat as it was. Read the store, not the render closure: the draft
+      // may have been touched since this send began.
+      if (
+        enableComputerControlForSend &&
+        useComposerDraftStore.getState().draftsByThreadId[threadIdForSend]
+          ?.enableComputerControl === undefined
+      ) {
+        setComposerDraftComputerControl(threadIdForSend, true);
+      }
       // Queued turns are dispatched from their captured snapshot, so this send path
       // must not clear a separate live draft the user may already be editing.
       if (queuedChatTurn === null) {
@@ -831,6 +847,7 @@ export function useChatTurnSubmission({
       }
 
       return executePreparedTurn({
+        dispatchSettingsForSend,
         nextThreadEnvMode,
         nextThreadBranch,
         nextThreadWorktreePath,
@@ -888,9 +905,6 @@ export function useChatTurnSubmission({
       isConnecting,
       sendPreflightInFlightRef,
       sendInFlightRef,
-      runtimeMode,
-      interactionMode,
-      envMode,
       showPlanFollowUpPrompt,
       activeProposedPlan,
       hasQueueableLiveTurn,
@@ -941,6 +955,8 @@ export function useChatTurnSubmission({
       composerPastedTexts,
       composerPullRequestContexts,
       restoredQueuedSourceProposedPlanRef,
+      turnDispatchSettings,
+      setComposerDraftComputerControl,
       enqueueQueuedComposerTurn,
       setComposerDraftPrompt,
       setComposerTrigger,
@@ -957,8 +973,6 @@ export function useChatTurnSubmission({
       selectedProvider,
       selectedModel,
       selectedPromptEffort,
-      selectedModelSelection,
-      providerOptionsForDispatch,
       pendingAutomationConversationRef,
       setPendingAutomationConversation,
       pendingAutomationConversation,
