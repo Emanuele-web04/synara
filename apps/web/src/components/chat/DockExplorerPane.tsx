@@ -5,7 +5,7 @@
 // Layer: Chat right-dock UI
 // Exports: DockExplorerPane
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ThreadId } from "@synara/contracts";
 import { isNormalizedWindowsAbsolutePath } from "@synara/shared/path";
@@ -15,6 +15,7 @@ import { directoryChain, useExplorerRevealRequestStore } from "~/explorerRevealR
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { projectListDirectoriesQueryOptions } from "~/lib/projectReactQuery";
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { WorkspaceExplorerSidebar } from "./workspaceExplorer";
@@ -90,8 +91,12 @@ export const DockExplorerPane = function DockExplorerPane(props: {
     };
   }, [revealRequest, props.workspaceRoot, props.threadId, queryClient]);
 
+  const selectionRequestRef = useRef(0);
   const handleSelectFile = (path: string) => {
-    setSelectedFilePath(path);
+    const request = ++selectionRequestRef.current;
+    void flushWorkspaceEditors(queryClient, props.workspaceRoot).then((saved) => {
+      if (saved && request === selectionRequestRef.current) setSelectedFilePath(path);
+    });
   };
 
   const handleToggleDirectory = (path: string) => {

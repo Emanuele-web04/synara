@@ -148,6 +148,14 @@ Update Claude Code, confirm the account exposes the expected model, and refresh 
 
 Compare the selected model, permission mode, project settings, local instructions, and executable path. A different Claude installation or configuration source can produce different behavior.
 
+## Usage history and context compaction
+
+Synara 0.8.4 corrects repeated Claude response accounting and distinguishes current context usage from accumulated processed tokens. Profile Stats counts verified completed model totals without adding cache or thinking tokens twice, and avoids counting mirrored subagents a second time.
+
+Older unverifiable processed totals are hidden rather than presented as accurate. Historical recovery is partial: missing raw results and already-purged aggregates cannot be reconstructed, so older charts can show less usage or incomplete history after the update. This is an accounting correction, not evidence that your subscription usage or bill decreased.
+
+A compaction icon indicates active context compaction. Wait for compaction to finish before treating a quiet transcript as a stalled response. Pending questions and drafted answers have recovery handling; see [Tasks and runtime](/docs/troubleshooting/tasks-and-runtime#recover-expired-questions).
+
 ## Official documentation
 
 - [Set up Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)

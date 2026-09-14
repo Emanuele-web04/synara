@@ -279,7 +279,7 @@ function handleCheckoutError(
                   actionProps: {
                     children: "Discard stash",
                     className:
-                      "border-destructive bg-destructive text-white shadow-destructive/24 hover:bg-destructive/90",
+                      "text-destructive [:hover,[data-pressed]]:bg-destructive/10 [:hover,[data-pressed]]:text-destructive",
                     onClick: () => {
                       closeActiveBranchRecoveryToast();
                       input.onRequestDiscardStash({ cwd: input.cwd });

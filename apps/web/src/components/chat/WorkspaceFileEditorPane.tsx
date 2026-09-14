@@ -67,7 +67,6 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
           conflict={session.state.conflict}
           onReload={session.requestReload}
           onOverwrite={session.overwrite}
-          onDismiss={session.dismissConflict}
         />
       ) : null}
       {session.loadError ? (

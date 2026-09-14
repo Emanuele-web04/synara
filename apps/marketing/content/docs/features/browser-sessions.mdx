@@ -1,0 +1,51 @@
+---
+title: Browser logins & sessions
+description: Manage saved accounts, import browser cookies deliberately, and understand shared sessions and optional Safari setup.
+---
+
+Tabs and browser tool access belong to a task, but cookies and signed-in sessions are shared across Synara browser tabs and agent workflows. Moving a tab between the floating browser and right dock does not create a separate session.
+
+## Saved logins
+
+In the desktop app, open the browser toolbar’s **Saved logins** key button to manage locally saved accounts. The list shows each site, username and whether the login was saved by you or an agent. An unfinished signup can appear separately from a saved account.
+
+Under **Saving & access**:
+
+- **Offer to save passwords** enables save and update prompts for supported login forms in Synara’s browser. It is off by default. Choose **Save**, **Update** or **Not now** when prompted.
+- **Autosave accepted logins** skips those prompts when saving is enabled. It is off by default and requires **Offer to save passwords**. Turning password-saving offers off also turns autosave off.
+- **Allow agents to find saved accounts** controls discovery of matching account metadata and is on by default. Matching uses the exact page origin. Agent password filling and password generation are unavailable in this release.
+
+Use **Set up** beside **Master password** to set a password of at least 12 characters, entered twice. Where secure OS storage is available, it protects the vault key; if it is unavailable, set the master password before using the locked vault. A forgotten master password cannot be reset from this interface.
+
+After setup, **Lock saved logins** locks vault access; use **Unlock** with the master password to access it again. Revealing any saved password also requires the master password. The reveal lasts up to 20 seconds and closes when the app loses focus, the document becomes hidden, the dialog closes or you select **Hide password**. Use a login’s delete button and confirm **Delete** to remove that saved login.
+
+Saved login deletion and vault locking affect the saved-password vault. They do not sign you out of websites or remove imported browser cookies. Use the website’s sign-out controls to end a signed-in session.
+
+## Import an existing browser session
+
+Cookie import is available through the desktop browser’s **Saved logins** dialog when a destination tab is selected. It copies compatible cookies from an available Chrome, Safari or Edge profile; available browsers and profiles depend on the platform and installed native reader. This imports signed-in browser sessions, not passwords into the Saved logins list.
+
+1. Select the Synara browser tab that should receive the session. For a site-only import, navigate to that site first.
+2. Open **Saved logins**, then **Import browser cookies**.
+3. Choose **Import scope**, **Browser** and **Profile**. **This site** includes the site, its subdomains and matching parent domains. **All sites in this profile** imports every compatible cookie in that profile.
+4. For a whole-profile import, select the checkbox granting Synara and its agents access to all imported signed-in sessions.
+5. Select **Import for this site** or **Import all sites**. Keep the destination selected and avoid navigation while the import runs.
+6. Check the imported and skipped counts. Confirm the page’s signed-in state afterward; some cookies cannot transfer and the site may still require a fresh sign-in.
+
+Imported sessions are shared across Synara browser tabs and agent workflows. Choosing **This site** narrows the copied domains; it does not create a private session for that task.
+
+Compatible imported session cookies can be restored after a clean app shutdown using secure local storage. An interrupted run’s session-cookie snapshot is discarded, and unavailable secure storage can prevent restoration. Import does not guarantee that every website remains signed in after a restart.
+
+## Optional Safari setup on macOS
+
+Safari cookie import may require macOS Full Disk Access. The optional **Bring your Safari logins along?** introduction offers **Open System Settings** or **Not now**. Nothing is copied merely by opening or completing this introduction.
+
+To configure it later, open **Settings → General → Safari import setup**:
+
+1. Open **System Settings → Privacy & Security → Full Disk Access**.
+2. Enable the running Synara app. If it is not listed, choose **Show app in Finder** and drag that app into the list. The setup uses the actual running app bundle’s name and path.
+3. Quit and reopen Synara, then explicitly run the cookie import from the browser.
+
+Full Disk Access is a broad macOS permission that reaches beyond Safari. You can decline and sign in directly in Synara instead. Opening System Settings or dismissing the setup does not prove that macOS has granted access; a later import reports the actual reader outcome.
+
+For browser interactions and embedded sign-in popups, continue with [Browser verification](/docs/workflows/browser-verification). See [Browser troubleshooting](/docs/troubleshooting/browser) for reader errors, locked saved logins, and persistence failures.

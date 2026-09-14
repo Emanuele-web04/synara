@@ -21,8 +21,10 @@ This document covers build-only native validation and publishing desktop release
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
 - Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
-- Published macOS and Windows artifacts must be signed. Build-only runs may
-  produce unsigned artifacts when signing secrets are unavailable.
+- Published macOS artifacts must be signed. Windows publication currently uses
+  an explicit version-scoped unsigned exception; otherwise Azure signing is
+  required. Build-only runs may produce unsigned artifacts when signing secrets
+  are unavailable.
 
 ## Desktop auto-update notes
 
@@ -133,10 +135,17 @@ Notes:
 
 ## 3) Azure Trusted Signing setup (Windows)
 
-Published Windows installers must be signed with Azure Trusted Signing. The
-workflow fails closed when any required signing value is absent; unsigned
-Windows artifacts are supported only for build-only validation runs. Signing
-requires all of the following secrets:
+The current Windows release policy publishes x64 installers unsigned under an
+explicit version-scoped exception. Before pushing the release tag, set the
+repository Actions variable `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` to the exact
+version without the `v` prefix (for example, `0.8.4`). The workflow checks equality
+with the resolved release version before packaging; do not use a permanent broad
+opt-out. Packaging, source provenance, startup smoke, and artifact upload must
+still pass. Missing Azure credentials are expected for this unsigned path.
+
+Without the matching exception, published Windows installers must be signed with
+Azure Trusted Signing, and the workflow fails closed when a required signing
+value is absent. A requested signed release requires all of the following secrets:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -162,7 +171,7 @@ Signing checklist:
 6. Add Azure secrets listed above in GitHub Actions secrets.
 7. Re-run a build-only workflow and confirm the Windows installer is signed.
 
-Before tagging a release, run a build-only workflow and verify the generated
+For a signed release, run a build-only workflow and verify the generated
 installer's Authenticode identity matches both the configured publisher name and
 full subject distinguished name.
 
@@ -186,6 +195,7 @@ full subject distinguished name.
 - macOS build unsigned when expected signed:
   - Check all Apple secrets are populated and non-empty.
 - Published Windows build rejected before packaging:
-  - Check all eight Azure ATS, identity, and auth secrets are populated and non-empty.
+  - For the unsigned release policy, check that `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` matches the exact version without `v`.
+  - For a signed release, check all eight Azure ATS, identity, and auth secrets are populated and non-empty.
 - Build fails with signing error:
   - Re-check certificate/profile names and tenant/client credentials.

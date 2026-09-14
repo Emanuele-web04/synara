@@ -88,6 +88,7 @@ import {
 } from "../composerDraftStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import {
+  buildGoalSlashCommandPrompt,
   canExecuteSideSlashCommand,
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -253,7 +254,8 @@ import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanne
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputNotice";
-import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
+import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
+import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -375,6 +377,9 @@ const EMPTY_PINNED_MESSAGES: readonly PinnedMessage[] = [];
 const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+
+/** Ties the composer `+` trigger to the panel it opens above the editor. */
+const COMPOSER_EXTRAS_PANEL_ID = "composer-extras-panel";
 
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 
@@ -721,6 +726,9 @@ export default function ChatView({
   const [composerCommandPicker, setComposerCommandPicker] = useState<
     null | "fork-target" | "review-target"
   >(null);
+  // The composer `+` panel shares the floating slot above the editor with the
+  // slash/mention command menu, so only one of the two is ever open.
+  const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -762,6 +770,7 @@ export default function ChatView({
     // render->effect->render cascade; the pickers already closed post-commit.
     const settle = window.setTimeout(() => {
       setComposerCommandPicker(null);
+      setIsComposerExtrasPanelOpen(false);
       setIsModelPickerOpen(false);
       setIsTraitsPickerOpen(false);
       setThreadFindOpen(false);
@@ -770,6 +779,7 @@ export default function ChatView({
     return () => window.clearTimeout(settle);
   }, [
     setComposerCommandPicker,
+    setIsComposerExtrasPanelOpen,
     setIsModelPickerOpen,
     setIsTraitsPickerOpen,
     setThreadFindOpen,
@@ -2041,6 +2051,10 @@ export default function ChatView({
     normalComposerMenuItems,
   ]);
   const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
+  // The `+` panel yields the floating slot to the slash/mention menu as soon as a
+  // trigger is typed, so the two can never render over each other.
+  const composerExtrasPanelOpen = isComposerExtrasPanelOpen && !composerMenuOpen;
+  const composerOverlayOpen = composerMenuOpen || composerExtrasPanelOpen;
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -4334,14 +4348,24 @@ export default function ChatView({
     editorActions: slashEditorActions,
   });
 
-  // Prefills "/goal <current text>" so editing reuses the same slash-command path
+  // Keep Goal menu drafts literal while reusing slash-command chips and persistence.
+  const insertGoalSlashCommandInComposer = useCallback(() => {
+    const currentPrompt = promptRef.current;
+    if (/^\s*\/goal\b/i.test(currentPrompt)) {
+      scheduleComposerFocus();
+      return;
+    }
+    setComposerPromptValue(buildGoalSlashCommandPrompt(currentPrompt));
+  }, [promptRef, scheduleComposerFocus, setComposerPromptValue]);
+
+  // Prefills a literal goal so editing reuses the same slash-command path
   // that created the goal, mirroring how queued turns restore into the composer.
   const editThreadGoalInComposer = useCallback(() => {
     const currentGoal = activeThread?.goal?.trim();
     if (!activeThread || !currentGoal) {
       return;
     }
-    const nextPrompt = `/goal ${currentGoal}`;
+    const nextPrompt = buildGoalSlashCommandPrompt(currentGoal);
     promptRef.current = nextPrompt;
     clearComposerDraftContent(activeThread.id);
     setComposerDraftPrompt(activeThread.id, nextPrompt);
@@ -4680,14 +4704,15 @@ export default function ChatView({
   const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
   const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
     <>
-      <ComposerExtrasMenu
-        interactionMode={interactionMode}
-        supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-        fastModeEnabled={composerTraitSelection.fastModeEnabled}
-        threadId={threadId}
-        onAddAttachments={addComposerAttachments}
-        onToggleFastMode={toggleFastMode}
-        onInteractionModeChange={handleInteractionModeChange}
+      <ComposerExtrasTrigger
+        open={isComposerExtrasPanelOpen}
+        panelId={COMPOSER_EXTRAS_PANEL_ID}
+        onToggle={() => {
+          setIsComposerExtrasPanelOpen((open) => !open);
+          // The panel is keyboard-driven from the editor: keep the caret where the
+          // user left it so typing (and Escape) keep working while it is open.
+          scheduleComposerFocus();
+        }}
       />
       {!isVoiceRecording && !isVoiceTranscribing ? (
         <RuntimeUsageControls
@@ -5175,7 +5200,7 @@ export default function ChatView({
               className={cn(
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
                 composerProviderState.composerFrameClassName,
-                composerMenuOpen && !isComposerApprovalState && "overflow-visible",
+                composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                 isSidechatExpired && "pointer-events-none opacity-60",
               )}
               aria-disabled={isSidechatExpired}
@@ -5184,7 +5209,7 @@ export default function ChatView({
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
                   composerProviderState.composerSurfaceClassName,
-                  composerMenuOpen && !isComposerApprovalState && "overflow-visible",
+                  composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
                 <ComposerInputBanners
@@ -5212,12 +5237,28 @@ export default function ChatView({
                 <div
                   className={cn(
                     COMPOSER_EDITOR_PADDING_CLASS_NAME,
-                    composerMenuOpen && !isComposerApprovalState && "overflow-visible",
+                    composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                   )}
                 >
-                  {composerMenuOpen && !isComposerApprovalState ? (
+                  {composerOverlayOpen && !isComposerApprovalState ? (
                     <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
-                      {isLocalFolderBrowserOpen ? (
+                      {composerExtrasPanelOpen ? (
+                        <ComposerExtrasPanel
+                          panelId={COMPOSER_EXTRAS_PANEL_ID}
+                          interactionMode={interactionMode}
+                          supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+                          fastModeEnabled={composerTraitSelection.fastModeEnabled}
+                          threadId={threadId}
+                          onAddAttachments={addComposerAttachments}
+                          onToggleFastMode={toggleFastMode}
+                          onInteractionModeChange={handleInteractionModeChange}
+                          onInsertGoal={insertGoalSlashCommandInComposer}
+                          onClose={() => {
+                            setIsComposerExtrasPanelOpen(false);
+                            scheduleComposerFocus();
+                          }}
+                        />
+                      ) : isLocalFolderBrowserOpen ? (
                         <ComposerLocalDirectoryMenu
                           mentionQuery={mentionTriggerQuery}
                           rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
@@ -5743,6 +5784,7 @@ export default function ChatView({
                     forkSource={forkSource}
                     isTemporaryThread={isThreadTemporary}
                     timelineEntries={timelineEntries}
+                    messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
@@ -5968,6 +6010,7 @@ export default function ChatView({
               project: activeProject,
               sourceThread: activeThread,
               selectedModelSelection,
+              runtimeMode,
             })
           }
           onNewChat={(selection, prompt, envMode, intent) =>

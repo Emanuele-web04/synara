@@ -342,6 +342,23 @@ function hasStartupProof(logPath: string): boolean {
   }
 }
 
+const STARTUP_DIAGNOSTIC_TAIL_LENGTH = 16_384;
+
+export function readPackagedStartupLogTails(logDirectory: string): string {
+  return ["desktop-main.log", "server-child.log"]
+    .map((name) => {
+      try {
+        const tail = readFileSync(join(logDirectory, name), "utf8").slice(
+          -STARTUP_DIAGNOSTIC_TAIL_LENGTH,
+        );
+        return `${name}:\n${tail}`;
+      } catch {
+        return `${name}: unavailable`;
+      }
+    })
+    .join("\n");
+}
+
 export function resolveNativePackagedDesktopPlatform(
   platform: NodeJS.Platform,
 ): PackagedDesktopPlatform {
@@ -364,11 +381,14 @@ export async function verifyPackagedDesktopStartup(
   mkdirSync(extractionRoot, { recursive: true });
 
   let child: ChildProcess | null = null;
+  let logDirectory: string | null = null;
+  let outputTail = "";
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
     verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
-    const logPath = join(env.SYNARA_HOME!, "userdata", "logs", "desktop-main.log");
+    logDirectory = join(env.SYNARA_HOME!, "userdata", "logs");
+    const logPath = join(logDirectory, "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {
       cwd: launch.cwd,
       env,
@@ -387,8 +407,11 @@ export async function verifyPackagedDesktopStartup(
     child.once("error", (error) => {
       childOutcome.launchError = error;
     });
-    child.stdout?.resume();
-    child.stderr?.resume();
+    const retainOutputTail = (chunk: Buffer) => {
+      outputTail = (outputTail + chunk.toString("utf8")).slice(-STARTUP_DIAGNOSTIC_TAIL_LENGTH);
+    };
+    child.stdout?.on("data", retainOutputTail);
+    child.stderr?.on("data", retainOutputTail);
 
     const deadline = Date.now() + options.timeoutMs;
     while (Date.now() < deadline) {
@@ -409,6 +432,12 @@ export async function verifyPackagedDesktopStartup(
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+  } catch (error) {
+    if (logDirectory) {
+      console.error(readPackagedStartupLogTails(logDirectory));
+      console.error(`Packaged process output tail:\n${outputTail || "No output captured."}`);
+    }
+    throw error;
   } finally {
     if (child) {
       await terminateProcessTree(child);
