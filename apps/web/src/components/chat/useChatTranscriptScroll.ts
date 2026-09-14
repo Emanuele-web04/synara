@@ -404,7 +404,12 @@ export function useChatTranscriptScroll({
       window.removeEventListener("keyup", releaseKeyboardGesture);
       window.removeEventListener("blur", releaseKeyboardGesture);
     };
-  }, [legendListRef, clearTranscriptAutoFollow, onMessagesScrollGesture, settlePendingScrollGesture]);
+  }, [
+    legendListRef,
+    clearTranscriptAutoFollow,
+    onMessagesScrollGesture,
+    settlePendingScrollGesture,
+  ]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
