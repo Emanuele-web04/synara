@@ -143,6 +143,10 @@ Restart Synara after updating.
 
 Run `codex login status`, then `codex login` if needed. For a custom model provider, verify its required environment variables and Codex configuration instead.
 
+### Authentication check reports `url is not supported for stdio`
+
+This is a configuration error: the same MCP server has both HTTP and stdio settings. Synara rebuilds its saved, managed gateway entry with only its HTTP settings when checking Codex or starting a session. Your original Codex configuration and other MCP servers remain unchanged. If `codex login status` also fails outside Synara, correct the conflicting transport settings in that Codex configuration.
+
 ### Models or reasoning options differ
 
 Check the selected Codex installation, account, CLI version, and `config.toml`. Synara does not invent model access beyond what the runtime reports.
