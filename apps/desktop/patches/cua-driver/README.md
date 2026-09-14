@@ -33,6 +33,17 @@ Semantic AX actions distinguish pre-dispatch refusal from attempted or uncertain
 mutation. A submitted selection/value write never falls through to another
 actuator, and exact foreground activation no longer requests all sibling windows.
 
+Revision 6 bounds post-action window observation for background delivery through
+`SYNARA_CUA_BACKGROUND_OBSERVATION_MS` — the same env-var mechanism foreground
+delivery already uses — and fetches each accessibility-tree element's attribute
+set in one `AXUIElementCopyMultipleAttributeValues` IPC call instead of the
+previous per-attribute round-trips. Per-attribute failures decode through the
+same error markers the API returns; elements that do not serve `AXActionNames`
+through the attribute API still take the dedicated call. Observation and
+dispatch semantics are unchanged: the detector's wildcard suppression and
+result hints still cover the window in which action side-effects typically
+appear.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event
