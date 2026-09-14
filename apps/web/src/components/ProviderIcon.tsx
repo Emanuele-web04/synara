@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import {
   AntigravityIcon,
   ClaudeAI,
+  ClineIcon,
   CursorIcon,
   DevinIcon,
   DroidIcon,
@@ -68,6 +69,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   devin: DevinIcon,
+  cline: ClineIcon,
   antigravity: AntigravityIcon,
   grok: GrokIcon,
   droid: DroidIcon,
