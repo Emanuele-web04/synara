@@ -282,7 +282,7 @@ export function ComputerSettingsPanel({
             }
             description={
               availabilityView.kind === "ready"
-                ? "The desktop is ready. Invoke /computer-use with your task, or ask to use Synara computer use. Its tools load for that request only."
+                ? "The desktop is ready. Turn on Computer control below to let the agent use the desktop."
                 : availabilityView.description
             }
             status={[setup.note, ...healthNotes].filter(Boolean).join(" ") || undefined}
@@ -394,8 +394,27 @@ export function ComputerSettingsPanel({
 
       <SettingsSection title="Computer control">
         <SettingsRow
-          title="How agents use the desktop"
-          description="Invoke /computer-use when you need desktop control. In Full access, routine actions continue automatically; approval mode asks once for the active Computer task. Provider risk reviews and consequential-action confirmations still apply, and clipboard reads remain separate. The model must support images and tool calls. Set up checks system permissions; it does not load Computer tools into ordinary messages. Looking (windows/state/screenshots) never asks; acting asks once per task, clipboard always asks."
+          title="Computer control"
+          description="Let the agent use the desktop in any chat. Approval gates and Stop still apply."
+          resetAction={
+            settings.computerControlEnabled !== defaults.computerControlEnabled ? (
+              <SettingResetButton
+                label="computer control"
+                onClick={() =>
+                  updateSettings({ computerControlEnabled: defaults.computerControlEnabled })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.computerControlEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ computerControlEnabled: Boolean(checked) })
+              }
+              aria-label="Let the agent use the desktop in any chat"
+            />
+          }
         />
       </SettingsSection>
     </div>

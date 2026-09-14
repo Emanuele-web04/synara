@@ -1,6 +1,5 @@
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
-import { isComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 // FILE: ProviderCommandReactor.ts
@@ -2199,50 +2198,39 @@ const make = Effect.gen(function* () {
       return;
     }
     const activation = computerActivationMetadata(input);
-    // P1 activation stickiness. A dispatch-path "off" is the composer's
-    // resolved default on every ordinary turn (the composer sends a resolved
-    // mode on each turn and has no persistent switch), so it is
-    // indistinguishable from an explicit chip-off on the wire and must never
-    // clear durable intent: admitControl("off") would wipe chatGeneration via
-    // recordChatIntent(false). Ordinary off turns inherit the live chat intent
-    // instead; only explicit offs clear, through Stop (interruptProviderTurn)
-    // and the revoke/disable paths, never here. A frozen single-shot request
-    // without a live user invocation likewise stays single-shot: only a real
-    // invocation (explicitInvocation) promotes a request to durable chat.
-    const explicitInvocation =
-      input.turnKind !== "goal-continuation" &&
-      (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
-      isComputerInvocation({ text: input.messageText, skills: input.skills });
+    // The Settings switch is the only consent. A dispatch-path switch-off is
+    // the composer's resolved default on every ordinary turn (the composer
+    // sends the switch on each turn and carries no other intent signal), so it
+    // is indistinguishable from an explicit switch-off on the wire and must
+    // never clear durable intent: admitControl("off") would wipe chatGeneration
+    // via recordChatIntent(false). Ordinary switch-off turns inherit the live
+    // chat intent instead; only explicit offs clear, through Stop
+    // (interruptProviderTurn) and the revoke/disable paths, never here. A
+    // switch-on turn admits durable chat intent when the generation gate
+    // allows it; a stale generation stays off for that turn.
+    const switchOn = input.enableComputerControl === true;
+    const generation = activation.computerControlGeneration;
     const enableComputerControl = Option.isNone(computerService)
       ? activation.enableComputerControl
       : input.turnKind === "goal-continuation"
-        ? isComputerInvocation({ text: input.messageText, skills: input.skills })
-          ? yield* Effect.promise(() =>
-              computerService.value.manager.admitControl(
-                input.threadId,
-                activation.computerControlMode,
-                activation.computerControlGeneration,
-                true,
-              ),
-            )
-          : computerService.value.manager.canContinueChatControl(input.threadId)
-        : input.dispatchMode === "steer" && activation.computerControlMode === "off"
-          ? false // A consumed request chip does not change the live turn's intent.
-          : activation.computerControlMode === "off"
-            ? computerService.value.manager.canContinueChatControl(input.threadId)
-            : yield* Effect.promise(() =>
+        ? computerService.value.manager.canContinueChatControl(input.threadId)
+        : input.dispatchMode === "steer" && !switchOn
+          ? false // A switch-off steer does not change the live turn's intent.
+          : switchOn
+            ? yield* Effect.promise(() =>
                 computerService.value.manager.admitControl(
                   input.threadId,
-                  activation.computerControlMode,
-                  activation.computerControlGeneration,
-                  explicitInvocation,
+                  "chat",
+                  generation,
+                  false,
                 ),
-              );
+              )
+            : computerService.value.manager.canContinueChatControl(input.threadId);
     yield* Effect.logDebug("provider command reactor computer inputs", {
       threadId: input.threadId,
+      switchOn,
       mode: activation.computerControlMode,
-      generation: activation.computerControlGeneration,
-      explicitInvocation,
+      generation,
       enableComputerControl,
     });
     const transcriptBoundaryMessageId =

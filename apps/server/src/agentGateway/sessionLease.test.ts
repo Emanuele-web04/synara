@@ -277,7 +277,7 @@ describe("AgentGatewaySessionLease", () => {
     expect(revokeSessionToken).toHaveBeenCalledWith("gateway-token");
   });
 
-  it("derives the computer capability from the session start input", () => {
+  it("derives the computer capability from the switch bool in the session start input", () => {
     const connectionForThread = vi.fn(() => ({
       url: "http://127.0.0.1:48123/mcp",
       bearerToken: "computer-token",

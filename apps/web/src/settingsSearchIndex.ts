@@ -325,9 +325,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "computer:how-agents-use-the-desktop",
     section: "computer",
-    title: "How agents use the desktop",
+    title: "Computer control",
     keywords:
-      "Computer control is not a switch: any chat's agent can see and drive the desktop when a task needs it. Mutating actions and clipboard reads go through the chat's own approval, so a full-access chat runs them without asking. enable enabling toggle permission desktop agent computer use screenshots approval",
+      "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
   },
 
   // ── Behavior ──────────────────────────────────────────────────────────────────

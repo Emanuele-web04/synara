@@ -853,6 +853,58 @@ export const makeAgentGateway = Effect.gen(function* () {
       );
   };
 
+  // First mutation of a turn prepends a transcript line naming the switch.
+  // The disclosure rides as its own activity so the chat says Computer
+  // control is ON from the first input, once per turn.
+  const COMPUTER_CONTROL_ON_DISCLOSURE =
+    "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
+  const surfacedComputerControlDisclosures = new Set<string>();
+  const SURFACED_CONTROL_DISCLOSURES_MAX = 512;
+  const surfaceComputerControlDisclosure = (
+    threadId: string,
+    turnId: string | null,
+  ): Effect.Effect<void> => {
+    const dedupeKey = `${threadId}:${turnId ?? "no-turn"}`;
+    if (surfacedComputerControlDisclosures.has(dedupeKey)) return Effect.void;
+    while (surfacedComputerControlDisclosures.size >= SURFACED_CONTROL_DISCLOSURES_MAX) {
+      surfacedComputerControlDisclosures.delete(
+        surfacedComputerControlDisclosures.keys().next().value!,
+      );
+    }
+    surfacedComputerControlDisclosures.add(dedupeKey);
+    const marker = stableGatewayDigest({
+      kind: "computer-control-disclosure",
+      threadId,
+      turnId,
+    });
+    const createdAt = isoNow();
+    return orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`agent:${marker}:computer-control-on`),
+        threadId: ThreadId.makeUnsafe(threadId),
+        activity: {
+          id: EventId.makeUnsafe(`gateway:${marker}:computer-control-on`),
+          tone: "info",
+          kind: "computer.control-disclosure",
+          summary: COMPUTER_CONTROL_ON_DISCLOSURE,
+          payload: { disclosure: COMPUTER_CONTROL_ON_DISCLOSURE },
+          turnId: turnId === null ? null : TurnId.makeUnsafe(turnId),
+          createdAt,
+        },
+        createdAt,
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("agent gateway could not surface computer-control disclosure", {
+            callerThreadId: threadId,
+            error: errorText(error),
+          }),
+        ),
+        Effect.asVoid,
+      );
+  };
+
   // One setup card per (thread, turn): an agent that hits a missing grant
   // typically retries the same tool several times in a row, and repeated cards
   // would bury the chat. The decider appends activities verbatim, so the dedupe
@@ -962,12 +1014,18 @@ export const makeAgentGateway = Effect.gen(function* () {
             // Computer capability is issued only after task activation. Full
             // access already consents to routine desktop actions, including
             // foreground delivery; focus is not a second approval boundary.
-            if (caller.value.runtimeMode === "full-access") return true;
+            if (caller.value.runtimeMode === "full-access") {
+              await Effect.runPromise(
+                surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
+                { signal },
+              ).catch(() => undefined);
+              return true;
+            }
             const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
             const requestApproval = taskConsent
               ? computerApprovalGate.requestTask.bind(computerApprovalGate)
               : computerApprovalGate.request.bind(computerApprovalGate);
-            return requestApproval({
+            const approved = await requestApproval({
               threadId: context.callerThreadId,
               turnId: context.callerTurnId ?? "",
               signal,
@@ -1013,6 +1071,13 @@ export const makeAgentGateway = Effect.gen(function* () {
                 );
               },
             });
+            if (approved) {
+              await Effect.runPromise(
+                surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
+                { signal },
+              ).catch(() => undefined);
+            }
+            return approved;
           },
         })
       : []),

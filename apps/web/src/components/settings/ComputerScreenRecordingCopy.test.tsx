@@ -16,8 +16,8 @@ vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 function binding(): AppSettingsBinding {
   return {
-    settings: { autoOpenComputerPane: true, allowComputerControlInNewChats: true },
-    defaults: { autoOpenComputerPane: true, allowComputerControlInNewChats: true },
+    settings: { autoOpenComputerPane: true, computerControlEnabled: true },
+    defaults: { autoOpenComputerPane: true, computerControlEnabled: false },
     updateSettings: vi.fn(),
   } as unknown as AppSettingsBinding;
 }

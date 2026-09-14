@@ -96,7 +96,6 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   command: ComposerSlashCommand,
 ): boolean {
   return (
-    command === "computer-use" ||
     command === "debug" ||
     command === "default" ||
     command === "automation" ||
@@ -120,7 +119,6 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   const normalizedCommand = normalizeComposerSlashCommandName(command);
   const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
-    normalizedCommand === "computer-use" ||
     normalizedCommand === "automation" ||
     normalizedCommand === "debug" ||
     normalizedCommand === "default" ||
@@ -162,12 +160,6 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   ComposerSlashCommand,
   ComposerSlashCommandDefinition
 > = {
-  "computer-use": {
-    command: "computer-use",
-    label: "/computer-use",
-    description: "Use the desktop for this task; load Computer tools only when invoked",
-    source: "app",
-  },
   clear: {
     command: "clear",
     label: "/clear",
@@ -528,10 +520,7 @@ export function getAvailableComposerSlashCommands(input: {
           "feedback",
           "automation",
         ];
-  return [
-    "computer-use",
-    ...availableCommands.filter((command) => !collidingNativeCommandNames.has(command)),
-  ];
+  return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
 }
 
 export function hasProviderNativeSlashCommand(

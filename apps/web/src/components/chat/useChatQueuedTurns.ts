@@ -241,12 +241,15 @@ export function useChatQueuedTurns({
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
-      setComposerDraftComputerControlMode(
-        activeThread.id,
+      // Restore the frozen switch plus its revocation generation.
+      const restoredComputerEnabled =
         resolveComputerControlMode(
           queuedTurn.computerControlMode,
           queuedTurn.enableComputerControl,
-        ),
+        ) !== "off";
+      setComposerDraftComputerControlMode(
+        activeThread.id,
+        restoredComputerEnabled ? "chat" : "off",
         { generation: queuedTurn.computerControlGeneration ?? 0 },
       );
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));

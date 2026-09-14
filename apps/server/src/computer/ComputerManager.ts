@@ -240,6 +240,19 @@ export class ComputerLeaseError extends ComputerBackendError {
   }
 }
 
+/** Whether the window found frontmost before an activation was put back. */
+export type ForegroundRestoreStatus =
+  | "restored"
+  | "restore-missed"
+  | "already-frontmost"
+  | "frontmost-unobservable";
+
+/** Which window a foreground excursion restored, and whether that succeeded. */
+export interface ForegroundRestoreInfo {
+  readonly restoredWindowId: string | null;
+  readonly restoreStatus: ForegroundRestoreStatus;
+}
+
 /** Thread state, targeting, action dispatch, and stream ownership for a computer. */
 export class ComputerManager {
   readonly computerId: ComputerId;
@@ -382,6 +395,11 @@ export class ComputerManager {
   }
   private readonly activeAuthorities = new Map<string, Set<AbortController>>();
   private readonly authorityTurns = new Map<string, string>();
+  /**
+   * App this thread already drove, lowercased. A second, different app
+   * re-asks approval: task consent covers the first app, not every app.
+   */
+  private readonly activeAppPerThread = new Map<string, string>();
 
   private controlDisabled(threadId: string): boolean {
     return this.disabledThreads.has(threadId) || this.controlState.get(threadId).disabled;
@@ -393,6 +411,36 @@ export class ComputerManager {
       !this.suspendedThreads.has(threadId) &&
       this.controlState.allows(threadId, generation)
     );
+  }
+
+  /**
+   * Second-app re-approval: the first app a thread drives is recorded, and a
+   * later launch/activation naming a different app asks the approval gate
+   * again. A denial refuses before the backend runs, so the new app is never
+   * touched.
+   */
+  private async requireSecondAppApproval(threadId: string | undefined, app: string): Promise<void> {
+    const owner = agentThreadId(threadId);
+    if (owner === undefined) return;
+    const normalized = app.trim().toLocaleLowerCase();
+    if (!normalized) return;
+    const previous = this.activeAppPerThread.get(owner);
+    if (previous === undefined) {
+      this.activeAppPerThread.set(owner, normalized);
+      return;
+    }
+    if (previous === normalized) return;
+    const approved = await computerApprovalGate.request({
+      threadId: owner,
+      signal: new AbortController().signal,
+      publish: async () => undefined,
+    });
+    if (!approved) {
+      throw new ComputerBackendError(
+        `Computer action targets a second app (${app}); it was refused pending approval for the new app.`,
+      );
+    }
+    this.activeAppPerThread.set(owner, normalized);
   }
 
   async admitControl(
@@ -474,6 +522,8 @@ export class ComputerManager {
       }
     } else {
       this.disabledThreads.add(threadId);
+      const runtime = this.threads.get(threadId);
+      if (runtime) runtime.paneSurfaced = false;
       // Increment immediately, before cleanup or persistence can yield. Old
       // queued requests never regain authority when this thread is re-enabled.
       const write = this.controlState.set(threadId, true);
@@ -1043,6 +1093,7 @@ export class ComputerManager {
   ): Promise<ComputerLaunchAppResult> {
     return this.withDesktopControl(threadId, async () => {
       assertDesktopOperationActive();
+      await this.requireSecondAppApproval(threadId, app);
       const result = await this.backend.launchApp(app, args);
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && waitForWindowMs > 0) {
@@ -1147,8 +1198,10 @@ export class ComputerManager {
         action === "computer_click" &&
         !modifiers?.length &&
         resolved.semantic &&
-        (["menu-bar", "menu-bar-extra"].includes(resolved.semantic.node.accessibilityRoot ?? "") ||
-          this.backend.supportsAction?.(resolved.semantic, "AXPress"))
+        // The token fast path runs whenever the backend advertises AXPress for
+        // the target. (Formerly also gated on menu-bar/menu-bar-extra; that
+        // menu-bar-only gate is dropped — a live token is the gate.)
+        this.backend.supportsAction?.(resolved.semantic, "AXPress")
       ) {
         assertDesktopOperationActive();
         // Select one actuator before dispatch. An uncertain AX press must never
@@ -1208,9 +1261,11 @@ export class ComputerManager {
         throw activationUnsupportedError();
       }
       const windows = await this.readWindows();
-      if (!windows.some((candidate) => candidate.id === windowId)) {
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target) {
         throw windowNotFoundError(windowId);
       }
+      await this.requireSecondAppApproval(threadId, target.appName ?? windowId);
       await raise(windowId);
       // Aiming after the raise, never before: a raise that refuses must not leave
       // the keyboard pointed at a window this call just declined to move.
@@ -1224,6 +1279,126 @@ export class ComputerManager {
         windowId,
       );
     });
+  }
+
+  /**
+   * Bring `windowId` forward for one approved use, then put the desktop back
+   * the way it was. Called only from the computer_activate_window tool entry,
+   * whose approval covers the whole excursion — including the restore, which
+   * never prompts a second time.
+   *
+   * The steps: record the frontmost window id from the existing topmost-first
+   * window listing (no new native surface; a listing of only hidden windows
+   * records null with a note) → raise and aim via the existing activate path →
+   * run the approved input, if one was given → restore the recorded window via
+   * the same raise path → re-observe the target with a fresh listing.
+   *
+   * A restore that fails is still a successful activation, never a silent one:
+   * the result carries a note naming the window that was not put back, and the
+   * computer.action event carries the same window plus the restore status.
+   */
+  async foregroundWithRestore(
+    threadId: string | undefined,
+    windowId: string,
+    input?: () => Promise<unknown>,
+  ): Promise<ComputerActionResult & { readonly note?: string }> {
+    return this.withDesktopControl(threadId, async () => {
+      const raise = this.backend.raiseWindow?.bind(this.backend);
+      if (!raise || !this.backendCapabilities.raise) {
+        throw activationUnsupportedError();
+      }
+      const windows = await this.readWindows();
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target) {
+        throw windowNotFoundError(windowId);
+      }
+      const previousId =
+        windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+      await this.requireSecondAppApproval(threadId, target.appName ?? windowId);
+      await raise(windowId);
+      // Aiming after the raise, never before: a raise that refuses must not leave
+      // the keyboard pointed at a window this call just declined to move.
+      assertDesktopOperationActive();
+      await this.backend.focusWindow?.(windowId);
+      if (input) {
+        try {
+          assertDesktopOperationActive();
+          await input();
+        } catch (error) {
+          // Input that failed after the raise must not leave the desktop
+          // rearranged: restore best-effort, then report the input failure.
+          if (previousId !== null && previousId !== windowId) {
+            await raise(previousId).catch(() => undefined);
+            await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
+          }
+          throw error;
+        }
+      }
+      let restore: ForegroundRestoreInfo;
+      let note: string | undefined;
+      if (previousId === null) {
+        restore = { restoredWindowId: null, restoreStatus: "frontmost-unobservable" };
+        note = "No frontmost window was observable before activation, so nothing was restored.";
+      } else if (previousId === windowId) {
+        restore = { restoredWindowId: null, restoreStatus: "already-frontmost" };
+      } else {
+        try {
+          assertDesktopOperationActive();
+          await raise(previousId);
+          await this.backend.focusWindow?.(previousId);
+          restore = { restoredWindowId: previousId, restoreStatus: "restored" };
+        } catch {
+          restore = { restoredWindowId: previousId, restoreStatus: "restore-missed" };
+          note =
+            `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
+            `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
+            `left with ${JSON.stringify(windowId)} raised.`;
+        }
+      }
+      // A fresh listing so the next read sees the desktop as it was left. Best
+      // effort: the activation already succeeded, and a stale listing must not
+      // fail it.
+      try {
+        await this.readWindows();
+      } catch {
+        // Keep the successful result.
+      }
+      const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
+        windowId,
+      });
+      this.emitForegroundRestoreAction(threadId, merged, restore, note);
+      return note !== undefined ? { ...merged, note } : merged;
+    });
+  }
+
+  /**
+   * The computer.action event for a foreground excursion: emitAction's payload
+   * plus which window was put back and whether that succeeded. Kept separate
+   * from emitAction so the existing action path is untouched; the two new
+   * fields ride as extras (with the note in the schema's message) because the
+   * contract's event shape does not name them yet.
+   */
+  private emitForegroundRestoreAction(
+    threadId: string | undefined,
+    result: ComputerActionResult,
+    restore: ForegroundRestoreInfo,
+    note: string | undefined,
+  ): void {
+    const attributed = agentThreadId(threadId);
+    if (attributed) this.surfacePaneForAgent(attributed);
+    this.emit({
+      type: "computer.action",
+      ...(result.windowId ? { windowId: result.windowId } : {}),
+      ...(result.delivery ? { delivery: result.delivery } : {}),
+      action: "computer_activate_window",
+      ok: true,
+      ...(attributed ? { threadId: ThreadId.makeUnsafe(attributed) } : {}),
+      ...(restore.restoredWindowId !== null ? { restoredWindowId: restore.restoredWindowId } : {}),
+      restoreStatus: restore.restoreStatus,
+      ...(note !== undefined
+        ? { message: clampComputerMessage(note, "The foreground window could not be restored.") }
+        : {}),
+    } as ComputerEvent);
   }
 
   async moveCursor(
@@ -1711,6 +1886,8 @@ export class ComputerManager {
     value: string,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
+      // Preferred over click-then-type when the target carries a live element
+      // token: one atomic write instead of focus plus keystrokes.
       const resolved = await this.resolveSemanticTarget(target);
       await this.prepareResolvedTarget(semanticPointTarget(resolved));
       assertDesktopOperationActive();
@@ -2030,6 +2207,8 @@ export class ComputerManager {
         if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
         await this.backend.clearFocusWindow?.();
         this.lease = null;
+        const runtime = this.threads.get(owner);
+        if (runtime) runtime.paneSurfaced = false;
         await this.announceDrivingAgent(null);
       });
       await this.publishAllThreads();
@@ -2121,6 +2300,7 @@ export class ComputerManager {
     this.authorityTurns.delete(threadId);
     this.authorityRevocations.delete(threadId);
     this.activeAuthorities.delete(threadId);
+    this.activeAppPerThread.delete(threadId);
     // Deleted after the thread state, so the resulting publish cannot recreate
     // it: a removed thread must not reappear as a lease holder.
     await this.releaseDesktopControl(threadId);
@@ -2461,7 +2641,25 @@ export class ComputerManager {
         notFound: true,
       });
     }
-    return { target, ...resolveComputerSemanticTarget(state.root, target) };
+    try {
+      return { target, ...resolveComputerSemanticTarget(state.root, target) };
+    } catch (error) {
+      // A truncated tree may simply not contain the control: name the narrow
+      // query so the miss is recoverable instead of a dead end.
+      if (
+        error instanceof ComputerTargetError &&
+        error.code === "computer_target_not_found" &&
+        state.root.truncated === true
+      ) {
+        throw new ComputerTargetError({
+          code: error.code,
+          message: `${error.message} The accessibility tree was truncated; use computer_get_state with label_contains to narrow the list and check whether the control is present.`,
+          candidates: error.candidates,
+          notFound: true,
+        });
+      }
+      throw error;
+    }
   }
 
   /**

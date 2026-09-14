@@ -881,11 +881,7 @@ export function useComposerSlashCommands(input: {
         trimmed,
         availableBuiltInSlashCommands,
       );
-      if (
-        !slashInvocation ||
-        slashInvocation.command === "model" ||
-        slashInvocation.command === "computer-use"
-      ) {
+      if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
       if (slashInvocation.command === "clear") {
@@ -1094,7 +1090,6 @@ export function useComposerSlashCommands(input: {
       }
 
       if (
-        item.command === "computer-use" ||
         item.command === "model" ||
         item.command === "goal" ||
         item.command === "rename" ||

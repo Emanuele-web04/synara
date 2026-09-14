@@ -41,11 +41,11 @@ export function useComputerControlModeChange({
           generation: result.generation ?? 0,
         });
         // Enabling against a reset server generation leaves control off: the
-        // queued invocation it would have armed is stale, so say so plainly.
+        // queued intent it would have armed is stale, so say so plainly.
         if (mode !== "off" && !result.enabled && current()) {
           toastManager.add({
             title: "Computer control was reset",
-            description: "Control was reset — send /computer-use again with current generation.",
+            description: "Control was reset — turn the Settings switch on again.",
             type: "error",
           });
         }

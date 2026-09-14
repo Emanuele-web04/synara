@@ -1081,17 +1081,20 @@ export const createComposerDraftStoreState =
     },
     setComputerControlMode: (threadId, mode, options) => {
       if (threadId.length === 0) return;
+      // Settings-switch semantics: only chat/off persist. A legacy "request"
+      // normalizes to "chat" so older callers keep working without single-shot.
+      const switchMode = mode === "off" ? ("off" as const) : ("chat" as const);
       set((state) => ({
         draftsByThreadId: {
           ...state.draftsByThreadId,
           [threadId]: {
             ...(state.draftsByThreadId[threadId] ?? createEmptyThreadDraft()),
-            computerControlMode: mode,
+            computerControlMode: switchMode,
             ...(options?.generation !== undefined
               ? { computerControlGeneration: options.generation }
               : {}),
-            enableComputerControl: mode !== "off",
-            ...(mode === "off" && options?.revokeQueued
+            enableComputerControl: switchMode !== "off",
+            ...(switchMode === "off" && options?.revokeQueued
               ? {
                   queuedTurns: (state.draftsByThreadId[threadId]?.queuedTurns ?? []).map(
                     (turn) => ({

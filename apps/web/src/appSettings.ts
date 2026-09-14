@@ -349,10 +349,11 @@ export const AppSettingsSchema = Schema.Struct({
   enableAppshots: Schema.optionalKey(Schema.Boolean),
   // Open the Computer pane automatically when an agent starts driving the desktop.
   autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Computer tools are available by default. A conversation's explicit choice
-  // wins over this preference; changing one conversation never changes it.
-  // The server still checks backend support, macOS permissions, and approvals.
-  allowComputerControlInNewChats: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Computer control is off by default. When on, the agent may use the desktop
+  // in any chat. Approval gates and Stop still apply.
+  computerControlEnabled: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Deprecated rename bridge. Normalization migrates this value and then omits the key.
+  allowComputerControlInNewChats: Schema.optionalKey(Schema.Boolean),
   // One-shot composer hint that suggests Medium effort for faster desktop actions.
   // Set when the user applies or dismisses it, so the hint never asks twice.
   dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -612,6 +613,7 @@ function normalizeProviderBinaryPathOverride(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   const {
     enableAppshots: legacyEnableAppshots,
+    allowComputerControlInNewChats: legacyAllowComputerControlInNewChats,
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
     ...currentSettings
@@ -619,6 +621,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
+    computerControlEnabled:
+      settings.computerControlEnabled || legacyAllowComputerControlInNewChats === true,
     // Password fields are accepted only as write-only update patches. Never retain
     // reusable provider credentials in browser state or localStorage.
     openCodeServerPassword: "",

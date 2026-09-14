@@ -6,7 +6,6 @@ struct AppSnapFailure: Error {
 }
 
 enum AppSnapMode {
-    case computerPreview
     case checkPermissions(Set<AppSnapPermission>)
     case requestPermissions(Set<AppSnapPermission>)
     case permissionGuide(pane: String, appPath: String, appName: String)
@@ -57,7 +56,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide", "--computer-preview":
+            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -100,12 +99,6 @@ struct AppSnapOptions {
             throw AppSnapFailure(code: "invalid_arguments", message: "Guide metadata is only used by the permission guide.")
         }
         switch requestedMode {
-        case "--computer-preview":
-            try rejectWatchArguments("Computer preview does not accept watch arguments.")
-            guard permissions.isEmpty else {
-                throw AppSnapFailure(code: "invalid_arguments", message: "Computer preview cannot request permissions.")
-            }
-            return AppSnapOptions(mode: .computerPreview)
         case "--permission-guide":
             try rejectWatchArguments("The permission guide does not accept watch arguments.")
             guard permissions.isEmpty, let guidePane,
@@ -157,7 +150,7 @@ struct AppSnapOptions {
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --watch, --computer-preview, or --permission-guide."
+                message: "Expected --check-permissions, --request-permissions, --watch, or --permission-guide."
             )
         }
     }

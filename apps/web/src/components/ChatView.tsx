@@ -110,8 +110,6 @@ import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useComputerControlModeChange } from "~/hooks/useComputerControlModeChange";
-import { resolveComputerControlMode } from "../computerControlMode";
-import { isComputerInvocation } from "@synara/shared/computerInvocation";
 import { useThreadComputerStateSeed } from "../hooks/useThreadComputerStateSeed";
 import {
   useThreadComputerAvailability,
@@ -1264,13 +1262,9 @@ export default function ChatView({
     composerSkills,
     composerMentions,
   });
-  // Computer is invoked for a task, like a skill. Old sticky composer defaults
-  // must not attach its schemas/instructions to unrelated coding messages.
-  const enableComputerControl = isComputerInvocation({
-    text: prompt,
-    skills: selectedComposerSkills,
-  });
-  const computerControlMode = enableComputerControl ? "request" : "off";
+  // Computer control follows the Settings switch. Ordinary messages never
+  // attach Computer schemas/instructions unless the switch is on.
+  const enableComputerControl = settings.computerControlEnabled === true;
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2405,17 +2399,10 @@ export default function ChatView({
       setMode: setComposerDraftComputerControlMode,
       focusComposer: scheduleComposerFocus,
     });
-  // Prepare an explicit invocation from the denial card; the user sends the request.
+  // The denial card switches control on; the composer keeps the plain message.
   const handleEnableComputerControlFromDenial = useCallback(() => {
-    handleComputerControlModeChange("request");
-    if (isComputerInvocation({ text: prompt })) return;
-    // Invocation detection reads the first non-empty line, so the command
-    // stays on line 1 and any existing draft follows after a blank line.
-    const [first, ...rest] = prompt.split("\n");
-    const task = (first ?? "").trim() || "Continue the requested desktop task.";
-    const explanation = rest.join("\n").trim();
-    setPrompt(explanation ? `/computer-use ${task}\n\n${explanation}` : `/computer-use ${task}`);
-  }, [handleComputerControlModeChange, prompt, setPrompt]);
+    handleComputerControlModeChange("chat");
+  }, [handleComputerControlModeChange]);
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -3147,7 +3134,6 @@ export default function ChatView({
       modelSelection: selectedModelSelection,
       providerOptions: providerOptionsForDispatch,
       enableComputerControl,
-      computerControlMode,
       computerControlGeneration,
       assistantDeliveryMode,
       runtimeMode,
@@ -3156,7 +3142,6 @@ export default function ChatView({
     }),
     [
       assistantDeliveryMode,
-      computerControlMode,
       computerControlGeneration,
       enableComputerControl,
       envMode,

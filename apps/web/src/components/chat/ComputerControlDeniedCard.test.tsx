@@ -9,33 +9,28 @@ import { describe, expect, it } from "vitest";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 
 describe("ComputerControlDeniedCard", () => {
-  it("offers Enable only while control is off, and says what it does", () => {
-    const markup = renderToStaticMarkup(
-      <ComputerControlDeniedCard toolName="computer_click" onEnable={() => undefined} />,
-    );
+  it("offers Enable only while control is off, and points at Settings", () => {
+    const markup = renderToStaticMarkup(<ComputerControlDeniedCard onEnable={() => undefined} />);
 
-    expect(markup).toContain("Computer control is off for this chat");
-    expect(markup).toContain("computer_click");
+    expect(markup).toContain(
+      "Computer control is off. Turn it on in Settings to let the agent use the desktop.",
+    );
     expect(markup).toContain(">Enable<");
-    // Enable stages a /computer-use draft the user still sends; the copy must
-    // not promise control is already on.
-    expect(markup).toContain("Choose Enable to draft a /computer-use request");
+    expect(markup).not.toContain("/computer-use");
   });
 
   it("hides Enable without a handler instead of rendering a dead button", () => {
-    const markup = renderToStaticMarkup(<ComputerControlDeniedCard toolName="computer_click" />);
+    const markup = renderToStaticMarkup(<ComputerControlDeniedCard />);
 
-    expect(markup).toContain("Computer control is off for this chat");
+    expect(markup).toContain(
+      "Computer control is off. Turn it on in Settings to let the agent use the desktop.",
+    );
     expect(markup).not.toContain(">Enable<");
   });
 
   it("flips to a confirmation with no Enable once control is on", () => {
     const markup = renderToStaticMarkup(
-      <ComputerControlDeniedCard
-        toolName="computer_click"
-        computerControlEnabled
-        onEnable={() => undefined}
-      />,
+      <ComputerControlDeniedCard computerControlEnabled onEnable={() => undefined} />,
     );
 
     expect(markup).toContain("Computer control is on for this chat");

@@ -4,8 +4,8 @@ This supersedes the composer activation and per-foreground-action approval choic
 
 ## User flow
 
-- Send `/computer-use <task>`, select a `computer-use` skill, or start the request with an explicit phrase such as “Use Synara computer use…”. `/computer-use` is a Synara command available on all nine providers, including when a provider advertises a command with the same name.
-- The composer has no persistent Computer switch. Settings retains setup, backend status and pane preferences. An installed backend, granted macOS permission or AppSnap attachment does not expose Computer to ordinary coding messages.
+- Turn the Computer switch on in Settings to let the agent use the desktop for the task. The switch is available on all nine providers.
+- The composer has no Computer slash command. Settings retains setup, backend status and pane preferences. An installed backend, granted macOS permission or AppSnap attachment does not expose Computer to ordinary coding messages.
 - In Full access, routine desktop actions proceed without another Synara approval. In approval-required mode, one Computer approval covers routine actions for the exact active turn. Concurrent first calls share one prompt; a decline applies for that turn. Clipboard reading uses separate per-call approval outside Full access.
 - Provider risk reviews, Plan restrictions and consequential-action confirmation policies remain applicable. Task consent is not a semantic detector for destructive clicks. Prepare consequential actions before requesting any confirmation required by the applicable policy.
 - Stop, disable, terminal turn events and session exit revoke or discard consent. A fresh invocation can rearm control using the current server generation. Older queued invocations keep their frozen generation and cannot revive revoked input.

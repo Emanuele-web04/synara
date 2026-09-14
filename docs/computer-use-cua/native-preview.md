@@ -10,7 +10,7 @@ The macOS desktop host now starts an AppSnap helper in `--computer-preview` mode
 - Closing the panel hides it for the rest of the task and reduces capture to 1 fps. Stop ends Computer Use for that turn. A new task gets a visible preview.
 - Model screenshots remain fresh, explicit tool requests through Cua. Preview frames are never substituted as evidence that an action succeeded.
 - Ordinary turns start no preview helper, send no preview IPC, and gain no Computer instructions or schemas from this feature.
-- Explicit invocation supports `/computer-use`, natural requests such as “Use Computer Use”, and the opening command prefix “Computer Use: …”. Quoted excerpts and ordinary discussion do not activate it.
+- Control follows the Settings switch. Quoted excerpts and ordinary discussion do not activate it.
 
 ## Ownership and cleanup
 

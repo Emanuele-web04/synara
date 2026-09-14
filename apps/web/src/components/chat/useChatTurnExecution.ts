@@ -612,14 +612,6 @@ export function useChatTurnExecution({
           }),
         );
         turnStartSucceeded = true;
-        if (queuedChatTurn === null && dispatchSettings.computerControlMode === "request") {
-          const draft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
-          if (
-            draft?.computerControlMode === "request" &&
-            computerControlChangeSequence.current === computerControlSequenceForSend
-          )
-            setComposerDraftComputerControlMode(threadIdForSend, "off");
-        }
         if (
           shouldResumeSettledLocalThread &&
           currentActiveGitBranchForSend !== null &&

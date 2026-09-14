@@ -250,6 +250,31 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "click")).toHaveLength(1);
   });
 
+  it("writes through a live token and refuses a stale one without a second dispatch", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Display",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = { target: { label: "Display" }, node, point: node.activationPoint! };
+    await f.backend.setValue(target, "1");
+    expect(f.calls.find((c) => c.name === "set_value")?.args).toMatchObject({
+      element_token: "fresh-token",
+      value: "1",
+    });
+    f.close();
+    await expect(f.backend.setValue(target, "2")).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    expect(f.calls.filter((c) => c.name === "set_value")).toHaveLength(1);
+  });
+
   it("allows the bounded native permission request to finish without extending action deadlines", async () => {
     const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
     const request: typeof cuaRequest = async (_endpoint, request, options) => {
@@ -535,6 +560,57 @@ describe("Cua native boundary", () => {
     expect(f.calls.find((call) => isTyping(call.name))).toMatchObject({
       name: "type_text",
       args: { delivery_mode: "foreground", force_synthetic: true },
+    });
+  });
+  it("sends background hotkey by default and keeps approved foreground hotkey", async () => {
+    const f = fixture();
+    await f.backend.hotkey(["meta", "a"], "cua:10:20");
+    expect(f.calls.find((call) => call.name === "hotkey")?.args).toMatchObject({
+      delivery_mode: "background",
+      keys: ["command", "a"],
+    });
+    f.calls.length = 0;
+    await withDesktopDeliveryMode("foreground", () => f.backend.hotkey(["meta", "a"], "cua:10:20"));
+    expect(f.calls.find((call) => call.name === "hotkey")?.args).toMatchObject({
+      delivery_mode: "foreground",
+      keys: ["command", "a"],
+    });
+  });
+  it("keeps moveCursor as background overlay-only and unverifiable", async () => {
+    const f = fixture();
+    const result = await withDesktopDeliveryMode("background", () =>
+      f.backend.moveCursor({ x: 10, y: 20 }, "cua:10:20"),
+    );
+    expect(result).toMatchObject({
+      point: { x: 10, y: 20 },
+      deliveryPath: "cua-overlay-only",
+      verified: "unverifiable",
+    });
+    expect(f.calls.find((call) => call.name === "move_cursor")?.args).toEqual({
+      x: 10,
+      y: 20,
+    });
+  });
+  it("launches by name or bundle id without a delivery mode", async () => {
+    const f = fixture();
+    await expect(f.backend.launchApp("Calculator")).resolves.toMatchObject({
+      app: "Calculator",
+      window: null,
+    });
+    expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
+      name: "Calculator",
+    });
+    f.calls.length = 0;
+    await expect(
+      f.backend.launchApp("com.apple.Calculator", ["--new-window"]),
+    ).resolves.toMatchObject({ app: "com.apple.Calculator", window: null });
+    expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
+      bundle_id: "com.apple.Calculator",
+      additional_arguments: ["--new-window"],
+    });
+    await expect(f.backend.launchApp("/Applications/Calculator.app")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "unsupported_operation",
     });
   });
   it("reads the published action route and requires public verification evidence", async () => {

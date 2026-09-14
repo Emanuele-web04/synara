@@ -49,8 +49,8 @@ function status(overrides: Partial<ComputerStatusResult> = {}): ComputerStatusRe
 
 function binding(): AppSettingsBinding {
   return {
-    settings: { autoOpenComputerPane: true, allowComputerControlInNewChats: true },
-    defaults: { autoOpenComputerPane: true, allowComputerControlInNewChats: true },
+    settings: { autoOpenComputerPane: true, computerControlEnabled: true },
+    defaults: { autoOpenComputerPane: true, computerControlEnabled: false },
     updateSettings: vi.fn(),
   } as unknown as AppSettingsBinding;
 }
@@ -150,12 +150,12 @@ describe("ComputerSettingsPanel", () => {
     ).toContain("Open automatically");
   });
 
-  it("explains invocation and task consent without offering a sticky default", () => {
+  it("offers a Computer control switch with approval and Stop guardrails", () => {
     const markup = render({ status: status() });
-    expect(markup).not.toContain("Enable computer control by default");
-    expect(markup).toContain("/computer-use");
-    expect(markup).toContain("approval mode asks once");
-    expect(markup).toContain("does not load Computer tools into ordinary messages");
-    expect(markup).toContain("support images and tool calls");
+    expect(markup).toContain("Computer control");
+    expect(markup).toContain("Let the agent use the desktop in any chat");
+    expect(markup).toContain("Approval gates and Stop still apply");
+    expect(markup).not.toContain("/computer-use");
+    expect(markup).not.toContain("How agents use the desktop");
   });
 });

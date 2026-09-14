@@ -5,7 +5,6 @@
 // Exports: command-name constants and normalization helpers.
 
 export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
-  "computer-use",
   "clear",
   "compact",
   "model",

@@ -284,6 +284,19 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("falls back to a coordinate click when no AXPress token is advertised", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      agentDialect: "macos" as const,
+      supportsAction: () => false,
+    });
+    const press = vi.spyOn(backend, "performAction");
+    const manager = new ComputerManager({ backend });
+    await manager.click("thread-1", { label: "Calculate", role: "button" });
+    expect(press).not.toHaveBeenCalled();
+    expect(backend.callsFor("click")).toHaveLength(1);
+    await manager.dispose();
+  });
+
   it("performs semantic writes only against a fresh, unambiguous snapshot", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
@@ -645,19 +658,61 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.typeText("thread-1", "hi");
     expect(openRequests).toEqual(["thread-1"]);
 
+    // Giving up the desktop ends the turn: the next attributed action
+    // surfaces the pane once more, then goes silent again within the turn.
+    await manager.releaseDesktopControl("thread-1");
+    await manager.click("thread-1", { x: 20, y: 20 });
+    expect(openRequests).toEqual(["thread-1", "thread-1"]);
+    await manager.typeText("thread-1", "again");
+    expect(openRequests).toEqual(["thread-1", "thread-1"]);
+
     // A second thread surfaces independently of the first.
     await manager.releaseDesktopControl("thread-1");
     await manager.pressKey("thread-2", "enter");
-    expect(openRequests).toEqual(["thread-1", "thread-2"]);
+    expect(openRequests).toEqual(["thread-1", "thread-1", "thread-2"]);
 
     // A removed thread must be explicitly restored before it may act again.
     await manager.handleThreadRemoved("thread-2");
     await expect(manager.pressKey("thread-2", "enter")).rejects.toThrow("revoked");
     await manager.handleThreadRestored("thread-2");
     await manager.pressKey("thread-2", "enter");
-    expect(openRequests).toEqual(["thread-1", "thread-2", "thread-2"]);
+    expect(openRequests).toEqual(["thread-1", "thread-1", "thread-2", "thread-2"]);
 
     await manager.dispose();
+  });
+
+  it("re-asks approval when a thread drives a second app", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    const request = vi.spyOn(computerApprovalGate, "request");
+    try {
+      await manager.launchApp("thread-1", "kcalc");
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+      expect(request).not.toHaveBeenCalled();
+
+      request.mockResolvedValueOnce(false);
+      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(/second app/i);
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+
+      request.mockResolvedValueOnce(true);
+      await manager.launchApp("thread-1", "firefox");
+      expect(backend.callsFor("launchApp")).toHaveLength(2);
+
+      request.mockClear();
+      await manager.launchApp("thread-1", "firefox");
+      expect(request).not.toHaveBeenCalled();
+      expect(backend.callsFor("launchApp")).toHaveLength(3);
+
+      request.mockResolvedValueOnce(false);
+      await expect(manager.activateWindow("thread-1", "fake-terminal")).rejects.toThrow(
+        /second app/i,
+      );
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+    } finally {
+      request.mockRestore();
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
   });
 
   it("never asks for the pane when the agent drives the human's visible desktop", async () => {
@@ -2049,4 +2104,168 @@ it("takes a single after-capture as the observation for a macOS scroll", async (
   } finally {
     await manager.dispose();
   }
+});
+
+function foregroundRestoreActions(manager: ComputerManager): Array<Record<string, unknown>> {
+  const actions: Array<Record<string, unknown>> = [];
+  manager.onEvent((event) => {
+    if (event.type === "computer.action") actions.push({ ...event });
+  });
+  return actions;
+}
+
+function foregroundRaisedIds(backend: FakeComputerBackend): readonly unknown[] {
+  return backend.callsFor("raiseWindow").map((call) => call.args[0]);
+}
+
+describe("ComputerManager foregroundWithRestore", () => {
+  it("restores the previously frontmost window after raising the target", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      // The default fake listing is topmost-first: fake-terminal is frontmost.
+      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(result.windowId).toBe("fake-calculator");
+      expect(result.note).toBeUndefined();
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-calculator", "fake-terminal"]);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({
+        action: "computer_activate_window",
+        windowId: "fake-calculator",
+        restoredWindowId: "fake-terminal",
+        restoreStatus: "restored",
+      });
+      expect(actions[0]).not.toHaveProperty("message");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("reports a missed restore as success with a note naming the unrestored window", async () => {
+    const backend = new FakeComputerBackend();
+    const raise = backend.raiseWindow.bind(backend);
+    const attempts: string[] = [];
+    backend.raiseWindow = async (windowId: string) => {
+      attempts.push(windowId);
+      if (windowId === "fake-terminal") throw new ComputerBackendError("The window closed.");
+      return raise(windowId);
+    };
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      // The activation itself succeeded; only the restore missed — never silent.
+      expect(result.windowId).toBe("fake-calculator");
+      expect(result.note).toEqual(expect.stringContaining("fake-terminal"));
+      // The throwing restore attempt is not in the backend's own call log, so
+      // the attempts are tracked here: the restore was tried, then missed.
+      expect(attempts).toEqual(["fake-calculator", "fake-terminal"]);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({
+        restoreStatus: "restore-missed",
+        restoredWindowId: "fake-terminal",
+        message: expect.stringContaining("fake-terminal"),
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("runs the approved input between raise and restore without a second approval", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const request = vi.spyOn(computerApprovalGate, "request").mockResolvedValue(true);
+    const order: string[] = [];
+    const raise = backend.raiseWindow.bind(backend);
+    backend.raiseWindow = async (windowId: string) => {
+      order.push(`raise:${windowId}`);
+      return raise(windowId);
+    };
+    try {
+      await manager.foregroundWithRestore("thread-1", "fake-calculator", async () => {
+        order.push("input");
+      });
+      expect(order).toEqual(["raise:fake-calculator", "input", "raise:fake-terminal"]);
+      // The activate approval covers the whole excursion, restore included.
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
+  it("still restores when the approved input fails, then reports the input failure", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      await expect(
+        manager.foregroundWithRestore("thread-1", "fake-calculator", async () => {
+          throw new Error("input blew up");
+        }),
+      ).rejects.toThrow("input blew up");
+      // The desktop is put back even though the input failed — and a failed
+      // action emits no computer.action event, as on every other path.
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-calculator", "fake-terminal"]);
+      expect(actions).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("skips the restore when the target is already frontmost", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      const result = await manager.foregroundWithRestore("thread-1", "fake-terminal");
+      expect(result.windowId).toBe("fake-terminal");
+      expect(result.note).toBeUndefined();
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({ restoreStatus: "already-frontmost" });
+      expect(actions[0]).not.toHaveProperty("restoredWindowId");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("notes when no frontmost window was observable, and restores nothing", async () => {
+    const hidden: readonly ComputerWindow[] = [
+      {
+        id: "hidden-terminal",
+        title: "Terminal",
+        appName: "org.kde.konsole",
+        bounds: { x: 40, y: 40, width: 960, height: 720 },
+        focused: false,
+        minimized: true,
+        visible: false,
+      },
+      {
+        id: "hidden-calculator",
+        title: "Calculator",
+        appName: "org.kde.kcalc",
+        bounds: { x: 1_050, y: 120, width: 420, height: 620 },
+        focused: false,
+        minimized: true,
+        visible: false,
+      },
+    ];
+    const backend = new FakeComputerBackend({ windows: hidden });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      const result = await manager.foregroundWithRestore("thread-1", "hidden-calculator");
+      expect(result.windowId).toBe("hidden-calculator");
+      expect(result.note).toEqual(expect.stringContaining("nothing was restored"));
+      expect(foregroundRaisedIds(backend)).toEqual(["hidden-calculator"]);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({ restoreStatus: "frontmost-unobservable" });
+      expect(actions[0]).not.toHaveProperty("restoredWindowId");
+    } finally {
+      await manager.dispose();
+    }
+  });
 });

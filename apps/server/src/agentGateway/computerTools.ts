@@ -84,6 +84,14 @@ function mcpToolResultJson(value: unknown): McpToolCallResult {
 export const COMPUTER_CONTROL_CAPABILITY = "computer:control" as const;
 
 /**
+ * First-mutation disclosure prepended to the first mutating computer result
+ * in a turn. It names the switch the user owns, so a transcript that drove
+ * the desktop always says so up front.
+ */
+export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
+  "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
+
+/**
  * Re-exported so a caller reaching for the computer family's gate finds it, and
  * so nothing is tempted to declare a second copy. The set itself lives in
  * `approvalGate.ts`, shared with the device family — it used to be declared
@@ -688,6 +696,35 @@ function withSetupNoteOnResult(
   return { ...result, content };
 }
 
+/**
+ * First-mutation disclosure on whatever shape the call produced. A JSON text
+ * part gains a `disclosure` field; anything else gains a leading line, so the
+ * first mutating payload in a turn always names the switch.
+ */
+function withDisclosureOnResult(result: McpToolCallResult, disclosure: string): McpToolCallResult {
+  const index = result.content.findIndex((entry) => entry.type === "text");
+  if (index === -1) {
+    return { ...result, content: [...result.content, { type: "text", text: disclosure }] };
+  }
+  const part = result.content[index];
+  if (part?.type !== "text") return result;
+  const content = [...result.content];
+  try {
+    const parsed: unknown = JSON.parse(part.text);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      content[index] = {
+        type: "text",
+        text: JSON.stringify({ ...(parsed as Record<string, unknown>), disclosure }),
+      };
+      return { ...result, content };
+    }
+  } catch {
+    // Fall through to the prose prepend below.
+  }
+  content[index] = { type: "text", text: `${disclosure}\n\n${part.text}` };
+  return { ...result, content };
+}
+
 function withSetupNoteInText(text: string, note: string): string {
   const parsed: unknown = (() => {
     try {
@@ -713,6 +750,20 @@ export function makeAgentGatewayComputerTools(
    * and the pane keep speaking desktop coordinates.
    */
   const frames = new ScreenshotFrameRegistry();
+
+  /**
+   * Consecutive unchanged scrolls per thread, with the window they were on.
+   * Three in a row on the same window means the content is not moving, so the
+   * fourth is refused before it touches the backend. A changed picture, a
+   * different window, or any non-scroll call clears the streak.
+   */
+  const unchangedScrolls = new Map<string, { windowId: string | undefined; count: number }>();
+
+  /**
+   * Turns that already disclosed first-mutation control. One disclosure per
+   * (thread, turn): the first mutating result carries it, the rest stay quiet.
+   */
+  const disclosedFirstMutations = new Set<string>();
 
   /**
    * PNG bytes travel as MCP image content and the metadata as the text part.
@@ -849,6 +900,9 @@ export function makeAgentGatewayComputerTools(
               };
             }
           }
+          // Any non-scroll call breaks an unchanged-scroll streak: the model
+          // looked or did something else instead of scrolling blindly on.
+          if (name !== "computer_scroll") unchangedScrolls.delete(context.callerThreadId);
           // Recorded before the call, because the call is what claims the
           // desktop, and the badge has to name this thread from the first
           // action rather than from the second.
@@ -924,13 +978,23 @@ export function makeAgentGatewayComputerTools(
             missing: await manager.missingPermissions(),
             buildSignature: manager.buildSignature(),
           });
+          let result: McpToolCallResult = isToolResult(value)
+            ? withSetupNoteOnResult(value, signal)
+            : mcpToolResultJson(withSetupNote(value, signal));
+          // First mutation of a turn prepends the control disclosure: the
+          // transcript must say Computer control is ON from the first input.
+          if (computerToolRequiresApproval(name)) {
+            const disclosureKey = `${context.callerThreadId}:${context.callerTurnId ?? "no-turn"}`;
+            if (!disclosedFirstMutations.has(disclosureKey)) {
+              disclosedFirstMutations.add(disclosureKey);
+              result = withDisclosureOnResult(result, COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE);
+            }
+          }
           return {
             // The note reaches both shapes. A plain object takes it as a field
             // on the payload; a result the handler already built — anything
             // carrying a screenshot — takes it in its text part.
-            result: isToolResult(value)
-              ? withSetupNoteOnResult(value, signal)
-              : mcpToolResultJson(withSetupNote(value, signal)),
+            result,
             signal,
           };
         },
@@ -1633,6 +1697,28 @@ export function makeAgentGatewayComputerTools(
             Math.sign(delta.deltaY) * Math.min(Math.abs(delta.deltaY), frame.region.height / 2),
         };
         const modifiers = readModifiers(args);
+        const incomingWindow = target.windowId ?? frame.windowId;
+        let streak = unchangedScrolls.get(threadId);
+        if (
+          streak &&
+          incomingWindow !== undefined &&
+          streak.windowId !== undefined &&
+          incomingWindow !== streak.windowId
+        ) {
+          unchangedScrolls.delete(threadId);
+          streak = undefined;
+        }
+        if (
+          streak &&
+          streak.count >= 3 &&
+          (incomingWindow === undefined || incomingWindow === streak.windowId)
+        ) {
+          throw new ToolInputError(
+            "Refusing a fourth consecutive scroll with no visible movement on this window. " +
+              "The content did not move — the page is at its edge. Stop scrolling and call " +
+              "computer_get_state with label_contains to find a labeled control instead.",
+          );
+        }
         const outcome = await manager.scrollCalibrated(
           threadId,
           hasTargetFields(target) ? target : null,
@@ -1643,6 +1729,29 @@ export function makeAgentGatewayComputerTools(
             ...(modifiers.length > 0 ? { modifiers } : {}),
           },
         );
+        const traveledY = outcome.result.scroll?.traveledY;
+        const scrollObservation = outcome.observation;
+        const capturedWindow =
+          scrollObservation && "screenshot" in scrollObservation ? scrollObservation : undefined;
+        // With wait_for_label the wrapper re-captures, so only travel counts;
+        // otherwise an after-capture identical to the latest frame is the same
+        // unchanged signal withObservation will report.
+        const willBeUnchanged =
+          args.wait_for_label === undefined &&
+          capturedWindow !== undefined &&
+          frames.matchLatest(threadId, capturedWindow.screenshot, capturedWindow.windowId) !==
+            undefined;
+        const resultWindow = outcome.result.windowId ?? capturedWindow?.windowId ?? incomingWindow;
+        if (traveledY === 0 || willBeUnchanged) {
+          const current = unchangedScrolls.get(threadId);
+          if (current && current.windowId === resultWindow) {
+            unchangedScrolls.set(threadId, { windowId: resultWindow, count: current.count + 1 });
+          } else {
+            unchangedScrolls.set(threadId, { windowId: resultWindow, count: 1 });
+          }
+        } else {
+          unchangedScrolls.delete(threadId);
+        }
         if (
           outcome.result.scroll &&
           (limited.deltaX !== delta.deltaX || limited.deltaY !== delta.deltaY)
@@ -1753,7 +1862,7 @@ export function makeAgentGatewayComputerTools(
         if (windowId === undefined) {
           throw new ToolInputError('Missing required argument "window_id".');
         }
-        return manager.activateWindow(context.callerThreadId, windowId);
+        return manager.foregroundWithRestore(context.callerThreadId, windowId);
       },
     ),
     observedActionEntry(

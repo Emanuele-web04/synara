@@ -355,8 +355,8 @@ function SettingsRouteView() {
       ? ["AppSnap shortcut"]
       : []),
     ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
-    ...(settings.allowComputerControlInNewChats !== defaults.allowComputerControlInNewChats
-      ? ["Computer control in new chats"]
+    ...(settings.computerControlEnabled !== defaults.computerControlEnabled
+      ? ["Computer control"]
       : []),
     ...(settings.autoOpenComputerPane !== defaults.autoOpenComputerPane
       ? ["Computer pane auto-open"]

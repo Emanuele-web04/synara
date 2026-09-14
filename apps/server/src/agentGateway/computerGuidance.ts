@@ -5,14 +5,14 @@ import { COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION } from "../computer/ComputerB
  * Read-only vs mutation split, deliberately not a separate lease: perception
  * tools (computer_list_windows, computer_get_state, computer_screenshot,
  * computer_get_screen_size, computer_wait) and mutating tools share one
- * `computer:control` capability, so every served Computer tool needs an
- * explicit `/computer-use` task behind it. Always leasing perception would
+ * `computer:control` capability, so every served Computer tool needs the
+ * Settings switch on plus OS grants behind it. Always leasing perception would
  * need a new `computer:control-read` capability in the gateway contract plus
  * per-tool `requiredCapability` splits in computerTools.ts — a contract and
  * tool-logic change, out of scope. Smallest safe step instead: the standing
  * one-line Computer affordance in harnessPolicy.ts (unconditional on the
  * Computer flag) plus this note, so a session without control routes
- * desktop-app work to an explicit user invocation rather than substituting
+ * desktop-app work to the Settings switch rather than substituting
  * another surface or hallucinating a read-only grant it does not have.
  */
 
@@ -43,11 +43,11 @@ export function computerToolInstructions(): string {
     "Task consent covers routine navigation and editing, not unrelated actions. Follow the applicable confirmation policy for deletion, purchases/payments/subscriptions, third-party communications or submissions, sharing sensitive data, binding agreements, account/access changes, newly acquired software, system/security settings and medical actions. Prepare the exact action before asking; honor specific prior authorization where that policy permits it. Hand personal authentication such as Touch ID back to the user. Stop when the user takes over, cancels or revokes Computer.",
     "### Efficient tool discovery and observation",
     'Use the available computer_* tools directly. With deferred tools, discover only the small set of tools needed next by exact names, in one lookup (for an app-button task: launch_app, get_state, click); never print ALL_TOOLS or the entire Computer catalog. Start with computer_launch_app or computer_list_windows, then computer_get_state with window_id. Reuse the launch result\'s window id. If it is null, use computer_list_windows({app:"App Name"}) to inspect only that app, never dump unrelated windows. A short stable sequence can run as ordered awaited tool calls in one script; stop on any refusal. Use include_screenshot:false for intermediate actions and verify once at the end. Prefer elements for verification; add include_text or an image only when elements are insufficient. Do not request both a final action screenshot and an identical separate screenshot.',
-    'Common start: computer_launch_app({app:"Calculator"}) returns window.id; computer_get_state({window_id:id}) returns elements without an image; computer_click({window_id:id,label:"exact observed label",role:"AXButton",delivery_mode:"foreground",include_screenshot:false}) presses one observed control. These are argument examples, not permission to guess controls. Use the tools under their provider-exposed names. Discover only additional tools or arguments when needed.',
+    'Common start: computer_launch_app({app:"Calculator"}) returns window.id; computer_get_state({window_id:id}) returns elements without an image; computer_click({window_id:id,label:"exact observed label",role:"AXButton",include_screenshot:false}) presses one observed control. These are argument examples, not permission to guess controls. Use the tools under their provider-exposed names. Discover only additional tools or arguments when needed.',
     "### Pointing at the desktop",
     "Observe before acting. Prefer label and role from computer_get_state. For x/y use pixel coordinates in a screenshot you received, optionally named by screenshot_id. Never convert screenshot pixels into desktop coordinates. Observe again after the window or controls move.",
     "### Aiming the keyboard",
-    "Pass window_id to select an exact input target; otherwise keys go to the last aimed window. The drawn cursor does not aim keys. Background delivery may affect app focus and does not isolate human input. Foreground delivery and switching apps are covered by the active task's Computer consent and approval mode. When asked to open and use an app visibly, choose delivery_mode:foreground from the first mutation; use background when the user requests background work. Do not change delivery mode to replay an uncertain action. Never rearrange unrelated windows or bypass an input pause. focused means selected input target; active reports native activation when known.",
+    "Pass window_id to select an exact input target; otherwise keys go to the last aimed window. The drawn cursor does not aim keys. Background delivery may affect app focus and does not isolate human input. Foreground delivery and switching apps are covered by the active task's Computer consent and approval mode. Start in background: omit delivery_mode unless the user asked for visible use. Use foreground only after computer_activate_window in the same task consent; never switch mode to replay uncertainty. Never rearrange unrelated windows or bypass an input pause. focused means selected input target; active reports native activation when known.",
     "### The screenshot on every action",
     `Use returned post-action observations, capped at ${COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION} pixels, for the next step. Use include_screenshot:false for intermediate actions or when a final text observation verifies the result. Inspect the final result. screenshotUnchanged reuses the previous image and mapping, not that the action failed. targetWindowClosed means the target is gone. Use computer_wait for a known next control; request computer_screenshot detail when needed, not after every keystroke.`,
     "### Reading a delivery verdict",

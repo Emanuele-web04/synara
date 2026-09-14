@@ -46,11 +46,11 @@ function stubCredentials() {
 }
 
 describe("computer turn presence", () => {
-  it("a re-lease without computer control drops computer_* next turn without throwing", () => {
+  it("lists computer_* when the switch is on and drops them when it is off", () => {
     const { minted, credentials } = stubCredentials();
     const threadId = ThreadId.makeUnsafe("thread-presence");
 
-    // This turn leases computer control: the catalog serves the family.
+    // This turn leases with the switch on: the catalog serves the family.
     const firstInput = captureAgentGatewayCapabilityInput({ enableComputerControl: true });
     const firstLease = acquireAgentGatewaySessionLease(credentials, threadId, "codex", firstInput);
     expect(firstLease).toBeDefined();
@@ -61,12 +61,12 @@ describe("computer turn presence", () => {
       "computer_get_state",
     ]);
 
-    // Control turns off between turns. The rotation releases the old lease and
-    // mints a fresh one from the new fact — nothing throws, and the next
+    // The switch turns off between turns. The rotation releases the old lease
+    // and mints a fresh one from the new fact — nothing throws, and the next
     // turn's catalog no longer names the family.
     firstLease?.release();
     expect(() => firstLease?.release()).not.toThrow();
-    const secondInput = captureAgentGatewayCapabilityInput({});
+    const secondInput = captureAgentGatewayCapabilityInput({ enableComputerControl: false });
     const secondCapabilities = new Set(agentGatewayCapabilitiesFor(secondInput));
     expect([...secondCapabilities]).toEqual([]);
     // The family is gone from the next turn's catalog: nothing served that

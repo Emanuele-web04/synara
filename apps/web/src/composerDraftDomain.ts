@@ -571,7 +571,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     runtimeMode: null,
     interactionMode: null,
     // Tri-state: undefined means "no explicit choice". A chat that has not
-    // started yet then follows the machine-wide allowComputerControlInNewChats
+    // started yet then follows the machine-wide computerControlEnabled
     // setting (off by default), including while permission setup is needed; its
     // first send records the resolved value here so later setting changes leave
     // the chat alone. A chat with turns and no recorded choice is off.

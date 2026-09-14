@@ -1,10 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, writeFile, chmod, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import { CuaDriverHost } from "./cuaDriverHost";
-import type { ComputerNativePreviewHost } from "./computerNativePreview";
 import {
   cuaRequest as rawCuaRequest,
   CUA_DRIVER_VERSION,
@@ -34,7 +33,6 @@ async function fixture(
     crash?: boolean;
     delayObservation?: boolean;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
-    preview?: ComputerNativePreviewHost;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
@@ -94,7 +92,6 @@ process.stdin.resume(); process.stdin.on('end',retire);
     capability: authority,
     setup: async () => {},
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
-    ...(options.preview ? { preview: options.preview } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -554,60 +551,17 @@ describe("Cua GUI host retirement", () => {
   });
 });
 
-describe("task-owned native preview", () => {
+describe("task-owned user stop", () => {
   const task = { threadId: "thread", turnId: "turn" };
-  const preview = () => ({
-    update: vi.fn(),
-    endTask: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
-  });
-  it("starts on an attributed model observation, never on pane polling", async () => {
-    const native = preview();
-    const f = await fixture(capability, { preview: native });
-    const request = { method: "call", name: "get_window_state", args: { pid: 42, window_id: 10 } };
-    await cuaRequest(f.endpoint, request);
-    expect(native.update).not.toHaveBeenCalled();
-    await cuaRequest(f.endpoint, { ...request, task, modelObservation: true });
-    expect(native.update).toHaveBeenCalledWith({ task, pid: 42, windowId: 10 });
-    await cuaRequest(f.endpoint, { method: "end_task", task });
-    expect(native.endTask).toHaveBeenCalledWith(task);
-  });
-  it("does not reopen capture after a turn ended during observation", async () => {
-    const native = preview();
-    const f = await fixture(capability, { preview: native, delayObservation: true });
-    const pending = cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
-      task,
-      modelObservation: true,
-      args: { pid: 42, window_id: 10 },
+  it("end_task succeeds without a native preview", async () => {
+    const f = await fixture();
+    await expect(cuaRequest(f.endpoint, { method: "end_task", task })).resolves.toMatchObject({
+      ok: true,
     });
-    await vi.waitFor(async () =>
-      expect((await f.events()).some((e) => e.event === "observe")).toBe(true),
-    );
-    await cuaRequest(f.endpoint, { method: "end_task", task: { threadId: task.threadId } });
-    await pending;
-    expect(native.update).not.toHaveBeenCalled();
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
   });
-  it("a delayed Stop from an old preview cannot cancel a newer task", async () => {
-    const native = preview();
-    const f = await fixture(capability, { preview: native });
-    const next = { threadId: "new-thread", turnId: "next" };
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
-      task: next,
-      modelObservation: true,
-      args: { pid: 42, window_id: 10 },
-    });
-    native.stop.mockClear();
-    await f.host.stopTaskByUser(task);
-    expect(native.stop).not.toHaveBeenCalled();
-    expect((await f.events()).some((e) => e.event === "cancel")).toBe(false);
-  });
-  it("native Stop refuses subsequent calls from the same turn", async () => {
-    const native = preview();
-    const f = await fixture(capability, { preview: native });
+  it("user Stop refuses subsequent calls from the same turn", async () => {
+    const f = await fixture();
     await f.host.stopTaskByUser(task);
     const blocked = await cuaRequest<CuaReply>(f.endpoint, {
       method: "call",

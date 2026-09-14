@@ -3181,7 +3181,7 @@ describe("turn dispatch settings", () => {
     });
   });
 
-  it.each(["off", "request", "chat"] as const)(
+  it.each(["off", "chat"] as const)(
     "preserves explicit %s intent across every dispatch projection",
     (computerControlMode) => {
       const settings = {
@@ -3205,6 +3205,38 @@ describe("turn dispatch settings", () => {
       expect(replay.enableComputerControl).toBe(computerControlMode !== "off");
     },
   );
+
+  it("normalizes a legacy request to chat on replay", () => {
+    const legacyQueued = {
+      ...QUEUED_CHAT_TURN,
+      computerControlMode: "request" as const,
+      enableComputerControl: true,
+      computerControlGeneration: 5,
+    };
+    const replay = resolveQueuedTurnDispatchSettings(
+      { ...LIVE_SETTINGS, enableComputerControl: true },
+      legacyQueued,
+    );
+    expect(replay.computerControlMode).toBe("chat");
+    expect(replay.enableComputerControl).toBe(true);
+    expect(replay.computerControlGeneration).toBe(5);
+  });
+
+  it("forces queued intent off when the live switch is off", () => {
+    const queuedOn = {
+      ...QUEUED_CHAT_TURN,
+      computerControlMode: "chat" as const,
+      enableComputerControl: true,
+      computerControlGeneration: 5,
+    };
+    const replay = resolveQueuedTurnDispatchSettings(
+      { ...LIVE_SETTINGS, enableComputerControl: false },
+      queuedOn,
+    );
+    expect(replay.enableComputerControl).toBe(false);
+    expect(replay.computerControlMode).toBe("off");
+    expect(replay.computerControlGeneration).toBe(5);
+  });
 
   it("starts an implementation thread with its own generation while preserving explicit mode", () => {
     const source = {
@@ -3277,7 +3309,7 @@ describe("resolveEffectiveComputerControl", () => {
           draftOverride: undefined,
           availability,
           chatHasTurns: false,
-          allowInNewChats: AppSettingsSchema.makeUnsafe({}).allowComputerControlInNewChats,
+          computerControlEnabled: AppSettingsSchema.makeUnsafe({}).computerControlEnabled,
         }),
       ).toBe(false);
       expect(
@@ -3285,7 +3317,7 @@ describe("resolveEffectiveComputerControl", () => {
           draftOverride: undefined,
           availability,
           chatHasTurns: false,
-          allowInNewChats: true,
+          computerControlEnabled: true,
         }),
       ).toBe(true);
     },
@@ -3296,7 +3328,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: undefined,
         availability: { kind: "unsupported-platform", platform: "win32" },
-        allowInNewChats: true,
+        computerControlEnabled: true,
         chatHasTurns: false,
       }),
     ).toBe(false);
@@ -3307,7 +3339,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: undefined,
         availability: { kind: "available", backend: "mac" },
-        allowInNewChats: false,
+        computerControlEnabled: false,
         chatHasTurns: false,
       }),
     ).toBe(false);
@@ -3321,7 +3353,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: undefined,
         availability: { kind: "available", backend: "mac" },
-        allowInNewChats: true,
+        computerControlEnabled: true,
         chatHasTurns: true,
       }),
     ).toBe(false);
@@ -3333,7 +3365,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: true,
         availability: { kind: "available", backend: "mac" },
-        allowInNewChats: false,
+        computerControlEnabled: false,
         chatHasTurns: true,
       }),
     ).toBe(true);
@@ -3342,7 +3374,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: false,
         availability: { kind: "available", backend: "mac" },
-        allowInNewChats: true,
+        computerControlEnabled: true,
         chatHasTurns: false,
       }),
     ).toBe(false);
@@ -3353,7 +3385,7 @@ describe("resolveEffectiveComputerControl", () => {
       resolveEffectiveComputerControl({
         draftOverride: true,
         availability: { kind: "backend-unavailable", message: "Reconnecting." },
-        allowInNewChats: false,
+        computerControlEnabled: false,
         chatHasTurns: false,
       }),
     ).toBe(true);

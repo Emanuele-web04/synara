@@ -55,8 +55,7 @@ describe("TimelineWorkEntryRow computer denial wiring", () => {
     (density) => {
       const markup = renderRow(denialEntry(), density);
 
-      expect(markup).toContain("Computer control is off for this chat");
-      expect(markup).toContain("computer_click");
+      expect(markup).toContain("Computer control is off. Turn it on in Settings");
       expect(markup).toContain(">Enable<");
     },
   );

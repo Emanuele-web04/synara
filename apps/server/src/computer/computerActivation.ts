@@ -1,29 +1,16 @@
 import type { ComputerControlMode } from "@synara/contracts";
-import { isComputerInvocation } from "@synara/shared/computerInvocation";
 
-/** Normalize durable user intent once, including older clients and saved queue entries. */
+/** Durable user intent follows the Settings switch only. */
 export function computerActivationMetadata(input: {
-  readonly computerControlMode?: ComputerControlMode | undefined;
   readonly enableComputerControl?: boolean | undefined;
   readonly computerControlGeneration?: number | undefined;
-  readonly messageText?: string | undefined;
-  readonly text?: string | undefined;
-  readonly dispatchOrigin?: "user" | "automation" | "agent" | undefined;
-  readonly skills?: readonly { name: string }[] | undefined;
-  readonly message?: { text: string; skills?: readonly { name: string }[] | undefined } | undefined;
 }): {
   computerControlMode: ComputerControlMode;
   enableComputerControl: boolean;
   computerControlGeneration: number;
 } {
-  const computerControlMode =
-    (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
-    isComputerInvocation({
-      text: input.messageText ?? input.message?.text ?? input.text,
-      skills: input.skills ?? input.message?.skills,
-    })
-      ? "request"
-      : (input.computerControlMode ?? (input.enableComputerControl === true ? "chat" : "off"));
+  const enabled = input.enableComputerControl === true;
+  const computerControlMode = enabled ? ("chat" as const) : ("off" as const);
   return {
     computerControlMode,
     enableComputerControl: computerControlMode !== "off",

@@ -43,17 +43,26 @@ import {
 } from "./appSettings";
 
 describe("computer control defaults", () => {
-  it("leaves computer tools off until a preference is explicitly saved", () => {
-    expect(AppSettingsSchema.makeUnsafe({}).allowComputerControlInNewChats).toBe(false);
+  it("leaves computer control off until a preference is explicitly saved", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ autoOpenComputerPane: false });
-    expect(normalizeStoredAppSettings(decoded).allowComputerControlInNewChats).toBe(false);
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(false);
   });
 
-  it("preserves a saved machine-wide opt-out", () => {
+  it("preserves a saved computer control preference", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
-      allowComputerControlInNewChats: false,
+      computerControlEnabled: true,
     });
-    expect(normalizeStoredAppSettings(decoded).allowComputerControlInNewChats).toBe(false);
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(true);
+  });
+
+  it("migrates the legacy per-chat computer control default", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      allowComputerControlInNewChats: true,
+    });
+    const normalized = normalizeStoredAppSettings(decoded);
+    expect(normalized.computerControlEnabled).toBe(true);
+    expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
   });
 });
 

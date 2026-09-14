@@ -587,7 +587,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     return (
       <div className={cn(compact ? "py-0.5" : "py-1")}>
         <ComputerControlDeniedCard
-          toolName={computerControlDenied.toolName}
           {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
           textFontSizePx={textFontSizePx}
           metaFontSizePx={chatMetaFontSizePx}

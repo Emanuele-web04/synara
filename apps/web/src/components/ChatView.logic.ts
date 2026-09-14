@@ -1669,14 +1669,14 @@ export function resolveEffectiveComputerControl(input: {
   readonly draftOverride: boolean | undefined;
   readonly mode?: ComposerComputerControlMode | undefined;
   readonly availability: ComputerAvailability | undefined;
-  readonly allowInNewChats: boolean;
+  readonly computerControlEnabled: boolean;
   /** True once the chat has any turn; the new-chat default no longer applies. */
   readonly chatHasTurns: boolean;
 }): boolean {
   if (input.availability?.kind === "unsupported-platform") return false;
   return input.mode !== undefined
     ? input.mode !== "off"
-    : (input.draftOverride ?? (!input.chatHasTurns && input.allowInNewChats));
+    : (input.draftOverride ?? (!input.chatHasTurns && input.computerControlEnabled));
 }
 
 /**
@@ -1705,8 +1705,8 @@ export interface TurnDispatchSettings {
 /**
  * A queued turn froze its dispatch settings when it was queued, so dispatching
  * it later must replay those, not whatever the composer shows now. Every field
- * falls back to the live settings except Computer access: a legacy missing
- * access choice stays off rather than inheriting unrelated live authorization.
+ * falls back to the live settings except Computer access: the frozen switch
+ * replays, but a live switch-off forces off so disabling revokes queued intent.
  *
  * `interactionMode` is deliberately included here but overridden by the
  * plan-follow-up path, which decides the mode from the follow-up itself.
@@ -1718,20 +1718,17 @@ export function resolveQueuedTurnDispatchSettings(
   if (!queuedTurn) {
     return settings;
   }
+  const queuedSwitchOn =
+    resolveComputerControlMode(queuedTurn.computerControlMode, queuedTurn.enableComputerControl) !==
+    "off";
+  const enableComputerControl = settings.enableComputerControl === true ? queuedSwitchOn : false;
   return {
     ...settings,
     modelSelection: queuedTurn.modelSelection ?? settings.modelSelection,
     providerOptions: queuedTurn.providerOptionsForDispatch ?? settings.providerOptions,
-    enableComputerControl:
-      resolveComputerControlMode(
-        queuedTurn.computerControlMode,
-        queuedTurn.enableComputerControl,
-      ) !== "off",
+    enableComputerControl,
     computerControlGeneration: queuedTurn.computerControlGeneration ?? 0,
-    computerControlMode: resolveComputerControlMode(
-      queuedTurn.computerControlMode,
-      queuedTurn.enableComputerControl,
-    ),
+    computerControlMode: enableComputerControl ? "chat" : "off",
     runtimeMode: queuedTurn.runtimeMode ?? settings.runtimeMode,
     interactionMode: queuedTurn.interactionMode ?? settings.interactionMode,
     // Plan follow-ups carry no environment of their own; they run wherever the

@@ -150,8 +150,8 @@ describe("Synara harness policy", () => {
 
   it("keeps the gateway policy below its prompt budget", () => {
     // Budget raised for the one-line Computer discoverability affordance
-    // above (173 chars); it still guards against accidental bloat.
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_200);
+    // above (242 chars); it still guards against accidental bloat.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_300);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -164,10 +164,10 @@ describe("Synara harness policy", () => {
 
   it("keeps the Computer discoverability affordance unconditional on the Computer flag", () => {
     // A session without Computer tools is exactly where the affordance pays:
-    // the model must route desktop-app work to an explicit user invocation
-    // instead of substituting shell/AppleScript/browser/device tools.
+    // the model must route desktop-app work to the Settings switch instead
+    // of substituting shell/AppleScript/browser/device tools.
     const affordance =
-      "To operate real macOS/Windows apps (open, click, type, scroll), ask user to invoke Computer (/computer-use <task>); do not substitute shell/AppleScript/browser/device tools.";
+      "To operate real macOS/Windows apps (open, click, type, scroll), use computer_* tools only when this session lists them; otherwise tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.";
     for (const gatewayControlAvailable of [true, false] as const) {
       for (const enableComputerControl of [true, false, undefined] as const) {
         const policy = renderSynaraHarnessPolicy({

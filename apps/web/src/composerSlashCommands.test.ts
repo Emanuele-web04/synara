@@ -34,7 +34,7 @@ describe("composerSlashCommands", () => {
     "pi",
     "antigravity",
   ] as const)(
-    "offers the app Computer invocation for %s even with a native name collision",
+    "does not offer a Computer slash invocation for %s, even with a native name collision",
     (provider) => {
       const commands = getAvailableComposerSlashCommands({
         provider,
@@ -46,12 +46,12 @@ describe("composerSlashCommands", () => {
         canOfferExportCommand: false,
         providerNativeCommandNames: ["computer-use"],
       });
-      expect(commands.filter((command) => command === "computer-use")).toHaveLength(1);
-      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "computer-use")).toBe(true);
+      expect(commands.filter((command) => (command as string) === "computer-use")).toHaveLength(0);
+      expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
     },
   );
   it("recognizes built-in slash commands", () => {
-    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
@@ -82,10 +82,7 @@ describe("composerSlashCommands", () => {
   });
 
   it("parses slash invocations with optional arguments", () => {
-    expect(parseComposerSlashInvocation("/computer-use open Notes")).toEqual({
-      command: "computer-use",
-      args: "open Notes",
-    });
+    expect(parseComposerSlashInvocation("/computer-use open Notes")).toBeNull();
     expect(parseComposerSlashInvocation("/review current diff")).toEqual({
       command: "review",
       args: "current diff",
@@ -458,7 +455,6 @@ describe("composerSlashCommands", () => {
     });
 
     expect(commands).toEqual([
-      "computer-use",
       "fork",
       "side",
       "export",
@@ -583,7 +579,6 @@ describe("composerSlashCommands", () => {
         canOfferExportCommand: true,
       }),
     ).toEqual([
-      "computer-use",
       "clear",
       "model",
       "plan",

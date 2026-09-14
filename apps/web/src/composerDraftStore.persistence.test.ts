@@ -41,7 +41,7 @@ describe("composerDraftStore persisted-state hydration", () => {
     },
   );
 
-  it.each(["off", "request", "chat"] as const)(
+  it.each(["off", "chat"] as const)(
     "round-trips explicit %s intent without changing other draft content",
     (mode) => {
       resetComposerDraftStore();
@@ -75,13 +75,24 @@ describe("composerDraftStore persisted-state hydration", () => {
     },
   );
 
+  it("normalizes a legacy request to the chat switch", () => {
+    resetComposerDraftStore();
+    const threadId = ThreadId.makeUnsafe("computer-request-legacy");
+    const store = useComposerDraftStore.getState();
+    store.setComputerControlMode(threadId, "request" as never, { generation: 7 });
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.computerControlMode).toBe("chat");
+    expect(draft?.enableComputerControl).toBe(true);
+    expect(draft?.computerControlGeneration).toBe(7);
+  });
+
   it("explicit off revokes queued intent while preserving queued messages", () => {
     resetComposerDraftStore();
     const threadId = ThreadId.makeUnsafe("computer-revoke-queue");
     const store = useComposerDraftStore.getState();
     store.enqueueQueuedTurn(threadId, {
       ...makeQueuedChatTurn("request"),
-      computerControlMode: "request",
+      computerControlMode: "chat",
       enableComputerControl: true,
     });
     store.setComputerControlMode(threadId, "off", { revokeQueued: true });

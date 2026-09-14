@@ -154,7 +154,7 @@ function editAndResendCommand(enableComputerControl?: boolean) {
 
 describe("decider computer-control pass-through", () => {
   it.each([false, true])(
-    "freezes user invocation and generation in the actual nested command (queued=%s)",
+    "ignores slash text and follows the switch instead (queued=%s)",
     async (queued) => {
       const command = turnStartCommand();
       const events = await decide(
@@ -168,8 +168,29 @@ describe("decider computer-control pass-through", () => {
       expect(
         payloadOf(events, queued ? "thread.turn-queued" : "thread.turn-start-requested"),
       ).toMatchObject({
-        computerControlMode: "request",
-        enableComputerControl: true,
+        computerControlMode: "off",
+        enableComputerControl: false,
+        computerControlGeneration: 7,
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "carries the switch and generation when slash text is present (switch=%s)",
+    async (enableComputerControl) => {
+      const command = turnStartCommand();
+      const events = await decide(
+        {
+          ...command,
+          message: { ...command.message, text: "/computer-use open Calculator" },
+          enableComputerControl,
+          computerControlGeneration: 7,
+        },
+        makeReadModel(),
+      );
+      expect(payloadOf(events, "thread.turn-start-requested")).toMatchObject({
+        computerControlMode: enableComputerControl ? "chat" : "off",
+        enableComputerControl,
         computerControlGeneration: 7,
       });
     },
@@ -191,12 +212,12 @@ describe("decider computer-control pass-through", () => {
     },
   );
   it.each([
-    { computerControlMode: "off" as const, enableComputerControl: true, expected: false },
-    { computerControlMode: "request" as const, enableComputerControl: false, expected: true },
-    { computerControlMode: "chat" as const, enableComputerControl: false, expected: true },
+    { enableComputerControl: true, expectedMode: "chat" as const, expected: true },
+    { enableComputerControl: false, expectedMode: "off" as const, expected: false },
+    { enableComputerControl: undefined, expectedMode: "off" as const, expected: false },
   ])(
-    "freezes $computerControlMode mode and generation across every dispatch path",
-    async ({ computerControlMode, enableComputerControl, expected }) => {
+    "freezes the switch and generation across every dispatch path",
+    async ({ enableComputerControl, expectedMode, expected }) => {
       for (const [command, state, eventType] of [
         [turnStartCommand(), makeReadModel(), "thread.turn-start-requested"],
         [turnStartCommand(), makeReadModel({ session: runningSession() }), "thread.turn-queued"],
@@ -208,11 +229,15 @@ describe("decider computer-control pass-through", () => {
         ],
       ] as const) {
         const events = await decide(
-          { ...command, computerControlMode, enableComputerControl, computerControlGeneration: 7 },
+          {
+            ...command,
+            ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
+            computerControlGeneration: 7,
+          },
           state,
         );
         expect(payloadOf(events, eventType)).toMatchObject({
-          computerControlMode,
+          computerControlMode: expectedMode,
           enableComputerControl: expected,
           computerControlGeneration: 7,
         });

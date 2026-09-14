@@ -56,12 +56,12 @@ describe("rankSettingsSearchEntries", () => {
     expect(hidden.some((entry) => entry.id === "computer:open-automatically")).toBe(false);
   });
 
-  it("does not claim clipboard reads always ask, because a full-access chat never does", () => {
+  it("indexes the Computer control switch with its guardrails", () => {
     const entry = SETTINGS_SEARCH_ENTRIES.find(
       (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
     );
-    expect(entry?.keywords).not.toContain("clipboard reads always ask");
-    expect(entry?.keywords).toContain("without asking");
+    expect(entry?.title).toBe("Computer control");
+    expect(entry?.keywords).toContain("Approval gates and Stop still apply");
   });
 
   it("includes the activity toasts notification row", () => {

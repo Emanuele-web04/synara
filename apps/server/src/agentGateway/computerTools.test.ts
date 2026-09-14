@@ -16,10 +16,12 @@ import {
 } from "../computer/ComputerBackend.ts";
 import { ComputerTargetError } from "../computer/uiTreeTargeting.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
+import { desktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
 import {
   COMPUTER_APPROVAL_REQUIRED_TOOLS,
+  COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE,
   computerToolInstructions,
   computerToolRequiresApproval,
   makeAgentGatewayComputerTools,
@@ -153,7 +155,8 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
     expect(notes).toContain("stop on any refusal");
     expect(notes).toContain('computer_launch_app({app:"Calculator"})');
-    expect(notes).toContain("choose delivery_mode:foreground from the first mutation");
+    expect(notes).toContain("omit delivery_mode unless the user asked for visible use");
+    expect(notes).not.toContain("choose delivery_mode:foreground from the first mutation");
     await manager.dispose();
   });
 
@@ -474,6 +477,21 @@ describe("agent gateway computer tools", () => {
     };
     expect(payload.elements).toHaveLength(60);
     expect(payload.elementsTruncated).toBe(true);
+  });
+
+  it("names label_contains when a truncated tree misses the label", async () => {
+    const base = new FakeComputerBackend();
+    const state = await base.getState({ includeTree: true });
+    const truncatedRoot = { ...state.root!, truncated: true as const };
+    const { call, manager } = await setup(new FakeComputerBackend({ root: truncatedRoot }));
+    try {
+      const result = await call("computer_click", { label: "Missing control" });
+      expect(result.isError).toBe(true);
+      const text = result.content.find((entry) => entry.type === "text");
+      expect(text?.type === "text" ? text.text : "").toContain("label_contains");
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("tells the model to point in screenshot pixels and never to convert them", async () => {
@@ -998,6 +1016,46 @@ describe("agent gateway computer tools", () => {
     expect(other.content.map((entry) => entry.type)).toEqual(["text", "image"]);
   });
 
+  it("refuses a fourth consecutive unchanged scroll on the same window", async () => {
+    const { backend, call, see } = await setup();
+    await see();
+    const args = { window_id: "fake-calculator", delta_x: 0, delta_y: 20 };
+
+    const first = await call("computer_scroll", args);
+    expect(first.isError).not.toBe(true);
+    expect(resultJson(first)).toMatchObject({
+      action: "computer_scroll",
+      scroll: { traveledY: 0 },
+    });
+
+    const second = await call("computer_scroll", args);
+    expect(second.isError).not.toBe(true);
+    expect(resultJson(second)).toMatchObject({ screenshotUnchanged: true });
+
+    const third = await call("computer_scroll", args);
+    expect(third.isError).not.toBe(true);
+    expect(backend.callsFor("scroll")).toHaveLength(3);
+
+    const fourth = await call("computer_scroll", args);
+    expect(fourth.isError).toBe(true);
+    const failure = fourth.content.find((entry) => entry.type === "text");
+    expect(failure?.type === "text" ? failure.text : "").toContain("computer_get_state");
+    expect(failure?.type === "text" ? failure.text : "").toContain("label_contains");
+    expect(backend.callsFor("scroll")).toHaveLength(3);
+
+    // The recovery the refusal names breaks the streak.
+    await call("computer_get_state", { include_screenshot: false });
+    backend.queueScreenshots(["changed-before", "changed-after"]);
+    const changed = await call("computer_scroll", args);
+    expect(changed.isError).not.toBe(true);
+    expect(changed.content.map((entry) => entry.type)).toEqual(["text", "image"]);
+
+    // Counter restarted: the next scroll is allowed, not refused.
+    const after = await call("computer_scroll", args);
+    expect(after.isError).not.toBe(true);
+    expect(backend.callsFor("scroll").length).toBeGreaterThan(3);
+  });
+
   it("tells the model the observation is downscaled and what unchanged means", async () => {
     const { byName } = await setup();
     const notes = computerToolInstructions();
@@ -1220,6 +1278,42 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("hotkey")).toHaveLength(1);
   });
 
+  it("refuses control-off mutations even for a gated provider without touching the backend", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      await manager.setControlEnabled(THREAD, false);
+      const refused = await call("computer_click", { x: 10, y: 10 });
+      expect(refused.isError).toBe(true);
+      expect(backend.callsFor("click")).toHaveLength(0);
+    } finally {
+      await manager.setControlEnabled(THREAD, true);
+      await manager.dispose();
+    }
+  });
+
+  it("includes the control disclosure on the first mutation payload of a turn", async () => {
+    const { manager, call } = await setup();
+    try {
+      expect(COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE).toContain("Computer control ON");
+      const first = await call("computer_press_key", { key: "enter" });
+      expect(first.isError).not.toBe(true);
+      const firstText =
+        first.content.find((entry) => entry.type === "text")?.type === "text"
+          ? (first.content.find((entry) => entry.type === "text") as { text: string }).text
+          : "";
+      expect(firstText).toContain("Computer control ON");
+      const second = await call("computer_press_key", { key: "enter" });
+      expect(second.isError).not.toBe(true);
+      const secondText =
+        second.content.find((entry) => entry.type === "text")?.type === "text"
+          ? (second.content.find((entry) => entry.type === "text") as { text: string }).text
+          : "";
+      expect(secondText).not.toContain("Computer control ON");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("refuses a semantic action name past the contract's bound", async () => {
     const { backend, call } = await setup();
     const result = await call("computer_perform_action", {
@@ -1436,8 +1530,22 @@ describe("agent gateway computer tools", () => {
       "computer_type_text",
       "computer_write_clipboard",
       "computer_activate_window",
+      "computer_press_key",
+      "computer_drag",
     ]) {
-      const refused = await call(name, { x: 1, y: 1, text: "x", window_id: "fake-terminal" }, "pi");
+      const refused = await call(
+        name,
+        {
+          x: 1,
+          y: 1,
+          text: "x",
+          window_id: "fake-terminal",
+          key: "enter",
+          from: { x: 1, y: 1 },
+          to: { x: 2, y: 2 },
+        },
+        "pi",
+      );
       expect(refused.isError).toBe(true);
       expect(resultJson(refused)).toMatchObject({
         error: { code: "ComputerApprovalRequired" },
@@ -1445,6 +1553,8 @@ describe("agent gateway computer tools", () => {
     }
     expect(backend.callsFor("click")).toHaveLength(0);
     expect(backend.callsFor("typeText")).toHaveLength(0);
+    expect(backend.callsFor("pressKey")).toHaveLength(0);
+    expect(backend.callsFor("drag")).toHaveLength(0);
     // Perception is untouched: refusing to read the screen protects nobody.
     const seen = await call("computer_list_windows", {}, "pi");
     expect(seen.isError).not.toBe(true);
@@ -2083,6 +2193,42 @@ describe("computer operation ordering", () => {
       await manager.dispose();
     }
   });
+
+  it("refuses a queued mutation flipped off mid-queue without new backend calls", async () => {
+    const { backend, manager, call } = await setup();
+    let finish = () => {};
+    let entered = () => {};
+    const held = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pressKey = backend.pressKey.bind(backend);
+    backend.pressKey = async (...args: Parameters<typeof pressKey>) => {
+      const result = await pressKey(...args);
+      entered();
+      await held;
+      return result;
+    };
+    try {
+      const first = call("computer_press_key", { key: "enter" });
+      await started;
+      const queued = call("computer_press_key", { key: "escape" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const disabling = manager.setControlEnabled(THREAD, false);
+      finish();
+      await disabling;
+      await first;
+      const queuedResult = await queued;
+      expect(queuedResult.isError).toBe(true);
+      expect(backend.callsFor("pressKey")).toHaveLength(1);
+      await manager.setControlEnabled(THREAD, true);
+    } finally {
+      finish();
+      await manager.dispose();
+    }
+  });
 });
 
 it("waits for a live label and returns its window screenshot in the same call", async () => {
@@ -2234,4 +2380,56 @@ it("allows human input between conditional wait observations and stops polling w
   } finally {
     await manager.dispose();
   }
+});
+
+describe("computer_activate_window foreground restore", () => {
+  it("runs a default-background activate in foreground scope and restores when approved", async () => {
+    const backend = new FakeComputerBackend();
+    const deliveryModes: string[] = [];
+    const raise = backend.raiseWindow.bind(backend);
+    backend.raiseWindow = async (windowId: string) => {
+      deliveryModes.push(desktopDeliveryMode());
+      return raise(windowId);
+    };
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval);
+    try {
+      // No delivery_mode arg: the call defaults to background, yet activation
+      // is a foreground excursion within the task's approval.
+      const result = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(result.isError).not.toBe(true);
+      expect(approval).toHaveBeenCalledWith(
+        "computer_activate_window",
+        expect.objectContaining({ delivery_mode: "foreground" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      // The whole excursion — raise plus restore — runs in foreground scope.
+      expect(deliveryModes).toEqual(["foreground", "foreground"]);
+      expect(backend.callsFor("raiseWindow").map((entry) => entry.args[0])).toEqual([
+        "fake-calculator",
+        "fake-terminal",
+      ]);
+      expect(resultJson(result)).toMatchObject({
+        action: "computer_activate_window",
+        windowId: "fake-calculator",
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("touches nothing when approval refuses the activate", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => false);
+    const { call, manager } = await setup(backend, approval);
+    try {
+      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(refused.isError).toBe(true);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
 });

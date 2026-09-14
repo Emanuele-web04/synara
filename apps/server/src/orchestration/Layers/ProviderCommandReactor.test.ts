@@ -6044,13 +6044,13 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each([
-    { mode: "request" as const, after: "none", expected: false },
-    { mode: "chat" as const, after: "none", expected: true },
-    { mode: "chat" as const, after: "disable-reenable", expected: false },
-    { mode: "chat" as const, after: "ordinary-turn", expected: true },
+    { switchOn: false as const, after: "none", expected: false },
+    { switchOn: true as const, after: "none", expected: true },
+    { switchOn: true as const, after: "disable-reenable", expected: false },
+    { switchOn: true as const, after: "ordinary-turn", expected: true },
   ])(
-    "ordinary follow-ups inherit live chat intent while single-shot requests do not persist (Computer $mode with $after gives goal continuation exposure=$expected)",
-    async ({ mode, after, expected }) => {
+    "ordinary follow-ups inherit live switch intent while switch-off turns do not persist (Computer switch=$switchOn with $after gives goal continuation exposure=$expected)",
+    async ({ switchOn, after, expected }) => {
       const manager = new ComputerManager({ backend: new FakeComputerBackend() });
       const harness = await createHarness({
         computerService: {
@@ -6062,7 +6062,7 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const createdAt = new Date().toISOString();
       try {
-        const sendUserTurn = async (index: number, computerControlMode?: "chat" | "request") => {
+        const sendUserTurn = async (index: number, switchOn?: boolean) => {
           await Effect.runPromise(
             harness.engine.dispatch({
               type: "thread.turn.start",
@@ -6074,7 +6074,9 @@ describe("ProviderCommandReactor", () => {
                 text: "Continue",
                 attachments: [],
               },
-              ...(computerControlMode ? { computerControlMode, computerControlGeneration: 0 } : {}),
+              ...(switchOn !== undefined
+                ? { enableComputerControl: switchOn, computerControlGeneration: 0 }
+                : {}),
               runtimeMode: "approval-required",
               interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
               createdAt,
@@ -6100,7 +6102,7 @@ describe("ProviderCommandReactor", () => {
             }),
           );
         };
-        await sendUserTurn(1, mode);
+        await sendUserTurn(1, switchOn);
         if (after === "ordinary-turn") await sendUserTurn(2);
         if (after === "disable-reenable") {
           await manager.setControlEnabled(threadId, false);
@@ -6171,7 +6173,7 @@ describe("ProviderCommandReactor", () => {
     expect(sent?.input?.match(/AppSnap image metadata/g)).toHaveLength(1);
   });
 
-  it("a frozen single-shot request without a live invocation does not persist to the next ordinary turn", async () => {
+  it("a frozen switch-off turn records no durable intent for the next ordinary turn", async () => {
     const manager = new ComputerManager({ backend: new FakeComputerBackend() });
     const harness = await createHarness({
       computerService: {
@@ -6184,7 +6186,7 @@ describe("ProviderCommandReactor", () => {
     const createdAt = new Date().toISOString();
     try {
       for (const [index, activation] of [
-        { computerControlMode: "request" as const, computerControlGeneration: 0 },
+        { enableComputerControl: false as const, computerControlGeneration: 0 },
         {},
       ].entries()) {
         if (index > 0) {
@@ -6228,9 +6230,11 @@ describe("ProviderCommandReactor", () => {
       }
       expect(
         harness.startSession.mock.calls.map(([, input]) => input.enableComputerControl),
-      ).toEqual([true, false]);
-      // The frozen request admitted this turn but recorded no durable intent:
-      // there is nothing for a follow-up to inherit.
+      ).toEqual([false]);
+      // The frozen switch-off turn admitted nothing durable, so the follow-up
+      // ordinary turn reuses the computer-less session (no restart, no second
+      // startSession call) and still sends without Computer.
+      expect(harness.sendTurn.mock.calls.length).toBe(2);
       expect(manager.canContinueChatControl(threadId)).toBe(false);
     } finally {
       await manager.dispose();
@@ -6280,7 +6284,7 @@ describe("ProviderCommandReactor", () => {
             text: "Continue",
             attachments: [],
           },
-          computerControlMode: "chat",
+          enableComputerControl: true,
           computerControlGeneration: 0,
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -6292,7 +6296,7 @@ describe("ProviderCommandReactor", () => {
       expect(manager.canContinueChatControl(threadId)).toBe(true);
       await markSessionReady();
       // Stop is an explicit off: the durable intent is cleared even though no
-      // turn carried computerControlMode "off".
+      // turn carried a switch-off.
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.interrupt",
@@ -6360,7 +6364,7 @@ describe("ProviderCommandReactor", () => {
         }),
       );
     try {
-      // Parent with live chat intent: the fork inherits it at generation 0.
+      // Parent with live switch intent: the fork inherits it at generation 0.
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -6372,7 +6376,7 @@ describe("ProviderCommandReactor", () => {
             text: "Continue",
             attachments: [],
           },
-          computerControlMode: "chat",
+          enableComputerControl: true,
           computerControlGeneration: 0,
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -6442,7 +6446,7 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each([false, true])(
-    "Computer activation during live coding steering respects stale generation=%s",
+    "Computer switch-on during live coding steering respects stale generation=%s",
     async (stale) => {
       const manager = new ComputerManager({ backend: new FakeComputerBackend() });
       const registry = makeAgentGatewaySessionRegistry();
@@ -6492,10 +6496,10 @@ describe("ProviderCommandReactor", () => {
             message: {
               messageId: asMessageId("coding-steer-message"),
               role: "user",
-              text: "Use Computer for this",
+              text: "Adjust the layout",
               attachments: [],
             },
-            computerControlMode: "request",
+            enableComputerControl: true,
             computerControlGeneration: 0,
             dispatchMode: "steer",
             runtimeMode: "approval-required",
@@ -6531,7 +6535,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it("preserves an active Computer profile during native steering after the request chip resets", async () => {
+  it("preserves an active Computer profile during native steering after the switch turns off", async () => {
     const registry = makeAgentGatewaySessionRegistry();
     const threadId = ThreadId.makeUnsafe("thread-1");
     registry.issue(threadId, "codex", { additionalCapabilities: ["computer:control"] });
@@ -6570,7 +6574,7 @@ describe("ProviderCommandReactor", () => {
           text: "Use the second window",
           attachments: [],
         },
-        computerControlMode: "off",
+        enableComputerControl: false,
         dispatchMode: "steer",
         runtimeMode: "approval-required",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -6629,7 +6633,7 @@ describe("ProviderCommandReactor", () => {
             text: "Continue",
             attachments: [],
           },
-          computerControlMode: "request",
+          enableComputerControl: true,
           computerControlGeneration: 0,
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

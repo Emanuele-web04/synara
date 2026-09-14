@@ -8,13 +8,11 @@ import { Button } from "~/components/ui/button";
 import { MonitorIcon } from "~/lib/icons";
 
 export function ComputerControlDeniedCard({
-  toolName,
   computerControlEnabled,
   textFontSizePx,
   metaFontSizePx,
   onEnable,
 }: {
-  readonly toolName: string | null;
   // Live composer state: once the user (or this card) switches control on, the
   // card flips to a confirmation instead of offering a dead button.
   readonly computerControlEnabled?: boolean;
@@ -35,16 +33,16 @@ export function ComputerControlDeniedCard({
         >
           {enabled
             ? "Computer control is on for this chat"
-            : "Computer control is off for this chat"}
+            : "Computer control is off. Turn it on in Settings to let the agent use the desktop."}
         </p>
-        <p
-          className="text-[var(--color-text-foreground-secondary)]"
-          style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
-        >
-          {enabled
-            ? "Queued desktop turns stay cancelled — send a fresh message to continue."
-            : `The agent tried to act on the desktop${toolName ? ` (${toolName})` : ""} and was stopped. Choose Enable to draft a /computer-use request, then send it to continue.`}
-        </p>
+        {enabled ? (
+          <p
+            className="text-[var(--color-text-foreground-secondary)]"
+            style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
+          >
+            Queued desktop turns stay cancelled — send a fresh message to continue.
+          </p>
+        ) : null}
       </div>
       {onEnable && !enabled ? (
         <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onEnable}>
