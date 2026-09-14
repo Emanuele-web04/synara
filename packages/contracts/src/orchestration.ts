@@ -327,7 +327,12 @@ export const MAX_PINNED_PROJECTS = 3;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
 export const THREAD_NOTES_MAX_CHARS = 16_384;
-export const THREAD_GOAL_MAX_CHARS = 4_096;
+// Goals travel the same transport budget as turn input; anything longer than
+// THREAD_GOAL_INLINE_MAX_CHARS is materialized to an on-disk file server-side
+// and persisted as a "read this file" reference (Codex-style large-input
+// handling), so the cap exists only to bound the wire payload.
+export const THREAD_GOAL_MAX_CHARS = PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
+export const THREAD_GOAL_INLINE_MAX_CHARS = 1_000;
 export const PINNED_MESSAGES_MAX_COUNT = 100;
 export const PINNED_MESSAGE_LABEL_MAX_CHARS = 60;
 // Correlation id is command id by design in this model.

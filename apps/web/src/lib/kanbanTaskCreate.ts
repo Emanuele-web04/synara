@@ -16,7 +16,11 @@ import type {
 } from "@synara/contracts";
 
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
-import { dispatchKanbanDraftThread, type KanbanDraftDispatchResult } from "./kanbanDispatch";
+import {
+  dispatchKanbanDraftThread,
+  dispatchKanbanDraftThreadAsGoal,
+  type KanbanDraftDispatchResult,
+} from "./kanbanDispatch";
 import { newThreadId } from "./utils";
 
 export interface KanbanDraftTaskInput {
@@ -59,17 +63,23 @@ export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
  * Creates the draft, then immediately promotes + dispatches it so the task skips
  * the Draft column and lands in In Progress — the "send now" path for the new-task
  * dialog. Reuses {@link dispatchKanbanDraftThread} so a sent task behaves exactly
- * like dragging a Draft card onto In Progress.
+ * like dragging a Draft card onto In Progress. Pass `sendAsGoal` to route through
+ * {@link dispatchKanbanDraftThreadAsGoal} instead, so the task starts with its
+ * prompt saved as the thread goal (the dialog's "send as goal" toggle, off by
+ * default).
  */
 export async function createAndSendKanbanTask(
   input: KanbanDraftTaskInput & {
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
+    sendAsGoal?: boolean | undefined;
   },
 ): Promise<{ threadId: ThreadId; result: KanbanDraftDispatchResult }> {
   const threadId = createKanbanDraftTask(input);
-  const result = await dispatchKanbanDraftThread({
+  const dispatch =
+    input.sendAsGoal === true ? dispatchKanbanDraftThreadAsGoal : dispatchKanbanDraftThread;
+  const result = await dispatch({
     threadId,
     projectId: input.projectId,
     thread: null,

@@ -68,6 +68,15 @@ import {
   isQuiescingCommandAdmissible,
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
+import {
+  discardMaterializedThreadGoalFile,
+  isOversizedThreadGoal,
+  materializeThreadGoalFile,
+  pruneThreadGoalFiles,
+  readMaterializedThreadGoalText,
+  threadGoalFileName,
+  threadGoalFileReference,
+} from "../threadGoalMaterialization.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import {
@@ -685,6 +694,50 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
+    // A materialized goal file is a candidate until its command commits: the
+    // write happens before invariants run, so a rejection must drop it instead
+    // of leaving up to the payload bound on disk. `goalFileCommitted` flips only
+    // after the commit transaction resolves — a timed-out command that turns out
+    // to have committed (accepted receipt) keeps its file.
+    let materializedGoalFilePath: string | undefined;
+    let materializedGoalFileWrite: Promise<string> | undefined;
+    let goalFileCommitted = false;
+    const discardUncommittedGoalFile = Effect.gen(function* () {
+      if (goalFileCommitted) {
+        return;
+      }
+      // An interrupt can land while the write is still in flight — the yield
+      // assignment in the command body then never runs, and unlinking first
+      // would race the write. Await it so the cleanup sees the settled path.
+      const pendingWrite = materializedGoalFileWrite;
+      if (pendingWrite !== undefined) {
+        const settledPath = yield* Effect.promise(() =>
+          pendingWrite.then(
+            (path) => path,
+            () => undefined,
+          ),
+        );
+        materializedGoalFilePath ??= settledPath;
+        materializedGoalFileWrite = undefined;
+      }
+      const filePath = materializedGoalFilePath;
+      materializedGoalFilePath = undefined;
+      if (filePath === undefined) {
+        return;
+      }
+      // The flag alone cannot prove non-commit: an interrupt delivered inside
+      // the commit transaction can land the write without the flag statement
+      // ever running. The accepted receipt is the source of truth — a command
+      // with one owns its file; only a command with none loses the candidate.
+      const receiptExit = yield* Effect.exit(
+        commandReceiptRepository.getByCommandId({ commandId: envelope.command.commandId }),
+      );
+      const receipt = receiptExit._tag === "Success" ? receiptExit.value : Option.none();
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        return;
+      }
+      yield* Effect.promise(() => discardMaterializedThreadGoalFile(filePath));
+    });
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
         eventStore.readFromSequence(dispatchStartSequence),
@@ -803,6 +856,38 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         };
       }
 
+      let materializedGoalFileName: string | undefined;
+      if (command.type === "thread.meta.update" && isOversizedThreadGoal(command.goal)) {
+        // A goal is re-injected into every provider turn — a huge inline goal
+        // would bloat each prompt. Materialize it to a per-command file and
+        // persist a resolvable "read this file" reference instead (same
+        // contract Codex uses for oversized input). The per-command filename
+        // keeps a rejected update from overwriting the file a live reference
+        // still points at; the reference only commits if the command does.
+        const goalCommand = command;
+        const oversizedGoal = command.goal;
+        // Keep the write promise reachable from cleanup: an interrupt during
+        // the await must not unlink underneath a write that still lands.
+        const goalFileWrite = materializeThreadGoalFile({
+          stateDir: serverConfig.stateDir,
+          threadId: goalCommand.threadId,
+          commandId: goalCommand.commandId,
+          goal: oversizedGoal,
+        });
+        materializedGoalFileWrite = goalFileWrite;
+        const goalFilePath = yield* Effect.tryPromise({
+          try: () => goalFileWrite,
+          catch: () =>
+            makeCommandInternalError(
+              goalCommand,
+              "Could not materialize the oversized thread goal to a file.",
+            ),
+        });
+        materializedGoalFileName = threadGoalFileName(goalCommand.commandId);
+        materializedGoalFilePath = goalFilePath;
+        command = { ...goalCommand, goal: threadGoalFileReference(goalFilePath) };
+      }
+
       if (command.type === "thread.meta.update" && command.expectedTitleSequence !== undefined) {
         const currentTitleSequence = yield* eventStore
           .getThreadTitleHighWaterSequence(command.threadId)
@@ -822,7 +907,30 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
       }
 
-      const deciderReadModel = yield* buildDeciderReadModel(command);
+      let deciderReadModel = yield* buildDeciderReadModel(command);
+      if (command.type === "thread.meta.update" && command.goalAchieved === true) {
+        // A completed oversized goal must keep its text durably: the persisted
+        // goal is only a "read this file" reference and the post-commit prune
+        // drops the whole directory on achievement. Resolve the ref into the
+        // read model so the recorded ThreadGoalAchievement holds the real goal.
+        const currentThread = deciderReadModel.threads.find(
+          (entry) => entry.id === command.threadId,
+        );
+        const persistedGoal = currentThread?.goal ?? "";
+        const resolvedGoal = yield* Effect.promise(() =>
+          readMaterializedThreadGoalText({
+            stateDir: serverConfig.stateDir,
+            threadId: command.threadId,
+            goal: persistedGoal,
+          }),
+        );
+        if (resolvedGoal !== null && currentThread !== undefined) {
+          deciderReadModel = overlayThread(deciderReadModel, {
+            ...currentThread,
+            goal: resolvedGoal,
+          });
+        }
+      }
       const eventBase = yield* decideOrchestrationCommand({
         command,
         readModel: deciderReadModel,
@@ -946,6 +1054,43 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ),
           ),
         );
+      // Commit is durable: the candidate file is now owned by the accepted
+      // update and governed by the post-commit prune, not the failure cleanup.
+      goalFileCommitted = true;
+
+      // Goal-file housekeeping only runs once the command committed: the
+      // accepted update decides which files still matter — a fresh oversized
+      // goal keeps only its own file, a goal moved back inline / marked
+      // achieved or a deleted thread drops the directory (also sweeping files
+      // orphaned by rejected materializations). Rejected commands never reach
+      // here, so a failure can't delete a file a live reference still uses.
+      const goalFilesDropThreadId =
+        command.type === "thread.delete"
+          ? command.threadId
+          : command.type === "thread.meta.update" &&
+              (materializedGoalFileName !== undefined ||
+                command.goal !== undefined ||
+                command.goalAchieved === true)
+            ? command.threadId
+            : null;
+      if (goalFilesDropThreadId !== null) {
+        yield* Effect.tryPromise({
+          try: () =>
+            pruneThreadGoalFiles({
+              stateDir: serverConfig.stateDir,
+              threadId: goalFilesDropThreadId,
+              keepFileName: materializedGoalFileName,
+            }),
+          catch: (error) => error,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Thread goal file cleanup failed.", {
+              threadId: goalFilesDropThreadId,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+        );
+      }
 
       commandReadModel = committedCommand.nextCommandReadModel;
       yield* Effect.forEach(
@@ -994,6 +1139,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
+      // Interrupts never surface as a typed failure, so they need their own
+      // cleanup hook. This finalizer is scoped to the gen, so it runs both when
+      // the timeout race interrupts it and on an external worker interrupt —
+      // after inner transaction finalizers, so the receipt read is definitive:
+      // an accepted receipt means the commit landed and owns the file.
+      Effect.onInterrupt(() => discardUncommittedGoalFile),
       Effect.timeoutOption(remainingBudgetMs),
       Effect.flatMap((outcome) =>
         Option.match(outcome, {
@@ -1049,6 +1200,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               })
               .pipe(Effect.catch(() => Effect.void));
           }
+          yield* discardUncommittedGoalFile;
           yield* Deferred.fail(envelope.result, error);
         }),
       ),
@@ -1094,6 +1246,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           const resolvedError = resolvedCrashOutcome.left;
+          yield* discardUncommittedGoalFile;
           yield* Deferred.fail(
             envelope.result,
             Schema.is(OrchestrationCommandTimeoutError)(resolvedError)

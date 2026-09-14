@@ -33,7 +33,13 @@ import {
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
-import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { waitForKanbanDispatchToSettle } from "../../lib/kanbanDispatch";
+import {
+  beginTurnDispatchOwnership,
+  clearPendingTurnDispatch,
+  endTurnDispatchOwnership,
+  markPendingTurnDispatch,
+} from "../../pendingTurnDispatch";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
@@ -250,6 +256,39 @@ export function useChatTurnExecution({
       let switchedToLocalCheckout = false;
       let turnStartSucceeded = false;
       let settledLocalBranchUpdatedForSend = false;
+      // A board dispatch racing this send must settle first: two starters must
+      // serialize onto one turn, never queue two. Claim dispatch ownership up
+      // front so a board drop that starts after this point defers to this send
+      // (it consults hasTurnDispatchOwnership), then wait out any dispatch
+      // already on the wire. The watchdog marker rides along for stream-ack
+      // recovery; ownership alone carries the exclusion window.
+      markPendingTurnDispatch(threadIdForSend);
+      beginTurnDispatchOwnership(threadIdForSend);
+      const settledBoardDispatch = await waitForKanbanDispatchToSettle(threadIdForSend);
+      if (settledBoardDispatch?.kind === "dispatched" && settledBoardDispatch.deferred !== true) {
+        // The board drop won and already dispatched this thread's draft prompt —
+        // running the prepared send now would queue a duplicate turn. The
+        // marker stays armed: the board's success path re-armed it for its own
+        // watchdog lifecycle (stream ack or age cap now owns clearing). Settle
+        // the attachment staging; the dispatch already cleared the composer
+        // content, so nothing user-visible is lost.
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        // The board owns the turn now — release this send's exclusion claim
+        // (the shared watchdog marker stays armed: the board re-armed it for
+        // its own stream-ack lifecycle).
+        endTurnDispatchOwnership(threadIdForSend);
+        return false;
+      }
+      // The wait is over and this send is proceeding. Both guards are keyed by
+      // thread, not by caller: a failed board dispatch clears them on the way
+      // out even though this chat send armed them, leaving the continuing send
+      // unguarded. Re-arm before doing any more work so a board drop in the
+      // gap still defers instead of queueing a duplicate turn.
+      markPendingTurnDispatch(threadIdForSend);
+      beginTurnDispatchOwnership(threadIdForSend);
       await (async () => {
         // "Work locally" from the setup card: drop any prepared worktree and
         // point the send (and the thread's metadata) back at the project
@@ -657,6 +696,10 @@ export function useChatTurnExecution({
           // watchdog to recover — drop the marker armed when the dispatch began.
           clearPendingTurnDispatch(threadIdForSend);
         }
+        // Whatever failed, this send attempt is over — release the exclusion
+        // claim so a later board drop can proceed. The marker above stays armed
+        // when the turn RPC did resolve (stream ack still owns clearing it).
+        endTurnDispatchOwnership(threadIdForSend);
         if (settledLocalBranchUpdatedForSend && !turnStartSucceeded) {
           await api.orchestration
             .dispatchCommand({

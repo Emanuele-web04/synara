@@ -28,8 +28,9 @@ import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { formatElapsed } from "../../session-logic";
 import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
+import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
-import { KANBAN_COLUMN_LABELS, kanbanThreadCardId, type KanbanCard } from "./kanban.logic";
+import { kanbanThreadCardId, refineAttentionFlagsForLivePr, type KanbanCard } from "./kanban.logic";
 
 /** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
 export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
@@ -39,6 +40,8 @@ export interface KanbanCardViewProps {
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  /** Keyboard handler — the board uses it for Alt+Arrow draft reorder. */
+  onKeyDown?: (card: KanbanCard, event: React.KeyboardEvent) => void;
   prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
@@ -64,7 +67,7 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   return (
     <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
       <KanbanStatusIcon column={card.column} className="size-3" />
-      {KANBAN_COLUMN_LABELS[card.column]}
+      {KANBAN_COLUMN_V2_LABELS[card.column]}
     </span>
   );
 }
@@ -89,10 +92,60 @@ function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
   return <ThreadStatusPillChip pill={pill} />;
 }
 
+/**
+ * v2-path red attention pills. Failed and stuck render their label so the card is
+ * never a silent normal card (D1); awaiting-approval/awaiting-input/needs-review
+ * also carry their pill flags. A card can carry more than one flag (stuck +
+ * needs-review), so up to two pills render — kept compact, never a wall of red.
+ * Classic cards never set `attention`, so this stays empty for the 3-column
+ * escape hatch.
+ */
+function KanbanCardAttentionPill({
+  card,
+  pr,
+}: {
+  card: KanbanCard;
+  pr: ReturnType<typeof resolveThreadPullRequestFallback> | null;
+}) {
+  if (!card.attention || card.attention.length === 0) {
+    return null;
+  }
+  // Preserve the resolved-empty vs not-yet-resolved distinction: an explicit
+  // `null` PR means live resolution settled with no open PR (drop needs-review),
+  // while `undefined` means the row has not resolved yet (keep the initial pill).
+  // Refinement operates on raw flags (`card.attention`); display copy is mapped
+  // after, so the comparison never drifts from the flag set.
+  const refinedFlags = refineAttentionFlagsForLivePr(
+    card.attention,
+    pr === null ? null : pr?.state,
+  );
+  // Tone follows what the pill actually renders — a refined-out needs-review can
+  // never hide a failed/stuck flag behind a red pill (M1). Up to two labels.
+  const visibleFlags = refinedFlags.slice(0, 2);
+  const tone = visibleFlags.some((flag) => flag === "failed" || flag === "stuck")
+    ? "text-red-600 dark:text-red-300/90"
+    : "text-amber-600 dark:text-amber-300/90";
+  const pillClassName = cn(
+    "shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium ring-1 ring-inset",
+    "bg-red-500/[0.07] ring-red-500/30",
+    tone,
+  );
+  return (
+    <>
+      {visibleFlags.map((flag) => (
+        <span key={flag} className={pillClassName}>
+          {KANBAN_ATTENTION_LABELS[flag]}
+        </span>
+      ))}
+    </>
+  );
+}
+
 function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
+  onKeyDown,
   prByThreadId,
   isOverlay: isOverlayProp,
   isDragSource: isDragSourceProp,
@@ -135,6 +188,7 @@ function KanbanCardViewComponent({
       tabIndex={isOverlay ? -1 : 0}
       onClick={onOpen ? () => onOpen(card) : undefined}
       onContextMenu={onContextMenu ? (event) => onContextMenu(card, event) : undefined}
+      onKeyDown={onKeyDown ? (event) => onKeyDown(card, event) : undefined}
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg bg-card/70 px-3 py-2.5 text-left transition-colors",
         RAISED_SURFACE_CHROME_CLASS_NAME,
@@ -213,6 +267,9 @@ function KanbanCardViewComponent({
           ) : (
             <>
               <KanbanCardStatusPill card={card} />
+              {card.attention && card.attention.length > 0 ? (
+                <KanbanCardAttentionPill card={card} pr={pr} />
+              ) : null}
               {activeWorkElapsed ? (
                 <span className="shrink-0 text-[11px] text-muted-foreground/70">
                   Worked for {activeWorkElapsed}

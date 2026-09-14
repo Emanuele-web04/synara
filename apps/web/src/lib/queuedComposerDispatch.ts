@@ -8,7 +8,12 @@ import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
 import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
-import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
+import {
+  beginTurnDispatchOwnership,
+  clearPendingTurnDispatch,
+  endTurnDispatchOwnership,
+  markPendingTurnDispatch,
+} from "../pendingTurnDispatch";
 import {
   buildSourceProposedPlanReference,
   findLatestProposedPlan,
@@ -18,6 +23,7 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendBrowserAnnotationsToPrompt } from "./browserAnnotations";
+import { waitForKanbanDispatchToSettle } from "./kanbanDispatch";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -49,6 +55,10 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
     return false;
   }
 
+  // Serialize with a racing board dispatch: two starters must never queue two
+  // turns for the same thread. Bounded + fail-open.
+  await waitForKanbanDispatchToSettle(input.threadId);
+
   const createdAt = new Date().toISOString();
   const messageId = newMessageId();
   const queuedTurn = input.queuedTurn;
@@ -77,6 +87,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         : undefined;
 
     markPendingTurnDispatch(input.threadId);
+    beginTurnDispatchOwnership(input.threadId);
     try {
       await persistQueuedTurnThreadSettings({
         api,
@@ -108,9 +119,11 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt,
       });
+      endTurnDispatchOwnership(input.threadId);
       return true;
     } catch {
       clearPendingTurnDispatch(input.threadId);
+      endTurnDispatchOwnership(input.threadId);
       return false;
     }
   }
@@ -162,6 +175,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   });
 
   markPendingTurnDispatch(input.threadId);
+  beginTurnDispatchOwnership(input.threadId);
   try {
     await persistQueuedTurnThreadSettings({
       api,
@@ -197,6 +211,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
         createdAt,
       }),
     );
+    endTurnDispatchOwnership(input.threadId);
     return true;
   } catch {
     await turnAttachmentsPromise.then(
@@ -204,6 +219,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
       () => undefined,
     );
     clearPendingTurnDispatch(input.threadId);
+    endTurnDispatchOwnership(input.threadId);
     return false;
   }
 }

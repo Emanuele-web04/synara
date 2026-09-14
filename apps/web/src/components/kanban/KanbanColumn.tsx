@@ -1,5 +1,5 @@
 // FILE: KanbanColumn.tsx
-// Purpose: One kanban column — droppable body, sortable draft cards, done render cap.
+// Purpose: One kanban column — droppable body, sortable draft cards.
 // Layer: UI component (project-board building block)
 // Exports: KanbanColumn, kanbanColumnDropId, parseKanbanColumnDropId
 
@@ -14,15 +14,13 @@ import { PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
-import {
-  KANBAN_COLUMN_LABELS,
-  resolveDraftDropAction,
-  type KanbanCard,
-  type KanbanColumnKey,
-} from "./kanban.logic";
+import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
+import { resolveDraftDropAction, type KanbanCard, type KanbanColumnKey } from "./kanban.logic";
 
 const COLUMN_DROP_ID_PREFIX = "kanban-column";
 const DONE_RENDER_CAP = 30;
+// Done columns grow unbounded; cap the initial render so opening the board
+// stays cheap for long-lived projects.
 
 export function kanbanColumnDropId(projectId: ProjectId, column: KanbanColumnKey): string {
   return `${COLUMN_DROP_ID_PREFIX}|${column}|${projectId}`;
@@ -35,7 +33,12 @@ export function parseKanbanColumnDropId(
   if (prefix !== COLUMN_DROP_ID_PREFIX || projectIdParts.length === 0) {
     return null;
   }
-  if (column !== "draft" && column !== "inProgress" && column !== "done") {
+  if (
+    column !== "draft" &&
+    column !== "inProgress" &&
+    column !== "awaitingYou" &&
+    column !== "done"
+  ) {
     return null;
   }
   return { projectId: projectIdParts.join("|"), column };
@@ -45,12 +48,14 @@ function SortableKanbanCard({
   card,
   onOpen,
   onContextMenu,
+  onKeyDown,
   prByThreadId,
   nowMs,
 }: {
   card: KanbanCard;
   onOpen: (card: KanbanCard) => void;
   onContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  onKeyDown?: ((card: KanbanCard, event: React.KeyboardEvent) => void) | undefined;
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
 }) {
@@ -70,6 +75,7 @@ function SortableKanbanCard({
         card={card}
         onOpen={onOpen}
         {...(onContextMenu ? { onContextMenu } : {})}
+        {...(onKeyDown ? { onKeyDown } : {})}
         prByThreadId={prByThreadId}
         isDragSource={isDragging}
         {...(nowMs !== undefined ? { nowMs } : {})}
@@ -84,6 +90,7 @@ function KanbanColumnComponent({
   cards,
   onOpenCard,
   onCardContextMenu,
+  onCardKeyDown,
   sortable: sortableProp,
   droppable: droppableProp,
   activeCard: activeCardProp,
@@ -97,6 +104,8 @@ function KanbanColumnComponent({
   onOpenCard: (card: KanbanCard) => void;
   /** Right-click handler forwarded to each card's context menu. */
   onCardContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  /** Keyboard handler forwarded to each card (board: Alt+Arrow draft reorder). */
+  onCardKeyDown?: ((card: KanbanCard, event: React.KeyboardEvent) => void) | undefined;
   /** Draft column in the project board: cards reorder via dnd-kit sortable. */
   sortable?: boolean;
   /** Project board only — the column body registers as a drop target. */
@@ -114,17 +123,15 @@ function KanbanColumnComponent({
   const activeCard = activeCardProp ?? null;
   const dropId = kanbanColumnDropId(projectId, columnKey);
   const { isOver, setNodeRef } = useDroppable({ id: dropId, disabled: !droppable });
+
+  const sortableItems = useMemo(() => cards.map((card) => card.cardId), [cards]);
   const [showAll, setShowAll] = useState(false);
 
-  // Done columns can grow unbounded; cap the initial render so opening the board
-  // stays cheap for long-lived projects.
   const cappedCards =
     columnKey === "done" && !showAll && cards.length > DONE_RENDER_CAP
       ? cards.slice(0, DONE_RENDER_CAP)
       : cards;
   const hiddenCount = cards.length - cappedCards.length;
-
-  const sortableItems = useMemo(() => cards.map((card) => card.cardId), [cards]);
 
   const dispatchTarget =
     columnKey === "inProgress" &&
@@ -138,6 +145,7 @@ function KanbanColumnComponent({
         card={card}
         onOpen={onOpenCard}
         onContextMenu={onCardContextMenu}
+        onKeyDown={onCardKeyDown}
         prByThreadId={prByThreadId}
         {...(nowMs !== undefined ? { nowMs } : {})}
       />
@@ -147,6 +155,7 @@ function KanbanColumnComponent({
           card={card}
           onOpen={onOpenCard}
           {...(onCardContextMenu ? { onContextMenu: onCardContextMenu } : {})}
+          {...(onCardKeyDown ? { onKeyDown: onCardKeyDown } : {})}
           prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
@@ -158,7 +167,7 @@ function KanbanColumnComponent({
     <section className="flex min-h-0 min-w-64 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 px-1.5 pb-2">
         <h3 className="text-[13px] font-medium text-foreground/90">
-          {KANBAN_COLUMN_LABELS[columnKey]}
+          {KANBAN_COLUMN_V2_LABELS[columnKey]}
         </h3>
         <span className="text-xs text-muted-foreground/70">{cards.length}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
