@@ -126,6 +126,22 @@ describe("ChatMarkdown directionMode browser", () => {
     expect(link ? getComputedStyle(link).direction : null).toBe("rtl");
   });
 
+  it("renders a paragraph containing only an Arabic-labeled link rtl", async () => {
+    await renderWithProviders(
+      <ChatMarkdown
+        text="[رابط التوثيق](https://example.com/docs)"
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+    const p = firstParagraph()!;
+    expect(p.getAttribute("dir")).toBe("rtl");
+    const link = p.querySelector<HTMLElement>("a");
+    expect(link?.getAttribute("href")).toBe("https://example.com/docs");
+    expect(link?.getAttribute("dir")).toBeNull();
+    expect(link ? getComputedStyle(link).direction : null).toBe("rtl");
+  });
+
   it("isolates a bare URL ltr inside an rtl paragraph", async () => {
     await renderWithProviders(
       <ChatMarkdown

@@ -690,6 +690,16 @@ describe("ChatMarkdown directionMode", () => {
     expect(markup).not.toContain('<a dir="ltr" href="https://example.com/docs"');
   });
 
+  it("renders a paragraph containing only an Arabic-labeled link rtl", async () => {
+    const markup = await renderDirectionMarkdown(
+      "[رابط التوثيق](https://example.com/docs)",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('href="https://example.com/docs"');
+    expect(markup).not.toContain('<a dir="ltr" href="https://example.com/docs"');
+  });
+
   it("keeps an English human label with parentheses inheriting the rtl paragraph", async () => {
     const markup = await renderDirectionMarkdown(
       "هذا شرح عربي واضح عن [API (v2)](https://example.com/docs) للمشروع.",
