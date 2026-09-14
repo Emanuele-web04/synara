@@ -7078,6 +7078,49 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps the temporary-chat accent while the selected button stays hovered", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-temporary-chat-hover-test" as MessageId,
+          targetText: "temporary chat hover test",
+        }),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      await page.getByLabelText("Create new thread in Project").click();
+      await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+
+      const temporaryChatButton = page.getByLabelText("Temporary chat");
+      await temporaryChatButton.hover();
+      await temporaryChatButton.click();
+      await expect.element(temporaryChatButton).toHaveAttribute("aria-pressed", "true");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+
+      const accentColorProbe = document.createElement("span");
+      accentColorProbe.style.color = "var(--color-text-accent)";
+      document.body.append(accentColorProbe);
+      const temporaryAccentColor = getComputedStyle(accentColorProbe).color;
+      accentColorProbe.remove();
+      expect(getComputedStyle(temporaryChatButton.element()).color).toBe(temporaryAccentColor);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("can detach an empty project draft back to a normal chat before first send", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
