@@ -5881,6 +5881,7 @@ export default function ChatView({
               project: activeProject,
               sourceThread: activeThread,
               selectedModelSelection,
+              runtimeMode,
             })
           }
           onNewChat={(selection, prompt, envMode, intent) =>
