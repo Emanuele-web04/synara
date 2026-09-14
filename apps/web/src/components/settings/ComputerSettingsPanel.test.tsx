@@ -136,10 +136,11 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Accessibility");
   });
 
-  it("hides the pane auto-open switch on a backend that drives the visible desktop", () => {
-    // The server never requests a pane there, so the switch controls nothing —
-    // and a switch that cannot change anything reads as a broken feature.
-    expect(render({ status: status() })).not.toContain("Open automatically");
+  it("offers the pane auto-open switch on every backend", () => {
+    // The preview is wanted on the visible desktop too: stills-only mode
+    // already keeps interactive off there, so the switch controls a real
+    // feature — watching the agent's view inside the app.
+    expect(render({ status: status() })).toContain("Open automatically");
     expect(
       render({
         status: status({

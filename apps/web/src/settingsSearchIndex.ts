@@ -316,11 +316,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Open automatically",
     keywords:
       "Open the Computer pane the first time an agent acts on the desktop in a chat. auto open dock computer use",
-    // A backend that drives the visible desktop never asks for a pane: the
-    // actions are already happening on the screen in front of the user, and
-    // mirroring their own display back at them adds nothing. The panel hides
-    // the row there, so the search must not offer it.
-    applies: (context) => !context.computerBackendIsVisibleDesktop,
+    // The pane auto-open row shows on every backend now: on the visible
+    // desktop the pane renders stills only, and watching the agent's captured
+    // view inside the app is the point of the preview.
+    applies: () => true,
   },
   {
     id: "computer:how-agents-use-the-desktop",

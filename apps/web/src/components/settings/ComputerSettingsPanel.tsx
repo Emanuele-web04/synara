@@ -24,7 +24,6 @@ import { useCallback, useEffect, useState } from "react";
 import type { AppSettingsBinding } from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
-  computerBackendIsVisibleDesktop,
   computerLastFailureNote,
   computerReconnectsNote,
   computerStatusNeedsSetup,
@@ -215,7 +214,6 @@ export function ComputerSettingsPanel({
   const captureBlocked = captureUnavailable && health?.status === "connected";
   // A missing background delivery route never authorizes foreground fallback.
   const backgroundInputDegraded = health?.backgroundInputDegraded === true;
-  const paneAutoOpenApplies = !computerBackendIsVisibleDesktop(status);
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
   const needsSetup = computerStatusNeedsSetup(status);
@@ -359,38 +357,36 @@ export function ComputerSettingsPanel({
         </SettingsCard>
       </SettingsSectionShell>
 
-      {/* Hidden on a backend that drives the visible desktop, where the server
-          never requests a pane at all (`ComputerManager.surfacePaneForAgent`
-          returns early): the agent's actions are already happening on the screen
-          the user is looking at. A switch that cannot change anything is worse
-          than an absent one — it reads as a feature that is broken. */}
-      {paneAutoOpenApplies ? (
-        <SettingsSection title="Computer pane">
-          <SettingsRow
-            title="Open automatically"
-            description="Open the Computer pane the first time an agent acts on the desktop in a chat. Closing the pane keeps it closed for the rest of that chat's run."
-            resetAction={
-              settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ? (
-                <SettingResetButton
-                  label="open automatically"
-                  onClick={() =>
-                    updateSettings({ autoOpenComputerPane: defaults.autoOpenComputerPane })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.autoOpenComputerPane}
-                onCheckedChange={(checked) =>
-                  updateSettings({ autoOpenComputerPane: Boolean(checked) })
+      {/* On a backend that drives the visible desktop the pane defaults to
+          stills-only (interactive mode stays off — a second cursor on the
+          user's own screen is worse than none), but the preview itself is
+          wanted: watching the agent's captured view inside the app is how a
+          user follows background work in windows they are not looking at. */}
+      <SettingsSection title="Computer pane">
+        <SettingsRow
+          title="Open automatically"
+          description="Open the Computer pane the first time an agent acts on the desktop in a chat. Closing the pane keeps it closed for the rest of that chat's run."
+          resetAction={
+            settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ? (
+              <SettingResetButton
+                label="open automatically"
+                onClick={() =>
+                  updateSettings({ autoOpenComputerPane: defaults.autoOpenComputerPane })
                 }
-                aria-label="Open the Computer pane automatically when an agent drives the desktop"
               />
-            }
-          />
-        </SettingsSection>
-      ) : null}
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoOpenComputerPane}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoOpenComputerPane: Boolean(checked) })
+              }
+              aria-label="Open the Computer pane automatically when an agent drives the desktop"
+            />
+          }
+        />
+      </SettingsSection>
 
       <SettingsSection title="Computer control">
         <SettingsRow

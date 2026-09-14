@@ -2854,9 +2854,9 @@ export class ComputerManager {
    * Emitted before the action event so the pane is already opening when the
    * first attributed action reaches the store. Mirrors
    * DeviceManager.requestOpenPane; see paneSurfaced for the once-per-thread
-   * rule. On a visible-desktop backend the actions are already happening on the
-   * human's own screen, so no pane is requested at all — mirroring their
-   * display back at them adds nothing.
+   * rule. The request is emitted on visible-desktop backends too — the client
+   * gates the actual opening on its auto-open preference, and there the pane
+   * renders stills only.
    *
    * The runtime record is still created in that case, before the decision: it
    * is what carries this thread's activity count and last error, and a thread
@@ -2864,8 +2864,12 @@ export class ComputerManager {
    */
   private surfacePaneForAgent(threadId: string): void {
     const state = this.threadRuntime(threadId);
-    if (this.backendCapabilities.visibleDesktop || state.paneSurfaced) return;
+    if (state.paneSurfaced) return;
     state.paneSurfaced = true;
+    // Emitted for visible-desktop backends too: the client gates the actual
+    // opening on its auto-open preference, and on a shared display the pane
+    // renders stills only — watching the agent's captured view inside the app
+    // is the point of the preview.
     this.emit({
       type: "computer.open-pane-requested",
       threadId: ThreadId.makeUnsafe(threadId),

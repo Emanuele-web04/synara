@@ -776,9 +776,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
-  it("never asks for the pane when the agent drives the human's visible desktop", async () => {
-    // Every action is already happening on the screen the user is looking at,
-    // so pushing a preview of their own display open would only be noise.
+  it("still asks for the pane when the agent drives the human's visible desktop", async () => {
+    // The preview is wanted there too: the pane renders stills only on a shared
+    // display, and the client gates the actual opening on its auto-open
+    // preference — emitting costs a pref-off user nothing.
     const backend = new FakeComputerBackend({
       capabilities: { ...new FakeComputerBackend().capabilities(), visibleDesktop: true },
     });
@@ -791,7 +792,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.click("thread-1", { x: 10, y: 10 });
     await manager.typeText("thread-1", "hi");
 
-    expect(openRequests).toEqual([]);
+    expect(openRequests).toEqual(["thread-1"]);
     await manager.dispose();
   });
 

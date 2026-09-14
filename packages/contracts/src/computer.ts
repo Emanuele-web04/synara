@@ -385,11 +385,12 @@ export const ComputerCapabilities = Schema.Struct({
   ghostCursor: Schema.Boolean,
   /**
    * The driven desktop is the display the human is already looking at, so every
-   * action is visible without a preview. Auto-opening the Computer pane keys
-   * off this being false: on a nested or offscreen desktop the pane is the only
-   * window onto the agent's work, while mirroring the human's own screen back
-   * at them is noise. The agent still drives that visible desktop through a
-   * seat of its own — never the human's.
+   * action is visible without a preview. On a nested or offscreen desktop the
+   * pane is the only window onto the agent's work; on a visible one the pane
+   * still opens on request (auto-open is client-preference gated) but renders
+   * stills only — interactive input stays off, because a second cursor on the
+   * human's own screen would fight theirs. The agent still drives that visible
+   * desktop through a seat of its own — never the human's.
    */
   visibleDesktop: Schema.Boolean,
 });
