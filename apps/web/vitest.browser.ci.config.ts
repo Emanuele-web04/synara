@@ -5,9 +5,10 @@ import stableConfig from "./vitest.browser.stable.config";
 const chatViewFile = "src/components/ChatView.browser.tsx";
 const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
 const stablePattern = testNamePattern as RegExp;
-// This parameterized full-app matrix costs about 100s on hosted runners.
+// Pair the short follow matrix with measured project/worktree/approval flows.
 // Complementary patterns keep every new stable ChatView case in exactly one lane.
-const followPattern = "restores streaming follow";
+// See .github/CI.md for the paired measurements and runner-time tradeoff.
+const followPattern = "(?:restores streaming follow|project|worktree|Space|approval)";
 
 export default defineConfig({
   ...stableConfig,
