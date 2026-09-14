@@ -472,6 +472,12 @@ export class CuaDriverHost {
             // Owned by the GUI host, not supplied through public tool arguments.
             // The native driver applies this only after foreground input cleanup.
             SYNARA_CUA_FOREGROUND_OBSERVATION_MS: "100",
+            // The detector watches for windows/foreground changes the action
+            // spawned — typically within ~200ms — not for the target's own
+            // content. 350ms keeps the wildcard focus-steal suppressor armed
+            // past the typical case while saving ~650ms per background action
+            // over the default one-second window.
+            SYNARA_CUA_BACKGROUND_OBSERVATION_MS: "350",
             CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
             CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
             CUA_DRIVER_RS_HOME: join(this.directory, "state"),
