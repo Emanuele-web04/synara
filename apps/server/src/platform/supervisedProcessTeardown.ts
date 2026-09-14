@@ -21,8 +21,13 @@ const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_INSPECT_INTERVAL_MS = 250;
-const DEFAULT_WINDOWS_INITIAL_CAPTURE_MS = 3_000;
-const FINAL_PROOF_INSPECTION_MAX_MS = 250;
+// A cold Windows PowerShell + CIM snapshot can approach three seconds even on
+// an idle workstation. Leave enough room for the observer's bounded retry so
+// transient load does not turn a confirmed root exit into unknown tree state.
+const DEFAULT_WINDOWS_INITIAL_CAPTURE_MS = 7_000;
+// The same worker is warm after the initial capture, but proof operations can
+// still exceed the 250ms observation cadence on otherwise healthy Windows hosts.
+const WINDOWS_PROOF_INSPECTION_TIMEOUT_MS = 2_000;
 
 export interface SupervisedProcessTeardownInput {
   readonly rootPid: number;
@@ -60,6 +65,7 @@ export interface SupervisedProcessTeardownDependencies {
   readonly captureProcessTree: (rootPid: number) => Promise<CapturedProcessTree>;
   readonly inspectProcessTree: (
     tree: CapturedProcessTree,
+    timeoutMs: number,
   ) => Promise<CapturedProcessTreeInspection>;
   /** Fresh native liveness observation, taken after the descendant snapshot. */
   readonly isRootRunning: (rootPid: number) => Promise<boolean>;
@@ -177,7 +183,7 @@ export async function teardownProviderProcessTree(
     tree: CapturedProcessTree,
     timeoutMs: number,
   ): Promise<CapturedProcessTreeInspection> => {
-    if (dependencies.inspectProcessTree) return dependencies.inspectProcessTree(tree);
+    if (dependencies.inspectProcessTree) return dependencies.inspectProcessTree(tree, timeoutMs);
     if (dependencies.processTreeKiller) {
       return (
         processTreeKiller.inspect?.(tree) ?? {
@@ -223,7 +229,7 @@ export async function teardownProviderProcessTree(
           ...(windowsObserver
             ? {
                 captureWindowsChildren: () =>
-                  windowsObserver.captureWithin(FINAL_PROOF_INSPECTION_MAX_MS),
+                  windowsObserver.captureWithin(WINDOWS_PROOF_INSPECTION_TIMEOUT_MS),
               }
             : {}),
         })
@@ -282,12 +288,7 @@ export async function teardownProviderProcessTree(
       } while (now() <= deadline);
 
       if (rootExited) {
-        const finalInspection = await inspectDescendants(
-          Math.min(
-            positiveDuration(input.inspectIntervalMs, DEFAULT_INSPECT_INTERVAL_MS),
-            FINAL_PROOF_INSPECTION_MAX_MS,
-          ),
-        );
+        const finalInspection = await inspectDescendants(WINDOWS_PROOF_INSPECTION_TIMEOUT_MS);
         if (finalInspection !== null) {
           remainingDescendants = finalInspection;
         }

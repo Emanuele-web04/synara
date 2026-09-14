@@ -449,6 +449,7 @@ describe("teardownProviderProcessTree", () => {
     };
     let descendantRunning = true;
     const signals: TerminalKillSignal[] = [];
+    const inspectionTimeouts: number[] = [];
     let now = 0;
 
     await expect(
@@ -463,11 +464,14 @@ describe("teardownProviderProcessTree", () => {
         {
           processTreeKiller: {
             capture: () => tree,
-            inspect: () => ({
+            signal: ({ signal }) => signals.push(signal),
+          },
+          inspectProcessTree: async (_tree, timeoutMs) => {
+            inspectionTimeouts.push(timeoutMs);
+            return {
               verified: true,
               survivors: descendantRunning ? [descendant] : [],
-            }),
-            signal: ({ signal }) => signals.push(signal),
+            };
           },
           now: () => now,
           sleep: async (milliseconds) => {
@@ -478,6 +482,7 @@ describe("teardownProviderProcessTree", () => {
       ),
     ).resolves.toEqual({ escalated: false, signalErrors: [], capturedBeforeRootExit: false });
     expect(signals).toEqual(["SIGTERM"]);
+    expect(inspectionTimeouts).toEqual([5, 2_000]);
   });
 
   it("preserves the last verified survivors when the final recheck is unverified", async () => {
