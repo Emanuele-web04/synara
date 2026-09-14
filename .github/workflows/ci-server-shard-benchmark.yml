@@ -1,0 +1,95 @@
+name: CI Server Shard Benchmark
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-server-shard-benchmark-${{ github.event.pull_request.number }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    if: github.head_ref == 'codex/ci-cross-platform-measurements'
+    name: Server 2-way vs 3-way (${{ matrix.rep }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+      - name: Run paired server shard benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark
+          run_one() {
+            local label="$1"; shift
+            /usr/bin/time -f '%e' -o "benchmark/${label}.seconds" "$@"
+          }
+          baseline() {
+            for shard in 1 2; do
+              run_one "baseline-${shard}" bun run --cwd apps/server test -- --shard="${shard}/2" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-${shard}.json"
+            done
+          }
+          candidate() {
+            for shard in 1 2 3; do
+              run_one "candidate-${shard}" bun run --cwd apps/server test -- --shard="${shard}/3" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/candidate-${shard}.json"
+            done
+          }
+          if [ "${{ matrix.rep }}" = "1" ]; then candidate; baseline; else baseline; candidate; fi
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('benchmark')
+
+          def inventory(paths):
+              groups = []
+              for path in paths:
+                  data = json.loads(path.read_text())
+                  assert data['success'], path
+                  current = set()
+                  for suite in data['testResults']:
+                      file_name = suite['name']
+                      for test in suite['assertionResults']:
+                          current.add((file_name, test['fullName'], test['status']))
+                  groups.append(current)
+              return groups
+
+          baseline_paths = [root/f'baseline-{i}.json' for i in (1, 2)]
+          candidate_paths = [root/f'candidate-{i}.json' for i in (1, 2, 3)]
+          baseline_groups = inventory(baseline_paths)
+          candidate_groups = inventory(candidate_paths)
+          baseline = set().union(*baseline_groups)
+          candidate = set().union(*candidate_groups)
+          assert len(baseline) == sum(map(len, baseline_groups)), 'baseline shards overlap'
+          assert len(candidate) == sum(map(len, candidate_groups)), 'candidate shards overlap'
+          assert baseline == candidate, (len(baseline), len(candidate), list(baseline ^ candidate)[:10])
+
+          base_times = [float((root/f'baseline-{i}.seconds').read_text()) for i in (1, 2)]
+          candidate_times = [float((root/f'candidate-{i}.seconds').read_text()) for i in (1, 2, 3)]
+          result = {
+              'rep': ${{ matrix.rep }},
+              'baseline': base_times,
+              'baseline_max': max(base_times),
+              'baseline_sum': sum(base_times),
+              'candidate': candidate_times,
+              'candidate_max': max(candidate_times),
+              'candidate_sum': sum(candidate_times),
+              'inventory': len(candidate),
+              'candidate_group_sizes': list(map(len, candidate_groups)),
+          }
+          (root/'result.json').write_text(json.dumps(result, indent=2))
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: server-shards-${{ matrix.rep }}
+          path: benchmark
+          if-no-files-found: warn
