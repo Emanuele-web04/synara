@@ -1,0 +1,270 @@
+name: CI Critical Path Benchmark
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-critical-path-benchmark-${{ github.event.pull_request.number }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  components:
+    if: github.head_ref == 'codex/ci-cross-platform-measurements'
+    name: Components paired benchmark (${{ matrix.rep }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+      - name: Install browser runtime
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: ./apps/web/node_modules/.bin/playwright install --with-deps chromium
+      - name: Write parallel component benchmark config
+        run: |
+          cat > apps/web/vitest.browser.components-parallel.bench.ts <<'TS'
+          import { defineConfig } from "vitest/config";
+          import stableConfig from "./vitest.browser.stable.config";
+
+          const chatViewFile = "src/components/ChatView.browser.tsx";
+          const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
+          const stablePattern = testNamePattern as RegExp;
+
+          export default defineConfig({
+            ...stableConfig,
+            test: {
+              ...stableTestConfig,
+              include: [],
+              projects: [
+                {
+                  extends: true,
+                  test: {
+                    name: "components-parallel",
+                    include: stableTestConfig.include!,
+                    exclude: [chatViewFile],
+                    testNamePattern: stablePattern,
+                    maxWorkers: 4,
+                    browser: {
+                      ...stableTestConfig.browser!,
+                      fileParallelism: true,
+                    },
+                  },
+                },
+              ],
+            },
+          });
+          TS
+      - name: Run paired component benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark
+          run_one() {
+            local label="$1"; shift
+            /usr/bin/time -f '%e' -o "benchmark/${label}.seconds" "$@"
+          }
+          baseline() {
+            run_one baseline-1 bun run --cwd apps/web test:browser:ci -- --project=components --shard=1/2 --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-1.json"
+            run_one baseline-2 bun run --cwd apps/web test:browser:ci -- --project=components --shard=2/2 --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-2.json"
+          }
+          candidate() {
+            run_one candidate bun run --cwd apps/web vitest -- run --config vitest.browser.components-parallel.bench.ts --project=components-parallel --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/candidate.json"
+          }
+          if [ "${{ matrix.rep }}" = "1" ]; then candidate; baseline; else baseline; candidate; fi
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('benchmark')
+          def inventory(paths):
+              items = set()
+              for path in paths:
+                  data = json.loads(path.read_text())
+                  assert data['success'], path
+                  for suite in data['testResults']:
+                      file = pathlib.Path(suite['name']).name
+                      for test in suite['assertionResults']:
+                          items.add((file, test['fullName'], test['status']))
+              return items
+          baseline = inventory([root/'baseline-1.json', root/'baseline-2.json'])
+          candidate = inventory([root/'candidate.json'])
+          assert baseline == candidate, (len(baseline), len(candidate), list(baseline ^ candidate)[:10])
+          b1 = float((root/'baseline-1.seconds').read_text())
+          b2 = float((root/'baseline-2.seconds').read_text())
+          c = float((root/'candidate.seconds').read_text())
+          result = {'rep': ${{ matrix.rep }}, 'baseline_shards': [b1,b2], 'baseline_max': max(b1,b2), 'baseline_sum': b1+b2, 'candidate': c, 'inventory': len(candidate)}
+          (root/'result.json').write_text(json.dumps(result, indent=2))
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: critical-components-${{ matrix.rep }}
+          path: benchmark
+
+  chat:
+    if: github.head_ref == 'codex/ci-cross-platform-measurements'
+    name: ChatView 3-way benchmark (${{ matrix.rep }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+      - name: Install browser runtime
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: ./apps/web/node_modules/.bin/playwright install --with-deps chromium
+      - name: Write three-way ChatView benchmark config
+        run: |
+          cat > apps/web/vitest.browser.chat3.bench.ts <<'TS'
+          import { defineConfig } from "vitest/config";
+          import stableConfig from "./vitest.browser.stable.config";
+
+          const chatViewFile = "src/components/ChatView.browser.tsx";
+          const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
+          const stablePattern = testNamePattern as RegExp;
+          const a = "(?:restores streaming follow|anchor|scroll|tool)";
+          const b = "(?:project|worktree|Space|approval|preserves three answers|queued|queue)";
+
+          export default defineConfig({
+            ...stableConfig,
+            test: {
+              ...stableTestConfig,
+              include: [],
+              projects: [
+                {
+                  extends: true,
+                  test: {
+                    name: "chat-a",
+                    include: [chatViewFile],
+                    testNamePattern: new RegExp(`${stablePattern.source}(?=.*${a})`),
+                  },
+                },
+                {
+                  extends: true,
+                  test: {
+                    name: "chat-b",
+                    include: [chatViewFile],
+                    testNamePattern: new RegExp(`${stablePattern.source}(?!.*${a})(?=.*${b})`),
+                  },
+                },
+                {
+                  extends: true,
+                  test: {
+                    name: "chat-c",
+                    include: [chatViewFile],
+                    testNamePattern: new RegExp(`${stablePattern.source}(?!.*${a})(?!.*${b})`),
+                  },
+                },
+              ],
+            },
+          });
+          TS
+      - name: Run paired ChatView benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark
+          run_one() {
+            local label="$1"; shift
+            /usr/bin/time -f '%e' -o "benchmark/${label}.seconds" "$@"
+          }
+          baseline() {
+            run_one baseline-follow bun run --cwd apps/web test:browser:ci -- --project=chat-follow --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-follow.json"
+            run_one baseline-workflows bun run --cwd apps/web test:browser:ci -- --project=chat-workflows --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-workflows.json"
+          }
+          candidate() {
+            for project in chat-a chat-b chat-c; do
+              run_one "$project" bun run --cwd apps/web vitest -- run --config vitest.browser.chat3.bench.ts --project="$project" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/${project}.json"
+            done
+          }
+          if [ "${{ matrix.rep }}" = "1" ]; then candidate; baseline; else baseline; candidate; fi
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('benchmark')
+          def executed(paths):
+              items = set()
+              for path in paths:
+                  data = json.loads(path.read_text())
+                  assert data['success'], path
+                  for suite in data['testResults']:
+                      for test in suite['assertionResults']:
+                          if test['status'] == 'passed': items.add(test['fullName'])
+              return items
+          base_paths = [root/'baseline-follow.json', root/'baseline-workflows.json']
+          cand_paths = [root/f'{p}.json' for p in ['chat-a','chat-b','chat-c']]
+          baseline = executed(base_paths)
+          groups = [executed([p]) for p in cand_paths]
+          candidate = set().union(*groups)
+          assert len(candidate) == sum(map(len, groups)), 'candidate partitions overlap'
+          assert baseline == candidate, (len(baseline), len(candidate), list(baseline ^ candidate)[:10])
+          base = [float((root/f'baseline-{p}.seconds').read_text()) for p in ['follow','workflows']]
+          cand = [float((root/f'{p}.seconds').read_text()) for p in ['chat-a','chat-b','chat-c']]
+          result = {'rep': ${{ matrix.rep }}, 'baseline': base, 'baseline_max': max(base), 'baseline_sum': sum(base), 'candidate': cand, 'candidate_max': max(cand), 'candidate_sum': sum(cand), 'tests': len(candidate), 'candidate_group_sizes': list(map(len, groups))}
+          (root/'result.json').write_text(json.dumps(result, indent=2))
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: critical-chat-${{ matrix.rep }}
+          path: benchmark
+
+  browser-runtime:
+    if: github.head_ref == 'codex/ci-cross-platform-measurements'
+    name: Browser runtime ${{ matrix.mode }} (${{ matrix.rep }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [with-deps, browser-only]
+        rep: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+      - name: Measure runtime preparation and launch Chromium
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.mode }}" = "with-deps" ]; then
+            /usr/bin/time -f '%e' -o runtime.seconds ./apps/web/node_modules/.bin/playwright install --with-deps chromium
+          else
+            /usr/bin/time -f '%e' -o runtime.seconds ./apps/web/node_modules/.bin/playwright install chromium
+          fi
+          cd apps/web
+          node --input-type=module - <<'JS'
+          import { chromium } from 'playwright';
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          await page.setContent('<main>ok</main>');
+          if (await page.textContent('main') !== 'ok') throw new Error('Chromium smoke failed');
+          await browser.close();
+          JS
+          echo "runtime_seconds=$(cat ../..//runtime.seconds)"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: critical-runtime-${{ matrix.mode }}-${{ matrix.rep }}
+          path: runtime.seconds
