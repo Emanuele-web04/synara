@@ -109,6 +109,7 @@ export class CuaDriverHost {
       capability: string;
       setup: () => Promise<void>;
       checkPermissions?: () => Promise<HostPermissions>;
+      releaseHeldInput?: () => Promise<void>;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
     },
   ) {}
@@ -566,27 +567,52 @@ export class CuaDriverHost {
     if (generation.retirement) return generation.retirement;
     generation.retired = true;
     this.retiring = this.retiring.then(async () => {
-      if (generation.didExit && generation.inputInFlight)
+      // Captured up front: the flag clears on confirmed cleanup, and a driver
+      // exit event can land after the dead socket already broke the request —
+      // either ordering leaves the OS believing a synthetic button or modifier
+      // is held, and a user click landing under it feels dead system-wide.
+      const inputUncertain = generation.inputInFlight;
+      const releaseHeldInput = async () => {
+        if (!inputUncertain || !this.options.releaseHeldInput) return;
+        try {
+          await this.options.releaseHeldInput();
+          log("released held input left by the dead driver generation");
+        } catch (error) {
+          log(`held-input release failed: ${String(error)}`);
+        }
+      };
+      if (generation.didExit && generation.inputInFlight) {
+        await releaseHeldInput();
         throw new Error(
           "Cua Driver exited during input without confirming native cleanup. Computer admission is closed.",
         );
+      }
       if (!generation.didExit && generation.cancellationReady) {
-        const reply = await cuaRequest<CuaReply>(
-          generation.socket,
-          {
-            method: "cancel_input",
-            args: { expected_pid: generation.child.pid },
-          },
-          { timeoutMs: 5_000 },
-        );
-        const cleanup = reply.result;
-        if (
-          !reply.ok ||
-          cleanup?.pid !== generation.child.pid ||
-          cleanup?.input_admission_closed !== true ||
-          cleanup?.cleanup_complete !== true ||
-          cleanup?.pending_input !== 0
-        ) {
+        let cleanupConfirmed = false;
+        try {
+          const reply = await cuaRequest<CuaReply>(
+            generation.socket,
+            {
+              method: "cancel_input",
+              args: { expected_pid: generation.child.pid },
+            },
+            { timeoutMs: 5_000 },
+          );
+          const cleanup = reply.result;
+          cleanupConfirmed =
+            reply.ok === true &&
+            cleanup?.pid === generation.child.pid &&
+            cleanup?.input_admission_closed === true &&
+            cleanup?.cleanup_complete === true &&
+            cleanup?.pending_input === 0;
+        } catch {
+          cleanupConfirmed = false;
+        }
+        if (!cleanupConfirmed) {
+          // The socket died or the acknowledgement could not be trusted — the
+          // in-gate releases may never have run, so the helper posts the
+          // OS-level ups before admission closes on this uncertainty.
+          await releaseHeldInput();
           throw new Error(
             "Cua Driver did not confirm native input cleanup. Computer admission is closed; the driver was not killed or replaced.",
           );

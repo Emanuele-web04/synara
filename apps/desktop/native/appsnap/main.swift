@@ -11,6 +11,8 @@ do {
         emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
     case let .requestPermissions(selectedPermissions):
         emitter.emitPermissions(requestAppSnapPermissions(selectedPermissions))
+    case .releaseHeldInput:
+        emitter.emit(releaseHeldInputEvents())
     case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)

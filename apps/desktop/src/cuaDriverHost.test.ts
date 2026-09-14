@@ -36,6 +36,7 @@ async function fixture(
     delayObservation?: boolean;
     deathFlag?: string;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
+    releaseHeldInput?: () => Promise<void>;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
@@ -98,6 +99,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     capability: authority,
     setup: async () => {},
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
+    ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -564,6 +566,25 @@ describe("Cua GUI host retirement", () => {
       "retiring",
       "exit",
     ]);
+  });
+  it("releases held input through the helper when the driver dies mid-action", async () => {
+    let releaseCalls = 0;
+    const released = async () => {
+      releaseCalls += 1;
+    };
+    const f = await fixture(capability, { crash: true, releaseHeldInput: released });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    // The fake driver exits on dispatch, so the call's retire runs the
+    // OS-level release before the request reports its failure.
+    await expect(
+      cuaRequest(
+        f.endpoint,
+        { method: "call", name: "type_text", args: { text: "fixture" } },
+        { timeoutMs: 300, mutation: true },
+      ),
+    ).resolves.toMatchObject({ ok: false });
+    expect(releaseCalls).toBe(1);
+    await expect(f.host.stop()).rejects.toThrow("admission is closed");
   });
   it("rejects later backend requests throughout suspension and resumes only on explicit restart", async () => {
     const f = await fixture();

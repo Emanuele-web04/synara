@@ -1,5 +1,4 @@
 import { CuaDriverHost } from "./cuaDriverHost";
-import { ComputerNativePreview } from "./computerNativePreview";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -325,7 +324,7 @@ const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
-  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR ?? "cua",
   allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
@@ -1928,6 +1927,21 @@ function initializeDesktopAppSnap(): void {
     openSettingsPane: (pane) => {
       const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
       if (paneUrl) void shell.openExternal(paneUrl).catch(() => undefined);
+    },
+    // Best effort: quit System Settings after a permission setup session lands
+    // every grant, so the user is not left staring at a pane they are done with.
+    closeSettingsApp: () => {
+      try {
+        const child = ChildProcess.execFile("/usr/bin/osascript", [
+          "-e",
+          'tell application "System Settings" to quit',
+          "-e",
+          'tell application "System Preferences" to quit',
+        ]);
+        child.on("error", () => undefined);
+      } catch {
+        // Grants already landed; a lingering Settings window is not a failure.
+      }
     },
     onState: (state) => {
       sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
@@ -3610,15 +3624,6 @@ async function startCuaHost(): Promise<void> {
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
     bundleId: desktopIdentity.bundleId,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
-    preview: new ComputerNativePreview({
-      helperPath: resolveAppSnapHelperPath(),
-      onUserStop: (task) => {
-        void host
-          .stopTaskByUser(task)
-          .catch((error) => safeConsoleError("[desktop] computer preview stop failed", error));
-      },
-      onError: (error) => safeConsoleError("[desktop] computer preview failed", error),
-    }),
     checkPermissions: async () => {
       // The AppSnap manager owns the shared native permission helper; lazily
       // starting it here keeps the CUA host working even when AppSnap itself is
@@ -3633,6 +3638,13 @@ async function startCuaHost(): Promise<void> {
     setup: async () => {
       initializeDesktopAppSnap();
       await appSnapManager!.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
+    },
+    releaseHeldInput: async () => {
+      // Same lazily-started shared helper as the permission checks: the AppSnap
+      // binary posts the releases, and it exists whether or not AppSnap itself
+      // is enabled.
+      initializeDesktopAppSnap();
+      await appSnapManager!.releaseHeldInput();
     },
     normalizeOverview: (result) => {
       const image = result.content?.find((part) => part.type === "image" && part.data);

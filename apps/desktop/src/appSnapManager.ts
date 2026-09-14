@@ -101,6 +101,12 @@ type AppSnapHelperMessage =
   | { type: "windows"; requestId: string; windows: DesktopAppSnapWindowEntry[] }
   | { type: "permission-guide"; state: DesktopAppSnapPermissionGuideState }
   | {
+      type: "release-held-input";
+      released?: boolean;
+      reason?: string;
+      details?: string[];
+    }
+  | {
       type: "error";
       id?: string;
       code: string;
@@ -1750,6 +1756,63 @@ export class DesktopAppSnapManager {
           );
         }
         resolve(receivedPermissions);
+      });
+    });
+  }
+
+  /**
+   * Releases synthetic input the OS may still believe is held after a
+   * computer-use driver died mid-gesture — a leaked button makes the user's
+   * real clicks feel dead system-wide until reboot. The Cua host calls this
+   * at retire-time precisely because no daemon may be left to ask; posting
+   * button-ups and a flags-clear is a no-op when nothing is held.
+   *
+   * Runs on the permission queue so it cannot interleave with a permission
+   * command's helper spawn, and resolves true only on the helper's
+   * `released` payload — a silent helper exit means the leak may stand.
+   */
+  async releaseHeldInput(): Promise<boolean> {
+    const run = this.#permissionCommandQueue.then(() => this.#executeReleaseHeldInput());
+    this.#permissionCommandQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await run;
+  }
+
+  #executeReleaseHeldInput(): Promise<boolean> {
+    if (this.#disposed || this.#platform !== "macos") return Promise.resolve(false);
+    if (!FS.existsSync(this.#options.helperPath)) {
+      this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      let child: AppSnapHelperProcess;
+      try {
+        child = this.#options.spawn(this.#options.helperPath, ["--release-held-input"], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch {
+        resolve(false);
+        return;
+      }
+      let released = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        resolve(false);
+      }, PERMISSION_COMMAND_TIMEOUT_MS);
+      this.#wireHelperOutput(child, (message) => {
+        if (message.type === "release-held-input" && message.released === true) {
+          released = true;
+        }
+      });
+      child.once("error", () => {
+        clearTimeout(timeout);
+        resolve(false);
+      });
+      child.once("close", () => {
+        clearTimeout(timeout);
+        resolve(released);
       });
     });
   }

@@ -8,6 +8,7 @@ struct AppSnapFailure: Error {
 enum AppSnapMode {
     case checkPermissions(Set<AppSnapPermission>)
     case requestPermissions(Set<AppSnapPermission>)
+    case releaseHeldInput
     case permissionGuide(pane: String, appPath: String, appName: String)
     case watch(
         outputDirectory: URL,
@@ -56,7 +57,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch", "--permission-guide":
+            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -121,6 +122,15 @@ struct AppSnapOptions {
             return AppSnapOptions(mode: .requestPermissions(
                 permissions.isEmpty ? [.accessibility, .screenRecording] : permissions
             ))
+        case "--release-held-input":
+            try rejectWatchArguments("Held-input release does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--release-held-input does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .releaseHeldInput)
         case "--watch":
             guard permissions.isEmpty else {
                 throw AppSnapFailure(
@@ -150,7 +160,7 @@ struct AppSnapOptions {
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --watch, or --permission-guide."
+                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, or --permission-guide."
             )
         }
     }
