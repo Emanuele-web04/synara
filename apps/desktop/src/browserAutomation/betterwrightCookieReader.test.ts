@@ -51,7 +51,7 @@ describe("patched Betterwright native reader diagnostics", () => {
     expect(report).toHaveBeenCalledWith({
       browser: "safari",
       profile: "default",
-      domains: ["example.test"],
+      includeSession: false,
       select: "legacy_first",
       timeoutMs: 10_000,
       appBound: "disabled",
