@@ -57,6 +57,7 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
+import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -98,6 +99,8 @@ type PendingTool = {
   readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
   readonly name: string;
   readonly args?: Record<string, unknown>;
+  /** Set when the transcript already reported this call as a background task. */
+  backgroundedByTranscript?: boolean;
 };
 
 type StoredTurn = {
@@ -111,6 +114,11 @@ export type AntigravityTrackedBackgroundTask = {
   readonly description?: string;
   readonly startedAt: string;
 };
+
+type BackgroundTaskTerminal = { readonly taskId: string } & (
+  | { readonly kind: "completed"; readonly message: AntigravitySystemMessageInfo }
+  | { readonly kind: "killed" }
+);
 
 type ToolSurfaceCounters = {
   /** Highest occurrence already rendered for each `${stepIndex}:${toolName}` pair. */
@@ -148,8 +156,12 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   pendingTools: PendingTool[];
   nextToolSequence: number;
   pendingBackgroundTasks: Map<string, AntigravityTrackedBackgroundTask>;
-  pendingAnonymousBackgroundTasks: number;
-  pendingBackgroundTaskCompletions: AntigravitySystemMessageInfo[];
+  pendingAnonymousBackgroundTasks: AntigravityBackgroundCallKey[];
+  pendingBackgroundTaskTerminals: BackgroundTaskTerminal[];
+  /** Recently settled or killed task ids, so a late post-tool hook cannot re-register them. */
+  settledBackgroundTaskIds: string[];
+  /** Calls the transcript backgrounded before their pre-tool hook was seen. */
+  transcriptBackgroundedCalls: AntigravityBackgroundCallKey[];
   backgroundCompletionSequence: number;
   latestBackgroundCompletionStepIndex?: number;
   /**
@@ -174,6 +186,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   stopped: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
+  stopTeardownRequested?: boolean;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -810,7 +823,8 @@ export function detectAntigravityBackgroundTaskStart(
 
     if (rawOutput) {
       const match =
-        rawOutput.match(/Task id ["']?([\w.-]+)["']?/iu) ?? rawOutput.match(/\b(task-[\w.-]+)\b/iu);
+        rawOutput.match(/Task id\b:?\s*["']?([\w./:-]+)["']?/iu) ??
+        rawOutput.match(/\b(task-[\w.-]+)\b/iu);
       if (/background task|sent to the background|running in the background/iu.test(rawOutput)) {
         const taskId = match?.[1] ?? match?.[0];
         return {
@@ -853,6 +867,64 @@ export function detectAntigravityBackgroundTaskStart(
   }
 
   return null;
+}
+
+/** agy's GENERIC RUNNING step lands before the stop hook; post-tool only once the task ends. */
+export function parseAntigravityBackgroundTaskStep(
+  content: string | undefined,
+): { taskId: string; description?: string } | null {
+  if (typeof content !== "string" || !/background task/iu.test(content)) return null;
+  const match =
+    content.match(/background task with task id:?\s*["']?([^\s"',]+)/iu) ??
+    content.match(/Task id ["']([^"']+)["']/iu) ??
+    content.match(/(?:[\w.-]+\/)?task-[\w.-]+/iu);
+  const taskId = (match?.[1] ?? match?.[0])?.trim();
+  if (!taskId) return null;
+  const description = content.match(/^Task Description:[ \t]*(.+)$/mu)?.[1]?.trim();
+  return { taskId, ...(description ? { description } : {}) };
+}
+
+/**
+ * Identifies one tool call across the transcript and the hook file: the
+ * planner step it belongs to, plus its command line when several calls share
+ * that step. Unspecified commands match only when the caller permits it.
+ */
+export type AntigravityBackgroundCallKey = {
+  readonly stepIndex: number | undefined;
+  readonly command?: string;
+  readonly taskId?: string;
+};
+
+export function takeAntigravityBackgroundCallKey(
+  keys: AntigravityBackgroundCallKey[],
+  stepIndex: number | undefined,
+  command: string | undefined,
+  options: {
+    readonly allowUnspecifiedCommand?: boolean;
+    readonly taskId?: string | undefined;
+  } = {},
+): boolean {
+  if (stepIndex === undefined) return false;
+  const index = keys.findIndex(
+    (key) =>
+      key.stepIndex === stepIndex &&
+      (key.taskId === undefined ||
+        options.taskId === undefined ||
+        matchAntigravityTrackedTaskId(options.taskId, [key.taskId]) !== undefined) &&
+      (key.command === undefined || command === undefined
+        ? options.allowUnspecifiedCommand !== false
+        : key.command === command),
+  );
+  if (index < 0) return false;
+  keys.splice(index, 1);
+  return true;
+}
+
+/** agy quotes CommandLine in hook args and transcript tool calls; task descriptions are bare. */
+export function normalizeAntigravityCommandLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/^"(.*)"$/su, "$1");
+  return trimmed.replace(/\s+/gu, " ").trim() || undefined;
 }
 
 export function matchAntigravityTrackedTaskId(
@@ -1096,6 +1168,19 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }).pipe(Effect.asVoid);
     };
 
+    /**
+     * Ids of tasks that already reached a terminal state. A post-tool hook can
+     * arrive after the transcript settled, killed, or force-completed a task;
+     * it must not re-register it, or nothing would ever settle it again.
+     */
+    const rememberSettledBackgroundTask = (
+      context: AntigravitySessionContext,
+      taskId: string,
+    ): void => {
+      context.settledBackgroundTaskIds.push(taskId);
+      if (context.settledBackgroundTaskIds.length > 32) context.settledBackgroundTaskIds.shift();
+    };
+
     const completePendingBackgroundTasks = (
       context: AntigravitySessionContext,
       status: "completed" | "failed" | "stopped",
@@ -1112,9 +1197,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           raw: raw(source, { taskId, tracked, status }),
         } satisfies ProviderRuntimeEvent);
       }
+      for (const taskId of context.pendingBackgroundTasks.keys()) {
+        rememberSettledBackgroundTask(context, taskId);
+      }
       context.pendingBackgroundTasks.clear();
-      context.pendingAnonymousBackgroundTasks = 0;
-      context.pendingBackgroundTaskCompletions.length = 0;
+      context.pendingAnonymousBackgroundTasks.length = 0;
+      context.pendingBackgroundTaskTerminals.length = 0;
     };
 
     const killPendingBackgroundTasks = (
@@ -1132,9 +1220,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           raw: raw(source, { taskId, tracked }),
         } satisfies ProviderRuntimeEvent);
       }
+      for (const taskId of context.pendingBackgroundTasks.keys()) {
+        rememberSettledBackgroundTask(context, taskId);
+      }
       context.pendingBackgroundTasks.clear();
-      context.pendingAnonymousBackgroundTasks = 0;
-      context.pendingBackgroundTaskCompletions.length = 0;
+      context.pendingAnonymousBackgroundTasks.length = 0;
+      context.pendingBackgroundTaskTerminals.length = 0;
     };
 
     const backgroundCompletionCandidate = (
@@ -1149,6 +1240,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       const tracked = context.pendingBackgroundTasks.get(taskId);
       if (!tracked) return false;
       context.pendingBackgroundTasks.delete(taskId);
+      rememberSettledBackgroundTask(context, taskId);
       offer({
         ...base(context),
         type: "task.completed",
@@ -1165,19 +1257,80 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       return true;
     };
 
+    const queueBackgroundTaskTerminal = (
+      context: AntigravitySessionContext,
+      terminal: BackgroundTaskTerminal,
+    ): boolean => {
+      if (
+        matchAntigravityTrackedTaskId(terminal.taskId, context.settledBackgroundTaskIds) ||
+        context.pendingBackgroundTaskTerminals.some(
+          (pending) =>
+            matchAntigravityTrackedTaskId(pending.taskId, [terminal.taskId]) !== undefined,
+        )
+      )
+        return false;
+      // Retain every unmatched terminal until its start arrives or the turn ends,
+      // even if no capture hooks were read. A history cap can lose the only finish.
+      // An unmatched terminal may belong to a different task, so it cannot settle
+      // an anonymous call or allow Stop to tear down the process before that match.
+      context.pendingBackgroundTaskTerminals.push(terminal);
+      return true;
+    };
+
+    const takeAnonymousBackgroundTask = (
+      context: AntigravitySessionContext,
+      stepIndex: number | undefined,
+      command: string | undefined,
+    ): boolean => {
+      const tasks = context.pendingAnonymousBackgroundTasks;
+      if (takeAntigravityBackgroundCallKey(tasks, stepIndex, command)) return true;
+      // A malformed/lost hook index can still be reconciled when its command
+      // uniquely identifies one anonymous call. Do not guess between duplicates.
+      const unindexed = tasks.filter(
+        (task) => task.stepIndex === undefined && command !== undefined && task.command === command,
+      );
+      if (unindexed.length !== 1) return false;
+      tasks.splice(tasks.indexOf(unindexed[0]!), 1);
+      return true;
+    };
+
     const registerBackgroundTask = (
       context: AntigravitySessionContext,
       start: { readonly taskId?: string; readonly description?: string },
       taskType: string,
-      source: { readonly name: string; readonly args?: Record<string, unknown> },
+      source: {
+        readonly name: string;
+        readonly args?: Record<string, unknown>;
+        readonly stepIndex?: number;
+      },
     ): void => {
-      if (context.stopped) return;
+      // A hook poll or transcript read still in flight when the turn was
+      // interrupted or settled must not register a task nobody will settle.
+      if (context.stopped || context.interrupted || context.turnTerminalEmitted) return;
       if (!start.taskId) {
-        context.pendingAnonymousBackgroundTasks += 1;
+        const command = normalizeAntigravityCommandLine(source.args?.CommandLine);
+        context.pendingAnonymousBackgroundTasks.push({
+          stepIndex: source.stepIndex,
+          ...(command !== undefined ? { command } : {}),
+        });
         return;
       }
       const taskId = start.taskId;
-      if (context.pendingBackgroundTasks.has(taskId)) return;
+      if (matchAntigravityTrackedTaskId(taskId, context.pendingBackgroundTasks.keys())) return;
+      const terminalIndex = context.pendingBackgroundTaskTerminals.findIndex(
+        (pending) => matchAntigravityTrackedTaskId(pending.taskId, [taskId]) !== undefined,
+      );
+      const terminal =
+        terminalIndex < 0
+          ? undefined
+          : context.pendingBackgroundTaskTerminals.splice(terminalIndex, 1)[0];
+      // Naming a killed anonymous call removes only its own occurrence and
+      // terminal; it must not reopen it or settle another running command.
+      if (
+        terminal?.kind === "killed" ||
+        matchAntigravityTrackedTaskId(taskId, context.settledBackgroundTaskIds)
+      )
+        return;
       context.pendingBackgroundTasks.set(taskId, {
         taskId,
         taskType,
@@ -1195,16 +1348,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         raw: raw("background-task-started", { taskId, ...source }),
       } satisfies ProviderRuntimeEvent);
 
-      const completionIndex = context.pendingBackgroundTaskCompletions.findIndex(
-        (message) =>
-          matchAntigravityTrackedTaskId(
-            backgroundCompletionCandidate(message),
-            context.pendingBackgroundTasks.keys(),
-          ) === taskId,
-      );
-      if (completionIndex < 0) return;
-      const [completion] = context.pendingBackgroundTaskCompletions.splice(completionIndex, 1);
-      if (completion) settleTrackedBackgroundTask(context, taskId, completion);
+      if (terminal?.kind === "completed") {
+        settleTrackedBackgroundTask(context, taskId, terminal.message);
+      }
     };
 
     const teardownStoppedTurnIfIdle = (context: AntigravitySessionContext): void => {
@@ -1212,11 +1358,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         !context.activeProcess ||
         context.turnTerminalEmitted ||
         context.pendingBackgroundTasks.size > 0 ||
-        context.pendingAnonymousBackgroundTasks > 0
+        context.pendingAnonymousBackgroundTasks.length > 0
       ) {
         return;
       }
       const child = context.activeProcess;
+      context.stopTeardownRequested = true;
       void teardownProcessTree(child).catch(() => {
         try {
           child.kill("SIGKILL");
@@ -1289,7 +1436,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   stopReason: "error",
                   errorMessage: input.errorMessage ?? "Antigravity turn failed.",
                 }
-              : { state: "completed", stopReason: "model_stop" },
+              : {
+                  state: "completed",
+                  stopReason: "model_stop",
+                },
         ...(input.raw ? { raw: input.raw } : {}),
       } satisfies ProviderRuntimeEvent);
       return true;
@@ -1359,13 +1509,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       for (const call of calls) {
         const name = typeof call?.name === "string" ? trim(call.name) : undefined;
         if (!name) continue;
-        const surfaceKey = `${stepIndex}:${name}`;
-        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
-        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const args =
           call.args && typeof call.args === "object"
             ? (call.args as Record<string, unknown>)
             : undefined;
+        const surfaceKey = `${stepIndex}:${name}`;
+        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
+        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const itemId = RuntimeItemId.makeUnsafe(
           `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
         );
@@ -1427,14 +1577,74 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         );
         if (matchedTaskId) {
           settleTrackedBackgroundTask(context, matchedTaskId, systemMessage);
-        } else if (candidateId && context.pendingAnonymousBackgroundTasks > 0) {
-          context.pendingAnonymousBackgroundTasks -= 1;
         } else if (candidateId) {
-          context.pendingBackgroundTaskCompletions.push(systemMessage);
-          if (context.pendingBackgroundTaskCompletions.length > 32) {
-            context.pendingBackgroundTaskCompletions.shift();
-          }
+          queueBackgroundTaskTerminal(context, {
+            kind: "completed",
+            taskId: candidateId,
+            message: systemMessage,
+          });
         }
+        return;
+      }
+
+      const backgroundStart =
+        step.type === "GENERIC" && step.status === "RUNNING"
+          ? parseAntigravityBackgroundTaskStep(step.content)
+          : null;
+      if (backgroundStart) {
+        // The background step always directly follows its tool call's planner
+        // step. When that step issued several calls, the task description names
+        // the command that was backgrounded.
+        const toolStep = stepIndex === undefined ? undefined : stepIndex - 1;
+        const candidates = context.pendingTools.filter((tool) => tool.stepIndex === toolStep);
+        const wantedCommand = normalizeAntigravityCommandLine(backgroundStart.description);
+        // A lone pending call may just be the first hook read from a multi-call
+        // planner step. Without a command match, defer ownership to the post-hook.
+        const pending = candidates.find(
+          (tool) =>
+            wantedCommand !== undefined &&
+            normalizeAntigravityCommandLine(tool.args?.CommandLine) === wantedCommand,
+        );
+        const replacesAnonymousTask =
+          pending === undefined && takeAnonymousBackgroundTask(context, toolStep, wantedCommand);
+        if (pending) {
+          pending.backgroundedByTranscript = true;
+        } else if (!replacesAnonymousTask && toolStep !== undefined) {
+          context.transcriptBackgroundedCalls.push({
+            stepIndex: toolStep,
+            taskId: backgroundStart.taskId,
+            ...(wantedCommand !== undefined ? { command: wantedCommand } : {}),
+          });
+        }
+        const command = pending?.args?.CommandLine;
+        const description =
+          backgroundStart.description ?? (typeof command === "string" ? command : undefined);
+        const plannerStep = currentTurn(context)?.items.find(
+          (item): item is TranscriptStep =>
+            typeof item === "object" &&
+            item !== null &&
+            (item as TranscriptStep).step_index === toolStep,
+        );
+        const plannerCalls =
+          plannerStep?.tool_calls?.filter(
+            (call) => typeof call?.name === "string" && call.name.trim().length > 0,
+          ) ?? [];
+        const plannerCall =
+          plannerCalls.find(
+            (call) =>
+              wantedCommand !== undefined &&
+              normalizeAntigravityCommandLine(call.args?.CommandLine) === wantedCommand,
+          ) ?? (plannerCalls.length === 1 ? plannerCalls[0] : undefined);
+        const name = pending?.name ?? plannerCall?.name ?? "run_command";
+        registerBackgroundTask(
+          context,
+          {
+            taskId: backgroundStart.taskId,
+            ...(description ? { description } : {}),
+          },
+          toolItemType(name),
+          { name, ...(pending?.args ? { args: pending.args } : {}) },
+        );
         return;
       }
 
@@ -1470,6 +1680,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
     const readTranscript = async (context: AntigravitySessionContext) => {
       if (!context.transcriptPath) return;
+      const turnAtStart = context.activeTurnId;
       const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
       if (isInitialRead) context.processedTranscriptBytes = 0;
       let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
@@ -1478,7 +1689,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       } catch {
         return;
       }
-      if (context.stopped) return;
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
       context.processedTranscriptBytes = batch.nextOffset;
       context.processedTranscriptPath = context.transcriptPath;
       const steps = batch.lines.flatMap((line) => {
@@ -1684,6 +1895,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
+      // A read that outlives its turn (interrupt, next sendTurn) must not feed
+      // stale hooks into whatever turn is active once it resumes.
+      const turnAtStart = context.activeTurnId;
       const completionSequenceBeforePoll = context.backgroundCompletionSequence;
       let latestStopStepIndex: number | undefined;
       let sawStopWithoutStepIndex = false;
@@ -1693,10 +1907,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       } catch {
         return;
       }
-      if (context.stopped) return;
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
       context.processedHookBytes = batch.nextOffset;
       for (const line of batch.lines) {
-        if (context.stopped) return;
+        if (context.stopped || context.activeTurnId !== turnAtStart) return;
         const tab = line.indexOf("\t");
         if (tab < 0) continue;
         const eventName = line.slice(0, tab);
@@ -1778,13 +1992,25 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
             );
             const itemType = toolItemType(name);
-            const pending = {
+            const pending: PendingTool = {
               stepIndex,
               itemId,
               itemType,
               name,
               ...(toolArgs ? { args: toolArgs } : {}),
-            } satisfies PendingTool;
+            };
+            // Only a command match can identify a late pre-hook. A step-only
+            // marker must wait until a post-hook confirms background execution.
+            if (
+              takeAntigravityBackgroundCallKey(
+                context.transcriptBackgroundedCalls,
+                stepIndex,
+                normalizeAntigravityCommandLine(toolArgs?.CommandLine),
+                { allowUnspecifiedCommand: false },
+              )
+            ) {
+              pending.backgroundedByTranscript = true;
+            }
             context.pendingTools.push(pending);
             offer({
               ...base(context, { itemId }),
@@ -1808,12 +2034,25 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             toolCall?.args && typeof toolCall.args === "object"
               ? (toolCall.args as Record<string, unknown>)
               : undefined;
+          // Several same-name calls can share a step and finish out of order:
+          // prefer the pending call with the same command line, then FIFO.
+          const matchesHook = (candidate: PendingTool) =>
+            candidate.stepIndex === stepIndex && (!name || candidate.name === name);
+          const hookCommand = normalizeAntigravityCommandLine(hookArgs?.CommandLine);
+          const exactIndex =
+            stepIndex === undefined || hookCommand === undefined
+              ? -1
+              : context.pendingTools.findIndex(
+                  (candidate) =>
+                    matchesHook(candidate) &&
+                    normalizeAntigravityCommandLine(candidate.args?.CommandLine) === hookCommand,
+                );
           const pendingIndex =
             stepIndex === undefined
               ? -1
-              : context.pendingTools.findIndex(
-                  (pending) => pending.stepIndex === stepIndex && (!name || pending.name === name),
-                );
+              : exactIndex >= 0
+                ? exactIndex
+                : context.pendingTools.findIndex(matchesHook);
           const pending =
             pendingIndex >= 0 ? context.pendingTools.splice(pendingIndex, 1)[0] : undefined;
           const toolName = pending?.name ?? name;
@@ -1846,13 +2085,43 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             } satisfies ProviderRuntimeEvent);
           }
 
-          if (!failed && toolName) {
-            const bgStart = detectAntigravityBackgroundTaskStart(toolName, toolArgs, payload);
+          const bgStart =
+            !failed && toolName
+              ? detectAntigravityBackgroundTaskStart(toolName, toolArgs, payload)
+              : null;
+          // An unmarked pending call can still own a transcript marker. Consume
+          // an unspecified command only for background output, so a foreground
+          // call sharing the step cannot take another call's marker.
+          const transcriptOwned =
+            pending?.backgroundedByTranscript === true ||
+            takeAntigravityBackgroundCallKey(
+              context.transcriptBackgroundedCalls,
+              stepIndex,
+              normalizeAntigravityCommandLine(toolArgs?.CommandLine),
+              {
+                allowUnspecifiedCommand: bgStart?.isBackground === true,
+                taskId: bgStart?.taskId,
+              },
+            );
+          if (!failed && toolName && !transcriptOwned) {
             if (bgStart?.isBackground) {
-              registerBackgroundTask(context, bgStart, toolItemType(toolName), {
-                name: toolName,
-                ...(toolArgs ? { args: toolArgs } : {}),
-              });
+              // Without a pre-tool entry the marker above cannot help: a hook that
+              // arrives after the transcript already settled the task must not
+              // re-register it, or nothing would ever settle it again.
+              // Only a named start can be matched against settled ids: with no
+              // candidate the matcher returns a lone tracked id, which would
+              // silently drop a genuine anonymous background start.
+              const settled =
+                bgStart.taskId !== undefined &&
+                matchAntigravityTrackedTaskId(bgStart.taskId, context.settledBackgroundTaskIds) !==
+                  undefined;
+              if (!settled) {
+                registerBackgroundTask(context, bgStart, toolItemType(toolName), {
+                  name: toolName,
+                  ...(toolArgs ? { args: toolArgs } : {}),
+                  ...(stepIndex !== undefined ? { stepIndex } : {}),
+                });
+              }
             } else if (toolName === "manage_task") {
               const action = typeof toolArgs?.Action === "string" ? toolArgs.Action : undefined;
               const targetTaskId =
@@ -1866,6 +2135,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   : undefined;
               if (matchedId) {
                 context.pendingBackgroundTasks.delete(matchedId);
+                rememberSettledBackgroundTask(context, matchedId);
                 offer({
                   ...base(context),
                   type: "task.updated",
@@ -1875,11 +2145,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   },
                   raw: raw("background-task-killed", { taskId: matchedId }),
                 } satisfies ProviderRuntimeEvent);
-              } else if (action === "kill" && targetTaskId) {
-                context.pendingAnonymousBackgroundTasks = Math.max(
-                  0,
-                  context.pendingAnonymousBackgroundTasks - 1,
-                );
+              } else if (
+                action === "kill" &&
+                targetTaskId &&
+                queueBackgroundTaskTerminal(context, { kind: "killed", taskId: targetTaskId })
+              ) {
+                rememberSettledBackgroundTask(context, targetTaskId);
               }
             }
           }
@@ -1899,7 +2170,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
       }
       await readTranscript(context);
-      if (context.stopped) return;
+      if (context.stopped || context.activeTurnId !== turnAtStart) return;
       const completionStepIndex = context.latestBackgroundCompletionStepIndex;
       const completionObservedDuringPoll =
         context.backgroundCompletionSequence > completionSequenceBeforePoll;
@@ -1996,8 +2267,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           pendingTools: [],
           nextToolSequence: 0,
           pendingBackgroundTasks: new Map(),
-          pendingAnonymousBackgroundTasks: 0,
-          pendingBackgroundTaskCompletions: [],
+          pendingAnonymousBackgroundTasks: [],
+          pendingBackgroundTaskTerminals: [],
+          settledBackgroundTaskIds: [],
+          transcriptBackgroundedCalls: [],
           backgroundCompletionSequence: 0,
           foreignConversations: new Map(),
           surfacedToolCallCounts: new Map(),
@@ -2121,8 +2394,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.processedSteps.clear();
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
-        context.pendingAnonymousBackgroundTasks = 0;
-        context.pendingBackgroundTaskCompletions.length = 0;
+        context.transcriptBackgroundedCalls.length = 0;
+        context.pendingAnonymousBackgroundTasks.length = 0;
+        context.pendingBackgroundTaskTerminals.length = 0;
         context.backgroundCompletionSequence = 0;
         delete context.latestBackgroundCompletionStepIndex;
         context.nextToolSequence = 0;
@@ -2132,6 +2406,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
+        delete context.stopTeardownRequested;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2152,6 +2427,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "--dangerously-skip-permissions",
           "--model",
           cliModel,
+          "--output-format",
+          "stream-json",
           "--log-file",
           logFile,
           "--print-timeout",
@@ -2198,9 +2475,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           context.activeTurnId === turnId;
         let stdout = "";
         let stderr = "";
+        const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stdout.on("data", (chunk) => {
+          outputParser.write(String(chunk));
+          stdout += chunk;
+        });
         child.stderr.on("data", (chunk) => (stderr += chunk));
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
@@ -2253,13 +2534,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            if (!context.sawAssistant && stdout.trim()) {
+            const printResult = outputParser.finish();
+            const responseText = printResult?.response ?? stdout.trim();
+            if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
                 {
                   step_index: Number.MAX_SAFE_INTEGER,
                   type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
+                  content: responseText,
                 },
                 "assistant_message",
                 "assistant_text",
@@ -2270,8 +2553,25 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
+            // Only our stop-hook teardown may replace a missing clean process exit.
+            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            const completedAfterStopTeardown =
+              context.stopTeardownRequested === true &&
+              printResult?.completedResponse === true &&
+              context.sawAssistant &&
+              !stderr.trim() &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            const interrupted =
+              context.interrupted ||
+              printResult?.state === "interrupted" ||
+              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+            const failed =
+              !interrupted &&
+              !completedAfterStopTeardown &&
+              ((code ?? 1) !== 0 ||
+                (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -2285,7 +2585,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    errorMessage:
+                      printResult?.error ||
+                      stderr.trim() ||
+                      (printResult?.state === undefined && printResult !== undefined
+                        ? "Antigravity CLI exited without a complete result."
+                        : undefined) ||
+                      `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
               raw: raw("process-exit", { code, signal, stdout, stderr }),
@@ -2491,8 +2797,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       },
     } satisfies AntigravityAdapterShape;
   });
-
-export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter());
 
 export function makeAntigravityAdapterLive(dependencies: AntigravityAdapterDependencies = {}) {
   return Layer.effect(AntigravityAdapter, makeAntigravityAdapter(dependencies));

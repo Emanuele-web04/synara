@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { ModelInfo, Options as ClaudeQueryOptions } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AutomationCreateInput,
   AutomationDefinition,
@@ -9,6 +10,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
   ProviderKind,
+  ProviderModelDescriptor,
   ServerProviderStatus,
   ThreadId as ThreadIdType,
 } from "@synara/contracts";
@@ -38,6 +40,12 @@ import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import {
+  ProjectionThread,
+  ProjectionThreadRepository,
+} from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import {
@@ -51,6 +59,10 @@ import type {
 } from "../../diagnostics/Services/ThreadDiagnosticsQuery.ts";
 import type { ProviderBlockingDeliveryEvidence } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
+import { ClaudeAdapter } from "../../provider/Services/ClaudeAdapter.ts";
+import { makeClaudeAdapterLive } from "../../provider/Layers/ClaudeAdapter.ts";
+import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -135,13 +147,103 @@ function makeThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread 
     ...shell,
     deletedAt: null,
     pinnedMessages: [],
-    threadMarkers: [],
     messages: [],
     proposedPlans: [],
     activities: [],
     checkpoints: [],
   };
 }
+
+const listDefaultTestModels: (typeof ProviderDiscoveryService)["Service"]["listModels"] = ({
+  provider,
+}) => {
+  const modelsByProvider: Record<string, ReadonlyArray<ProviderModelDescriptor>> = {
+    codex: [
+      { slug: DEFAULT_MODEL_BY_PROVIDER.codex, name: "GPT-6 Astra" },
+      { slug: "gpt-5.5", name: "GPT-5.5" },
+      {
+        slug: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+      {
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
+    claudeAgent: [
+      {
+        slug: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+      },
+      {
+        slug: "sonnet",
+        name: "Claude Sonnet alias",
+        resolvedModel: "claude-sonnet-5",
+        optionDescriptors: [
+          {
+            id: "autoCompactWindow",
+            label: "Context window",
+            type: "select",
+            options: [
+              { id: "auto", label: "Auto" },
+              { id: "200k", label: "200k" },
+            ],
+          },
+        ],
+      },
+    ],
+    cursor: [{ slug: "auto", name: "Auto" }],
+    antigravity: [
+      {
+        slug: "Gemini 3.5 Flash",
+        name: "Gemini 3.5 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+      {
+        slug: "Gemini 3.8 Flash",
+        name: "Gemini 3.8 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
+    grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
+    droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
+    opencode: [
+      { slug: "openai/gpt-5", name: "OpenAI GPT-5" },
+      {
+        slug: "deepseek/deepseek-flash",
+        name: "DeepSeek V4.1 Flash",
+        optionDescriptors: [
+          {
+            id: "variant",
+            label: "Variant",
+            type: "select",
+            options: [
+              { id: "default", label: "Default" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      },
+    ],
+    pi: [{ slug: "test-pi", name: "Test Pi" }],
+  };
+  return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
+};
 
 interface GatewayHarness {
   readonly dispatched: Array<OrchestrationCommand>;
@@ -224,6 +326,20 @@ function makeAutomationDefinition(
   };
 }
 
+function makeFullAutomationUpdate(definition: AutomationDefinition) {
+  return {
+    automationId: definition.id,
+    name: definition.name,
+    prompt: definition.prompt,
+    schedule: definition.schedule,
+    enabled: true,
+    maxIterations: definition.maxIterations,
+    stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
+    notificationPolicy: "all",
+    completionPolicy: { type: "none" },
+  };
+}
+
 const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
   "token-parent-claude": "thread-parent",
@@ -235,6 +351,7 @@ function makeHarnessLayer(
   threads: ReadonlyArray<OrchestrationThreadShell>,
   automationDefinitions: ReadonlyArray<AutomationDefinition> = [],
   options: {
+    readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
     readonly failDispatch?: (command: OrchestrationCommand) => boolean;
     readonly dispatchDelayMs?: number;
@@ -481,6 +598,7 @@ function makeHarnessLayer(
             .map((event) => event.sequence),
         ),
       ),
+    getThreadTitleHighWaterSequence: () => Effect.succeed(0),
     readThreadEvents: (input: {
       threadId: string;
       throughSequenceInclusive: number;
@@ -803,43 +921,7 @@ function makeHarnessLayer(
   } as unknown as (typeof GitManager)["Service"]);
 
   const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
-    listModels: ({ provider }: { provider: string }) => {
-      const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
-        codex: [
-          { slug: "gpt-5.5", name: "GPT-5.5" },
-          {
-            slug: "gpt-5.6-terra",
-            name: "GPT-5.6 Terra",
-            supportedReasoningEfforts: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-            ],
-          },
-        ],
-        claudeAgent: [
-          {
-            slug: "claude-sonnet-5",
-            name: "Claude Sonnet 5",
-          },
-        ],
-        cursor: [{ slug: "auto", name: "Auto" }],
-        antigravity: [
-          {
-            slug: "Gemini 3.5 Flash",
-            name: "Gemini 3.5 Flash",
-            supportedReasoningEfforts: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-            ],
-          },
-        ],
-        grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
-        droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
-        opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
-        pi: [{ slug: "test-pi", name: "Test Pi" }],
-      };
-      return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
-    },
+    listModels: options.listModels ?? listDefaultTestModels,
   } as unknown as (typeof ProviderDiscoveryService)["Service"]);
 
   const providerKinds: ReadonlyArray<ProviderKind> = [
@@ -1252,12 +1334,323 @@ function toolErrorText(result: Record<string, unknown> | undefined): string {
   return content[0]?.text ?? "";
 }
 
+function makeClaudeGatewayRuntime(models: ModelInfo[]) {
+  const queries: Array<{
+    options: ClaudeQueryOptions;
+    modelChanges: Array<string | undefined>;
+    settingsChanges: Array<Record<string, unknown>>;
+  }> = [];
+  const layer = makeClaudeAdapterLive({
+    createQuery: ({ options }) => {
+      const captured = {
+        options,
+        modelChanges: [] as Array<string | undefined>,
+        settingsChanges: [] as Array<Record<string, unknown>>,
+      };
+      queries.push(captured);
+      const closed = Promise.withResolvers<void>();
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            await closed.promise;
+            return { done: true as const, value: undefined };
+          },
+        }),
+        close: () => closed.resolve(),
+        interrupt: async () => {},
+        stopTask: async () => {},
+        backgroundTasks: async () => false,
+        setModel: async (model) => {
+          captured.modelChanges.push(model);
+        },
+        setPermissionMode: async () => {},
+        setMaxThinkingTokens: async () => {},
+        applyFlagSettings: async (settings) => {
+          captured.settingsChanges.push(settings);
+        },
+        getContextUsage: async () => {
+          throw new Error("No live context usage in this test");
+        },
+        supportedCommands: async () => [],
+        supportedModels: async () => models,
+        supportedAgents: async () => [],
+      };
+    },
+  }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-gateway-test", "/tmp")),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return {
+    queries,
+    layer: ProviderDiscoveryServiceLive.pipe(
+      Layer.provideMerge(
+        Layer.effect(
+          ProviderAdapterRegistry,
+          Effect.gen(function* () {
+            const adapter = yield* ClaudeAdapter;
+            return {
+              getByProvider: () => Effect.succeed(adapter),
+              listProviders: () => Effect.succeed(["claudeAgent"] as const),
+            };
+          }),
+        ),
+      ),
+      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provideMerge(layer),
+    ),
+  };
+}
+
 describe("AgentGateway", () => {
   const baseThreads = [
     makeThreadShell("thread-parent"),
     makeThreadShell("thread-child", { parentThreadId: ThreadId.makeUnsafe("thread-parent") }),
     makeThreadShell("thread-archived", { archivedAt: NOW }),
   ];
+
+  for (const model of [
+    { value: "sonnet" },
+    { value: "fable" },
+    { value: "claude-sonnet-5" },
+    { value: "claude-fable-5" },
+    { value: "claude-fable-5-1[1m]" },
+    { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5" },
+    { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
+    { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
+    { value: "team-model", resolvedModel: "claude-fable-5-1" },
+  ]) {
+    it.effect(
+      `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
+      () => {
+        const runtime = makeClaudeGatewayRuntime([
+          { ...model, displayName: model.value, description: "SDK-discovered model" },
+        ]);
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const discovery = yield* ProviderDiscoveryService;
+          const threads = yield* ProjectionThreadRepository;
+          const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+            listModels: (input) =>
+              input.provider === "claudeAgent"
+                ? discovery.listModels(input)
+                : Effect.succeed({ models: [], source: "test" }),
+          });
+          yield* Effect.gen(function* () {
+            const harness = yield* makeHarness;
+            const capabilities = toolResultJson(
+              (yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_capabilities",
+                args: {},
+              })).result,
+            );
+            const construction = (
+              capabilities.targetConstruction as Record<
+                string,
+                {
+                  providerOptions: Array<{ key: string }>;
+                  optionsByModel: Record<string, Array<{ key: string; allowedValues: unknown[] }>>;
+                }
+              >
+            ).claudeAgent!;
+            assert.notInclude(
+              construction.providerOptions.map((rule) => rule.key),
+              "autoCompactWindow",
+            );
+            assert.deepEqual(
+              construction.optionsByModel[model.value]?.find(
+                (rule) => rule.key === "autoCompactWindow",
+              )?.allowedValues,
+              ["auto", "200k", "1m"],
+            );
+
+            // A rejected window must fail before creating a thread or starting a turn.
+            const invalid = yield* harness.callTool({
+              token: "token-parent",
+              name: "synara_create_thread",
+              args: {
+                requestId: "invalid-window",
+                prompt: "work",
+                target: {
+                  provider: "claudeAgent",
+                  model: model.value,
+                  options: { autoCompactWindow: "2m" },
+                },
+              },
+            });
+            assert.isTrue(isToolError(invalid.result));
+            assert.lengthOf(harness.dispatched, 0);
+
+            for (const options of [
+              undefined,
+              { autoCompactWindow: "auto" },
+              { autoCompactWindow: "200k" },
+              { autoCompactWindow: "1m" },
+              { contextWindow: "1m" },
+            ]) {
+              const parent = makeThreadDetail(baseThreads[0]!);
+              harness.setThreadDetail({
+                ...parent,
+                latestTurn: {
+                  ...parent.latestTurn!,
+                  turnId: TurnId.makeUnsafe(`parent-${JSON.stringify(options)}`),
+                },
+              });
+              const response = yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_create_thread",
+                args: {
+                  requestId: `window-${JSON.stringify(options)}`,
+                  prompt: "work",
+                  target: {
+                    provider: "claudeAgent",
+                    model: model.value,
+                    ...(options ? { options } : {}),
+                  },
+                },
+              });
+              assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+              const creates = harness.dispatched.filter(
+                (command) => command.type === "thread.create",
+              );
+              const turns = harness.dispatched.filter(
+                (command) => command.type === "thread.turn.start",
+              );
+              const create = creates.at(-1)!;
+              const turn = turns.at(-1)!;
+              assert.deepEqual(create.modelSelection.options, options);
+              assert.deepEqual(turn.modelSelection, create.modelSelection);
+              yield* threads.upsert(
+                Schema.decodeUnknownSync(ProjectionThread)({
+                  ...makeThreadDetail(makeThreadShell(create.threadId)),
+                  threadId: create.threadId,
+                  modelSelection: create.modelSelection,
+                  latestTurnId: null,
+                  notes: null,
+                  goal: null,
+                  pendingApprovalCount: 0,
+                  pendingUserInputCount: 0,
+                  hasActionableProposedPlan: 0,
+                }),
+              );
+              const saved = Option.getOrThrow(
+                yield* threads.getById({ threadId: create.threadId }),
+              );
+              assert.deepEqual(saved.modelSelection, create.modelSelection);
+              yield* adapter.startSession({
+                threadId: create.threadId,
+                provider: "claudeAgent",
+                runtimeMode: "full-access",
+                modelSelection: saved.modelSelection,
+              });
+              yield* adapter.sendTurn({
+                threadId: create.threadId,
+                input: turn.message.text,
+                modelSelection: turn.modelSelection,
+              });
+              const query = runtime.queries.at(-1)!;
+              const window = options?.autoCompactWindow ?? options?.contextWindow;
+              const expectedModel =
+                options && model.resolvedModel
+                  ? `${model.resolvedModel}${model.value.endsWith("[1m]") ? "[1m]" : ""}`
+                  : model.value;
+              assert.equal(
+                query.options.model,
+                window === "1m" && !expectedModel.endsWith("[1m]")
+                  ? `${expectedModel}[1m]`
+                  : expectedModel,
+              );
+              const settings = query.options.settings as { autoCompactWindow?: number };
+              assert.equal(
+                settings.autoCompactWindow,
+                window === "1m" ? 1_000_000 : window === "200k" ? 200_000 : undefined,
+              );
+              assert.deepEqual(query.modelChanges, []);
+              assert.deepEqual(query.settingsChanges, []);
+              yield* adapter.stopSession(create.threadId);
+            }
+          }).pipe(Effect.provide(gatewayLayer));
+        }).pipe(
+          Effect.provide(
+            Layer.merge(
+              runtime.layer,
+              ProjectionThreadRepositoryLive.pipe(
+                Layer.provide(SqlitePersistenceMemory),
+                Layer.provide(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  for (const model of [
+    { value: "claude-haiku-4-5" },
+    { value: "claude-opus-4-5" },
+    { value: "unknown-model" },
+    { value: "sonnet", resolvedModel: "claude-haiku-4-5" },
+  ]) {
+    it.effect(
+      `does not advertise or accept unsupported discovered Claude windows: ${model.value}`,
+      () => {
+        const runtime = makeClaudeGatewayRuntime([
+          { ...model, displayName: model.value, description: "SDK-discovered model" },
+        ]);
+        return Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+            listModels: (input) =>
+              input.provider === "claudeAgent"
+                ? discovery.listModels(input)
+                : Effect.succeed({ models: [] }),
+          });
+          yield* Effect.gen(function* () {
+            const harness = yield* makeHarness;
+            const capabilities = toolResultJson(
+              (yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_capabilities",
+                args: {},
+              })).result,
+            );
+            const construction = (
+              capabilities.targetConstruction as Record<
+                string,
+                {
+                  optionsByModel: Record<string, Array<{ key: string }>>;
+                }
+              >
+            ).claudeAgent!;
+            assert.property(construction.optionsByModel, model.value);
+            assert.notInclude(
+              construction.optionsByModel[model.value]!.map((rule) => rule.key),
+              "autoCompactWindow",
+            );
+            for (const key of ["autoCompactWindow", "contextWindow"]) {
+              const response = yield* harness.callTool({
+                token: "token-parent",
+                name: "synara_create_thread",
+                args: {
+                  requestId: key,
+                  prompt: "work",
+                  target: {
+                    provider: "claudeAgent",
+                    model: model.value,
+                    options: { [key]: "1m" },
+                  },
+                },
+              });
+              assert.isTrue(isToolError(response.result));
+              assert.include(toolErrorText(response.result), "model_option_unavailable");
+            }
+            assert.lengthOf(harness.dispatched, 0);
+            assert.lengthOf(harness.worktreeCreates, 0);
+          }).pipe(Effect.provide(gatewayLayer));
+        }).pipe(Effect.provide(runtime.layer));
+      },
+    );
+  }
 
   it.effect("rejects requests without a valid bearer token", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
@@ -1561,23 +1954,33 @@ describe("AgentGateway", () => {
       assert.deepEqual(setThreadPullRequest?.inputSchema.required, ["reference"]);
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
-      assert.include(createAutomation?.description ?? "", "self-contained brief");
+      assert.include(createAutomation?.description ?? "", "self-contained future-run brief");
       const createAutomationProperties = createAutomation?.inputSchema.properties as
         | Record<string, { description?: string }>
         | undefined;
       assert.include(
         createAutomationProperties?.name?.description ?? "",
-        "3–8 word outcome-oriented",
+        "specific 3–8 word outcome label",
       );
       assert.include(
         createAutomationProperties?.prompt?.description ?? "",
-        "no assumed chat context",
+        "Assume no chat context",
       );
       assert.include(
         createAutomationProperties?.prompt?.description ?? "",
-        "notifying the user versus staying silent",
+        "notify-versus-silent criteria",
       );
       assert.property(createAutomationProperties, "stopAfterConsecutiveFailures");
+      assert.property(createAutomationProperties, "target");
+      assert.property(createAutomationProperties, "enabled");
+      const createAutomationTarget = createAutomationProperties?.target as
+        | { type?: string; required?: ReadonlyArray<string>; properties?: Record<string, unknown> }
+        | undefined;
+      assert.equal(createAutomationTarget?.type, "object");
+      assert.deepEqual(createAutomationTarget?.required, ["provider", "model"]);
+      assert.property(createAutomationTarget?.properties, "provider");
+      assert.property(createAutomationTarget?.properties, "model");
+      assert.property(createAutomationTarget?.properties, "options");
       const updateAutomationMemory = tools.find(
         (tool) => tool.name === "synara_update_automation_memory",
       );
@@ -1605,6 +2008,7 @@ describe("AgentGateway", () => {
         createAutomationProperties?.prompt?.description,
       );
       assert.property(updateAutomationProperties, "stopAfterConsecutiveFailures");
+      assert.property(updateAutomationProperties, "target");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4354,10 +4758,17 @@ describe("AgentGateway", () => {
       assert.deepEqual(created.schedule, { type: "interval", everySeconds: 300 });
       assert.equal(created.maxIterations, 50);
       assert.equal(created.stopAfterConsecutiveFailures, 3);
+      // Omitting target keeps the legacy behavior: the heartbeat inherits the
+      // continued thread's exact provider session.
+      assert.deepEqual(created.modelSelection, { provider: "codex", model: "gpt-5.5" });
+      assert.isTrue(created.enabled);
       // Local-checkout targets must carry the matching environment + risk
       // acknowledgement so AutomationService policy checks stay enforced.
       assert.equal(created.worktreeMode, "local");
       assert.deepEqual(created.acknowledgedRisks, ["local-checkout"]);
+      const payload = toolResultJson(response.result);
+      assert.isTrue(payload.enabled as boolean);
+      assert.deepEqual(payload.modelSelection, { provider: "codex", model: "gpt-5.5" });
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4815,6 +5226,307 @@ describe("AgentGateway", () => {
         completionPolicy: { type: "none" },
         acknowledgedRisks: ["local-checkout"],
       });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("persists exact standalone automation targets with provider options", () => {
+    const discoveryCalls: Array<{ provider: string; cwd?: string | undefined }> = [];
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      listModels: (input) => {
+        discoveryCalls.push(input);
+        return listDefaultTestModels(input);
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const targets = [
+        { provider: "codex", model: "gpt-5.6-sol", options: { reasoningEffort: "high" } },
+        { provider: "opencode", model: "deepseek/deepseek-flash", options: { variant: "high" } },
+        { provider: "antigravity", model: "Gemini 3.8 Flash", options: { reasoningEffort: "low" } },
+        // The discovered alias resolves to the concrete model before persistence.
+        { provider: "claudeAgent", model: "sonnet", options: { autoCompactWindow: "200k" } },
+      ] as const;
+
+      for (const [index, target] of targets.entries()) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_create_automation",
+          args: {
+            name: `Exact target ${index}`,
+            prompt: "Run the scheduled work on this exact target.",
+            mode: index % 2 === 0 ? "standalone" : "dedicated",
+            schedule: { type: "interval", everySeconds: 300 },
+            target,
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const expectedModel = target.provider === "claudeAgent" ? "claude-sonnet-5" : target.model;
+        const expectedSelection = {
+          provider: target.provider,
+          model: expectedModel,
+          options: target.options,
+        } as ModelSelection;
+        assert.deepEqual(harness.automationCreates[index]?.modelSelection, expectedSelection);
+        const payload = toolResultJson(response.result);
+        assert.deepEqual(payload.modelSelection, harness.automationCreates[index]?.modelSelection);
+        assert.isTrue(payload.enabled as boolean);
+      }
+      // Resolution ran against the automation project's workspace root, like threads.
+      assert.deepEqual([...new Set(discoveryCalls.map((call) => call.cwd))], ["/tmp/demo"]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("persists updated standalone and dedicated targets and preserves omitted ones", () => {
+    const standalone = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      targetThreadId: null,
+    });
+    const dedicated = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-dedicated"),
+      mode: "dedicated",
+      targetThreadId: null,
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone, dedicated]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const target: ModelSelection = {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "medium" },
+      };
+
+      const targetedStandalone = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: { ...makeFullAutomationUpdate(standalone), target },
+      });
+      assert.isFalse(
+        isToolError(targetedStandalone.result),
+        toolErrorText(targetedStandalone.result),
+      );
+      assert.deepEqual(harness.automationUpdates[0]?.modelSelection, target);
+
+      const targetedDedicated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          ...makeFullAutomationUpdate(dedicated),
+          target: { ...target, options: { reasoningEffort: "low" } },
+        },
+      });
+      assert.isFalse(
+        isToolError(targetedDedicated.result),
+        toolErrorText(targetedDedicated.result),
+      );
+      assert.deepEqual(harness.automationUpdates[1]?.modelSelection, {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "low" },
+      } as ModelSelection);
+
+      const preserved = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: makeFullAutomationUpdate(standalone),
+      });
+      assert.isFalse(isToolError(preserved.result), toolErrorText(preserved.result));
+      assert.notProperty(harness.automationUpdates[2] as Record<string, unknown>, "modelSelection");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects invalid automation targets before create or update", () => {
+    const standalone = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      targetThreadId: null,
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone], {
+      providerStatuses: [
+        {
+          provider: "claudeAgent",
+          status: "error",
+          available: false,
+          authStatus: "unauthenticated",
+          checkedAt: NOW,
+          message: "Claude is not authenticated.",
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const create = (target: Record<string, unknown>) =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_create_automation",
+          args: {
+            name: "Rejected target",
+            prompt: "This must not be created.",
+            mode: "standalone",
+            schedule: { type: "interval", everySeconds: 300 },
+            target,
+          },
+        });
+
+      const unavailableModel = yield* create({ provider: "codex", model: "gpt-5.6-sol-low" });
+      assert.equal(
+        (toolResultJson(unavailableModel.result).error as { code: string }).code,
+        "model_unavailable",
+      );
+      const unavailableProvider = yield* create({
+        provider: "claudeAgent",
+        model: "claude-sonnet-5",
+      });
+      assert.equal(
+        (toolResultJson(unavailableProvider.result).error as { code: string }).code,
+        "provider_unavailable",
+      );
+      const invalidOption = yield* create({
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "ultra" },
+      });
+      assert.equal(
+        (toolResultJson(invalidOption.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      // Unknown option keys must reach the resolver instead of being silently stripped.
+      const inventedOption = yield* create({
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { inventedOption: "invented-value" },
+      });
+      assert.equal(
+        (toolResultJson(inventedOption.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      assert.deepEqual(harness.automationCreates, []);
+
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          automationId: standalone.id,
+          name: standalone.name,
+          prompt: standalone.prompt,
+          schedule: standalone.schedule,
+          enabled: true,
+          maxIterations: standalone.maxIterations,
+          stopAfterConsecutiveFailures: standalone.stopAfterConsecutiveFailures,
+          notificationPolicy: "all",
+          completionPolicy: { type: "none" },
+          target: {
+            provider: "antigravity",
+            model: "Gemini 3.8 Flash",
+            options: { reasoningEffort: "ultra" },
+          },
+        },
+      });
+      assert.equal(
+        (toolResultJson(updated.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      assert.deepEqual(harness.automationUpdates, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects explicit targets on heartbeat automations", () => {
+    const definition = makeAutomationDefinition();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const created = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Switch session",
+          prompt: "This heartbeat cannot switch its session.",
+          target: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        },
+      });
+      assert.isTrue(isToolError(created.result));
+      assert.include(toolErrorText(created.result), "heartbeat");
+      assert.deepEqual(harness.automationCreates, []);
+
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          automationId: definition.id,
+          name: definition.name,
+          prompt: definition.prompt,
+          schedule: definition.schedule,
+          enabled: true,
+          maxIterations: definition.maxIterations,
+          stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
+          notificationPolicy: "all",
+          completionPolicy: { type: "none" },
+          target: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        },
+      });
+      assert.isTrue(isToolError(updated.result));
+      assert.include(toolErrorText(updated.result), "heartbeat");
+      assert.deepEqual(harness.automationUpdates, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("stages explicitly disabled automations without proposal state", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const disabled = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Staged review",
+          prompt: "Review this before enabling it.",
+          mode: "standalone",
+          schedule: { type: "interval", everySeconds: 300 },
+          enabled: false,
+        },
+      });
+      assert.isFalse(isToolError(disabled.result), toolErrorText(disabled.result));
+      const created = harness.automationCreates[0]!;
+      assert.isFalse(created.enabled ?? true);
+      assert.isNull(created.proposalState ?? null);
+      const payload = toolResultJson(disabled.result);
+      assert.isFalse(payload.enabled as boolean);
+      assert.isNull(payload.proposalState);
+      // A plain disabled definition is not a proposal, so no card is surfaced.
+      assert.equal(harness.dispatched.length, 0);
+
+      const conflicting = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: { name: "Conflicting", prompt: "x", suggested: true, enabled: true },
+      });
+      assert.isTrue(isToolError(conflicting.result));
+      assert.include(toolErrorText(conflicting.result), "suggested");
+      assert.equal(harness.automationCreates.length, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lists the stored model selection for each automation", () => {
+    const definition = makeAutomationDefinition({
+      modelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.8 Flash",
+        options: { reasoningEffort: "low" },
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_list_automations",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const automations = toolResultJson(response.result).automations as Array<
+        Record<string, unknown>
+      >;
+      assert.deepEqual(automations[0]?.modelSelection, definition.modelSelection);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

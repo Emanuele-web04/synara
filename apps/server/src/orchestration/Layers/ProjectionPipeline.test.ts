@@ -1,3 +1,5 @@
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -11,7 +13,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -39,6 +41,12 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
 import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
+
+const readProjectedMessage = (threadId: ThreadId, messageId: MessageId) =>
+  Effect.gen(function* () {
+    const repository = yield* ProjectionThreadMessageRepository;
+    return Option.getOrThrow(yield* repository.getByThreadAndMessageId({ threadId, messageId }));
+  }).pipe(Effect.provide(ProjectionThreadMessageRepositoryLive));
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -81,6 +89,32 @@ const makeAppendAndProject =
     eventStore
       .append(event)
       .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+// Scenario event appender: generates the event envelope (ids, causation,
+// metadata) so tests only spell the meaningful fields. `prefix` keeps ids
+// unique across the shared per-file test database.
+const makeScenarioAppender = (
+  appendAndProject: ReturnType<typeof makeAppendAndProject>,
+  prefix: string,
+) => {
+  let scenarioSequence = 0;
+  return (
+    event: DistributiveOmit<
+      Parameters<typeof appendAndProject>[0],
+      "eventId" | "commandId" | "correlationId" | "causationEventId" | "metadata"
+    >,
+  ) =>
+    appendAndProject({
+      ...event,
+      eventId: EventId.makeUnsafe(`evt-${prefix}-${++scenarioSequence}`),
+      commandId: CommandId.makeUnsafe(`cmd-${prefix}-${scenarioSequence}`),
+      correlationId: CommandId.makeUnsafe(`cmd-${prefix}-${scenarioSequence}`),
+      causationEventId: null,
+      metadata: {},
+    });
+};
 
 const exists = (filePath: string) =>
   Effect.gen(function* () {
@@ -637,6 +671,244 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(yield* readTerminalRows(), liveRows);
     }),
   );
+
+  it.effect("keeps thread updatedAt at turn completion across projection rebuilds", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const threadId = ThreadId.makeUnsafe("thread-completion-updated-at");
+      const turnId = TurnId.makeUnsafe("turn-completion-updated-at");
+      const projectId = ProjectId.makeUnsafe("project-completion-updated");
+      const modelSelection = { provider: "codex", model: "gpt-5.6-sol" } as const;
+      const createdAt = "2026-09-01T00:00:00.000Z";
+      const requestedAt = "2026-09-01T00:00:01.000Z";
+      const startedAt = "2026-09-01T00:00:02.000Z";
+      const completedAt = "2026-09-01T00:00:03.000Z";
+
+      const appendScenarioEvent = makeScenarioAppender(appendAndProject, "completion-updated");
+      const session = (
+        status: "running" | "ready",
+        activeTurnId: TurnId | null,
+        updatedAt: string,
+      ) => ({
+        threadId,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access" as const,
+        activeTurnId,
+        lastError: null,
+        updatedAt,
+      });
+
+      yield* appendScenarioEvent({
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        payload: {
+          projectId,
+          title: "Completion updated project",
+          workspaceRoot: "/tmp/project-completion-updated",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        payload: {
+          threadId,
+          projectId,
+          title: "Completion updated thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.turn-start-requested",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-completion-updated"),
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          createdAt: requestedAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        payload: { threadId, session: session("running", turnId, startedAt) },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: completedAt,
+        payload: { threadId, session: session("ready", null, completedAt) },
+      });
+
+      const readThreadUpdatedAt = sql<{ readonly updatedAt: string }>`
+        SELECT updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+
+      // Projection repair resets projector cursors and replays from the journal;
+      // the rebuild must not regress the thread row back to the turn start.
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threads}
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+    }),
+  );
+
+  it.effect("keeps thread updatedAt monotonic across stale session events and replay", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const appendScenarioEvent = makeScenarioAppender(appendAndProject, "stale-session");
+      const threadId = ThreadId.makeUnsafe("thread-stale-session-updated-at");
+      const turnId = TurnId.makeUnsafe("turn-stale-session-updated-at");
+      const projectId = ProjectId.makeUnsafe("project-stale-session-updated");
+      const modelSelection = { provider: "codex", model: "gpt-5.6-sol" } as const;
+      const createdAt = "2026-09-01T00:00:00.000Z";
+      const requestedAt = "2026-09-01T00:00:01.000Z";
+      const startedAt = "2026-09-01T00:00:02.000Z";
+      const completedAt = "2026-09-01T00:00:03.000Z";
+
+      const session = (
+        status: "running" | "ready",
+        activeTurnId: TurnId | null,
+        updatedAt: string,
+      ) => ({
+        threadId,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access" as const,
+        activeTurnId,
+        lastError: null,
+        updatedAt,
+      });
+
+      yield* appendScenarioEvent({
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        payload: {
+          projectId,
+          title: "Stale session project",
+          workspaceRoot: "/tmp/project-stale-session",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        payload: {
+          threadId,
+          projectId,
+          title: "Stale session thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.turn-start-requested",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-stale-session"),
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          createdAt: requestedAt,
+        },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        payload: { threadId, session: session("running", turnId, startedAt) },
+      });
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: completedAt,
+        payload: { threadId, session: session("ready", null, completedAt) },
+      });
+      // A late-arriving session event whose sequence follows completion but
+      // whose occurredAt precedes it (retry, import, reconciliation).
+      yield* appendScenarioEvent({
+        type: "thread.session-set",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        payload: { threadId, session: session("running", turnId, startedAt) },
+      });
+
+      const readThreadUpdatedAt = sql<{ readonly updatedAt: string }>`
+        SELECT updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const readTurn = sql<{ readonly state: string; readonly completedAt: string | null }>`
+        SELECT state, completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+
+      // Projection repair resets projector cursors and replays from the journal;
+      // the stale event must not regress the thread row during the rebuild.
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threads}
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      assert.equal((yield* readThreadUpdatedAt)[0]!.updatedAt, completedAt);
+      assert.deepEqual(yield* readTurn, [{ state: "completed", completedAt }]);
+    }),
+  );
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-identity-scope-")))(
@@ -731,7 +1003,15 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-ide
           FROM projection_thread_messages
           WHERE message_id = ${messageId}
           ORDER BY thread_id ASC
-        `;
+        `.pipe(
+            Effect.flatMap((rows) =>
+              Effect.forEach(rows, (row) =>
+                readProjectedMessage(ThreadId.makeUnsafe(row.threadId), messageId).pipe(
+                  Effect.map((message) => ({ ...row, text: message.text })),
+                ),
+              ),
+            ),
+          );
         const expectedRows = [
           {
             threadId: firstThreadId,
@@ -3103,7 +3383,7 @@ it.layer(
       `;
       const streamed = streamedRows[0];
       assert.lengthOf(streamedRows, 1);
-      assert.equal(streamed?.text, deltas.join(""));
+      assert.equal((yield* readProjectedMessage(threadId, messageId)).text, deltas.join(""));
       assert.equal(streamed?.turnId, turnId);
       assert.equal(streamed?.dispatchOrigin, "agent");
       assert.isTrue(Boolean(streamed?.isStreaming));
@@ -3283,7 +3563,7 @@ it.layer(
         WHERE thread_id = ${threadId} AND message_id = ${messageId}
       `;
       assert.lengthOf(rows, 1);
-      assert.equal(rows[0]?.text, "first second third");
+      assert.equal((yield* readProjectedMessage(threadId, messageId)).text, "first second third");
     }),
   );
 });
@@ -3903,7 +4183,14 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const messageRows = yield* sql<{ readonly text: string }>`
         SELECT text FROM projection_thread_messages WHERE message_id = 'message-a'
       `;
-      assert.deepEqual(messageRows, [{ text: "hello world" }]);
+      assert.lengthOf(messageRows, 1);
+      assert.equal(
+        (yield* readProjectedMessage(
+          ThreadId.makeUnsafe("thread-a"),
+          MessageId.makeUnsafe("message-a"),
+        )).text,
+        "hello world",
+      );
 
       const stateRows = yield* sql<{
         readonly projector: string;
@@ -5396,3 +5683,94 @@ it.layer(
     }),
   );
 });
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-deferred-"))(
+  "OrchestrationProjectionPipeline deferred cursor",
+  (it) => {
+    it.effect(
+      "settles the deferred cursor inside the hot transaction only when it is caught up",
+      () =>
+        Effect.gen(function* () {
+          const projectionPipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const now = new Date().toISOString();
+          const threadId = ThreadId.makeUnsafe("thread-deferred-settle");
+          const cursorOf = (projector: string) =>
+            Effect.map(
+              sql<{ readonly sequence: number }>`
+            SELECT last_applied_sequence AS sequence FROM projection_state WHERE projector = ${projector}
+          `,
+              (rows) => rows[0]?.sequence ?? null,
+            );
+          const streamedDelta = (index: number, text: string) =>
+            eventStore.append({
+              type: "thread.message-sent",
+              eventId: EventId.makeUnsafe(`evt-deferred-settle-${index}`),
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: now,
+              commandId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              causationEventId: null,
+              correlationId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              metadata: {},
+              payload: {
+                threadId,
+                messageId: MessageId.makeUnsafe("message-deferred-settle"),
+                role: "assistant",
+                text,
+                turnId: null,
+                streaming: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            });
+
+          yield* projectionPipeline.bootstrap;
+          // A full pass brings both phase cursors to the same sequence.
+          const first = yield* streamedDelta(1, "one ");
+          yield* projectionPipeline.projectEvent(first);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), first.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+
+          // Caught up: a streamed delta has no deferred projector, so the hot
+          // transaction moves the deferred cursor itself and reports it settled.
+          const second = yield* streamedDelta(2, "two ");
+          const settled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(second),
+          );
+          assert.isTrue(settled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), second.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            second.sequence,
+          );
+
+          // Lagging (a failed or in-flight deferred catch-up): the hot transaction
+          // must leave the deferred cursor alone so the catch-up still replays.
+          yield* sql`
+        UPDATE projection_state SET last_applied_sequence = ${first.sequence}
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+      `;
+          const third = yield* streamedDelta(3, "three");
+          const notSettled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(third),
+          );
+          assert.isFalse(notSettled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), third.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+          yield* projectionPipeline.projectDeferredEvent(third);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            third.sequence,
+          );
+        }),
+    );
+  },
+);

@@ -11,7 +11,6 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -80,6 +79,7 @@ describe("store event reducer", () => {
         text: "Use @linear",
         attachments: [],
         mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        startsNewTurn: true,
         turnId: null,
         streaming: false,
         source: "native",
@@ -91,6 +91,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
+    expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
   });
 
   it("updates thread error and marks the running latest turn failed from session-set events", () => {
@@ -830,84 +831,6 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
   });
 
-  it("applies live thread marker operation events without replacing the whole list", () => {
-    const initialState = makeState(makeThread());
-    const markerId = ThreadMarkerId.makeUnsafe("marker-op-1");
-    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-op-2");
-    const messageId = MessageId.makeUnsafe("assistant-marker-op");
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: markerId,
-          messageId,
-          startOffset: 6,
-          endOffset: 20,
-          selectedText: "important text",
-          style: "highlight",
-          color: "yellow",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:00.000Z",
-          updatedAt: "2026-02-27T00:03:00.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:00.000Z",
-      }),
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: secondMarkerId,
-          messageId,
-          startOffset: 30,
-          endOffset: 39,
-          selectedText: "underline",
-          style: "underline",
-          color: "blue",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:05.000Z",
-          updatedAt: "2026-02-27T00:03:05.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:05.000Z",
-      }),
-      makeDomainEvent("thread.marker-done-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        done: true,
-        updatedAt: "2026-02-27T00:03:10.000Z",
-      }),
-      makeDomainEvent("thread.marker-label-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        label: "Follow up",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      }),
-      makeDomainEvent("thread.marker-removed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId: secondMarkerId,
-        updatedAt: "2026-02-27T00:03:20.000Z",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.threadMarkers).toEqual([
-      {
-        id: markerId,
-        messageId,
-        startOffset: 6,
-        endOffset: 20,
-        selectedText: "important text",
-        style: "highlight",
-        color: "yellow",
-        label: "Follow up",
-        done: true,
-        createdAt: "2026-02-27T00:03:00.000Z",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      },
-    ]);
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
-  });
-
   it("updates turn diffs and latest turn immediately from live events", () => {
     const initialState = makeState(
       makeThread({
@@ -1518,14 +1441,14 @@ describe("store event reducer", () => {
     expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
   });
 
-  it("replaces provider-local activity sequences with durable orchestration sequences", () => {
+  it("preserves canonical activity sequences in sequential and batched live updates", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const events = [
       makeDomainEvent(
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-before-restart", sequence: 99 }),
+          activity: makeActivity({ id: "activity-first", sequence: 99 }),
         },
         { sequence: 40 },
       ),
@@ -1533,7 +1456,7 @@ describe("store event reducer", () => {
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-after-restart", sequence: 0 }),
+          activity: makeActivity({ id: "activity-second", sequence: 100 }),
         },
         { sequence: 41 },
       ),
@@ -1547,10 +1470,10 @@ describe("store event reducer", () => {
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
     expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
     expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
   });
 

@@ -16,8 +16,16 @@ import * as AcpErrors from "./AcpErrors.ts";
 
 import { ProviderAdapterRequestError, type ProviderAdapterError } from "../Errors.ts";
 
+// Synara-internal ACP tool kind for provider-native subagent runs. ACP's ToolKind has
+// no subagent variant (Cursor sends `kind: "other"` + `rawInput._toolName: "task"`), so
+// the runtime model tags detected subagent calls with this kind to reach the shared
+// collab_agent_tool_call presentation (agent icon, prompt preview, subagent live meta).
+export const ACP_SUBAGENT_TOOL_KIND = "agent";
+
 export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
+    case ACP_SUBAGENT_TOOL_KIND:
+      return "collab_agent_tool_call";
     case "execute":
       return "command_execution";
     case "edit":
@@ -75,18 +83,6 @@ export function mapAcpToAdapterError(
     detail: error.message,
     cause: error,
   });
-}
-
-export function acpPermissionOutcome(decision: ProviderApprovalDecision): string {
-  switch (decision) {
-    case "acceptForSession":
-      return "allow-always";
-    case "accept":
-      return "allow-once";
-    case "decline":
-    default:
-      return "reject-once";
-  }
 }
 
 type AcpPermissionOptionLike = {

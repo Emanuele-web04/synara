@@ -32,13 +32,21 @@ do {
         let parentProcessMonitor = ParentProcessMonitor()
         parentProcessMonitor.start()
 
+        let requestListener = ExternalTriggerListener(
+            emitter: emitter,
+            emitsReady: externalTrigger
+        ) {
+            coordinator.handleGesture()
+        } onListWindows: { requestId in
+            coordinator.handleListWindows(requestId: requestId)
+        } onCaptureWindow: { requestId, windowID in
+            coordinator.handleCaptureWindow(windowID: windowID, requestId: requestId)
+        }
+        requestListener.start()
+
         let gestureSource: AnyObject
         if externalTrigger {
-            let listener = ExternalTriggerListener(emitter: emitter) {
-                coordinator.handleGesture()
-            }
-            listener.start()
-            gestureSource = listener
+            gestureSource = requestListener
         } else {
             let monitor = OptionChordMonitor(emitter: emitter) {
                 coordinator.handleGesture()
@@ -47,7 +55,7 @@ do {
             gestureSource = monitor
         }
 
-        withExtendedLifetime((coordinator, gestureSource, parentProcessMonitor)) {
+        withExtendedLifetime((coordinator, gestureSource, requestListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
     }

@@ -39,8 +39,20 @@ function normalizePathSeparators(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-function isNormalizedWindowsAbsolutePath(value: string): boolean {
+// For paths whose separators have already been normalized to forward slashes.
+export function isNormalizedWindowsAbsolutePath(value: string): boolean {
   return isWindowsDrivePath(value) || value.startsWith("//");
+}
+
+export function localPathsEqual(left: string, right: string): boolean {
+  const normalizedLeft = normalizePathSeparators(left.trim());
+  const normalizedRight = normalizePathSeparators(right.trim());
+  const leftWithoutTrailing = normalizedLeft.replace(/\/+$/, "");
+  const rightWithoutTrailing = normalizedRight.replace(/\/+$/, "");
+  return isNormalizedWindowsAbsolutePath(normalizedLeft) &&
+    isNormalizedWindowsAbsolutePath(normalizedRight)
+    ? leftWithoutTrailing.toLowerCase() === rightWithoutTrailing.toLowerCase()
+    : leftWithoutTrailing === rightWithoutTrailing;
 }
 
 function windowsRelativePathOf(targetPath: string, workspaceRoot: string): string | null {

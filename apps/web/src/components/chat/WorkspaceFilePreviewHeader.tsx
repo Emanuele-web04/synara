@@ -19,7 +19,15 @@ import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { basenameOfPath } from "~/file-icons";
 import { useCopyFileContentsToClipboard, useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
+import {
+  ChevronRightIcon,
+  CodeIcon,
+  CopyIcon,
+  EllipsisIcon,
+  EyeOpenIcon,
+  PencilIcon,
+  RefreshCwIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -49,10 +57,16 @@ interface WorkspaceFilePreviewHeaderProps {
   contentsForCopy?: string | null;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  onEditFile?: (() => void) | undefined;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
+  saveState?: string | undefined;
+  onSave?: (() => void) | undefined;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
+  /** Re-fetches the current file without discarding a dirty edit buffer. */
+  onReload?: (() => void) | undefined;
+  reloading?: boolean;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -295,7 +309,22 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
         </span>
       ) : null}
 
+      {props.saveState ? (
+        <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+          {props.saveState}
+        </span>
+      ) : null}
       <div className="flex shrink-0 items-center gap-1.5">
+        {props.onSave ? (
+          <button
+            type="button"
+            onClick={props.onSave}
+            disabled={!props.dirty || props.saveState === "Saving..."}
+            className="rounded-md px-2 py-1 text-[11px] disabled:opacity-50"
+          >
+            Save
+          </button>
+        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"
@@ -325,6 +354,32 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onEditFile ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Edit file"
+            title="Edit file"
+            onClick={props.onEditFile}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
+        ) : null}
+
+        {props.onReload ? (
+          <ChatHeaderIconButton
+            label="Reload file from disk"
+            title="Reload file from disk"
+            tone="plain"
+            onClick={props.onReload}
+          >
+            <RefreshCwIcon
+              aria-hidden="true"
+              className={cn("size-3.5", props.reloading && "animate-spin")}
+            />
+          </ChatHeaderIconButton>
         ) : null}
 
         <Menu>

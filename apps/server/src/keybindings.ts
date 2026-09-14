@@ -110,6 +110,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "ctrl+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "alt+arrowdown", command: "diff.change.next", when: "!terminalFocus" },
+  { key: "alt+arrowup", command: "diff.change.previous", when: "!terminalFocus" },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
@@ -193,6 +195,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "meta+ctrl+p", command: "git.commitAndPush", when: "!terminalFocus && isMac" },
   { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
+  { key: "mod+s", command: "editor.file.save", when: "!terminalFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {
@@ -470,10 +473,6 @@ export const ResolvedKeybindingFromConfig = KeybindingRule.pipe(
         }),
     }),
   ),
-);
-
-export const ResolvedKeybindingsFromConfig = Schema.Array(ResolvedKeybindingFromConfig).check(
-  Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
 );
 
 function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {

@@ -95,3 +95,77 @@ test("v0.7.3 durable workflows are documented and connected", () => {
   assert.ok(worktrees.includes("wsl.exe"));
   assert.ok(worktrees.includes("\\\\wsl.localhost"));
 });
+
+test("v0.8.2 documents rename, simulator opt-out, and Claude automatic compaction", () => {
+  const commands = read("content/docs/reference/slash-commands.mdx");
+  const simulator = read("content/docs/features/ios-simulator.mdx");
+  const claude = read("content/docs/providers/claude-code.mdx");
+  assert.ok(commands.includes("/rename <title>"));
+  assert.ok(commands.includes("keeps the newer title"));
+  assert.ok(simulator.includes("Automatically open simulator"));
+  assert.ok(simulator.includes("open the pane manually"));
+  assert.ok(claude.includes("Auto (Claude Code)"));
+  assert.ok(claude.includes("returning to Auto clears that override"));
+});
+
+test("v0.8.3 documents packaged dependency recovery and persistent diff layout", () => {
+  const providers = read("content/docs/troubleshooting/providers.mdx");
+  const organize = read("content/docs/features/organize.mdx");
+  assert.ok(providers.includes("Cannot find package 'zod'"));
+  assert.ok(providers.includes("0.8.3 or later"));
+  assert.ok(providers.includes("does not repair the app bundle"));
+  assert.ok(organize.includes("**Split diff** or **Stacked diff**"));
+  assert.ok(organize.includes("after an app restart"));
+});
+
+test("v0.8.4 editor and browser guides are connected and preserve safety boundaries", () => {
+  const meta = JSON.parse(read("content/docs/features/meta.json"));
+  const overview = extractInternalLinks(read("content/docs/features/overview.mdx"));
+  const home = extractInternalLinks(read("content/docs/index.mdx"));
+  for (const slug of ["workspace-editor", "browser-sessions"]) {
+    const guide = read(`content/docs/features/${slug}.mdx`);
+    const frontmatter = parseFrontmatter(guide);
+    assert.equal(frontmatter.error, undefined);
+    assert.ok(frontmatter.values.title?.trim());
+    assert.ok(frontmatter.values.description?.trim());
+    assert.ok(meta.pages.includes(slug));
+    assert.ok(overview.includes(`/docs/features/${slug}`));
+    assert.ok(home.includes(`/docs/features/${slug}`));
+  }
+  const editor = read("content/docs/features/workspace-editor.mdx");
+  assert.ok(editor.includes("400 ms"));
+  assert.ok(editor.includes("does not repeatedly retry a failed write"));
+  assert.ok(editor.includes("**Partial diff**"));
+  assert.ok(editor.includes("Some files or changes may be missing"));
+  const browser = read("content/docs/features/browser-sessions.mdx");
+  assert.ok(browser.includes("shared across Synara browser tabs and agent workflows"));
+  assert.ok(browser.includes("Agent password filling and password generation are unavailable"));
+  assert.ok(browser.includes("Nothing is copied merely by opening or completing"));
+  assert.ok(browser.includes("clean app shutdown"));
+});
+
+test("v0.8.4 removes saved transcript marker promises and documents recovery", () => {
+  const organize = read("content/docs/features/organize.mdx");
+  const overview = read("content/docs/features/overview.mdx");
+  assert.ok(!organize.includes("## Mark transcript moments"));
+  assert.ok(!overview.includes("**Pins, markers & notes**"));
+  assert.ok(organize.includes("pinned messages and thread notes remain available"));
+  const runtime = read("content/docs/troubleshooting/tasks-and-runtime.mdx");
+  assert.ok(runtime.includes("**Restore answers**"));
+  assert.ok(runtime.includes("Restoring alone does not send anything"));
+  const claude = read("content/docs/providers/claude-code.mdx");
+  assert.ok(claude.includes("Historical recovery is partial"));
+  assert.ok(claude.includes("not evidence that your subscription usage or bill decreased"));
+});
+
+test("v0.8.4 documents selection actions and exact automation target limitations", () => {
+  const composer = read("content/docs/features/composer.mdx");
+  assert.ok(composer.includes("**Add to new Chat**"));
+  assert.ok(composer.includes("**Open in chat**"));
+  assert.ok(composer.includes("**Choose another window**"));
+  const automations = read("content/docs/workflows/automations.mdx");
+  assert.ok(automations.includes("enabled: false"));
+  assert.ok(automations.includes("Heartbeat automations continue an existing task session"));
+  assert.ok(automations.includes("its provider is fixed"));
+  assert.ok(automations.includes("omitting the target preserves the saved selection"));
+});

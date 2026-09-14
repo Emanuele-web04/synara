@@ -4,7 +4,7 @@
 // Exports: Vitest suites for appSettings.ts
 
 import { Schema } from "effect";
-import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -225,6 +225,7 @@ describe("getAppModelOptions", () => {
     const options = getAppModelOptions("codex", ["custom/internal-model"]);
 
     expect(options.map((option) => option.slug)).toEqual([
+      "gpt-6-astra",
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
@@ -407,18 +408,15 @@ describe("environment panel defaults", () => {
   it("starts optional text sections disabled without overriding explicit preferences", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
     expect(defaults).toMatchObject({
-      showEnvironmentMarkers: false,
       showEnvironmentInstructions: false,
       showEnvironmentNotepad: false,
     });
 
     const enabled = AppSettingsSchema.makeUnsafe({
-      showEnvironmentMarkers: true,
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
     expect(enabled).toMatchObject({
-      showEnvironmentMarkers: true,
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
@@ -463,7 +461,7 @@ describe("resolveAppModelSelection", () => {
         },
         "",
       ),
-    ).toBe("gpt-5.5");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 
   it("resolves display names through the shared resolver", () => {
@@ -1058,6 +1056,16 @@ describe("AppSettingsSchema", () => {
     expect(
       decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
     ).toBe(true);
+  });
+
+  it("preserves a disabled simulator auto-open preference across settings persistence", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    expect(defaults.autoOpenDevicePane).toBe(true);
+
+    const settings = applyLocalAppSettingsPatch(defaults, { autoOpenDevicePane: false });
+    expect(decode(Schema.encodeSync(codec)(settings)).autoOpenDevicePane).toBe(false);
   });
 
   it("fills decoding defaults for persisted settings that predate newer keys", () => {

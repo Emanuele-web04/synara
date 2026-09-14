@@ -277,3 +277,81 @@ Key source paths checked:
 **Decision:** Current provider, feature, troubleshooting, and workflow guides now describe
 the 0.8.0 release. Historical Kilo Code references remain only inside older release notes;
 current provider navigation and marketing surfaces point to Devin CLI.
+
+## Synara v0.8.2 — 2026-09-06
+
+Release-range audit: `v0.8.1..6edbd1b1a9a8d947f06a3d7f6b2e0f28654ae9a4` (43 commits). Product behavior was checked against this source head; the release commit adds version metadata and documentation to that source.
+
+- Rename: `apps/web/src/hooks/useComposerSlashCommands.ts`, `apps/web/src/lib/threadRename.ts`, and `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`.
+- Simulator preference and ownership: `apps/web/src/routes/_chat.settings.tsx`, `appSettings.ts`, `components/chat/SingleChatSurface.tsx`, and `hooks/useDeviceEventBridge.ts`.
+- Claude Auto/200k/1M: `packages/contracts/src/model.ts`, `packages/shared/src/model.ts`, and `apps/server/src/provider/Layers/ClaudeAdapter.ts`. Auto is distinct from explicit overrides; commit titles describing earlier default behavior are not the final contract.
+- Model discovery and provider recovery: `apps/server/src/provider/Layers/PiAdapter.ts`, `DevinAdapter.ts`, `providerModelDiscoveryCache.ts`, and `apps/server/src/providerUsage/providers/droid.ts`.
+- File revalidation: `apps/server/src/workspaceFileChanges.ts` and `apps/web/src/components/WorkspaceFilePreview.tsx`; checkpoint initialization: `apps/server/src/orchestration/Layers/CheckpointReactor.ts`.
+- Performance numbers are scoped to checked-in reports under `docs/performance/2026-09-05-concurrent-threads` and `docs/performance/2026-09-06`, not a new full-release comparison.
+- Updated existing indexed guides and their cross-links; no new disconnected guide or navigation entry was needed.
+
+## 0.8.3 hotfix audit
+
+Source range: v0.8.2 through 1ff70e178 (the complete code changes included in v0.8.3). Provider recovery is grounded in apps/server/package.json and commit c34389ae8; packaged validation in apps/server/src/runtimeDependencySmoke.ts and scripts/verify-packaged-desktop-startup.ts. Persistent diff layout is grounded in apps/web/src/components/DiffPanel.tsx and its browser regression test. Existing organize and provider-troubleshooting guides were updated with focused contract coverage; no new navigation entries or external links were needed.
+
+## Synara v0.8.4 feature documentation
+
+Date checked: **2026-09-14**
+
+**Authority:** Local Synara checkout at pre-release product head
+`0eaf3831e`, audited across the complete `v0.8.3..0eaf3831e` range.
+Release preparation additionally fixes Node 24 SQLite embedded-NUL text preservation,
+with completion/restart/resume regression coverage; this does not change the documented
+workflows. The guides were checked against the final release diff and implementation
+behavior at this product head, not claims inferred from PR titles.
+
+**Durable documentation changes:** interactive onboarding; per-project Local/Worktree
+preference; effort slider and empty-side-chat selection; selection-to-current/side/new-chat;
+AppSnap window picker; autosaving editor and conflict/navigation behavior; live diffs,
+compare-with-ref, blame, change shortcuts, partial diff warnings; maximized file panels and
+wiki links; PR context cards and dock status; saved login controls, browser-cookie import,
+shared session scope, Safari permission setup and embedded popups; exact automation targets;
+Claude usage-history limits and expired-question recovery; Pi follow-ups/retries; Cursor
+subagent cards; Codex default/startup retry; simulator screenshot evidence; removal of saved
+transcript markers, highlights and underlines while pins/notes and temporary find remain.
+
+Key source paths checked:
+
+- Editor and diffs: `apps/web/src/lib/workspaceEditorSession.ts`,
+  `hooks/useWorkspaceFileEditorSession.ts`, `components/EditorDirtyRouteGuard.tsx`,
+  `components/WorkspaceFilePreview.tsx`, `components/chat/DockExplorerPane.tsx`,
+  `components/chat/WorkspaceFileEditorChrome.tsx`, `components/DiffPanel.tsx`,
+  `components/DiffPanelCompareRefMenuSection.tsx`, `components/DiffTruncationWarning.tsx`,
+  `lib/remarkWikiLinks.ts`, and `keybindings.ts`.
+- Composer and setup: `apps/web/src/onboarding/logic.ts`, onboarding step components,
+  `components/chat/ComposerExtrasPanel.tsx`, `useAppSnapWindows.ts`,
+  `TranscriptSelectionAction.tsx`, `SelectionNewChatComposer.tsx`,
+  `ComposerEffortSliderCard.tsx`, and `components/chat/RightDock.tsx`.
+- AppSnap native scope: `apps/desktop/native/appsnap/WindowCapture.swift`,
+  `apps/desktop/src/appSnapManager.ts`, and `apps/web/src/appSnapIntake.ts`.
+- Browser session boundary and UI: `apps/desktop/src/browserSessionPolicy.ts`,
+  `browserManager.ts`, `browserAutomation/browserCookieImport.ts`, `browserSessionRestore.ts`,
+  `browserVault.ts`, `vaultKeyProtection.ts`, `browserVaultCapture.ts`,
+  `apps/web/src/components/BrowserCookieImport.tsx`, `BrowserVault.tsx`,
+  `BrowserVaultMaster.tsx`, `SafariAccessOnboarding.tsx`, and `apps/desktop/src/safariAccessIpc.ts`.
+- Provider and recovery: `packages/contracts/src/model.ts`,
+  `apps/server/src/provider/Layers/PiAdapter.ts`, `CursorAdapter.ts`, `ClaudeAdapter.ts`,
+  `apps/web/src/components/chat/ComposerExpiredUserInputNotice.tsx`,
+  `TimelineWorkEntryRow.tsx`, `apps/server/src/persistence/Migrations/101_RemoveTranscriptMarkers.ts`,
+  and `docs/claude-token-accounting.md`.
+- Automation targets and PR context: `apps/server/src/agentGateway/automationTools.ts`,
+  `targetResolver.ts`, `apps/web/src/components/chat/PullRequestContextCard.tsx`,
+  `components/chat/environment/EnvironmentPullRequestSection.tsx`, and PR badge controls.
+- Simulator media: `apps/web/src/components/DevicePanel.tsx`, `LocalImagePreview.tsx`,
+  and `components/chat/GeneratedMarkdownImage.tsx`.
+
+**Audit boundaries:** Native permissions, cookie decryption on each OS, live providers,
+real OAuth sign-in and packaged Windows runtime were not exercised by this documentation
+audit. The guides do not promise agent password filling/generation, isolated per-task
+cookies, automatic Safari migration, crash-proof cookie restoration, or reconstructed
+legacy Claude totals. Existing external links were not changed. Styling-only and internal
+CI/storage performance commits are represented in release notes rather than separate
+operating guides; quantitative claims require the release's benchmark evidence.
+
+**Mirrors:** The release additions are synchronized to both public documentation trees;
+existing site-specific formatting and unrelated documentation differences are retained.

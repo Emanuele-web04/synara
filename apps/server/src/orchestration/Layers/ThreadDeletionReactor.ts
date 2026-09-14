@@ -1,5 +1,6 @@
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
 import { ServerConfig } from "../../config";
@@ -8,7 +9,7 @@ import { GitCore } from "../../git/Services/GitCore";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
-import { TerminalManager } from "../../terminal/Services/Manager";
+import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "../../threadRetention";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery";
@@ -43,27 +44,6 @@ export function isThreadCurrentlyArchived(
 ): boolean {
   return thread?.archivedAt !== null && thread?.archivedAt !== undefined;
 }
-
-export const logCleanupCauseUnlessInterrupted = <R, E>({
-  effect,
-  message,
-  threadId,
-}: {
-  readonly effect: Effect.Effect<void, E, R>;
-  readonly message: string;
-  readonly threadId: ThreadDeletedEvent["payload"]["threadId"];
-}): Effect.Effect<void, E, R> =>
-  effect.pipe(
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) {
-        return Effect.failCause(cause);
-      }
-      return Effect.logDebug(message, {
-        threadId,
-        cause: Cause.pretty(cause),
-      });
-    }),
-  );
 
 export const cleanupSucceededUnlessInterrupted = <R, E>({
   effect,
@@ -102,6 +82,26 @@ export const detachThreadDevice = (threadId: ThreadId) =>
       ),
     ),
   );
+
+export const closeThreadTerminalScopes = (
+  terminalManager: Pick<TerminalManagerShape, "close" | "closeSessionsOpenedAtOrBefore">,
+  threadId: ThreadId,
+  deleteHistory: boolean,
+  openedAtOrBefore?: string,
+) =>
+  Effect.forEach(terminalScopeIdsForThread(threadId), (scopeId) =>
+    cleanupSucceededUnlessInterrupted({
+      effect:
+        openedAtOrBefore === undefined
+          ? terminalManager.close({ threadId: ThreadId.makeUnsafe(scopeId), deleteHistory })
+          : terminalManager.closeSessionsOpenedAtOrBefore({
+              threadId: ThreadId.makeUnsafe(scopeId),
+              openedAtOrBefore,
+            }),
+      message: "thread lifecycle cleanup skipped terminal close",
+      threadId: ThreadId.makeUnsafe(scopeId),
+    }),
+  ).pipe(Effect.map((results) => results.every(Boolean)));
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -178,18 +178,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadDeletedEvent["payload"]["threadId"],
     deleteHistory: boolean,
     openedAtOrBefore?: string,
-  ) =>
-    cleanupSucceededUnlessInterrupted({
-      effect:
-        openedAtOrBefore === undefined
-          ? terminalManager.close({ threadId, deleteHistory })
-          : terminalManager.closeSessionsOpenedAtOrBefore({
-              threadId,
-              openedAtOrBefore,
-            }),
-      message: "thread lifecycle cleanup skipped terminal close",
-      threadId,
-    });
+  ) => closeThreadTerminalScopes(terminalManager, threadId, deleteHistory, openedAtOrBefore);
 
   const waitForThreadPurgeFence = Effect.fn(function* (
     threadId: ThreadDeletedEvent["payload"]["threadId"],

@@ -54,6 +54,8 @@ import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTran
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
+import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
+import { isMacNavigatorPlatform } from "./lib/utils";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
@@ -531,6 +533,7 @@ export function createWsNativeApi(): NativeApi {
         options?.signal
           ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
           : transport.request(WS_METHODS.projectsReadFile, input),
+      onFileChange: (input, callback) => transport.subscribeProjectFileChange(input, callback),
       resolveWorkspaceFileReferences: (input) =>
         transport.request(WS_METHODS.projectsResolveWorkspaceFileReferences, input),
       resolveOutOfRootFileReference: (input) =>
@@ -584,7 +587,9 @@ export function createWsNativeApi(): NativeApi {
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
+      readFileAtRev: (input) => transport.request(WS_METHODS.gitReadFileAtRev, input),
       workingTreeDiffStats: (input) => transport.request(WS_METHODS.gitWorkingTreeDiffStats, input),
+      blameLine: (input) => transport.request(WS_METHODS.gitBlameLine, input),
       summarizeDiff: (input) =>
         transport.request(WS_METHODS.gitSummarizeDiff, input, {
           timeoutMs: null,
@@ -594,6 +599,7 @@ export function createWsNativeApi(): NativeApi {
           timeoutMs: null,
         }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
+      listRecentCommits: (input) => transport.request(WS_METHODS.gitListRecentCommits, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
       // Worktree materialization scales with checkout size; progress events
       // keep the UI honest while the stream runs, so no fixed timeout.
@@ -636,7 +642,9 @@ export function createWsNativeApi(): NativeApi {
         position?: { x: number; y: number },
       ): Promise<T | null> => {
         if (window.desktopBridge) {
-          return window.desktopBridge.showContextMenu(items, position);
+          // Native icons are macOS-only; other platforms keep the plain menu.
+          const desktopItems = isMacNavigatorPlatform() ? await withNativeMenuIcons(items) : items;
+          return window.desktopBridge.showContextMenu(desktopItems, position);
         }
         return showContextMenuFallback(items, position);
       },
@@ -769,6 +777,10 @@ export function createWsNativeApi(): NativeApi {
         });
       },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
+      regenerateThreadTitle: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
+          timeoutMs: null,
+        }),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>
@@ -853,6 +865,9 @@ export function createWsNativeApi(): NativeApi {
       onEvent: deviceEventListeners.subscribe,
     },
     browser: {
+      ...(window.desktopBridge?.browser?.vault
+        ? { vault: window.desktopBridge.browser.vault }
+        : {}),
       open: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.open(input);
@@ -927,6 +942,7 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Browser screenshots require the desktop app.");
       },
+      capturePreview: async (input) => window.desktopBridge?.browser.capturePreview(input) ?? null,
       navigate: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.navigate(input);

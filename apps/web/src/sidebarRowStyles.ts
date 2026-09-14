@@ -22,7 +22,7 @@ export const SIDEBAR_ROW_HOVER_CLASS_NAME =
   "hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)]";
 
 export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
-  "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)] hover:bg-[var(--sidebar-accent-active)] hover:text-[var(--sidebar-accent-foreground)]";
+  "bg-[var(--sidebar-selected)] text-[var(--sidebar-accent-foreground)] hover:bg-[var(--sidebar-selected)] hover:text-[var(--sidebar-accent-foreground)]";
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 

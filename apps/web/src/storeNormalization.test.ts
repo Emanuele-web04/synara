@@ -10,6 +10,7 @@ import {
   dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
+  normalizeThreadFromReadModel,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
@@ -375,4 +376,63 @@ describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
     expect(merged.messages.find((message) => message.id === assistantId)?.text).toBe(localText);
     expect(merged.messages.find((message) => message.id === assistantId)?.streaming).toBe(true);
   });
+});
+
+describe("accounting activity retention", () => {
+  it("keeps 3000 accounting turns within the existing transcript cap", () => {
+    const activities = Array.from({ length: 6000 }, (_, index) =>
+      makeActivity({
+        id: "accounting-" + index,
+        turnId: TurnId.makeUnsafe("turn-" + Math.floor(index / 2)),
+        kind: index % 2 === 0 ? "context-window.updated" : "turn.completed",
+        sequence: index + 1,
+      }),
+    );
+    const normalized = normalizeActivities(activities, undefined);
+    expect(normalized).toHaveLength(2000);
+    const accumulator = createThreadActivityAccumulator(normalized);
+    accumulator.append(
+      makeActivity({ id: "new-tool", turnId: TurnId.makeUnsafe("new-turn"), sequence: 6001 }),
+    );
+    expect(accumulator.result()).toHaveLength(1999);
+  });
+});
+
+it("keeps the source-message signal stable for equivalent snapshots and work-only changes", () => {
+  const incoming = makeReadModelThread({
+    messages: [
+      {
+        id: MessageId.makeUnsafe("signal-message"),
+        source: "native",
+        role: "assistant",
+        text: "Hello",
+        turnId: TurnId.makeUnsafe("signal-turn"),
+        streaming: true,
+        createdAt: "2026-09-13T00:00:00.000Z",
+        updatedAt: "2026-09-13T00:00:00.000Z",
+        textSegments: [
+          {
+            text: "Hello",
+            sequence: 1,
+            startedAt: "2026-09-13T00:00:00.000Z",
+            endedAt: "2026-09-13T00:00:00.000Z",
+          },
+        ],
+      },
+    ],
+  });
+  const initial = normalizeThreadFromReadModel(incoming, undefined);
+  const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial);
+  expect(replay.messages).toBe(initial.messages);
+  const workOnly = normalizeThreadFromReadModel(
+    { ...structuredClone(incoming), activities: [makeActivity({ id: "tool-status" })] },
+    replay,
+  );
+  expect(workOnly.messages).toBe(initial.messages);
+  const textDelta = normalizeThreadFromReadModel(
+    { ...incoming, messages: [{ ...incoming.messages[0]!, text: "Hello world" }] },
+    workOnly,
+  );
+  expect(textDelta.messages).not.toBe(initial.messages);
+  expect(textDelta.messages[0]?.text).toBe("Hello world");
 });

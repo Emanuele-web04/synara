@@ -3,6 +3,7 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -44,10 +45,7 @@ import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
-import {
-  readOpenCodeAuthFileUtf8,
-  resolveOpenCodeCompatibleAuthPaths,
-} from "./openCodeAuthPaths.ts";
+import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -134,7 +132,7 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
 
 export const runOpenCodeSdk = <A>(
   operation: string,
-  fn: () => Promise<A>,
+  fn: (signal: AbortSignal) => Promise<A>,
 ): Effect.Effect<A, OpenCodeRuntimeError> =>
   Effect.tryPromise({
     try: fn,
@@ -305,14 +303,12 @@ function formatOpenCodeServerStartupDetail(input: {
 
 function pooledOpenCodeServerKey(input: {
   readonly binaryPath: string;
-  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly cwd?: string;
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
   readonly poolIsolationKey?: string;
 }): string {
-  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
     binaryPath: input.binaryPath,
     cwd: input.cwd ?? null,
@@ -320,14 +316,6 @@ function pooledOpenCodeServerKey(input: {
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
     poolIsolationKey: input.poolIsolationKey ?? null,
-    cliSpec: {
-      defaultBinaryPath: cliSpec.defaultBinaryPath,
-      displayName: cliSpec.displayName,
-      serverReadyPrefix: cliSpec.serverReadyPrefix,
-      configContentEnvVar: cliSpec.configContentEnvVar,
-      dataDirectoryName: cliSpec.dataDirectoryName,
-      serverAuthUsername: cliSpec.serverAuthUsername,
-    },
   });
 }
 
@@ -463,22 +451,6 @@ function readOpenCodeVariantEffort(
     return trimToNull(variantKey);
   }
   return null;
-}
-
-export function resolveOpenCodeAuthFilePath(
-  pathInfo: Pick<OpenCodePathInfo, "home">,
-  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
-): string {
-  const [preferredPath] = resolveOpenCodeCompatibleAuthPaths({
-    homeDir: pathInfo.home,
-    env: process.env,
-    platform: process.platform,
-    dataDirectoryName: cliSpec.dataDirectoryName,
-  });
-  if (!preferredPath) {
-    throw new Error("OpenCode auth path resolution produced no candidates");
-  }
-  return preferredPath;
 }
 
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
@@ -1199,7 +1171,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
-          const key = pooledOpenCodeServerKey(input);
+          // Collapse ordinary aliases, but let the OS resolve parent traversal: resolving `..`
+          // lexically can cross a symlink differently or hide a missing directory. Keep the same
+          // spelling in both the pool key and spawn options, without adding filesystem work here.
+          const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
+          const pooledInput =
+            input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {
             yield* cancelPooledServerIdleClose(existing);
@@ -1213,7 +1191,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
               const serverScope = yield* Scope.make();
               const startedExit = yield* Effect.exit(
                 restore(
-                  startOpenCodeServerProcess(input).pipe(
+                  startOpenCodeServerProcess(pooledInput).pipe(
                     Effect.provideService(Scope.Scope, serverScope),
                   ),
                 ),
@@ -1228,7 +1206,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 key,
                 server: startedExit.value,
                 scope: serverScope,
-                closeOnRelease: input.poolIsolationKey !== undefined,
+                closeOnRelease: pooledInput.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
                 exitWatchFiber: null,
@@ -1318,7 +1296,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       });
 
     const loadProviders = (client: OpencodeClient) =>
-      runOpenCodeSdk("provider.list", () => client.provider.list()).pipe(
+      runOpenCodeSdk("provider.list", (signal) => client.provider.list(undefined, { signal })).pipe(
         Effect.filterMapOrFail(
           (list) =>
             list.data
@@ -1334,7 +1312,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       );
 
     const loadAgents = (client: OpencodeClient) =>
-      runOpenCodeSdk("app.agents", () => client.app.agents()).pipe(
+      runOpenCodeSdk("app.agents", (signal) => client.app.agents(undefined, { signal })).pipe(
         Effect.map((result) => result.data ?? []),
       );
 
@@ -1350,9 +1328,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       );
 
     const loadConsoleState = (client: OpencodeClient) =>
-      runOpenCodeSdk("experimental.console.get", () => client.experimental.console.get()).pipe(
+      runOpenCodeSdk("experimental.console.get", (signal) =>
+        client.experimental.console.get(undefined, { signal }),
+      ).pipe(
         Effect.map((result) => result.data ?? null),
         // Console metadata is optional and should not block model discovery.
+        Effect.timeoutOption("2 seconds"),
+        Effect.map(Option.getOrElse(() => null)),
         Effect.catch(() => Effect.succeed(null)),
       );
 

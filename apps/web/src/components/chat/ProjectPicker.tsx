@@ -25,11 +25,18 @@ import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { FolderClosed } from "../FolderClosed";
 import { SpaceIcon } from "../SpaceIcon";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
+import {
+  PICKER_PANEL_ACTION_ROW_CLASS_NAME,
+  PICKER_PANEL_GROUP_LABEL_CLASS_NAME,
+  PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
+  PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME,
+  PICKER_PANEL_ROW_ICON_CLASS_NAME,
+  PICKER_PANEL_ROW_SELECTED_CLASS_NAME,
+} from "./pickerPanelStyles";
 import {
   Combobox,
   ComboboxEmpty,
@@ -87,13 +94,6 @@ interface ActiveFolderOption {
  * Module scope on purpose: the caller runs this inside a `try`, and React Compiler cannot lower a
  * conditional expression there — inlining it makes the whole picker skip compilation.
  */
-/** Full-width action row in the picker footer (add project, reset to home). */
-const PICKER_FOOTER_ACTION_CLASS_NAME = cn(
-  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm",
-  ELEVATED_HOVER_SURFACE_CLASS_NAME,
-  "hover:text-[var(--color-text-foreground)]",
-);
-
 function startActiveFolderSelection(
   folder: ActiveFolderOption,
   handlers: {
@@ -541,22 +541,18 @@ export const ProjectPicker = memo(function ProjectPicker({
         index={index}
         value={folder.cwd}
         className={cn(
-          selected &&
-            "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+          PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME,
+          selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME,
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
-          <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-baseline gap-1.5">
-              <span className="min-w-0 truncate">{folder.primaryLabel}</span>
-              {folder.secondaryLabel ? (
-                <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
-                  {folder.secondaryLabel}
-                </span>
-              ) : null}
-            </div>
-          </div>
+          <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+          <span className="min-w-0 truncate">{folder.primaryLabel}</span>
+          {folder.secondaryLabel ? (
+            <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+              {folder.secondaryLabel}
+            </span>
+          ) : null}
         </div>
       </ComboboxItem>
     );
@@ -648,15 +644,19 @@ export const ProjectPicker = memo(function ProjectPicker({
           ) : null}
         </div>
       )}
-      <ComboboxPopup align={align} side={side} className="p-0">
+      {/* Width lives on the popup so the shell always fills it: the surface grows to a wide
+          trigger (`--anchor-width`) and never leaves an empty strip beside the rows. */}
+      <ComboboxPopup align={align} side={side} className="min-w-60 p-0">
         <PickerPanelShell
+          variant="plain"
+          widthClassName="w-full"
           searchInput={
             <ComboboxInput
-              className="rounded-md border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
-              inputClassName="ring-0"
+              inputClassName={PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME}
               placeholder={searchPlaceholder}
               showTrigger={false}
               size="sm"
+              unstyled
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -666,13 +666,13 @@ export const ProjectPicker = memo(function ProjectPicker({
               <button
                 type="button"
                 className={cn(
-                  PICKER_FOOTER_ACTION_CLASS_NAME,
+                  PICKER_PANEL_ACTION_ROW_CLASS_NAME,
                   "disabled:cursor-not-allowed disabled:opacity-60",
                 )}
                 onClick={() => void handleAddNewProject()}
                 disabled={isPicking}
               >
-                <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                <PlusIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
                 <span className="truncate">
                   {isPicking ? loadingAddProjectLabel : addProjectLabel}
                 </span>
@@ -680,10 +680,10 @@ export const ProjectPicker = memo(function ProjectPicker({
               {shouldShowResetToHome ? (
                 <button
                   type="button"
-                  className={PICKER_FOOTER_ACTION_CLASS_NAME}
+                  className={PICKER_PANEL_ACTION_ROW_CLASS_NAME}
                   onClick={handleResetToHome}
                 >
-                  <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                  <XIcon className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
                   <span className="truncate">{resetActionLabel}</span>
                 </button>
               ) : null}
@@ -709,7 +709,12 @@ export const ProjectPicker = memo(function ProjectPicker({
                 <Fragment key={group.key}>
                   {groupIndex > 0 ? <ComboboxSeparator /> : null}
                   <ComboboxGroup>
-                    <ComboboxGroupLabel className="flex items-center gap-1.5">
+                    <ComboboxGroupLabel
+                      className={cn(
+                        PICKER_PANEL_GROUP_LABEL_CLASS_NAME,
+                        "flex items-center gap-1.5",
+                      )}
+                    >
                       <SpaceIcon icon={group.icon} className="size-3 shrink-0" />
                       <span className="min-w-0 truncate">{group.label}</span>
                     </ComboboxGroupLabel>
@@ -725,7 +730,9 @@ export const ProjectPicker = memo(function ProjectPicker({
             ) : null}
             {filteredLocalFolderOptions.length > 0 ? (
               <ComboboxGroup>
-                <ComboboxGroupLabel>{localFoldersGroupLabel}</ComboboxGroupLabel>
+                <ComboboxGroupLabel className={PICKER_PANEL_GROUP_LABEL_CLASS_NAME}>
+                  {localFoldersGroupLabel}
+                </ComboboxGroupLabel>
                 {filteredLocalFolderOptions.map(({ absolutePath, entry }, index) => (
                   <ComboboxItem
                     hideIndicator={absolutePath !== selectedWorkspaceRoot}
@@ -733,12 +740,13 @@ export const ProjectPicker = memo(function ProjectPicker({
                     index={filteredActiveFolderOptions.length + index}
                     value={absolutePath}
                     className={cn(
+                      PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME,
                       absolutePath === selectedWorkspaceRoot &&
-                        "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+                        PICKER_PANEL_ROW_SELECTED_CLASS_NAME,
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
+                      <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
                       <span className="truncate">{entry.name}</span>
                     </div>
                   </ComboboxItem>
