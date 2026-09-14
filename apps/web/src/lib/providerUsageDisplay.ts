@@ -4,8 +4,10 @@
 
 import {
   deriveVisibleRateLimitRows,
+  formatRateLimitDisplayLabel,
   formatRateLimitRemainingPercent,
   formatRateLimitResetCountdown,
+  windowDurationMinsForWindowLabel,
   type ProviderRateLimit,
   type VisibleRateLimitRow,
 } from "~/lib/rateLimits";
@@ -14,6 +16,8 @@ import { deriveUsagePace, type UsagePaceSummary } from "~/lib/usagePace";
 export type ProviderUsageTone = "healthy" | "warning" | "danger";
 
 export interface ProviderUsageDisplayRow extends VisibleRateLimitRow {
+  /** Presentation-only text; `label` stays the raw identity used for ordering and merging. */
+  displayLabel: string;
   remainingLabel: string;
   leftText: string;
   resetText: string | null;
@@ -64,19 +68,9 @@ function paceTone(status: UsagePaceSummary["status"]): ProviderUsageTone {
 }
 
 function windowDurationMinsForRow(row: VisibleRateLimitRow): number | undefined {
-  if (row.windowDurationMins !== undefined) {
-    return row.windowDurationMins;
-  }
-  if (row.label === "5h") {
-    return 300;
-  }
-  if (row.label === "Weekly") {
-    return 10_080;
-  }
-  if (row.label === "Daily") {
-    return 1_440;
-  }
-  return undefined;
+  // A duration reported by the provider always wins; the registry only fills generic
+  // identities such as `5h`/`Weekly` when the source did not carry one.
+  return row.windowDurationMins ?? windowDurationMinsForWindowLabel(row.label);
 }
 
 export function providerUsageToneClassName(tone: ProviderUsageTone): string {
@@ -87,7 +81,7 @@ export function providerUsageProgressTrackProps(
   row: ProviderUsageDisplayRow,
 ): ProviderUsageProgressTrackProps {
   return {
-    label: `${row.label} remaining`,
+    label: `${row.displayLabel} remaining`,
     remainingPercent: row.remainingPercent,
     markerPercent: row.markerPercent,
     fillClassName: providerUsageToneClassName(row.remainingTone),
@@ -120,6 +114,7 @@ export function deriveProviderUsageDisplayRow(row: VisibleRateLimitRow): Provide
 
   return {
     ...row,
+    displayLabel: formatRateLimitDisplayLabel(row.label),
     remainingPercent,
     remainingLabel,
     leftText: `${remainingLabel} left`,
