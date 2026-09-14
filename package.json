@@ -59,6 +59,7 @@
     "dist:desktop:dmg:x64": "node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch x64",
     "dist:desktop:linux": "node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64",
     "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
+    "homebrew:cask": "node scripts/render-homebrew-cask.ts",
     "release:smoke": "node scripts/release-smoke.ts",
     "release:smoke:mac-update": "node scripts/smoke-mac-update-artifact.ts",
     "canary:setup": "node scripts/canary.ts setup",

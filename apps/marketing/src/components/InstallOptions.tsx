@@ -98,6 +98,18 @@ export default function InstallOptions({
         />
       </div>
 
+      <div className="mt-8 w-full max-w-xl rounded-2xl border border-[var(--divide)] bg-[var(--block-elevated)] px-5 py-4 text-left">
+        <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
+          macOS via Homebrew
+        </p>
+        <p className="mt-2 text-[13px] leading-[1.6] text-[var(--text-secondary)]">
+          Installs the same signed GitHub Release disk image as the macOS download above.
+        </p>
+        <pre className="mt-3 overflow-x-auto rounded-xl bg-[var(--page-bg)] px-4 py-3 font-mono text-[13px] text-[var(--text-primary)]">
+          <code>brew install --cask synara</code>
+        </pre>
+      </div>
+
       <p className="mt-8 text-[12px] text-[var(--text-tertiary)]">
         <InstallerCount initialCount={installerCount} />
       </p>
