@@ -13,6 +13,7 @@ import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../com
 import {
   captureComposerPromptHistorySavedDraft,
   type QueuedComposerChatTurn,
+  type QueuedComposerTurn,
 } from "../../composerDraftStore";
 import { useComposerSlashCommands } from "../../hooks/useComposerSlashCommands";
 import { extractChatAutomationInvocation } from "../../lib/automationIntent";
@@ -110,6 +111,8 @@ interface ChatComposerCommandsInput {
     requestedDispatchMode?: "queue" | "steer",
     queuedTurn?: QueuedComposerChatTurn,
   ) => Promise<boolean>;
+  onSteerQueuedComposerTurn: (queuedTurn: QueuedComposerTurn) => Promise<void>;
+  hasComposerContent: boolean;
   settings: AppSettings;
   hasLiveTurn: boolean;
   isLocalFolderBrowserOpen: ReturnType<typeof useComposerDiscovery>["isLocalFolderBrowserOpen"];
@@ -164,6 +167,8 @@ export function useChatComposerCommands({
   toggleInteractionMode,
   composerMenuOpenRef,
   onSend,
+  onSteerQueuedComposerTurn,
+  hasComposerContent,
   settings,
   hasLiveTurn,
   isLocalFolderBrowserOpen,
@@ -566,6 +571,22 @@ export function useChatComposerCommands({
     }
 
     if (key === "Enter" && !event.shiftKey) {
+      const nextQueuedTurn = composerDraft.queuedTurns[0];
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !menuIsActive &&
+        !hasComposerContent &&
+        snapshot.value.trim().length === 0 &&
+        !activePendingProgress &&
+        !isComposerApprovalState &&
+        pendingUserInputs.length === 0 &&
+        nextQueuedTurn
+      ) {
+        // Use the queued row's Steer action, including its failure recovery.
+        if (!event.repeat) void onSteerQueuedComposerTurn(nextQueuedTurn);
+        return true;
+      }
       if (promptHistoryNavigationRef.current !== null) {
         // Sending commits the recalled text as the prompt; drop the saved
         // draft here (not just in the send path) so it cannot linger and

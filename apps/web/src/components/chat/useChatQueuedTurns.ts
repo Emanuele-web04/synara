@@ -2,7 +2,7 @@ import { ThreadId } from "@synara/contracts";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
-import { type QueuedComposerTurn } from "../../composerDraftStore";
+import { useComposerDraftStore, type QueuedComposerTurn } from "../../composerDraftStore";
 import { cloneComposerImageAttachment } from "../../lib/composerSend";
 import {
   armQueuedComposerSteerGate,
@@ -290,7 +290,8 @@ export function useChatQueuedTurns({
 
   const onSteerQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn) => {
-      const previousQueue = queuedComposerTurnsRef.current;
+      const previousQueue =
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns ?? [];
       const queuedIndex = previousQueue.findIndex((entry) => entry.id === queuedTurn.id);
       if (queuedIndex < 0) {
         return;
@@ -306,7 +307,6 @@ export function useChatQueuedTurns({
       setQueuedAutoDispatchTick((tick) => tick + 1);
     },
     [
-      queuedComposerTurnsRef,
       setQueuedAutoDispatchTick,
       dispatchQueuedComposerTurn,
       insertQueuedComposerTurn,
