@@ -133,10 +133,15 @@ function Slider({
           className="relative h-[var(--slider-track-size)] w-full overflow-visible rounded-full bg-[color-mix(in_srgb,var(--color-text-foreground)_14%,transparent)]"
           data-slot="slider-track"
         >
+          {/* At the minimum the fill sits entirely under the thumb, but the thumb and
+              the track share the same left edge, so anti-aliasing leaves a sliver of
+              accent peeking out. Hide the fill there instead of relying on overlap. */}
           <SliderPrimitive.Indicator
             className={cn(
               "rounded-full bg-[var(--color-text-accent)]",
               magnetic && MAGNETIC_MOTION_CLASS,
+              magnetic && "transition-[inset-inline-start,width,opacity]",
+              valuePercent <= 0 && "opacity-0",
             )}
             data-slot="slider-indicator"
           />
@@ -165,13 +170,19 @@ function Slider({
               ? { getAriaValueText: (_formatted: string, next: number) => getAriaValueText(next) }
               : {})}
             className={cn(
-              "size-[var(--slider-thumb-size)] cursor-grab rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.35),0_0_0_1px_rgba(0,0,0,0.06)] outline-none has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/60 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing group-data-pressed/slider:scale-110 group-data-pressed/slider:shadow-[0_2px_6px_rgba(0,0,0,0.4),0_0_0_1px_rgba(0,0,0,0.06)]",
-              magnetic
-                ? "transition-[inset-inline-start,scale,box-shadow] duration-180 ease-[cubic-bezier(0.22,1.1,0.36,1)] motion-reduce:transition-none"
-                : "transition-[scale,box-shadow] duration-100",
+              "size-[var(--slider-thumb-size)] cursor-grab rounded-full outline-none has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/40 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing",
+              magnetic && MAGNETIC_MOTION_CLASS,
             )}
             data-slot="slider-thumb"
-          />
+          >
+            {/* Press feedback scales this inner disc, not the Thumb: Base UI measures the
+                Thumb's bounding box to place it, so scaling it would shift the thumb off
+                the track edge and expose the fill behind it. */}
+            <span
+              aria-hidden="true"
+              className="block size-full rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12),0_0_0_0.5px_rgba(0,0,0,0.05)] transition-[scale,box-shadow] duration-150 ease-out group-data-pressed/slider:scale-105 group-data-pressed/slider:shadow-[0_2px_5px_rgba(0,0,0,0.14),0_0_0_0.5px_rgba(0,0,0,0.05)] motion-reduce:transition-none"
+            />
+          </SliderPrimitive.Thumb>
         </SliderPrimitive.Track>
       </SliderPrimitive.Control>
     </SliderPrimitive.Root>

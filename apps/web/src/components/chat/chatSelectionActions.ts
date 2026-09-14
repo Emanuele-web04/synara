@@ -13,8 +13,11 @@ export interface TranscriptSelectionActionLayout {
   placement: "top" | "bottom";
 }
 
-const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 336;
-export const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 38;
+// Slot the layout reserves for the toolbar. The toolbar itself sizes to its labels and
+// centers inside this slot, so the width only needs to be a close estimate for viewport
+// clamping. Height must match the toolbar exactly (h-7 + 1px border top and bottom).
+export const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 320;
+export const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 30;
 const TRANSCRIPT_SELECTION_ACTION_GAP_PX = 8;
 function getSelectionRect(selection: Selection): DOMRect | null {
   if (selection.rangeCount === 0 || selection.isCollapsed) {
