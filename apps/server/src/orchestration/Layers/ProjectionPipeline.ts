@@ -1337,6 +1337,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: nextState,
+              // Live reconciliation can restore an incorrectly interrupted
+              // turn. Its completion timestamp must be reopened with it.
+              completedAt: nextState === "running" ? null : existingTurn.value.completedAt,
               pendingMessageId:
                 existingTurn.value.pendingMessageId ??
                 (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),

@@ -5333,6 +5333,47 @@ it.layer(
     }),
   );
 
+  it.effect(
+    "reopens an interrupted turn's completion timestamp when live ownership is restored",
+    () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("thread-live-realignment");
+        const turnId = TurnId.makeUnsafe("turn-live-realignment");
+        const append = makeScenarioAppender(
+          makeAppendAndProject(eventStore, projectionPipeline),
+          "live-realignment",
+        );
+        for (const [index, status] of (["running", "interrupted", "running"] as const).entries()) {
+          const updatedAt = `2026-09-11T20:0${index}:00.000Z`;
+          yield* append({
+            type: "thread.session-set",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: updatedAt,
+            payload: {
+              threadId,
+              session: {
+                threadId,
+                status,
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: status === "running" ? turnId : null,
+                lastError: null,
+                updatedAt,
+              },
+            },
+          });
+        }
+        assert.deepEqual(
+          yield* sql`SELECT state, completed_at AS "completedAt", started_at AS "startedAt" FROM projection_turns WHERE thread_id = ${threadId}`,
+          [{ state: "running", completedAt: null, startedAt: "2026-09-11T20:00:00.000Z" }],
+        );
+      }),
+  );
+
   it.effect("projects steer dispatch mode onto the triggering user message", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;

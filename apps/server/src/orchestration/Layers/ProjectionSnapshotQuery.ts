@@ -1028,12 +1028,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               sessions.active_turn_id IS NOT NULL
               AND sessions.status <> 'error'
             )
+            OR sessions.status IN ('starting', 'running')
             OR latest_turn.state = 'running'
             OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
           )
           -- Later of the session lifecycle timestamp and the thread timestamp:
-          -- threads.updated_at advances on every appended message, so a turn
-          -- that is actively streaming output is not a stale candidate.
+          -- these are shell/lifecycle timestamps, not provider progress.
+          -- The planner checks live ownership before settling a candidate.
           AND MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) <= ${updatedBefore}
         ORDER BY MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) ASC, threads.thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}

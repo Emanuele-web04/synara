@@ -2503,10 +2503,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       // turn past the staleness cutoff, including threads whose runtime binding
       // row is already gone (`thread-unbound-oldest`) and archived threads
       // (`thread-archived-running`) - archiving does not settle a live turn.
-      // Excluded: `thread-fresh-running` (updated after the cutoff),
-      // `thread-settled` (no active turn), and `thread-queued-oldest` (a pending
-      // turn with no active turn id on either the session or the runtime row).
+      // A starting session with no turn must also reach the planner, which
+      // owns the longer startup grace period. Otherwise it is never repaired.
       assert.deepEqual(candidates, [
+        ThreadId.makeUnsafe("thread-queued-oldest"),
         ThreadId.makeUnsafe("thread-unbound-oldest"),
         ThreadId.makeUnsafe("thread-archived-running"),
         ThreadId.makeUnsafe("thread-stale-running"),
@@ -2518,7 +2518,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         updatedBefore: "2026-07-23T09:00:00.000Z",
         limit: 1,
       });
-      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-unbound-oldest")]);
+      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-queued-oldest")]);
+
+      // Exact stuck signature: an interrupted previous turn, an optimistic
+      // starting session, and no runtime binding left to supply an active id.
+      yield* sql`UPDATE projection_turns SET state = 'interrupted', completed_at = '2026-07-21T01:00:00.000Z', checkpoint_turn_count = NULL, checkpoint_status = NULL WHERE thread_id = 'thread-queued-oldest'`;
+      yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = 'thread-queued-oldest'`;
+      assert.deepEqual(
+        yield* snapshotQuery.listStaleInFlightThreadIds({
+          updatedBefore: "2026-07-23T09:00:00.000Z",
+          limit: 1,
+        }),
+        [ThreadId.makeUnsafe("thread-queued-oldest")],
+      );
     }),
   );
 
