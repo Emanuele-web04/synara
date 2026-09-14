@@ -1,0 +1,57 @@
+name: Server sharding experiment
+on:
+  push:
+    branches: [codex/ci-cross-platform-measurements]
+    paths: [.github/workflows/ci-server-benchmark.yml]
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: node --test .github/scripts/ci-shards.test.mjs
+      - name: Compare unchanged full shard with timing-aware placement
+        env:
+          BENCH_SHARD: ${{ matrix.shard }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, time
+          out=pathlib.Path('benchmark-results').resolve();out.mkdir()
+          records=[]
+          for sample in range(3):
+              for variant in (['baseline','candidate'] if sample%2==0 else ['candidate','baseline']):
+                  name=f'{variant}-{sample}'
+                  args=['bun','run','--cwd','apps/server','test','--shard='+os.environ['BENCH_SHARD']+'/2','--reporter=default','--reporter=json','--outputFile='+str(out/(name+'.json'))]
+                  if variant=='candidate':args+=['--sequence.sequencer=../../.github/scripts/ci-sequencer.mjs']
+                  start=time.monotonic();r=subprocess.run(args,capture_output=True,text=True,timeout=600)
+                  row={'name':name,'shard':os.environ['BENCH_SHARD'],'seconds':time.monotonic()-start,'status':r.returncode}
+                  print(json.dumps(row),flush=True);records.append(row)
+                  (out/(name+'.log')).write_text(r.stdout+r.stderr)
+                  (out/'results.json').write_text(json.dumps(records,indent=2))
+          if any(x['status'] for x in records):raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: server-balance-${{ matrix.shard }}
+          path: benchmark-results
+          retention-days: 14
+          if-no-files-found: error
