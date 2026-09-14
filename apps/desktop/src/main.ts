@@ -1,4 +1,4 @@
-import { CuaDriverHost } from "./cuaDriverHost";
+import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -3618,6 +3618,7 @@ let cuaHostEndpoint: string | undefined;
 
 async function startCuaHost(): Promise<void> {
   if (process.platform !== "darwin" || cuaDriverHost) return;
+  sweepOrphanedCuaDrivers();
   const host = new CuaDriverHost({
     binaryPath: app.isPackaged
       ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")

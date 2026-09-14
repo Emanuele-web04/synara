@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -41,6 +41,50 @@ function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
 }
 
 const log = (message: string) => console.info(`[desktop-cua] ${message}`);
+
+/**
+ * A daemon whose host died by SIGKILL never sees retire() and its own stdin
+ * watchdog can leave the process wedged: the tokio runtime exits but the
+ * AppKit overlay keeps the process alive, leaking a ghost overlay window and
+ * its socket dir. Kill any embedded daemon whose recorded host pid is gone.
+ * A recycled pid reads as alive and is left alone — safe direction.
+ */
+export function sweepOrphanedCuaDrivers(): void {
+  if (process.platform !== "darwin") return;
+  let listing: string;
+  try {
+    listing = execFileSync("ps", ["-axo", "pid,args"], { encoding: "utf8" });
+  } catch {
+    return;
+  }
+  for (const line of listing.split("\n")) {
+    if (!/cua-driver\s+serve\s+--embedded/.test(line)) continue;
+    const pid = Number(line.trim().split(/\s+/)[0]);
+    if (!pid || pid === process.pid) continue;
+    let env: string;
+    try {
+      env = execFileSync("ps", ["eww", "-p", String(pid), "-o", "command"], {
+        encoding: "utf8",
+      });
+    } catch {
+      continue;
+    }
+    const hostPid = Number(env.match(/CUA_DRIVER_EMBEDDED_HOST_PID=(\d+)/)?.[1]);
+    if (!hostPid) continue;
+    try {
+      process.kill(hostPid, 0);
+      continue;
+    } catch {
+      // Host is gone: the daemon is an orphan.
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+      log(`killed orphaned cua-driver pid=${pid} (host pid ${hostPid} gone)`);
+    } catch {
+      // Already gone.
+    }
+  }
+}
 
 const DRIVER_SESSION_DEATH_CODES = new Set([
   "session_ended",
@@ -485,11 +529,23 @@ export class CuaDriverHost {
           },
         },
       );
-      // Consume diagnostics without retaining potentially private tool payloads.
-      child.stderr?.on("data", () => undefined);
+      // Keep a short stderr tail so a wedged or panicking daemon is diagnosable
+      // after the fact; payloads may be private, so only lines are kept and only
+      // surfaced on exit, never streamed.
+      const stderrTail: string[] = [];
+      child.stderr?.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString("utf8").split("\n")) {
+          if (!line.trim()) continue;
+          stderrTail.push(line.slice(0, 200));
+          if (stderrTail.length > 20) stderrTail.shift();
+        }
+      });
       const exited = new Promise<void>((resolve) => {
         child.once("exit", () => resolve());
         child.once("error", () => resolve());
+      });
+      void exited.then(() => {
+        if (stderrTail.length) log(`driver stderr tail: ${stderrTail.join(" | ")}`);
       });
       const generation: Generation = {
         child,
