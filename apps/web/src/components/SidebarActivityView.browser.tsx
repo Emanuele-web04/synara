@@ -117,6 +117,59 @@ describe("SidebarActivityView", () => {
     document.body.innerHTML = "";
   });
 
+  it("distinguishes projectless chats from a real project named Synara in rows, groups, and filters", async () => {
+    const chatProject = { ...makeProject(PROJECT_B, "Home"), kind: "chat" as const };
+    const chat = makeThread(600, {
+      projectId: PROJECT_B,
+      title: "Projectless chat",
+      lastVisitedAt: undefined,
+    });
+    const projectThread = makeThread(601, { title: "Project chat", lastVisitedAt: undefined });
+    const mounted = await render(
+      renderActivity({
+        threads: [chat, projectThread],
+        projects: [makeProject(PROJECT_A, "Synara"), chatProject],
+      }),
+    );
+
+    const chatRow = page.getByTestId(`activity-thread-${chat.id}`);
+    const projectRow = page.getByTestId(`activity-thread-${projectThread.id}`);
+    await expect.element(chatRow).toHaveTextContent("No project");
+    await expect.element(chatRow).not.toHaveTextContent("Synara");
+    await expect.element(chatRow).not.toHaveTextContent("Home");
+    await expect.element(projectRow).toHaveTextContent("Synara");
+    expect(
+      chatRow.element().querySelector('[data-slot="central-icon"][style*="bubble-text.svg"]'),
+    ).not.toBeNull();
+    expect(
+      chatRow.element().querySelector('[data-slot="central-icon"][style*="folder-2.svg"]'),
+    ).toBeNull();
+    expect(
+      projectRow.element().querySelector('[data-slot="central-icon"][style*="folder-2.svg"]'),
+    ).not.toBeNull();
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => {
+      const labels = Array.from(
+        document.querySelectorAll('[data-slot="activity-section-label"]'),
+        (element) => element.textContent,
+      );
+      expect(labels).toContain("No project");
+      expect(labels).toContain("Synara");
+    });
+
+    await page.getByRole("button", { name: "Filter activity by project" }).click();
+    await page.getByRole("menuitemradio", { name: /No project/u }).click();
+    await expect.element(chatRow).toBeVisible();
+    await expect.element(projectRow).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Filter activity by project" }))
+      .toHaveTextContent("No project");
+    await mounted.unmount();
+  });
+
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
     const threads = Array.from({ length: 45 }, (_, index) => makeThread(index));
     threads[44] = makeThread(44, {

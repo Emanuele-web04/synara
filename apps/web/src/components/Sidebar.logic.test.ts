@@ -550,7 +550,7 @@ describe("resolveThreadHoverCardMetadata", () => {
     ).toBeNull();
   });
 
-  it("labels project-less chat containers as Synara instead of the slug folder", () => {
+  it("labels projectless chat containers as No project instead of the slug folder", () => {
     const metadata = resolveThreadHoverCardMetadata({
       thread: makeSidebarThreadSummary({ branch: null }),
       project: {
@@ -561,7 +561,7 @@ describe("resolveThreadHoverCardMetadata", () => {
       },
     });
 
-    expect(metadata.projectName).toBe("Synara");
+    expect(metadata.projectName).toBe("No project");
   });
 });
 
