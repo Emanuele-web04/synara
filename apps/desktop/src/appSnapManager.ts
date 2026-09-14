@@ -504,6 +504,10 @@ export class DesktopAppSnapManager {
   #watchReconcileRequested = false;
   #permissionProcess: AppSnapHelperProcess | null = null;
   #permissionCommandQueue: Promise<void> = Promise.resolve();
+  // Read-side freshness only: a grant flip surfaces at the next expiry, and
+  // request/setup paths always bypass it. Five seconds keeps a TCC answer
+  // honest for display while skipping a helper spawn on every poll.
+  #permissionCheckCache: { at: number; kindsKey: string } | null = null;
   #disposed = false;
   #requestedCapture: { id: string; cancel: () => void } | null = null;
   #intentionalWatchStop = false;
@@ -576,8 +580,29 @@ export class DesktopAppSnapManager {
     permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    const kindsKey = JSON.stringify(permissions ?? null);
+    if (
+      this.#permissionCheckCache &&
+      this.#permissionCheckCache.kindsKey === kindsKey &&
+      Date.now() - this.#permissionCheckCache.at < 5_000
+    ) {
+      return this.getState();
+    }
     if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
       return this.getState();
+    }
+    // Cache only an all-granted answer. A missing report must always reach the
+    // helper again — a transient TCC negative could otherwise be served from
+    // cache for five seconds while callers re-probe for the real state.
+    const effectiveKinds: readonly DesktopAppSnapPermissionKind[] =
+      permissions ?? ["accessibility", "screenRecording"];
+    if (
+      effectiveKinds.every(
+        (kind) =>
+          this.#panePermission(APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]) === "granted",
+      )
+    ) {
+      this.#permissionCheckCache = { at: Date.now(), kindsKey };
     }
     await this.#reconcileWatchProcess();
     return this.getState();
