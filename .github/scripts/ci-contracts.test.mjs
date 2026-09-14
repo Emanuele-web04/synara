@@ -114,7 +114,13 @@ test("browser partitions stay complementary and both reject quarantined geometry
   assert.ok(config.includes("${stablePattern.source}(?!.*${followPattern})"));
   const left = new RegExp(`${quarantine}(?=.*${source})`);
   const right = new RegExp(`${quarantine}(?!.*${source})`);
-  for (const title of ["restores streaming follow", "creates a project", "new worktree", "approval already answered", "unknown future stable case"]) {
+  for (const title of [
+    "restores streaming follow",
+    "creates a project",
+    "new worktree",
+    "approval already answered",
+    "unknown future stable case",
+  ]) {
     assert.equal(Number(left.test(title)) + Number(right.test(title)), 1, title);
     const tagged = `[geometry:linux] ${title}`;
     assert.equal(left.test(tagged) || right.test(tagged), false, tagged);
