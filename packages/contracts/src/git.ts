@@ -472,6 +472,7 @@ export type GitStatusStreamEvent = typeof GitStatusStreamEvent.Type;
 
 export const GitReadWorkingTreeDiffResult = Schema.Struct({
   patch: Schema.String,
+  truncated: Schema.Boolean,
 });
 export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
 

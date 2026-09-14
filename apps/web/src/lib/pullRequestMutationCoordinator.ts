@@ -34,7 +34,8 @@ type PinMutationCoordinator = {
   chainsByIdentity: Map<string, PinMutationChain>;
   nextRefreshId: number;
   activeRefreshProtectedIdentities: Map<number, Set<string>>;
-  activeActionFieldCountsByIdentity: Map<string, Map<keyof PullRequestActionListPatch, number>>;
+  nextActionProtectionId: number;
+  activeActionProtectionsByIdentity: Map<string, Map<number, PullRequestActionProtectionContext>>;
   activeRefreshProtectedActionFields: Map<
     number,
     Map<string, Set<keyof PullRequestActionListPatch>>
@@ -50,10 +51,19 @@ export type PullRequestRefreshMutationContext = {
 
 export type PullRequestActionProtectionContext = {
   identityKey: string;
+  protectionId: number;
+  optimisticPatch: Readonly<PullRequestActionListPatch>;
+  outcome: "pending" | "succeeded" | "failed";
   protectedFields: ReadonlySet<keyof PullRequestActionListPatch>;
 };
 
+export type PullRequestActionReadFence = ReadonlyMap<
+  string,
+  ReadonlyArray<PullRequestActionProtectionContext>
+>;
+
 const pinMutationCoordinators = new WeakMap<QueryClient, PinMutationCoordinator>();
+const EMPTY_PULL_REQUEST_ACTION_READ_FENCE: PullRequestActionReadFence = new Map();
 
 function getPinMutationCoordinator(queryClient: QueryClient): PinMutationCoordinator {
   const existing = pinMutationCoordinators.get(queryClient);
@@ -63,7 +73,8 @@ function getPinMutationCoordinator(queryClient: QueryClient): PinMutationCoordin
     chainsByIdentity: new Map(),
     nextRefreshId: 0,
     activeRefreshProtectedIdentities: new Map(),
-    activeActionFieldCountsByIdentity: new Map(),
+    nextActionProtectionId: 0,
+    activeActionProtectionsByIdentity: new Map(),
     activeRefreshProtectedActionFields: new Map(),
     pinWriteTailsByIdentity: new Map(),
   };
@@ -197,8 +208,13 @@ export function beginPullRequestRefresh(
   const refreshId = ++coordinator.nextRefreshId;
   const protectedPinIdentities = new Set(coordinator.chainsByIdentity.keys());
   const protectedActionFieldsByIdentity = new Map<string, Set<keyof PullRequestActionListPatch>>();
-  for (const [identityKey, fieldCounts] of coordinator.activeActionFieldCountsByIdentity) {
-    protectedActionFieldsByIdentity.set(identityKey, new Set(fieldCounts.keys()));
+  for (const [identityKey, protections] of coordinator.activeActionProtectionsByIdentity) {
+    const fields = new Set<keyof PullRequestActionListPatch>();
+    for (const protection of protections.values()) {
+      if (protection.optimisticPatch.state !== undefined) fields.add("state");
+      if (protection.optimisticPatch.isDraft !== undefined) fields.add("isDraft");
+    }
+    protectedActionFieldsByIdentity.set(identityKey, fields);
   }
   coordinator.activeRefreshProtectedIdentities.set(refreshId, protectedPinIdentities);
   coordinator.activeRefreshProtectedActionFields.set(refreshId, protectedActionFieldsByIdentity);
@@ -212,40 +228,103 @@ export function beginPullRequestActionProtection(
 ): PullRequestActionProtectionContext {
   const coordinator = getPinMutationCoordinator(queryClient);
   const identityKey = pullRequestRemoteIdentityKey(input);
+  const protectionId = ++coordinator.nextActionProtectionId;
   const protectedFields = new Set<keyof PullRequestActionListPatch>();
   if (patch.state !== undefined) protectedFields.add("state");
   if (patch.isDraft !== undefined) protectedFields.add("isDraft");
-  if (protectedFields.size === 0) return { identityKey, protectedFields };
+  const context: PullRequestActionProtectionContext = {
+    identityKey,
+    protectionId,
+    optimisticPatch: patch,
+    outcome: "pending",
+    protectedFields,
+  };
+  if (protectedFields.size === 0) return context;
 
-  const fieldCounts = coordinator.activeActionFieldCountsByIdentity.get(identityKey) ?? new Map();
-  for (const field of protectedFields) {
-    fieldCounts.set(field, (fieldCounts.get(field) ?? 0) + 1);
-  }
-  coordinator.activeActionFieldCountsByIdentity.set(identityKey, fieldCounts);
+  const protections = coordinator.activeActionProtectionsByIdentity.get(identityKey) ?? new Map();
+  protections.set(protectionId, context);
+  coordinator.activeActionProtectionsByIdentity.set(identityKey, protections);
   for (const refreshFields of coordinator.activeRefreshProtectedActionFields.values()) {
     const fields = refreshFields.get(identityKey) ?? new Set();
     for (const field of protectedFields) fields.add(field);
     refreshFields.set(identityKey, fields);
   }
-  return { identityKey, protectedFields };
+  return context;
 }
 
 export function finishPullRequestActionProtection(
   queryClient: QueryClient,
   context: PullRequestActionProtectionContext,
+  outcome: "succeeded" | "failed",
 ) {
+  if (context.outcome === "pending") context.outcome = outcome;
   if (context.protectedFields.size === 0) return;
   const coordinator = getPinMutationCoordinator(queryClient);
-  const fieldCounts = coordinator.activeActionFieldCountsByIdentity.get(context.identityKey);
-  if (!fieldCounts) return;
-  for (const field of context.protectedFields) {
-    const nextCount = (fieldCounts.get(field) ?? 0) - 1;
-    if (nextCount > 0) fieldCounts.set(field, nextCount);
-    else fieldCounts.delete(field);
+  const protections = coordinator.activeActionProtectionsByIdentity.get(context.identityKey);
+  if (!protections?.delete(context.protectionId)) return;
+  if (protections.size === 0) {
+    coordinator.activeActionProtectionsByIdentity.delete(context.identityKey);
   }
-  if (fieldCounts.size === 0) {
-    coordinator.activeActionFieldCountsByIdentity.delete(context.identityKey);
+}
+
+/** Capture live action records by reference before a Git request. Their eventual outcome lets a
+ * late response preserve successful intent but discard an optimistic action that failed. */
+export function capturePullRequestActionReadFence(
+  queryClient: QueryClient,
+): PullRequestActionReadFence {
+  const coordinator = pinMutationCoordinators.get(queryClient);
+  if (!coordinator || coordinator.activeActionProtectionsByIdentity.size === 0) {
+    return EMPTY_PULL_REQUEST_ACTION_READ_FENCE;
   }
+  const fence = new Map<string, ReadonlyArray<PullRequestActionProtectionContext>>();
+  for (const [identityKey, protections] of coordinator.activeActionProtectionsByIdentity) {
+    fence.set(identityKey, [...protections.values()]);
+  }
+  return fence;
+}
+
+export function hasPullRequestActionReadProtection(
+  queryClient: QueryClient,
+  readFence?: PullRequestActionReadFence,
+): boolean {
+  return (
+    (readFence?.size ?? 0) > 0 ||
+    (pinMutationCoordinators.get(queryClient)?.activeActionProtectionsByIdentity.size ?? 0) > 0
+  );
+}
+
+/** Latest non-failed user intent for each action-owned field. The optional request-start fence
+ * prevents a stale response from winning when it settles just after the mutation itself. */
+export function activePullRequestActionPatch(
+  queryClient: QueryClient,
+  input: Pick<PullRequestDetailInput, "repository" | "number">,
+  readFence?: PullRequestActionReadFence,
+): PullRequestActionListPatch {
+  const identityKey = pullRequestRemoteIdentityKey(input);
+  const protections = new Map<number, PullRequestActionProtectionContext>();
+  for (const protection of readFence?.get(identityKey) ?? []) {
+    protections.set(protection.protectionId, protection);
+  }
+  const coordinator = pinMutationCoordinators.get(queryClient);
+  for (const protection of coordinator?.activeActionProtectionsByIdentity
+    .get(identityKey)
+    ?.values() ?? []) {
+    protections.set(protection.protectionId, protection);
+  }
+
+  const activePatch: PullRequestActionListPatch = {};
+  for (const protection of [...protections.values()].sort(
+    (left, right) => left.protectionId - right.protectionId,
+  )) {
+    if (protection.outcome === "failed") continue;
+    if (protection.optimisticPatch.state !== undefined) {
+      activePatch.state = protection.optimisticPatch.state;
+    }
+    if (protection.optimisticPatch.isDraft !== undefined) {
+      activePatch.isDraft = protection.optimisticPatch.isDraft;
+    }
+  }
+  return activePatch;
 }
 
 export function protectedActionFieldsForRefresh(
@@ -257,9 +336,12 @@ export function protectedActionFieldsForRefresh(
     protectedFields.set(identityKey, new Set(fields));
   }
   const coordinator = getPinMutationCoordinator(queryClient);
-  for (const [identityKey, fieldCounts] of coordinator.activeActionFieldCountsByIdentity) {
+  for (const [identityKey, protections] of coordinator.activeActionProtectionsByIdentity) {
     const fields = protectedFields.get(identityKey) ?? new Set();
-    for (const field of fieldCounts.keys()) fields.add(field);
+    for (const protection of protections.values()) {
+      if (protection.optimisticPatch.state !== undefined) fields.add("state");
+      if (protection.optimisticPatch.isDraft !== undefined) fields.add("isDraft");
+    }
     protectedFields.set(identityKey, fields);
   }
   return protectedFields;

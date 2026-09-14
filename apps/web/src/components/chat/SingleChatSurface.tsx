@@ -2,6 +2,7 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { useNavigate } from "@tanstack/react-router";
 import {
   lazy,
@@ -824,18 +825,12 @@ export function SingleChatSurface(props: {
       return;
     }
 
-    await handleNewThread(
-      projectId,
-      {
-        envMode: appSettings.defaultThreadEnvMode,
-      },
-      {
-        search: (previous) => ({
-          ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
-          view: "editor",
-        }),
-      },
-    );
+    await handleNewThread(projectId, undefined, {
+      search: (previous) => ({
+        ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
+        view: "editor",
+      }),
+    });
   };
   const handleSelectEditorProject = (projectId: ProjectId) => {
     void openEditorProject(projectId).catch((error: unknown) => {
@@ -1255,7 +1250,15 @@ export function SingleChatSurface(props: {
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
-          onClosePane={(paneId) => closePane(props.threadId, paneId)}
+          onClosePane={(paneId) => {
+            if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {
+              closePane(props.threadId, paneId);
+              return;
+            }
+            void flushWorkspaceEditors(queryClient, workspaceRoot).then((saved) => {
+              if (saved) closePane(props.threadId, paneId);
+            });
+          }}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
