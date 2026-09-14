@@ -1,3 +1,4 @@
+import type { TurnDispatchSettings } from "../ChatView.logic";
 import type {
   MessageId,
   ModelSelection,
@@ -71,6 +72,10 @@ export interface LateComposerSendHandlers {
 }
 
 export interface ChatTurnSubmissionInput {
+  turnDispatchSettings: TurnDispatchSettings;
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   threadId: ThreadId;
   hasLiveTurn: boolean;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;

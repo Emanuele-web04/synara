@@ -54,7 +54,11 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  AGENT_GATEWAY_NO_CAPABILITIES,
+  captureAgentGatewayCapabilityInput,
+} from "../../agentGateway/sessionLease.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import {
@@ -269,6 +273,7 @@ function providerErrorMapsToWarning(event: ProviderEvent): boolean {
   return (
     event.kind === "error" &&
     (event.method === "process/stderr" ||
+      event.method === "mcpServer/elicitation/request/unrenderable" ||
       (event.method === "error" &&
         typeof event.message === "string" &&
         isNonFatalCodexErrorMessage(event.message)))
@@ -490,6 +495,8 @@ function toRequestTypeFromMethod(method: string): CanonicalRequestType {
       return "file_change_approval";
     case "item/permissions/requestApproval":
       return "permissions_approval";
+    case "mcpServer/elicitation/request":
+      return "tool_approval";
     case "applyPatchApproval":
       return "apply_patch_approval";
     case "execCommandApproval":
@@ -515,6 +522,8 @@ function toRequestTypeFromKind(kind: unknown): CanonicalRequestType {
       return "file_change_approval";
     case "permissions":
       return "permissions_approval";
+    case "tool":
+      return "tool_approval";
     default:
       return "unknown";
   }
@@ -1123,7 +1132,10 @@ function mapToRuntimeEvents(
     }
 
     const detail =
-      asString(payload?.command) ?? asString(payload?.reason) ?? asString(payload?.prompt);
+      asString(payload?.command) ??
+      asString(payload?.reason) ??
+      asString(payload?.prompt) ??
+      asString(payload?.message);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1904,8 +1916,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ? {
                   agentGatewayMcp: {
                     endpointUrl: () => agentGatewayCredentials.mcpEndpointUrl,
-                    acquireSessionLease: (threadId) =>
-                      acquireAgentGatewaySessionLease(agentGatewayCredentials, threadId, PROVIDER)!,
+                    // Codex leases inside the app-server manager, which owns
+                    // session restarts. The manager carries the start input's
+                    // capability facts; review runtimes request none.
+                    acquireSessionLease: (threadId, capabilityInput) =>
+                      acquireAgentGatewaySessionLease(
+                        agentGatewayCredentials,
+                        threadId,
+                        PROVIDER,
+                        capabilityInput ?? AGENT_GATEWAY_NO_CAPABILITIES,
+                      )!,
                   },
                 }
               : {}),
@@ -2062,6 +2082,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
           : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        agentGatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };

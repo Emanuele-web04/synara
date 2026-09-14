@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 
 import {
   CommandId,
+  COMPUTER_WS_METHODS,
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
@@ -13,11 +14,13 @@ import {
   WS_METHODS,
   WsBootstrapRpcGroup,
   WsCompatibilityError,
+  WsComputerRpcGroup,
   WsDeviceRpcGroup,
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
   type DeviceEvent,
+  type ComputerEvent,
   type GitActionProgressEvent,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
@@ -66,6 +69,11 @@ import { DevServerManager, findProjectDevServerForLocalServer } from "./devServe
 import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
 import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
+import { ComputerService } from "./computer/Services/ComputerService";
+import { ComputerEventInterests } from "./computer/computerEventInterests.ts";
+import { CurrentWsConnectionSession } from "./wsConnectionSessions";
+import { makeWsComputerHandlers } from "./computer/wsComputerHandlers";
+import { makeComputerFrameRouteLayer } from "./computer/computerFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
 import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
@@ -183,12 +191,11 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
   { error: WsRpcError, requiredForClient: false },
 ) {}
 
-// The device group is defined separately in contracts because its engine is
-// macOS-only, but it is served on the same socket: one connection, one
-// admission middleware, one exhaustive handler map.
-const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup).middleware(
-  WsRequestAdmissionMiddleware,
-);
+// Optional device and computer groups are served on the same socket: one
+// connection, one admission middleware, one exhaustive handler map.
+const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+  .merge(WsComputerRpcGroup)
+  .middleware(WsRequestAdmissionMiddleware);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
@@ -377,6 +384,9 @@ const makeWsRpcHandlersLayer = () =>
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
+      const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      const computerHandlers = makeWsComputerHandlers(computerService);
+      const computerInterests = new ComputerEventInterests();
       const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
         homeDir: config.homeDir,
         fileSystem,
@@ -2088,6 +2098,63 @@ const makeWsRpcHandlersLayer = () =>
                   { label: "device.events" },
                 ),
           ),
+
+        ...computerHandlers,
+        [COMPUTER_WS_METHODS.changePermission]: (input) =>
+          !computerService
+            ? Effect.fail(new WsRpcError({ message: "Computer service is unavailable." }))
+            : Effect.tryPromise({
+                try: () =>
+                  computerService.manager.permissions.change(
+                    input.threadId,
+                    input.enabled,
+                    async () => {
+                      if (!providerService.stopRuntimeSession)
+                        throw new Error("Provider runtime stop is unavailable.");
+                      await Effect.runPromise(
+                        providerService.stopRuntimeSession({ threadId: input.threadId }),
+                      );
+                      await computerService.manager.releaseDesktopControl(input.threadId);
+                    },
+                  ),
+                catch: (cause) =>
+                  toWsRpcError(
+                    cause,
+                    "Computer permission change failed. Access remains blocked; try again.",
+                  ),
+              }),
+        [COMPUTER_WS_METHODS.getThreadState]: (input) =>
+          Effect.gen(function* () {
+            const connection = yield* CurrentWsConnectionSession;
+            if (connection) computerInterests.watch(connection, input.threadId);
+            return yield* computerHandlers[COMPUTER_WS_METHODS.getThreadState](input);
+          }),
+        [COMPUTER_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "computer.events" },
+            computerService?.supported !== true
+              ? Stream.never
+              : bufferLiveUiStream(
+                  Stream.callback<ComputerEvent>((queue) =>
+                    Effect.gen(function* () {
+                      const connection = yield* CurrentWsConnectionSession;
+                      const unsubscribe = computerService.manager.onEvent((event) => {
+                        if (!connection || !computerInterests.accepts(connection, event)) return;
+                        Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+                      });
+                      yield* Effect.addFinalizer(() =>
+                        Effect.sync(() => {
+                          unsubscribe();
+                          // Interests survive stream retries on the same socket.
+                          // Weak keys expire with the connection session.
+                        }),
+                      );
+                    }),
+                  ),
+                  { label: "computer.events" },
+                ),
+          ),
       });
     }),
   );
@@ -2173,6 +2240,9 @@ export function authorizeDeviceFrameWebSocketUpgrade(input: {
     Effect.orElseSucceed(() => false),
   );
 }
+
+/** Computer still frames use the same trusted-origin and authentication policy. */
+export const authorizeComputerFrameWebSocketUpgrade = authorizeDeviceFrameWebSocketUpgrade;
 
 export function makeWebsocketRpcRouteLayer<R>(
   rpcWebSocketHttpEffectSource: Effect.Effect<
@@ -2383,8 +2453,25 @@ const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
     }),
 });
 
+const computerFrameRouteLayer = makeComputerFrameRouteLayer({
+  authorizeUpgrade: (request) =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const serverAuth = yield* ServerAuth;
+      const url = trustedWebSocketRequestUrl(request, config);
+      if (url === null) return false;
+      return yield* authorizeComputerFrameWebSocketUpgrade({
+        config,
+        legacyToken: url.searchParams.get("token"),
+        request: makeEffectAuthRequest(request),
+        serverAuth,
+      });
+    }),
+});
+
 export const websocketRpcRouteLayer = Layer.mergeAll(
   deviceFrameRouteLayer,
+  computerFrameRouteLayer,
   makeWebsocketNegotiationRouteLayer(),
   // The registry must be provided here so the upgrade route and the RPC
   // middleware (built from the same source effect) share one instance.

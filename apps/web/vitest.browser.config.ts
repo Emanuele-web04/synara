@@ -7,7 +7,7 @@ import viteConfig from "./vite.config";
 const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 
 export default mergeConfig(
-  viteConfig,
+  viteConfig({ command: "serve", mode: "test" }),
   defineConfig({
     // Direct React roots in hook regressions must not trigger a mid-test reload.
     optimizeDeps: { include: ["react-dom/client"] },
