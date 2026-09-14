@@ -19,7 +19,7 @@
       "name": "@synara/desktop",
       "version": "0.8.4",
       "dependencies": {
-        "betterwright": "2.4.0",
+        "betterwright": "2.7.3",
         "effect": "catalog:",
         "electron": "43.4.1",
         "electron-updater": "^6.6.2",
@@ -234,7 +234,7 @@
   },
   "patchedDependencies": {
     "@legendapp/list@3.3.3": "patches/@legendapp%2Flist@3.3.3.patch",
-    "betterwright@2.4.0": "patches/betterwright@2.4.0.patch",
+    "betterwright@2.7.3": "patches/betterwright@2.7.3.patch",
     "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368": "patches/@effect%2Fplatform-node-shared@8881a9b.patch",
   },
   "overrides": {
@@ -1740,7 +1740,7 @@
 
     "baseline-browser-mapping": ["baseline-browser-mapping@2.10.8", "", { "bin": { "baseline-browser-mapping": "dist/cli.cjs" } }, "sha512-PCLz/LXGBsNTErbtB6i5u4eLpHeMfi93aUv5duMmj6caNu6IphS4q6UevDnL36sZQv9lrP11dbPKGMaXPwMKfQ=="],
 
-    "betterwright": ["betterwright@2.4.0", "", { "dependencies": { "@ghostery/adblocker-playwright": "2.18.2", "playwright-core": "1.61.1", "tldts": "7.4.9" }, "optionalDependencies": { "patchright-core": "1.61.1", "rookie-cookies": "0.6.0" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.30.0", "@modelcontextprotocol/sdk": ">=1.13.0" }, "optionalPeers": ["@anthropic-ai/sdk", "@modelcontextprotocol/sdk"], "bin": { "betterwright": "dist/bin/betterwright.js" } }, "sha512-KRjfvqov+hkt3WWG2GSA5T6O3rxtQyrLrS2iZajq2yHuHi3rPebtq4+aMt+av0iXNYJFYjWfcWqP/cGHxE5n9w=="],
+    "betterwright": ["betterwright@2.7.3", "", { "dependencies": { "@ghostery/adblocker-playwright": "2.18.2", "playwright-core": "1.61.1", "tldts": "7.4.9" }, "optionalDependencies": { "patchright-core": "1.61.1", "rookie-cookies": "0.6.0", "ws": "8.21.0" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.30.0", "@modelcontextprotocol/sdk": ">=1.13.0", "electron": ">=43.4.1" }, "optionalPeers": ["@anthropic-ai/sdk", "@modelcontextprotocol/sdk", "electron"], "bin": { "betterwright": "dist/bin/betterwright.js" } }, "sha512-wqHTL5VU/6ktZwSSM7zWp9uTVxt0C5RSV4X65pHdI+QenBvfVsISn5M25fDNeEwAAOu15mu77XYD4+GPaz9HLg=="],
 
     "bignumber.js": ["bignumber.js@9.3.1", "", {}, "sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ=="],
 

@@ -6,7 +6,7 @@ import {
 } from "betterwright";
 import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synara/contracts";
 import type { DesktopBrowserManager } from "../browserManager";
-import { openBetterwrightConnection } from "./betterwrightConnection";
+import { synaraHostTarget } from "./betterwrightHostTarget";
 
 const SOURCES = new Set(["chrome", "safari", "edge"]);
 
@@ -64,11 +64,21 @@ export class BrowserCookieImport {
       await assertTarget();
       await this.waitForAgents();
       await assertTarget();
-      const connection = await openBetterwrightConnection(runtime.webContents, undefined, [], true);
+      // This signal only gates adapter connect(): upstream syncCookies takes
+      // no signal, so mid-sync cancellation works by revoking the transport
+      // (stop() below), not through this controller.
+      const interrupt = new AbortController();
+      const hostTarget = synaraHostTarget(runtime.webContents, {
+        cookieImport: true,
+        signal: interrupt.signal,
+      });
       let browser: BetterWright | undefined;
       let close: Promise<void> | undefined;
       const stop = () => {
-        close ??= connection.close(false);
+        interrupt.abort();
+        close ??= Promise.all([hostTarget.revokeAll(false), browser?.close()]).then(
+          () => undefined,
+        );
         void close.catch(() => {});
       };
       const navigation = (
@@ -86,8 +96,7 @@ export class BrowserCookieImport {
         await assertTarget();
         browser = new BetterWright({
           home: this.home,
-          provider: connection.provider,
-          hostOwnedTarget: true,
+          hostTarget,
           downloadPolicy: "deny",
           credentialCapture: false,
           vault: false,
@@ -96,13 +105,11 @@ export class BrowserCookieImport {
           parkBackgroundPages: false,
           policy: new NetworkPolicy({ allowLoopback: true }),
         });
-        const target = new URL(connection.provider.cdpUrl);
         const result = await browser.syncCookies({
           source: { browser: input.browser, profile: input.profile },
           ...(origin ? { domains: [origin.hostname] } : {}),
           windowsAppBound: "disabled",
           timeoutMs: 30_000,
-          cloudConsent: `cdp:${target.host}`,
         });
         if (!result.ok) {
           const stages = [

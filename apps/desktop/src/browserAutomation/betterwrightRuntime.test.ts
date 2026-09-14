@@ -8,11 +8,28 @@ const mocks = vi.hoisted(() => ({
   browserClose: vi.fn(),
   connectionClose: vi.fn(),
   openConnection: vi.fn(),
+  constructedOptions: { current: undefined as unknown },
 }));
 vi.mock("betterwright", () => ({
   BetterWright: class {
-    run = mocks.run;
-    close = mocks.browserClose;
+    conn: { close(): Promise<void> } | undefined;
+    constructor(
+      public options: {
+        hostTarget: { connect(arg: unknown): Promise<{ close(): Promise<void> }> };
+      },
+    ) {
+      mocks.constructedOptions.current = options;
+    }
+    run = async (code: string, runOptions?: unknown) => {
+      this.conn ??= await this.options.hostTarget.connect({
+        proxyUrl: "socks5://127.0.0.1:1",
+      });
+      return mocks.run(code, runOptions);
+    };
+    close = async () => {
+      await this.conn?.close();
+      return mocks.browserClose();
+    };
   },
   NetworkPolicy: class {},
 }));
@@ -30,7 +47,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.browserClose.mockResolvedValue(undefined);
   mocks.connectionClose.mockResolvedValue(undefined);
-  mocks.openConnection.mockResolvedValue({ provider: {}, close: mocks.connectionClose });
+  mocks.constructedOptions.current = undefined;
+  mocks.openConnection.mockImplementation(async () => {
+    let closing: Promise<void> | undefined;
+    return {
+      provider: {},
+      get closed() {
+        return closing !== undefined;
+      },
+      close: (cancel = true) => (closing ??= Promise.resolve(mocks.connectionClose(cancel))),
+    };
+  });
   vi.mocked(contents.getBackgroundThrottling).mockReturnValue(true);
   vi.mocked(contents.isDestroyed).mockReturnValue(false);
 });
@@ -169,8 +196,28 @@ describe("Betterwright runtime errors", () => {
   it("retains successful values and converts milliseconds to seconds", async () => {
     mocks.run.mockResolvedValue({ ok: true, result: { filled: true } });
     expect(await run()).toEqual({ filled: true });
-    expect(mocks.run).toHaveBeenCalledWith("return null", { timeout: 30 });
+    expect(mocks.run).toHaveBeenCalledWith("return null", {
+      timeout: 30,
+      signal: expect.any(AbortSignal),
+      automaticUI: false,
+    });
     expect(mocks.connectionClose).toHaveBeenCalledWith(false);
+  });
+
+  it("leases the tab through hostTarget, never the raw provider path", async () => {
+    mocks.run.mockResolvedValue({ ok: true, result: null });
+    await run();
+    const options = mocks.constructedOptions.current as Record<string, unknown>;
+    expect(options.hostTarget).toEqual(
+      expect.objectContaining({
+        connect: expect.any(Function),
+        run: expect.any(Function),
+        revokeAll: expect.any(Function),
+      }),
+    );
+    expect(options).toMatchObject({ downloadPolicy: "deny", credentialCapture: false });
+    expect(options).not.toHaveProperty("provider");
+    expect(options).not.toHaveProperty("hostOwnedTarget");
   });
 
   it("terminates uncertain execution when the worker transport rejects", async () => {
