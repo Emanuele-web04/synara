@@ -4,6 +4,7 @@ const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
+  "auto-local": 1,
   "full-access": 2,
 } as const satisfies Record<RuntimeMode, number>;
 
@@ -28,6 +29,11 @@ export function autoRuntimeModeSelectionIssue(input: {
     readonly supportsAutoMode?: boolean | undefined;
   };
 }): string | null {
+  if (input.runtimeMode === "auto-local") {
+    return providerSupportsAutoRuntimeMode(input.modelSelection.provider)
+      ? null
+      : "Local Auto is currently available for Codex and Claude Code.";
+  }
   if (input.runtimeMode !== "auto") {
     return null;
   }
@@ -59,7 +65,8 @@ export function normalizeRuntimeModeForProvider(
   runtimeMode: RuntimeMode,
   provider: ProviderKind,
 ): RuntimeMode {
-  return runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)
+  return (runtimeMode === "auto" || runtimeMode === "auto-local") &&
+    !providerSupportsAutoRuntimeMode(provider)
     ? "approval-required"
     : runtimeMode;
 }

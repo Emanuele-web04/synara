@@ -5332,10 +5332,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
-          input.runtimeMode === "auto"
-            ? "auto"
-            : (toPermissionMode(providerOptions?.permissionMode) ??
-              (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
+          input.runtimeMode === "auto-local"
+            ? "default"
+            : input.runtimeMode === "auto"
+              ? "auto"
+              : (toPermissionMode(providerOptions?.permissionMode) ??
+                (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
         const settings = {
           // Pin only explicit non-native overrides. Otherwise Claude Code owns
           // resolution via server tuning, settings.json, and

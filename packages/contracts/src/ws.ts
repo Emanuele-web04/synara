@@ -1,3 +1,4 @@
+import { LocalAutoManageInput } from "./localAuto";
 import { Schema, Struct } from "effect";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
@@ -250,6 +251,7 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
+  serverLocalAuto: "server.localAuto",
   serverListExternalMcpIntegrations: "server.listExternalMcpIntegrations",
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
@@ -468,6 +470,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateProvider, ServerProviderUpdateInput),
+  tagRequestBody(WS_METHODS.serverLocalAuto, LocalAutoManageInput),
   tagRequestBody(WS_METHODS.serverListExternalMcpIntegrations, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),

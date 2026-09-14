@@ -142,7 +142,8 @@ function validateAutoRuntimeMode(
   provider: ProviderSession["provider"],
   runtimeMode: ProviderSession["runtimeMode"],
 ) {
-  return runtimeMode !== "auto" || providerSupportsAutoRuntimeMode(provider)
+  return (runtimeMode !== "auto" && runtimeMode !== "auto-local") ||
+    providerSupportsAutoRuntimeMode(provider)
     ? Effect.void
     : Effect.fail(
         new ProviderValidationError({

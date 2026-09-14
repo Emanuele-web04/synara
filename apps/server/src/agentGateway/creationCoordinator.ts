@@ -517,7 +517,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const runtimeMode =
             externalPolicy?.runtimeMode ??
             spec.runtimeMode ??
-            (context.kind === "external-client" || caller!.runtimeMode === "auto"
+            (context.kind === "external-client" ||
+            caller!.runtimeMode === "auto" ||
+            caller!.runtimeMode === "auto-local"
               ? "approval-required"
               : caller!.runtimeMode);
           if (
