@@ -71,9 +71,8 @@ interface ProviderModelDiscoveryTask {
 export const PROVIDER_MODEL_DISCOVERY_CLIENT_TIMEOUT_MS = 50_000;
 
 /**
- * Final client-side fence for provider discovery. The server has a shorter
- * deadline, but a wedged desktop/native bridge must not leave model controls
- * pending forever after the server-side request should already have settled.
+ * Final client-side fence for provider discovery. A wedged desktop/native bridge
+ * must not leave model controls pending forever when the native request never settles.
  */
 export async function withProviderModelDiscoveryClientDeadline(
   discovery: Promise<ProviderListModelsResult>,
