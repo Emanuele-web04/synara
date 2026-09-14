@@ -1,0 +1,101 @@
+name: CI balance experiment
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-measurements]
+    paths: [.github/workflows/ci-balance-benchmark.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-balance-experiment-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chat-follow, chat-workflows]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - working-directory: apps/web
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Paired baseline and candidate, same runner, three samples each
+        env:
+          BENCH_PROJECT: ${{ matrix.project }}
+        run: node .github/scripts/ci-balance-benchmark.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: balance-${{ matrix.project }}
+          path: benchmark-results
+          retention-days: 14
+          if-no-files-found: error
+
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Measure root plus shared setup and every static command
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, tempfile, time
+          records=[]
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'static-results';out.mkdir()
+          for sample in range(3):
+              with tempfile.TemporaryDirectory(dir=os.environ['RUNNER_TEMP']) as td:
+                  repo=pathlib.Path(td)/'repo'
+                  subprocess.run(['git','worktree','add','--detach',str(repo),'HEAD'],check=True)
+                  try:
+                      env={**os.environ,'BUN_INSTALL_CACHE_DIR':str(pathlib.Path(td)/'cache')}
+                      args=['bun','install','--frozen-lockfile','--filter','./','--filter','@synara/shared']
+                      start=time.monotonic();r=subprocess.run(args,cwd=repo,env=env,capture_output=True,text=True)
+                      records.append({'sample':sample,'seconds':time.monotonic()-start,'status':r.returncode})
+                      (out/f'install-{sample}.log').write_text(r.stdout+r.stderr)
+                      (out/'results.json').write_text(json.dumps(records,indent=2))
+                      r.check_returncode()
+                      if sample==0:
+                          for script in ['brand:check','windows-runtime:check','lint','release:smoke']:
+                              subprocess.run(['bun','run',script],cwd=repo,env=env,check=True)
+                          subprocess.run(['bun','run','fmt'],cwd=repo,env=env,check=True)
+                          subprocess.run(['bun','run','fmt:check'],cwd=repo,env=env,check=True)
+                          diff=subprocess.check_output(['git','diff','--binary'],cwd=repo)
+                          (out/'format.patch').write_bytes(diff)
+                  finally:
+                      subprocess.run(['git','worktree','remove','--force',str(repo)],check=True)
+          print(json.dumps(records,indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: static-measurements
+          path: ${{ runner.temp }}/static-results
+          retention-days: 14
+          if-no-files-found: error
