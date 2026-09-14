@@ -1,8 +1,6 @@
-# Lane rule: static-fast is fast checks with no special runtime, static-typecheck is tsc,
-# unit runs Vitest through Turbo, browser owns Playwright (stable only, sharded),
-# build owns Electron and desktop output. Geometry quarantine lives in ci-nightly.yml.
-# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static-fast.
-# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
+# Independent feedback lanes; the quality job only aggregates results.
+# Install scope/cache decisions and measured tradeoffs: .github/CI.md.
+# Stable browser coverage blocks PRs; geometry quarantine stays nightly.
 name: CI
 
 on:
@@ -10,6 +8,9 @@ on:
   push:
     branches:
       - main
+
+permissions:
+  contents: read
 
 # Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
 concurrency:
@@ -64,8 +65,8 @@ jobs:
               - '!apps/marketing/content/**'
               - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
 
-  # Phase 1b: the old static lane split. Fast checks (no special runtime) stay
-  # unblocked so docs-only PRs get a signal in ~1min.
+  # Root + scripts dependencies suffice for every static check and release smoke.
+  # Never wait for the changes job to report formatting or lint failures.
   static-fast:
     name: Static Checks (fast)
     runs-on: ubuntu-24.04
@@ -76,6 +77,11 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          scope: "static"
+
+      - name: Verify CI contracts
+        run: node --test .github/scripts/ci-contracts.test.mjs
 
       - name: Verify Synara identity
         run: bun run brand:check
@@ -88,6 +94,9 @@ jobs:
 
       - name: Lint
         run: bun run lint
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
 
   static-typecheck:
     name: Static Checks (typecheck)
@@ -139,6 +148,8 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          turbo: "true"
 
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli'
@@ -212,6 +223,7 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           electron: "true"
+          turbo: "true"
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -221,12 +233,14 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
-  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
-  # Phase 2g: needs every required lane. Matrix jobs report one result covering
+  # Aggregate only: no checkout, install, build or test execution.
+  # Preserve the branch-protection display name and always() failure handling.
+  # Needs every required lane. Matrix jobs report one result covering
   # all shards, so ANY failed shard fails the gate. Docs-only runs pass with
   # heavy lanes skipped (static-fast must still succeed).
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
+    permissions: {}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs:
@@ -238,7 +252,6 @@ jobs:
       - build
       - windows_process
       - migration_lineage
-      - release_smoke
     if: always()
     steps:
       - name: Aggregate lane results
@@ -252,7 +265,6 @@ jobs:
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
           MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
-          RELEASE_SMOKE: ${{ needs.release_smoke.result }}
         run: |
           fail=0
           # The docs-only filter itself must have run: without it a skip proves nothing.
@@ -269,7 +281,7 @@ jobs:
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE" "release-smoke=$RELEASE_SMOKE"; do
+          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
             name="${lane%%=*}"
             result="${lane#*=}"
             if [ "$CODE" != "true" ]; then
@@ -300,12 +312,11 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          scope: "runtime"
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
-
-      - name: Verify Windows runtime boundary
-        run: bun run windows-runtime:check
 
       - name: Test Windows process runtime
         run: >-
@@ -355,7 +366,7 @@ jobs:
   # Released (id, name) migration pairs are recorded in every user's
   # effect_sql_migrations table, so renumbering or renaming one corrupts existing
   # installs. This job needs the release tags, hence the unshallow checkout; the
-  # guard itself is dependency-free and skips with a warning if tags are missing.
+  # dependency-free guard needs a real tag history, never a missing-history skip.
   migration_lineage:
     name: Migration Lineage
     runs-on: ubuntu-24.04
@@ -374,33 +385,6 @@ jobs:
           node-version-file: package.json
 
       - name: Verify released migration lineage
-        run: node scripts/check-migration-lineage.ts
-
-  release_smoke:
-    name: Release Smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Verify Synara identity
-        run: bun run brand:check
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
+        run: |
+          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+          node scripts/check-migration-lineage.ts
