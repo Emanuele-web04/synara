@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
-import { resolveThreadProjectLabel } from "./Sidebar.logic";
+import {
+  deriveSidebarThreadActivity,
+  resolveThreadProjectLabel,
+  resolveThreadStatusPill,
+  sortThreadsForSidebar,
+} from "./Sidebar.logic";
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
@@ -775,5 +780,127 @@ describe("resolveThreadProjectLabel", () => {
       "Synara",
     );
     expect(resolveThreadProjectLabel(undefined)).toBe("Synara");
+  });
+});
+
+describe("sidebar subagent activity", () => {
+  const parent = makeThread({
+    id: "parent",
+    session: makeSession("ready"),
+    latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+    lastVisitedAt: "2026-08-01T11:00:00.000Z",
+    settledAt: "2026-08-01T11:00:00.000Z",
+  });
+  const child = makeThread({
+    id: "child",
+    parentThreadId: parent.id,
+    session: makeSession("running"),
+  });
+  const statusFor = (thread: SidebarThreadSummary) =>
+    resolveThreadStatusPill({
+      thread,
+      hasPendingApprovals: thread.hasPendingApprovals,
+      hasPendingUserInput: thread.hasPendingUserInput,
+    });
+
+  it("keeps a settled parent's spinner and Activity group running while a child works", () => {
+    const threads = deriveSidebarThreadActivity([parent, child]);
+    const rolledUpParent = threads[0]!;
+    expect(statusFor(rolledUpParent)).toMatchObject({ label: "Working", pulse: true });
+    expect(resolveActivityStatusGroup(rolledUpParent)).toBe("running");
+    expect(buildActivityViewModel({ threads, pinnedThreadIdSet: new Set() })).toMatchObject({
+      active: [rolledUpParent],
+      settled: [],
+    });
+    expect(rolledUpParent.session).toBe(parent.session);
+    expect(rolledUpParent.latestTurn).toBe(parent.latestTurn);
+    expect(rolledUpParent.hasLiveTailWork).toBe(false);
+    expect(parent.hasWorkingSubagents).toBeUndefined();
+  });
+
+  it("rolls up nested work regardless of row order and preserves unrelated rows", () => {
+    const middle = { ...child, session: makeSession("ready") };
+    const grandchild = { ...child, id: ThreadId.makeUnsafe("grandchild"), parentThreadId: child.id };
+    const unrelated = makeThread({ id: "unrelated" });
+    const threads = deriveSidebarThreadActivity([grandchild, unrelated, middle, parent]);
+    expect(
+      threads.filter((thread) => thread.hasWorkingSubagents).map((thread) => thread.id),
+    ).toEqual([child.id, parent.id]);
+    expect(threads[1]).toBe(unrelated);
+    expect(sortThreadsForSidebar([unrelated, threads[3]!], "updated_at")[0]?.id).toBe(parent.id);
+  });
+
+  it("stays working until the last child settles, then clears on completion or removal", () => {
+    const sibling = { ...child, id: ThreadId.makeUnsafe("sibling") };
+    const done = { ...child, session: makeSession("ready"), latestTurn: parent.latestTurn };
+    expect(statusFor(deriveSidebarThreadActivity([parent, done, sibling])[0]!)).toMatchObject({
+      label: "Working",
+    });
+    for (const remaining of [[done], []]) {
+      const threads = deriveSidebarThreadActivity([parent, ...remaining]);
+      expect(threads[0]).toBe(parent);
+      expect(statusFor(threads[0]!)).toBeNull();
+      expect(resolveActivityStatusGroup(threads[0]!)).toBe("seen");
+    }
+  });
+
+  it.each(["interrupted", "error"] as const)(
+    "ignores a %s child turn even if its session still says running",
+    (state) => {
+      const settledChild = { ...child, latestTurn: { ...parent.latestTurn!, state } };
+      expect(statusFor(deriveSidebarThreadActivity([parent, settledChild])[0]!)).toBeNull();
+    },
+  );
+
+  it("counts late live work but not a connecting or blocked child", () => {
+    const lateChild = { ...child, session: makeSession("ready"), hasLiveTailWork: true };
+    expect(statusFor(deriveSidebarThreadActivity([parent, lateChild])[0]!)).toMatchObject({
+      label: "Working",
+    });
+    for (const waitingChild of [
+      { ...child, session: makeSession("connecting") },
+      { ...child, hasPendingApprovals: true },
+      { ...child, hasPendingUserInput: true },
+    ]) {
+      expect(statusFor(deriveSidebarThreadActivity([parent, waitingChild])[0]!)).toBeNull();
+    }
+  });
+
+  it("preserves the parent's approval and input indicators while descendants work", () => {
+    for (const [field, label] of [
+      ["hasPendingApprovals", "Pending Approval"],
+      ["hasPendingUserInput", "Awaiting Input"],
+    ] as const) {
+      const threads = deriveSidebarThreadActivity([{ ...parent, [field]: true }, child]);
+      expect(statusFor(threads[0]!)).toMatchObject({ label, pulse: false });
+      expect(resolveActivityStatusGroup(threads[0]!)).toBe("attention");
+    }
+  });
+
+  it("keeps a parent with a ready plan in the running group until its child finishes", () => {
+    const planParent = { ...parent, interactionMode: "plan" as const, hasActionableProposedPlan: true };
+    const threads = deriveSidebarThreadActivity([planParent, child]);
+    expect(resolveActivityStatusGroup(threads[0]!)).toBe("running");
+    expect(statusFor(threads[0]!)).toMatchObject({ label: "Working" });
+    expect(statusFor(deriveSidebarThreadActivity([planParent])[0]!)).toMatchObject({
+      label: "Plan Ready",
+    });
+  });
+
+  it("ignores archived children and stops at missing or archived parents", () => {
+    const archivedAt = "2026-08-01T12:00:00.000Z";
+    for (const threads of [
+      [parent, { ...child, archivedAt }],
+      [parent, { ...child, parentThreadId: ThreadId.makeUnsafe("missing") }],
+      [{ ...parent, archivedAt }, child],
+    ]) {
+      expect(deriveSidebarThreadActivity(threads)).toBe(threads);
+    }
+  });
+
+  it("bounds traversal when a malformed parent chain contains a cycle", () => {
+    const threads = deriveSidebarThreadActivity([{ ...parent, parentThreadId: child.id }, child]);
+    expect(threads).toHaveLength(2);
+    expect(statusFor(threads[0]!)).toMatchObject({ label: "Working" });
   });
 });

@@ -23,7 +23,10 @@ const ACTIVITY_GROUP_ORDER: Record<ActivityStatusGroup, number> = {
 };
 
 export function isThreadRunningForActivity(
-  thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasLiveTailWork" | "hasWorkingSubagents" | "session" | "latestTurn"
+  >,
 ): boolean {
   return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
 }
@@ -32,6 +35,7 @@ type ActivityAttentionInput = Pick<
   SidebarThreadSummary,
   | "hasActionableProposedPlan"
   | "hasLiveTailWork"
+  | "hasWorkingSubagents"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "interactionMode"
@@ -49,6 +53,7 @@ function requiresActivityAttention(thread: ActivityAttentionInput): boolean {
   return (
     thread.interactionMode === "plan" &&
     !thread.hasLiveTailWork &&
+    !thread.hasWorkingSubagents &&
     isLatestTurnSettled(thread.latestTurn, thread.session) &&
     thread.hasActionableProposedPlan
   );
