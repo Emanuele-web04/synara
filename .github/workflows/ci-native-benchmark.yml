@@ -1,0 +1,106 @@
+name: Native CI experiment
+
+on:
+  push:
+    branches: [codex/ci-cross-platform-measurements]
+    paths: [.github/workflows/ci-native-benchmark.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-native-experiment-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  NODE_OPTIONS: --max-old-space-size=4096
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export exact editable text inputs
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, os
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          chosen = {}
+          for name in files:
+              if name.startswith(('.github/workflows/', '.github/actions/', '.github/scripts/', 'scripts/', 'apps/server/vitest', 'apps/web/vitest', '.oxfmt', '.oxlint')) or name in ['AGENTS.md', 'CONTRIBUTING.md', 'package.json', 'turbo.json', 'vitest.config.ts', 'bun.lock', 'docs/release.md']:
+                  try:
+                      chosen[name] = pathlib.Path(name).read_text()
+                  except (UnicodeError, IsADirectoryError):
+                      pass
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'source.json').write_text(json.dumps(chosen))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-source
+          path: ${{ runner.temp }}/source.json
+          retention-days: 14
+
+  native:
+    name: Native artifact (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - os: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+          - os: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Install filtered release dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned native artifact with unchanged packaging checks
+        run: |
+          version="$(node -p "require('./apps/server/package.json').version")"
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version "$version" --verbose 2>&1 | tee "$RUNNER_TEMP/native-build.log"
+      - name: Smoke packaged desktop startup
+        run: |
+          version="$(node -p "require('./apps/server/package.json').version")"
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir release --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version "$version"
+      - name: Verify native device helper compilation
+        if: runner.os == 'macOS'
+        run: bun run test:device:probe
+      - name: Capture build diagnostics, never publish artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-diagnostics-${{ matrix.os }}
+          path: ${{ runner.temp }}/native-build.log
+          retention-days: 14
+          if-no-files-found: warn
