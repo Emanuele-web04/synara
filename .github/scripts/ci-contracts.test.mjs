@@ -103,20 +103,17 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
     assert.ok(windows.includes(file), file);
 });
 
-test(
-  "measured critical-path distribution stays three-way and skips redundant apt provisioning",
-  () => {
-    for (const shard of ["1/3", "2/3", "3/3"])
-      assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
-    for (const shard of ["1/3", "2/3", "3/3"])
-      assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);
-    for (const project of ["chat-follow", "chat-projects", "chat-workflows"])
-      assert.ok(workflow.includes(`project: ${project}`), project);
-    const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
-    assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
-    assert.ok(!browser.includes("playwright install --with-deps chromium"));
-  },
-);
+test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
+  for (const shard of ["1/3", "2/3", "3/3"])
+    assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
+  for (const shard of ["1/3", "2/3", "3/3"])
+    assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);
+  for (const project of ["chat-follow", "chat-projects", "chat-workflows"])
+    assert.ok(workflow.includes(`project: ${project}`), project);
+  const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
+  assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
+  assert.ok(!browser.includes("playwright install --with-deps chromium"));
+});
 
 test("three ChatView partitions are complementary and reject quarantined geometry", () => {
   const config = read("../../apps/web/vitest.browser.ci.config.ts");
@@ -151,6 +148,10 @@ test("three ChatView partitions are complementary and reject quarantined geometr
   ]) {
     assert.equal(partitions.filter((pattern) => pattern.test(title)).length, 1, title);
     const tagged = `[geometry:linux] ${title}`;
-    assert.equal(partitions.some((pattern) => pattern.test(tagged)), false, tagged);
+    assert.equal(
+      partitions.some((pattern) => pattern.test(tagged)),
+      false,
+      tagged,
+    );
   }
 });
