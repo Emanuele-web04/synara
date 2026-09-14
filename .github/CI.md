@@ -138,3 +138,24 @@ After editing CI, run `bun run fmt:check`, `bun run lint`, `bun run typecheck`,
 Retain full-history `bun run migrations:check` and Windows boundary/native checks.
 A dependency-scope rollback is simply the original full frozen install; it must
 not change test commands, required-check identity, signing policy or publication.
+
+### First complete PR run: cold cache initialization
+
+[Run 34828358809](https://github.com/Emanuele-web04/synara/actions/runs/34828358809)
+on `8d1dd637db912c678322f31b520c197830eb89f1` passed all 15 jobs, including the
+required aggregate, all stable browser partitions and every native Windows
+command. From workflow start to completion metadata it took 325 seconds;
+the gate completed after 324 seconds. Raw runner time totalled 2,422 seconds
+(40.37 minutes), versus the reference main run's 2,158 seconds (35.97 minutes).
+This first run was therefore not an overall compute improvement.
+
+The new archive keys required cold dependency/build setup and archive creation.
+Post-workspace steps alone consumed 209 runner-seconds, and the desktop build
+command took 111 seconds rather than restoring the baseline's warm build outputs.
+Static checks, now including release smoke, finished in 29 seconds versus the old
+39-second static job plus its separate 25-second smoke job. Native Windows
+finished in 146 seconds versus 261 seconds in the reference run.
+
+Cold initialization and subsequent warm operation must be reported separately.
+The PR verification discussion records the complete confirmation runs without
+changing the application code, test inventory or validation commands between them.
