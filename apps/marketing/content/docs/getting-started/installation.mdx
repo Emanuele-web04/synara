@@ -44,6 +44,18 @@ On Linux, your desktop environment may require making the AppImage executable be
 chmod +x Synara*.AppImage
 ```
 
+The Linux AppImage also requires FUSE 2 (`libfuse.so.2`) to mount. Many current
+distributions ship only FUSE 3, in which case the system FUSE 2 package must be
+installed first:
+
+```bash
+# Arch / CachyOS / Omarchy
+sudo pacman -S fuse2
+
+# Debian / Ubuntu / Linux Mint
+sudo apt install libfuse2
+```
+
 </Step>
 <Step>
 
