@@ -90,7 +90,13 @@ export function buildPullRequestTimelineEvents(
     ...detail.commits.map((commit) => ({
       id: commit.oid,
       at: commit.committedDate,
-      title: `Commit ${commit.oid.slice(0, 7)}`,
+      title: (() => {
+        const author = commit.authors.find((candidate) => candidate.name?.trim() || candidate.login);
+        const authorLabel = author?.name?.trim() || author?.login;
+        return authorLabel
+          ? `Commit ${commit.oid.slice(0, 7)} by ${authorLabel}`
+          : `Commit ${commit.oid.slice(0, 7)}`;
+      })(),
       body: commit.messageHeadline || "No commit message.",
     })),
     ...detail.comments.map((comment) => ({
