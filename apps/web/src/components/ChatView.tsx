@@ -2660,7 +2660,7 @@ export default function ChatView({
     onTerminalMetadataChange: (
       terminalId: string,
       metadata: {
-        cliKind: "codex" | "claude" | "antigravity" | null;
+        cliKind: "codex" | "claude" | "antigravity" | "commandcode" | null;
         label: string;
       },
     ) => {

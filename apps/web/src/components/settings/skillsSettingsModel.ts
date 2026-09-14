@@ -45,6 +45,7 @@ export const ORIGIN_SECTION_ORDER = [
   "grok",
   "droid",
   "opencode",
+  "commandcode",
   "pi",
   "devin",
   "agents",
@@ -70,6 +71,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.droid, provider: "droid" };
     case "opencode":
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
+    case "commandcode":
+      return { label: PROVIDER_DISPLAY_NAMES.commandcode, provider: "commandcode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
     case "agents":

@@ -114,6 +114,7 @@ export function useChatProviderModels({
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
       opencode: resolveHint("opencode"),
+      commandcode: resolveHint("commandcode"),
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
     };

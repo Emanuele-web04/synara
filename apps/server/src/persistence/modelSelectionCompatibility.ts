@@ -13,6 +13,7 @@ type ModelProviderKind =
   | "grok"
   | "droid"
   | "opencode"
+  | "commandcode"
   | "pi"
   | "devin";
 
@@ -56,6 +57,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
+  }
+  if (lowerLabel.includes("command code") || lowerLabel.includes("commandcode")) {
+    return "commandcode";
   }
   if (lowerLabel.includes("kilo")) {
     return "opencode";
@@ -102,6 +106,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "grok" ||
     provider === "droid" ||
     provider === "opencode" ||
+    provider === "commandcode" ||
     provider === "pi" ||
     provider === "devin"
   ) {

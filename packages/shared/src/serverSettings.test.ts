@@ -41,6 +41,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           serverUrl: "",
         },
+        commandcode: {
+          ...DEFAULT_SERVER_SETTINGS.providers.commandcode,
+          binaryPath: "",
+        },
         pi: {
           ...DEFAULT_SERVER_SETTINGS.providers.pi,
           binaryPath: "",
@@ -70,6 +74,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.grok).toEqual({});
     expect(providerOptions.droid).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
+    expect(providerOptions.commandcode).toEqual({});
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
   });

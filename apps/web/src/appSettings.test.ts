@@ -437,6 +437,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           droid: [],
           opencode: [],
+          commandcode: [],
           pi: [],
         },
         "galapagos-alpha",
@@ -457,6 +458,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           droid: [],
           opencode: [],
+          commandcode: [],
           pi: [],
         },
         "",
@@ -477,6 +479,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           droid: [],
           opencode: [],
+          commandcode: [],
           pi: [],
         },
         "GPT-5.3 Codex",
@@ -497,6 +500,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           droid: [],
           opencode: [],
+          commandcode: [],
           pi: [],
         },
         "sonnet",
@@ -517,6 +521,7 @@ describe("resolveAppModelSelection", () => {
           grok: [],
           droid: [],
           opencode: [],
+          commandcode: [],
           pi: [],
         },
         "custom/selected-model",
@@ -632,6 +637,7 @@ describe("normalizeStoredAppSettings", () => {
         grokBinaryPath: "grok",
         droidBinaryPath: "droid",
         openCodeBinaryPath: "opencode",
+        commandCodeBinaryPath: "cmd",
         piBinaryPath: "pi",
       }),
     );
@@ -645,6 +651,7 @@ describe("normalizeStoredAppSettings", () => {
       grokBinaryPath: "",
       droidBinaryPath: "",
       openCodeBinaryPath: "",
+      commandCodeBinaryPath: "",
       piBinaryPath: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
@@ -674,6 +681,7 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
+        commandCodeBinaryPath: "",
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
@@ -715,6 +723,7 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
+        commandCodeBinaryPath: "",
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
@@ -737,6 +746,7 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
         openCodeServerUrl: "",
+        commandCodeBinaryPath: "cmd",
         piAgentDir: "",
         piBinaryPath: "pi",
       }),
@@ -754,6 +764,7 @@ describe("provider-indexed custom model settings", () => {
     customDroidModels: ["claude-opus-4-8-custom"],
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+    customCommandCodeModels: ["commandcode/custom-model"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
 
@@ -767,6 +778,7 @@ describe("provider-indexed custom model settings", () => {
       "grok",
       "droid",
       "opencode",
+      "commandcode",
       "pi",
     ]);
   });
@@ -785,6 +797,9 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
     expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
+    expect(getCustomModelsForProvider(settings, "commandcode")).toEqual([
+      "commandcode/custom-model",
+    ]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
 
@@ -798,6 +813,7 @@ describe("provider-indexed custom model settings", () => {
       customDroidModels: ["droid/default-model"],
       customDevinModels: ["adaptive"],
       customOpenCodeModels: ["openai/gpt-5"],
+      customCommandCodeModels: ["commandcode/default-model"],
       customPiModels: ["anthropic/default-pi"],
     } as const;
 
@@ -813,6 +829,9 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "commandcode")).toEqual([
+      "commandcode/default-model",
+    ]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
   });
 
@@ -864,6 +883,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for commandcode", () => {
+    expect(patchCustomModels("commandcode", ["commandcode/custom-model"])).toEqual({
+      customCommandCodeModels: ["commandcode/custom-model"],
+    });
+  });
+
   it("patches custom models for pi", () => {
     expect(patchCustomModels("pi", ["anthropic/custom-pi"])).toEqual({
       customPiModels: ["anthropic/custom-pi"],
@@ -880,6 +905,7 @@ describe("provider-indexed custom model settings", () => {
       droid: ["claude-opus-4-8-custom"],
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
+      commandcode: ["commandcode/custom-model"],
       pi: ["anthropic/custom-pi"],
     });
   });
@@ -910,6 +936,11 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
+    expect(
+      modelOptionsByProvider.commandcode.some(
+        (option) => option.slug === "commandcode/custom-model",
+      ),
+    ).toBe(true);
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );
@@ -933,6 +964,7 @@ describe("provider-indexed custom model settings", () => {
         "openrouter/gpt-oss-120b",
         "openrouter/gpt-oss-120b",
       ],
+      customCommandCodeModels: [" commandcode/custom-model ", "commandcode/custom-model"],
       customPiModels: [
         " anthropic/claude-sonnet-4-5 ",
         "anthropic/custom-pi",
@@ -973,6 +1005,11 @@ describe("provider-indexed custom model settings", () => {
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.commandcode.filter(
+        (option) => option.slug === "commandcode/custom-model",
+      ),
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),

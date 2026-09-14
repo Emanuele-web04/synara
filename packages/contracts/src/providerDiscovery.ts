@@ -15,6 +15,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "grok",
   "droid",
   "opencode",
+  "commandcode",
   "pi",
   "devin",
 ]);
