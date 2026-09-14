@@ -11,7 +11,17 @@ export interface SizedProviderRuntimeEvent {
 }
 
 export function isTerminalProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
-  return event.type === "turn.completed" || event.type === "session.exited";
+  return (
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted" ||
+    event.type === "session.exited" ||
+    event.type === "task.completed" ||
+    (event.type === "task.updated" &&
+      (event.payload.status === "completed" ||
+        event.payload.status === "failed" ||
+        event.payload.status === "killed" ||
+        event.payload.status === "paused"))
+  );
 }
 function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
   try {

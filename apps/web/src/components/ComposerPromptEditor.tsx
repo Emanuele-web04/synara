@@ -519,6 +519,7 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string | undefined;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
   /**
@@ -939,6 +940,7 @@ function ComposerPromptEditorInner({
   mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  ariaLabel,
   className,
   onRemoveTerminalContext,
   onCollapsePastedText,
@@ -1209,6 +1211,7 @@ function ComposerPromptEditorInner({
               )}
               data-testid="composer-editor"
               aria-placeholder={placeholder}
+              aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
@@ -1257,6 +1260,7 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    ariaLabel,
     className,
     onRemoveTerminalContext,
     onCollapsePastedText,
@@ -1296,6 +1300,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}

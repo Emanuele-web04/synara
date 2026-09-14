@@ -73,6 +73,7 @@ import {
   isNonFatalCodexErrorMessage,
 } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveCodexServiceTier } from "../../codexServiceTier.ts";
 import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -195,12 +196,13 @@ function codexModelSelectionOverrides(
     return {};
   }
 
+  const serviceTier = resolveCodexServiceTier(modelSelection);
   return {
     model: modelSelection.model,
     ...(modelSelection.options?.reasoningEffort !== undefined
       ? { effort: modelSelection.options.reasoningEffort }
       : {}),
-    ...(modelSelection.options?.fastMode ? { serviceTier: "fast" } : {}),
+    ...(serviceTier !== undefined ? { serviceTier } : {}),
   };
 }
 
@@ -2476,7 +2478,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             turnWatchdogs.clear();
             manager.off("event", listener);
           });
-          yield* ingress.stop;
+          yield* ingress.abort;
           yield* Queue.shutdown(runtimeEventQueue);
         }),
     );

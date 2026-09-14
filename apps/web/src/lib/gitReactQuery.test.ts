@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 const { readWorkingTreeDiff } = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
+    truncated: false,
   })),
 }));
 vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
@@ -22,6 +23,7 @@ import {
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
   refreshGitWorkingTreeDiffsForCwd,
+  refreshGitAfterFileWrite,
 } from "./gitReactQuery";
 
 function deferredVoid() {
@@ -36,9 +38,15 @@ describe("file-scoped working tree diffs", () => {
   it("keeps each file separate from other files and the repository-wide cache", async () => {
     const client = new QueryClient();
     const query = (filePath?: string) => gitWorkingTreeDiffQueryOptions({ cwd: "/repo", filePath });
-    expect(await client.fetchQuery(query())).toEqual({ patch: "all" });
-    expect(await client.fetchQuery(query("src/a.ts"))).toEqual({ patch: "src/a.ts" });
-    expect(await client.fetchQuery(query("src/b.ts"))).toEqual({ patch: "src/b.ts" });
+    expect(await client.fetchQuery(query())).toEqual({ patch: "all", truncated: false });
+    expect(await client.fetchQuery(query("src/a.ts"))).toEqual({
+      patch: "src/a.ts",
+      truncated: false,
+    });
+    expect(await client.fetchQuery(query("src/b.ts"))).toEqual({
+      patch: "src/b.ts",
+      truncated: false,
+    });
     expect(readWorkingTreeDiff).toHaveBeenCalledWith({
       cwd: "/repo",
       scope: "workingTree",
@@ -339,6 +347,45 @@ describe("git query invalidation", () => {
     await Promise.resolve();
     expect(queryClient.getQueryData(diffKey)).toBe("fresh");
     unsubscribe();
+  });
+
+  it("coalesces file-write bursts, reads the latest patch, and leaves branch queries alone", async () => {
+    const client = new QueryClient();
+    const cwd = "/repo/autosave";
+    const key = gitQueryKeys.workingTreeDiff(cwd, "unstaged");
+    const gate = deferredVoid();
+    let contents = "first";
+    const read = vi.fn(async () => {
+      const observed = contents;
+      if (read.mock.calls.length === 1) await gate.promise;
+      return observed;
+    });
+    const branches = vi.fn();
+    client.setQueryData(key, "baseline");
+    client.setQueryData(gitQueryKeys.branches(cwd), []);
+    const stopDiff = new QueryObserver(client, {
+      queryKey: key,
+      queryFn: read,
+      staleTime: Infinity,
+    }).subscribe(() => undefined);
+    const stopBranches = new QueryObserver(client, {
+      queryKey: gitQueryKeys.branches(cwd),
+      queryFn: branches,
+      staleTime: Infinity,
+    }).subscribe(() => undefined);
+    const refresh = refreshGitAfterFileWrite(client, cwd);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    contents = "latest";
+    for (let index = 0; index < 20; index++)
+      expect(refreshGitAfterFileWrite(client, cwd)).toBe(refresh);
+    gate.resolve();
+    await refresh;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(client.getQueryData(key)).toBe("latest");
+    expect(branches).not.toHaveBeenCalled();
+    stopDiff();
+    stopBranches();
+    client.clear();
   });
 
   it("serializes active expensive Git detail reads after status", async () => {

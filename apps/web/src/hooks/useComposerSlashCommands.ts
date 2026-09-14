@@ -19,6 +19,7 @@ import type { Project, Thread } from "../types";
 import type { ComposerTrigger } from "../composer-logic";
 import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
 import {
+  buildGoalSlashCommandPrompt,
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,
   getAvailableComposerSlashCommands,
@@ -366,7 +367,7 @@ export function useComposerSlashCommands(input: {
       }
       if (action.action === "edit") {
         const currentGoal = activeThread?.goal?.trim() ?? "";
-        editorActions.setComposerPromptValue(`/goal ${currentGoal}`);
+        editorActions.setComposerPromptValue(buildGoalSlashCommandPrompt(currentGoal));
         editorActions.scheduleComposerFocus();
         return;
       }

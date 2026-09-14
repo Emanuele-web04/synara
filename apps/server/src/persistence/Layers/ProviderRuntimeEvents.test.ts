@@ -585,6 +585,87 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
       assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
     }),
   );
+  it.effect("acknowledges a drained page in one transaction with per-row bookkeeping", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const journalSize = Effect.map(
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+        (rows) => rows[0]?.count ?? 0,
+      );
+      const replayableTurns = Effect.map(
+        repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10_000,
+        }),
+        (rows) => rows.map((row) => String(row.event.turnId)),
+      );
+      const cursorBefore = yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+
+      // One page: a turn that settles inside it, then an open follow-up turn.
+      const settledEvents = 40;
+      const openEvents = 25;
+      let last = cursorBefore;
+      for (let index = 0; index < settledEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("c", index))).sequence;
+      }
+      last = (yield* repository.append(terminalEvent("c"))).sequence;
+      for (let index = 0; index < openEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("d", index))).sequence;
+      }
+      const sizeBeforeAck = yield* journalSize;
+
+      // The target must be a stored row the cursor can reach contiguously.
+      assert.isFalse(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last + 1,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        cursorBefore,
+      );
+      assert.strictEqual(yield* journalSize, sizeBeforeAck);
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        last,
+      );
+      // Same outcome as row-by-row acknowledgement: the settled turn released
+      // its replay backlog (the terminal forced a scan) while every event of
+      // the still-open turn stays replayable.
+      const replayable = yield* replayableTurns;
+      assert.strictEqual(replayable.length, openEvents);
+      assert.isTrue(replayable.every((turn) => turn === "turn-retention-d"));
+      // The scan ran once, at the end of the page: the bounded diagnostic tail
+      // may already include the open turn's rows, so the journal holds between
+      // the tail and tail-plus-open-turn rows, never fewer.
+      const sizeAfterAck = yield* journalSize;
+      assert.isAtLeast(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+      assert.isAtMost(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + openEvents);
+      assert.isBelow(sizeAfterAck, sizeBeforeAck);
+
+      // Idempotent once the cursor is already there.
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:01.000Z",
+        }),
+      );
+      assert.strictEqual(yield* journalSize, sizeAfterAck);
+    }),
+  );
 });
 
 it.layer(ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(

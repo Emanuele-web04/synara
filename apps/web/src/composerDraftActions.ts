@@ -567,6 +567,18 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    setPendingUserInputDrafts: (threadId, drafts) => {
+      set((state) => {
+        const nextDraft = {
+          ...(state.draftsByThreadId[threadId] ?? createEmptyThreadDraft()),
+          pendingUserInputDrafts: drafts,
+        };
+        const draftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) delete draftsByThreadId[threadId];
+        else draftsByThreadId[threadId] = nextDraft;
+        return { draftsByThreadId };
+      });
+    },
     setPrompt: (threadId, prompt) => {
       if (threadId.length === 0) {
         return;
