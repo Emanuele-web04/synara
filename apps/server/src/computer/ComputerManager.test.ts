@@ -284,6 +284,38 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("re-walks a fresh tree when a cached-tree target lookup misses", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    const realGetState = backend.getState.bind(backend);
+    let calls = 0;
+    vi.spyOn(backend, "getState").mockImplementation(async (options) => {
+      calls += 1;
+      const state = await realGetState(options);
+      // First read serves a stale tree whose target has not appeared yet —
+      // what a recent-tree cache hit looks like after a UI change.
+      if (calls === 1 && state.root) {
+        return {
+          ...state,
+          root: {
+            ...state.root,
+            children: state.root.children.map((child) => ({ ...child, children: [] })),
+          },
+        };
+      }
+      return state;
+    });
+
+    const result = await manager.click("thread-1", { label: "Calculate", role: "button" });
+    expect(result.point).toEqual({ x: 1_180, y: 228 });
+    expect(calls).toBe(2);
+    expect(backend.callsFor("getState")[0]?.args[0]).toMatchObject({ reuseRecentTree: true });
+    expect(backend.callsFor("getState")[1]?.args[0]).not.toMatchObject({
+      reuseRecentTree: true,
+    });
+    await manager.dispose();
+  });
+
   it("falls back to a coordinate click when no AXPress token is advertised", async () => {
     const backend = Object.assign(new FakeComputerBackend(), {
       agentDialect: "macos" as const,
