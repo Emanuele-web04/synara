@@ -4789,8 +4789,7 @@ export default function ChatView({
             "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5",
             COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
             COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
-            isThreadTemporary &&
-              "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]",
+            isThreadTemporary && "!text-[var(--color-text-accent)]",
           )}
         >
           <TemporaryThreadIcon className="size-3.5" />
