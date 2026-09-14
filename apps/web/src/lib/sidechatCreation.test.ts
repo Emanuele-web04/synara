@@ -1,4 +1,4 @@
-import type { NativeApi, OrchestrationShellSnapshot } from "@synara/contracts";
+import type { ModelSelection, NativeApi, OrchestrationShellSnapshot } from "@synara/contracts";
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,7 @@ import {
   createOrJoinSidechat,
   createSidechatThread,
   getSidechatPaneRetentionVersion,
+  sendSidechatPrompt,
   sidechatPaneRetentionRemainingMs,
   subscribeSidechatPaneRetention,
   type SidechatCreationFlight,
@@ -24,6 +25,7 @@ const sourceThread = {
   id: ThreadId.makeUnsafe("source-thread"),
   projectId: ProjectId.makeUnsafe("project-1"),
   title: "Source thread",
+  runtimeMode: "full-access",
   envMode: "local",
   branch: "main",
   worktreePath: null,
@@ -59,6 +61,80 @@ describe("createSidechatThread", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearSidechatPaneRetention(ThreadId.makeUnsafe("sidechat-thread"));
+  });
+
+  it.each([
+    "codex",
+    "claudeAgent",
+    "opencode",
+    "cursor",
+    "devin",
+    "antigravity",
+    "grok",
+    "pi",
+    "droid",
+  ] as const)("inherits Full access for a %s fork and its first prompt", async (provider) => {
+    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+    await createSidechatThread({
+      api: makeApi({ dispatchCommand }),
+      project,
+      sourceThread,
+      selectedModelSelection: { provider, model: "test-model" },
+      initialPrompt: "Investigate this",
+      openSidechat: vi.fn(),
+      syncServerShellSnapshot: vi.fn(),
+    });
+    expect(dispatchCommand.mock.calls.map(([command]) => command.runtimeMode)).toEqual([
+      "full-access",
+      "full-access",
+    ]);
+  });
+
+  it.each([
+    [{ provider: "codex", model: "test-model" }, "auto"],
+    [{ provider: "claudeAgent", model: "test-model", supportsAutoMode: true }, "auto"],
+    [
+      { provider: "claudeAgent", model: "test-model", supportsAutoMode: false },
+      "approval-required",
+    ],
+    [{ provider: "claudeAgent", model: "test-model" }, "approval-required"],
+    [{ provider: "cursor", model: "test-model" }, "approval-required"],
+  ] satisfies [ModelSelection, string][])(
+    "normalizes inherited Auto for %j to %s",
+    async (modelSelection, expectedRuntimeMode) => {
+      const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+      await createSidechatThread({
+        api: makeApi({ dispatchCommand }),
+        project,
+        sourceThread: { ...sourceThread, runtimeMode: "auto" },
+        selectedModelSelection: modelSelection,
+        initialPrompt: "Investigate this",
+        openSidechat: vi.fn(),
+        syncServerShellSnapshot: vi.fn(),
+      });
+      expect(dispatchCommand.mock.calls.map(([command]) => command.runtimeMode)).toEqual([
+        expectedRuntimeMode,
+        expectedRuntimeMode,
+      ]);
+    },
+  );
+
+  it("uses the selected composer permission instead of the older source value", async () => {
+    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+    await createSidechatThread({
+      api: makeApi({ dispatchCommand }),
+      project,
+      sourceThread,
+      selectedModelSelection,
+      runtimeMode: "approval-required",
+      initialPrompt: "Investigate this",
+      openSidechat: vi.fn(),
+      syncServerShellSnapshot: vi.fn(),
+    });
+    expect(dispatchCommand.mock.calls.map(([command]) => command.runtimeMode)).toEqual([
+      "approval-required",
+      "approval-required",
+    ]);
   });
 
   it("opens the fork before waiting for the shell snapshot", async () => {
@@ -213,6 +289,23 @@ describe("createSidechatThread", () => {
     ).rejects.toThrow("fork failed");
     expect(openSidechat).not.toHaveBeenCalled();
   });
+});
+
+describe("sendSidechatPrompt", () => {
+  it.each(["full-access", "auto", "approval-required"] as const)(
+    "preserves %s for a queued prompt",
+    async (runtimeMode) => {
+      const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+      await sendSidechatPrompt({
+        api: makeApi({ dispatchCommand }),
+        threadId: sourceThread.id,
+        selectedModelSelection,
+        runtimeMode,
+        prompt: "Follow up",
+      });
+      expect(dispatchCommand).toHaveBeenCalledWith(expect.objectContaining({ runtimeMode }));
+    },
+  );
 });
 
 describe("sidechat pane retention", () => {

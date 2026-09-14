@@ -73,6 +73,10 @@ the conversation or split from one exact turn. Use a
 [handoff](https://www.trysynara.com/docs/workflows/handoffs) when another provider should continue
 the same task and ownership boundary.
 
+Sidechats inherit the source chat's selected permissions, including Full access. Approve for me
+is preserved when the selected provider and model support it; otherwise the sidechat uses Ask for
+approval. You can change a sidechat's permissions independently after creating it.
+
 ## Environments
 
 A task runs in one of two common environments.
