@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -57,10 +58,12 @@ export function sweepOrphanedCuaDrivers(): void {
   } catch {
     return;
   }
+  const liveSocketDirs = new Set<string>();
   for (const line of listing.split("\n")) {
     if (!/cua-driver\s+serve\s+--embedded/.test(line)) continue;
     const pid = Number(line.trim().split(/\s+/)[0]);
     if (!pid || pid === process.pid) continue;
+    const socketDir = line.match(/--socket\s+(\S+)\//)?.[1];
     let env: string;
     try {
       env = execFileSync("ps", ["eww", "-p", String(pid), "-o", "command"], {
@@ -73,6 +76,7 @@ export function sweepOrphanedCuaDrivers(): void {
     if (!hostPid) continue;
     try {
       process.kill(hostPid, 0);
+      if (socketDir) liveSocketDirs.add(socketDir);
       continue;
     } catch {
       // Host is gone: the daemon is an orphan.
@@ -82,6 +86,29 @@ export function sweepOrphanedCuaDrivers(): void {
       log(`killed orphaned cua-driver pid=${pid} (host pid ${hostPid} gone)`);
     } catch {
       // Already gone.
+    }
+  }
+  // Every generation mkdtemps a synara-cua-* dir (host.sock, driver socket,
+  // state) and nothing reaps it on a crash — hundreds accumulate over days.
+  // A dir survives only while a live daemon still references its socket, or
+  // while it is young enough to belong to a spawn still in flight.
+  let entries: string[];
+  try {
+    entries = readdirSync(tmpdir());
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.startsWith("synara-cua-")) continue;
+    const dir = join(tmpdir(), entry);
+    if (liveSocketDirs.has(dir)) continue;
+    try {
+      if (now - statSync(dir).mtimeMs < 30_000) continue;
+      rmSync(dir, { recursive: true, force: true });
+      log(`removed stale driver directory ${entry}`);
+    } catch {
+      // Already gone or unreadable.
     }
   }
 }
