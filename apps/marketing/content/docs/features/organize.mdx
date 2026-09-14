@@ -13,7 +13,7 @@ Projects, threads, and individual transcript messages can be pinned. Pinned mess
 
 Press `mod+f` to open the floating transcript search. Synara highlights matching message text, shows the active result and total count, and supports previous/next navigation without treating tool-only activity as conversation text.
 
-Close the panel to remove its temporary highlights. Transcript search does not change messages or pinned content.
+Close the panel to remove its temporary highlights. Transcript search does not change messages or pinned content. Saved transcript highlights, underlines, and markers were removed in 0.8.4; pinned messages and thread notes remain available.
 
 ## Recap long threads
 
@@ -33,11 +33,17 @@ The primary sidebar destinations can also be dragged into your preferred order. 
 
 The editor workspace opens a file tree and syntax-highlighted editor next to the conversation, and can move file references straight into prompts. For bigger edits, open-in launchers hand the project to VS Code, Cursor, Zed, JetBrains IDEs, Xcode, Ghostty, Terminal, and others.
 
+The Explorer now edits files with syntax highlighting and a numbered plain-text fallback. Edits autosave after a short pause; **Saved**, **Saving...**, and **Unsaved changes** show the actual state. Use **Save** or `mod+s` to save immediately. See [Workspace editor & diffs](/docs/features/workspace-editor) for conflicts, navigation, and review controls.
+
 ## File preview updates
 
 Open text, image, PDF, and diff views revalidate when workspace files change. Unsaved text edits are protected from background replacement. Check the task's checkout before treating an updated preview as evidence from a particular branch.
 
 Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. Split is the default until you save a preference.
+
+## Read larger documents
+
+Use **Maximize panel** on a file or Explorer pane to expand it across the workspace; **Restore panel** returns to the dock. Rendered Markdown resolves workspace wiki links such as `[[notes/design]]` and `[[notes/design|Design notes]]`, adding `.md` when the target has no extension. Wiki links resolve from the workspace root. Heading and block wiki-link targets remain literal text.
 
 ## Rename and retain your layout
 

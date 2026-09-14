@@ -3,6 +3,7 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -299,14 +300,12 @@ function formatOpenCodeServerStartupDetail(input: {
 
 function pooledOpenCodeServerKey(input: {
   readonly binaryPath: string;
-  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly cwd?: string;
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
   readonly poolIsolationKey?: string;
 }): string {
-  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
     binaryPath: input.binaryPath,
     cwd: input.cwd ?? null,
@@ -314,14 +313,6 @@ function pooledOpenCodeServerKey(input: {
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
     poolIsolationKey: input.poolIsolationKey ?? null,
-    cliSpec: {
-      defaultBinaryPath: cliSpec.defaultBinaryPath,
-      displayName: cliSpec.displayName,
-      serverReadyPrefix: cliSpec.serverReadyPrefix,
-      configContentEnvVar: cliSpec.configContentEnvVar,
-      dataDirectoryName: cliSpec.dataDirectoryName,
-      serverAuthUsername: cliSpec.serverAuthUsername,
-    },
   });
 }
 
@@ -1165,7 +1156,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
-          const key = pooledOpenCodeServerKey(input);
+          // Collapse ordinary aliases, but let the OS resolve parent traversal: resolving `..`
+          // lexically can cross a symlink differently or hide a missing directory. Keep the same
+          // spelling in both the pool key and spawn options, without adding filesystem work here.
+          const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
+          const pooledInput =
+            input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {
             yield* cancelPooledServerIdleClose(existing);
@@ -1179,7 +1176,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
               const serverScope = yield* Scope.make();
               const startedExit = yield* Effect.exit(
                 restore(
-                  startOpenCodeServerProcess(input).pipe(
+                  startOpenCodeServerProcess(pooledInput).pipe(
                     Effect.provideService(Scope.Scope, serverScope),
                   ),
                 ),
@@ -1194,7 +1191,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 key,
                 server: startedExit.value,
                 scope: serverScope,
-                closeOnRelease: input.poolIsolationKey !== undefined,
+                closeOnRelease: pooledInput.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
                 exitWatchFiber: null,

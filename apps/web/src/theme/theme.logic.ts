@@ -444,9 +444,9 @@ export function parseThemeShareString(rawValue: string): ThemeSharePayload {
   }
 
   const payloadText = value.slice(THEME_SHARE_PREFIX.length);
-  const jsonText = payloadText.startsWith("{") ? payloadText : decodeURIComponent(payloadText);
   let payload: unknown;
   try {
+    const jsonText = payloadText.startsWith("{") ? payloadText : decodeURIComponent(payloadText);
     payload = JSON.parse(jsonText);
   } catch {
     throw new Error("Theme share string does not contain valid JSON.");

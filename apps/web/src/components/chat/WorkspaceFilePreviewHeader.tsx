@@ -60,6 +60,8 @@ interface WorkspaceFilePreviewHeaderProps {
   onEditFile?: (() => void) | undefined;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
+  saveState?: string | undefined;
+  onSave?: (() => void) | undefined;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
   /** Re-fetches the current file without discarding a dirty edit buffer. */
@@ -307,7 +309,22 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
         </span>
       ) : null}
 
+      {props.saveState ? (
+        <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+          {props.saveState}
+        </span>
+      ) : null}
       <div className="flex shrink-0 items-center gap-1.5">
+        {props.onSave ? (
+          <button
+            type="button"
+            onClick={props.onSave}
+            disabled={!props.dirty || props.saveState === "Saving..."}
+            className="rounded-md px-2 py-1 text-[11px] disabled:opacity-50"
+          >
+            Save
+          </button>
+        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"

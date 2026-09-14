@@ -161,7 +161,6 @@ export function useChatTurnExecution({
   runProjectScript,
   persistThreadSettingsForNextTurn,
   rememberCustomBinaryPathForDispatch,
-  assistantDeliveryMode,
   setSettledThreadBranchWarningDismissedThreadId,
   armLocalDispatchAckFallback,
   setQueuedSteerGate,

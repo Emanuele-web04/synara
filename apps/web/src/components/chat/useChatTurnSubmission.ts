@@ -1,3 +1,4 @@
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import {
   resolveQueuedTurnDispatchSettings,
   queuedChatTurnDispatchFields,
@@ -59,9 +60,6 @@ export function useChatTurnSubmission({
   isConnecting,
   sendPreflightInFlightRef,
   sendInFlightRef,
-  runtimeMode,
-  interactionMode,
-  envMode,
   showPlanFollowUpPrompt,
   activeProposedPlan,
   hasQueueableLiveTurn,
@@ -162,8 +160,6 @@ export function useChatTurnSubmission({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  providerOptionsForDispatch,
   pendingAutomationConversationRef,
   setPendingAutomationConversation,
   pendingAutomationConversation,
@@ -261,6 +257,19 @@ export function useChatTurnSubmission({
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current
       ) {
+        return false;
+      }
+      sendPreflightInFlightRef.current = true;
+      const editorSaved = await flushWorkspaceEditors(
+        queryClient,
+        threadWorkspaceCwd ?? chatWorkspaceRoot,
+      ).catch(() => false);
+      sendPreflightInFlightRef.current = false;
+      if (!editorSaved) {
+        setThreadError(
+          threadId,
+          "Could not save editor changes. Resolve the save error before sending; your prompt and file draft are preserved.",
+        );
         return false;
       }
       if (!queuedTurn) {

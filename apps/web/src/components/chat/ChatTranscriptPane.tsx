@@ -101,6 +101,7 @@ interface ChatTranscriptPaneProps {
   scrollButtonVisible: boolean;
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
+  messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
@@ -177,6 +178,7 @@ export function ChatTranscriptPane({
   scrollButtonVisible,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
+  messageChangeSignal,
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
@@ -266,6 +268,7 @@ export function ChatTranscriptPane({
             {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={timelineEntries}
+            messageChangeSignal={messageChangeSignal}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}

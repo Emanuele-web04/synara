@@ -294,6 +294,14 @@ export interface ContextMenuItem<T extends string = string> {
   /** Starts a new visual group before this actionable row. */
   separatorBefore?: boolean;
   destructive?: boolean;
+  /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
+  icon?: string;
+}
+
+/** Context menu row sent over the desktop bridge with its icon pre-rasterized by the renderer. */
+export interface DesktopContextMenuItem<T extends string = string> extends ContextMenuItem<T> {
+  /** `data:image/png;base64,` template image rendered at 2x for a 16pt menu icon. */
+  iconDataUrl?: string;
 }
 
 export type DesktopUpdateStatus =
@@ -632,7 +640,7 @@ export interface DesktopBridge {
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
-    items: readonly ContextMenuItem<T>[],
+    items: readonly DesktopContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;

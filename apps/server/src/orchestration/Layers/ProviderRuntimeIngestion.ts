@@ -2,6 +2,7 @@ import {
   type AssistantDeliveryMode,
   CommandId,
   EventId,
+  isToolLifecycleItemType,
   MessageId,
   type OrchestrationCheckpointFile,
   type OrchestrationEvent,
@@ -340,7 +341,7 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     case "item.updated":
     case "item.completed": {
       const itemType = event.payload.itemType;
-      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+      return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
     case "user-input.requested":
@@ -1887,6 +1888,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const rows = yield* pendingInteractions.listUnsettled({ threadId });
       for (const row of rows) {
+        if (row.status === "uncertain" && row.interactionKind === "approval") continue;
         if (scopeFilter && !scopeFilter(row)) continue;
         const requestKind = pendingInteractionRequestKind(row.interactionKind);
         yield* orchestrationEngine.dispatch(
