@@ -404,6 +404,86 @@ describe("Cua GUI host retirement", () => {
     expect((await f.events()).some((event) => event.event === "key")).toBe(false);
   });
 
+  it("ignores a permission probe that reverts on the confirming re-read", async () => {
+    // The AppSnap helper can read TCC mid-transition and report a grant that
+    // the next probe reverts. Arming the gate on that phantom read deadlocked
+    // production: every action runs check_permissions first via refresh(), so
+    // the helper re-armed the gate after each observation cleared it.
+    let probes = 0;
+    const f = await fixture(capability, {
+      checkPermissions: async () => {
+        probes += 1;
+        return { accessibility: true, screenRecording: probes !== 2 };
+      },
+    });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await expect(check()).resolves.toMatchObject({ desktopEpoch: 0 });
+    await expect(check()).resolves.toMatchObject({
+      desktopEpoch: 0,
+      result: { structuredContent: { screen_recording: true } },
+    });
+    expect(probes).toBe(3);
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("a flapping permission helper cannot deadlock input behind the observation gate", async () => {
+    let probes = 0;
+    const f = await fixture(capability, {
+      checkPermissions: async () => {
+        probes += 1;
+        return { accessibility: true, screenRecording: probes % 2 === 1 };
+      },
+    });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const observe = () =>
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+        args: { pid: 1, window_id: 2 },
+      });
+    await check();
+    await f.host.pauseDesktop("screen-lock");
+    f.host.resumeDesktop("screen-lock");
+    for (let i = 0; i < 3; i += 1) {
+      await observe();
+      await check();
+      await expect(
+        cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+      ).resolves.toMatchObject({ ok: true });
+    }
+  });
+
+  it("refuses an observation a stop interrupted instead of silently voiding the clear", async () => {
+    const f = await fixture(capability, { delayObservation: true });
+    await f.host.pauseDesktop("screen-lock");
+    f.host.resumeDesktop("screen-lock");
+    const observe = () =>
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+        args: { pid: 1, window_id: 2 },
+      });
+    const interrupted = observe();
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // stopInput (turn Stop/revokeControl) used to bump only the input epoch:
+    // the in-flight image still returned while its gate clear was skipped.
+    await cuaRequest(f.endpoint, { method: "stop" });
+    await expect(interrupted).resolves.toMatchObject({
+      result: { isError: true, structuredContent: { code: "desktop_input_paused" } },
+    });
+    await observe();
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   it("preserves multibyte UTF-8 across incoming socket chunks", async () => {
     const authority = capability + "-è🧪";
     const f = await fixture(authority);

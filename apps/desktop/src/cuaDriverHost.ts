@@ -36,6 +36,12 @@ interface HostPermissions {
   screenRecording: boolean;
 }
 
+function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
+  return a.accessibility !== b.accessibility || a.screenRecording !== b.screenRecording;
+}
+
+const log = (message: string) => console.info(`[desktop-cua] ${message}`);
+
 const DRIVER_SESSION_DEATH_CODES = new Set([
   "session_ended",
   "session-expired",
@@ -229,27 +235,39 @@ export class CuaDriverHost {
         // AppSnap's short-lived helper avoids the embedded daemon's TCC cache.
         // This remains an authenticated, read-only host operation: prompt args
         // from tools never reach the permission request path.
-        const permissions = await this.checkPermissions(connection, this.options.checkPermissions);
-        if (
-          !permissions ||
-          this.closed ||
-          this.suspended ||
-          connection.destroyed ||
-          epoch !== this.epoch
-        )
+        const check = this.options.checkPermissions;
+        const cancelled = () =>
+          this.closed || this.suspended || connection.destroyed || epoch !== this.epoch;
+        let permissions = await this.checkPermissions(connection, check);
+        if (!permissions || cancelled())
           return {
             ok: false,
             error: "Cancelled before permission check completed.",
             effect: "not-dispatched",
           } as const;
-        if (
-          this.permissions &&
-          (permissions.accessibility !== this.permissions.accessibility ||
-            permissions.screenRecording !== this.permissions.screenRecording)
-        ) {
+        if (this.permissions && permissionsChanged(this.permissions, permissions)) {
+          // A single helper probe can read TCC mid-transition and report a
+          // phantom change the next probe reverts. Arming on it deadlocks the
+          // desktop: every action runs check_permissions first, so a flapping
+          // helper re-arms the gate after each observation clears it. Only a
+          // confirmed second read counts as a real change.
+          const confirmed = await this.checkPermissions(connection, check);
+          if (!confirmed || cancelled())
+            return {
+              ok: false,
+              error: "Cancelled before permission check completed.",
+              effect: "not-dispatched",
+            } as const;
+          permissions = confirmed;
+        }
+        if (this.permissions && permissionsChanged(this.permissions, permissions)) {
           this.epoch += 1;
           this.desktopEpoch += 1;
           this.desktopObservationRequired = true;
+          log(
+            `permission state changed accessibility ${this.permissions.accessibility} -> ${permissions.accessibility}, ` +
+              `screen_recording ${this.permissions.screenRecording} -> ${permissions.screenRecording}; requiring fresh desktop observation`,
+          );
           // Already inside the operation queue: stop() would wait for itself.
           // Retire directly, preserving its native cleanup acknowledgement.
           if (this.generation) await this.retire(this.generation);
@@ -273,8 +291,10 @@ export class CuaDriverHost {
       if (
         this.desktopObservationRequired &&
         (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")
-      )
+      ) {
+        log(`refused ${name}: fresh desktop observation still required`);
         return this.desktopPauseReply();
+      }
       const reply = await this.call(
         name,
         request.args,
@@ -371,8 +391,12 @@ export class CuaDriverHost {
         break;
       }
       if (!reply || !generation) throw new Error("Cancelled before dispatch.");
-      if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name))
+      if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name)) {
+        log(
+          `refused stale ${name} read (desktop epoch ${admittedDesktopEpoch} -> ${this.desktopEpoch})`,
+        );
         return this.desktopPauseReply();
+      }
       if (
         modelObservation &&
         !connection.destroyed &&
@@ -387,8 +411,10 @@ export class CuaDriverHost {
         reply.result.structuredContent?.screenshot_frame_valid !== false &&
         (reply.result.content?.some((part) => part.type === "image" && !!part.data) ||
           Array.isArray(reply.result.structuredContent?.elements))
-      )
+      ) {
         this.desktopObservationRequired = false;
+        log(`fresh desktop observation via ${name}; input gate cleared`);
+      }
       if (name === "get_desktop_state" && reply.result && this.options.normalizeOverview)
         this.options.normalizeOverview(reply.result);
       return reply;
@@ -575,6 +601,10 @@ export class CuaDriverHost {
 
   stop(): Promise<void> {
     this.epoch += 1;
+    // A read dispatched before a stop must not be admitted as a fresh
+    // observation afterwards: bumping the desktop epoch turns that silent
+    // clear-void into a visible stale-read refusal.
+    this.desktopEpoch += 1;
     for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
     this.stopping = this.stopping.then(async () => {
@@ -612,14 +642,15 @@ export class CuaDriverHost {
   /** OS desktop state is independent of backend restarts. A backend resume
    * cannot reopen input while the screen is locked or another user is active. */
   pauseDesktop(reason: string): Promise<void> {
-    this.desktopEpoch += 1;
     this.desktopPauses.add(reason);
     this.desktopObservationRequired = true;
+    log(`desktop input paused (${reason}); requiring fresh desktop observation`);
     return this.stop();
   }
 
   resumeDesktop(reason: string): void {
-    this.desktopPauses.delete(reason);
+    if (this.desktopPauses.delete(reason))
+      log(`desktop pause "${reason}" lifted; ${this.desktopPauses.size} pause(s) remain`);
   }
 
   private desktopPauseReply(): CuaReply {

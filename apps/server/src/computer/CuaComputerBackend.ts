@@ -794,7 +794,7 @@ export class CuaComputerBackend implements ComputerBackend {
     const { pid, window_id, window, baseline } = await this.target(windowId);
     if (!window.visible) {
       const message =
-        "The target window is not available on the current Space. Read its state after it becomes available before continuing.";
+        "The target window is not on the current Space or not on screen. Call computer_activate_window to bring it forward, then read its fresh state before continuing.";
       throw new CuaActionError(message, "not-dispatched", "target_not_on_active_space", {
         windowId: window.id,
         message,
