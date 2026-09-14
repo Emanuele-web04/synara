@@ -114,9 +114,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # Group short suites to share setup and leave runner capacity for other PRs.
-  # Server files are split across two runners, retaining their serial worker
-  # flags within each shard. Turbo still runs each package's build prerequisites.
+  # Keep each server shard serial internally, but use three independent runners.
+  # The measured native 3-way split lowers the slowest shard without changing
+  # collected tests. Turbo still runs each package's build prerequisites.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
@@ -136,12 +136,15 @@ jobs:
             filters: "--filter=@synara/web"
             test-args: ""
           # Server lane tests the CLI package (package name @synara/cli).
-          - pkg: server 1/2
+          - pkg: server 1/3
             filters: "--filter=@synara/cli"
-            test-args: "--shard=1/2"
-          - pkg: server 2/2
+            test-args: "--shard=1/3"
+          - pkg: server 2/3
             filters: "--filter=@synara/cli"
-            test-args: "--shard=2/2"
+            test-args: "--shard=2/3"
+          - pkg: server 3/3
+            filters: "--filter=@synara/cli"
+            test-args: "--shard=3/3"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -158,9 +161,9 @@ jobs:
       - name: Test (${{ matrix.pkg }})
         run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
-  # File sharding cannot split the large ChatView suite. Run its follow matrix
-  # and remaining cases separately, plus two shards of all other browser files.
-  # Every runner retains the stable suite's serial execution and quarantine.
+  # ChatView is one large file, so split it by complementary test-name groups.
+  # Other browser files use native 3-way file sharding. Every runner keeps serial
+  # execution and the stable geometry quarantine; only distribution changes.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
@@ -175,12 +178,16 @@ jobs:
         include:
           - project: chat-follow
             shard: 1/1
+          - project: chat-projects
+            shard: 1/1
           - project: chat-workflows
             shard: 1/1
           - project: components
-            shard: 1/2
+            shard: 1/3
           - project: components
-            shard: 2/2
+            shard: 2/3
+          - project: components
+            shard: 3/3
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -194,16 +201,16 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
 
-      # Run the workspace-local playwright binary directly: bunx stalled after
-      # the chromium download on hosted runners. The step timeout stops any
-      # remaining apt/download stalls from eating the whole job budget.
+      # GitHub's pinned Ubuntu image already provides the Chromium shared-library
+      # dependencies used by this stable suite. Avoid a redundant apt/font pass on
+      # every shard; nightly geometry still uses --with-deps for rendering coverage.
       - name: Install browser test runtime
         timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           cd apps/web
-          ./node_modules/.bin/playwright install --with-deps chromium
+          ./node_modules/.bin/playwright install chromium
 
       - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
         timeout-minutes: 20

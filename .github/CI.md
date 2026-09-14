@@ -2,9 +2,9 @@
 
 The required check remains **Format, Lint, Typecheck, Test, Browser Test, Build**.
 It aggregates results only. Static checks start independently. Normal code
-changes still run typechecking, four unit partitions, four stable browser
-partitions, desktop build, native Windows regression and migration lineage.
-Docs-only detection and nightly geometry ownership are unchanged.
+changes run typechecking, five unit partitions, six stable browser partitions,
+desktop build, native Windows regression and migration lineage. Docs-only
+detection and nightly geometry ownership are unchanged.
 
 ## Install scopes and caches
 
@@ -35,20 +35,19 @@ runs there once; native Windows validation is not removed. Release preflight
 still installs the full workspace and runs all tests. Signing, notarization,
 source provenance, publication and production dependency staging are unchanged.
 
-## Measurements: September 14, 2026
+## Cross-platform setup measurements: September 14, 2026
 
 Application baseline: `70f5ed0e4757c0f69891b258171da80d324f0e18`. The successful
 [baseline main CI](https://github.com/Emanuele-web04/synara/actions/runs/34792874548)
-took 323 seconds and 2,158 raw runner-seconds across 16 jobs. This is one observed
-full run, not a controlled multi-run median. The new full graph has 15 jobs;
-docs-only retains three. No percentage below describes an entire signed release.
+took 323 seconds and 2,158 raw runner-seconds across 16 jobs. These are observed
+samples, not a promise for every hosted runner. No percentage below describes an
+entire signed release.
 
 The [cross-platform install experiment](https://github.com/Emanuele-web04/synara/actions/runs/34822416944)
 used three observations per variant on each runner, fresh worktrees and dedicated
 empty `BUN_INSTALL_CACHE_DIR` directories. Variant order reversed on the middle
-repetition. Bun was pinned by the repository toolchain. Linux/Windows included
-lifecycle scripts; both macOS control and candidate used the release workflow's
-existing `--ignore-scripts`. Frozen lockfile hashes remained identical.
+repetition. Linux/Windows included lifecycle scripts; both macOS variants used
+the release workflow's existing `--ignore-scripts`.
 
 ```text
 Install segment                              Full median  Scoped median  Reduction
@@ -62,100 +61,152 @@ macOS Intel device dependencies               61.12 s       7.02 s        88.5%
 
 The corrected static scope was measured in a
 [separate same-source Ubuntu job](https://github.com/Emanuele-web04/synara/actions/runs/34823971221):
-7.55 / 7.47 / 7.68 seconds. This is not paired on the same machine as the
-full-workspace control. Intel release measurements were noisy: full
+7.55 / 7.47 / 7.68 seconds. Intel release measurements were noisy: full
 61.12 / 269.19 / 54.96 seconds, scoped 29.68 / 42.69 / 106.97 seconds. Its median
-improved but not every pair did; do not promise a fixed 30% improvement.
-Device installs were consistently smaller on both architectures. Linux runtime
-filtering measured 27.85 to 24.08 seconds, but full Linux jobs retain their healthy
-warm modules cache rather than universally switching to cold filtered installs.
+improved but not every pair did. Linux runtime filtering measured 27.85 to 24.08
+seconds, but full Linux jobs retain their healthy warm modules cache.
 
 [Native artifact validation](https://github.com/Emanuele-web04/synara/actions/runs/34822950006)
 passed Linux AppImage, Windows NSIS, macOS ARM64 DMG and Intel DMG builds plus
-packaged-startup smoke with the filtered install. Both macOS native device probes
+packaged-startup smoke with filtered installs. Both macOS native device probes
 also passed. These were **unsigned build-only checks**, not signed publication or
 all Xcode/simulator combinations.
 
-## Browser distribution
+## Critical-path attack
 
-The four blocking runners are preserved. Complementary ChatView name patterns
-move project/worktree/Space/approval cases into the shorter follow partition.
-Unknown new stable cases always fall into exactly one partition. Both retain
-the existing geometry exclusion. No test bodies, assertions, retries or timeouts
-were changed.
+The previous warm confirmation
+[run 34829293225](https://github.com/Emanuele-web04/synara/actions/runs/34829293225)
+completed in 308 seconds and 1,943 raw runner-seconds (32.38 minutes). The browser
+`chat-workflows` job was the critical lane, followed by server and component
+partitions. The experiments below target those measured paths rather than adding
+generic concurrency.
 
-The [paired browser experiment](https://github.com/Emanuele-web04/synara/actions/runs/34823613671)
-ran control/candidate three times each per partition on the same runner, reversing
-order in the middle. Median test-command durations changed from
-146.77 / 222.28 seconds to 200.91 / 178.20 seconds. The larger median is **9.6%
-shorter**; combined medians are **2.7% higher**. This is a latency tradeoff, not a
-browser compute reduction. Exact executed-name unions remained 126 stable cases,
-with no overlap or omissions, on all repetitions. Candidate runs all passed;
-one unchanged baseline follow case failed, and its failure remains in the logs.
+### Stable browser runtime preparation
+
+The [runtime benchmark](https://github.com/Emanuele-web04/synara/actions/runs/34832610297)
+ran three repetitions of Playwright `install --with-deps chromium` and `install
+chromium` after the same browser-cache restore. Every browser-only repetition then
+launched Chromium, created a page and verified DOM content.
+
+```text
+Preparation             Observations (s)         Median
+--with-deps chromium     17.17 / 16.86 / 12.38   16.86
+chromium only             0.75 /  0.55 /  0.65    0.65
+```
+
+That removes **96.1%** of this preparation segment. The hosted Ubuntu image
+already contains the shared libraries needed by stable tests; `--with-deps` was
+re-running apt and installing rendering fonts on every shard. Stable CI now uses
+`playwright install chromium`. Nightly geometry retains `--with-deps` because
+fonts/layout are part of that quarantine's purpose. If a future runner image loses
+a required system dependency, the blocking browser lane fails rather than silently
+reducing coverage.
+
+### ChatView three-way distribution
+
+The same benchmark compared the current two complementary ChatView projects with
+three complementary projects. All three paired repetitions preserved exactly 126
+executed stable tests with no overlap or omission, and every candidate command
+passed.
+
+```text
+Metric                         2-way median   3-way median   Change
+Slowest test command              213.75 s       170.42 s    -20.3%
+Summed test-command time          416.31 s       487.28 s    +17.0%
+```
+
+The accepted groups are follow/scroll/tool, project/worktree/approval/queue, and
+a complementary fallback that owns every other current or future stable ChatView
+case. This is deliberately a feedback-latency tradeoff: one additional runner is
+used, while test bodies, assertions, timeouts and quarantine semantics stay intact.
+
+### Server native three-way sharding
+
+The [server benchmark](https://github.com/Emanuele-web04/synara/actions/runs/34833458963)
+compared Vitest's existing native two-way shard assignment with native three-way
+assignment. Each repetition ran both variants on the same runner and reversed
+order in the middle repetition. Exact JSON inventories matched at 5,025 assertion
+results with no shard overlap; all repetitions passed.
+
+```text
+Metric                         2-way median   3-way median   Change
+Slowest test command              212.26 s       174.46 s    -17.8%
+Summed test-command time          400.41 s       406.44 s     +1.5%
+```
+
+The package remains serial internally (`maxWorkers=1`, no file parallelism); only
+the number of independent CI shards changes. This is separate from the rejected
+custom timing-aware sequencer below.
+
+### Component native three-way sharding
+
+The [component benchmark](https://github.com/Emanuele-web04/synara/actions/runs/34833550200)
+compared the existing two native file shards with three native file shards. All
+three repetitions preserved exactly 408 assertion results with no overlap or
+omission and passed.
+
+```text
+Metric                         2-way median   3-way median   Change
+Slowest test command              231.85 s       190.19 s    -18.0%
+Summed test-command time          389.11 s       437.00 s    +12.3%
+```
+
+Serial browser execution remains enabled inside each runner. One extra shard buys
+lower feedback latency; the full-CI measurement decides whether its added compute
+is acceptable.
 
 ## Rejected experiments and external-service limits
 
-[Timing-aware server sharding](https://github.com/Emanuele-web04/synara/actions/runs/34825744944)
-was rejected. Three paired repetitions preserved all 418 files and 5,030 collected
-tests, but the slower-shard median rose from 206.16 to 226.63 seconds (+9.9%).
-Combined shard medians rose from 393.74 to 402.11 seconds (+2.1%). All corrected
-runs passed; correctness alone is not a performance win. The prototype and timing
-hints were removed. The earlier CLI-path prototype failed before running tests
-and is not counted as a fast result. The original two server shards stay intact.
+Intra-runner component `fileParallelism` with four workers failed in all three
+repetitions of [run 34832610297](https://github.com/Emanuele-web04/synara/actions/runs/34832610297).
+The candidate was also slower than the individual baseline shards in the completed
+sample. It is not enabled. Native file sharding above keeps each browser process
+serial instead.
 
-Root-only installation measured 2.07 seconds but cannot own release smoke.
-Root + shared also failed because Bun's isolated scripts links were absent.
-The accepted static scope includes the scripts workspace and passed every
-static command, including release smoke. Those failed scopes were not adopted.
+An earlier [timing-aware server sequencer](https://github.com/Emanuele-web04/synara/actions/runs/34825744944)
+was also rejected. It preserved the then-collected suite but worsened slower-shard
+time 9.9% and combined time 2.1%. The prototype/timing hints remain removed. The
+accepted server change uses Vitest's native shard assignment instead.
 
-Linux ARM64 browser commands took 276.63 / 277.68 seconds versus x64
-272.35 / 270.92 seconds. No browser runner architecture switch was adopted.
-Full server tests were somewhat faster on ARM in two samples, but one x64
-baseline repeat had a pre-existing model-discovery timing failure. That is not
-sufficient evidence to change the native architecture contract.
+Root-only installation measured 2.07 seconds but cannot own release smoke. Root +
+shared also failed because Bun's isolated scripts links were absent. Only the
+verified root + scripts static scope is used.
 
-Stagehand is not a drop-in provider for this Vitest Browser Mode suite. No
-Stagehand/Browserbase speedup is claimed and no deterministic test was replaced
-with semantic AI success. Remote Turbo caching needs a configured service,
-credentials and cross-platform artifact-input review. A metadata-only branch
-check found no configured `TURBO_TOKEN`, `TURBO_TEAM`, `BROWSERBASE_API_KEY` or
-`BROWSERBASE_PROJECT_ID`; no values were exposed or services enabled.
+Linux ARM64 browser commands were slower than x64, so no architecture switch was
+adopted. Stagehand is not a drop-in provider for this Vitest Browser Mode suite;
+no Stagehand/Browserbase speedup is claimed and no deterministic test was replaced
+with semantic AI success. Remote Turbo caching needs configured service credentials
+and cross-platform artifact-input review. No external service or paid runner is
+enabled by this change.
 
-Raw JSON, exact commands and failure logs are attached to the experiment runs.
-Temporary branch-push benchmark workflows are removed from the final change;
-immutable experiment commits preserve the harness for reproduction. Compare
-cold and warm runs separately and never add install-segment percentages together.
+Raw JSON and exact commands remain attached to immutable experiment runs. Temporary
+benchmark workflows are removed from the final tree. Full-CI wall time and raw
+runner consumption must be evaluated together; per-shard latency reductions are
+not added together into an overall percentage.
 
 ## Verification and rollback
 
 `node --test .github/scripts/ci-contracts.test.mjs` executes the actual aggregate
 shell for successful code/docs runs and rejects failures, cancellations, invalid
-change outputs and unexpected skips. It also guards install scopes, native
-Windows test inventory, cacheability and complementary browser partitions.
+change outputs and unexpected skips. It also guards install scopes, native Windows
+test inventory, three-way server/component distribution, browser preparation and
+complementary ChatView ownership.
 
 After editing CI, run `bun run fmt:check`, `bun run lint`, `bun run typecheck`,
 `bun run test`, the CI contract tests and workflow syntax/expression validation.
 Retain full-history `bun run migrations:check` and Windows boundary/native checks.
-A dependency-scope rollback is simply the original full frozen install; it must
-not change test commands, required-check identity, signing policy or publication.
+Rollback is mechanical: restore the prior two-way shard matrices and/or
+`--with-deps` stable browser preparation without changing test commands, required
+check identity, signing policy or publication.
 
-### First complete PR run: cold cache initialization
+### Earlier cross-platform candidate evidence
 
-[Run 34828358809](https://github.com/Emanuele-web04/synara/actions/runs/34828358809)
-on `8d1dd637db912c678322f31b520c197830eb89f1` passed all 15 jobs, including the
-required aggregate, all stable browser partitions and every native Windows
-command. From workflow start to completion metadata it took 325 seconds;
-the gate completed after 324 seconds. Raw runner time totalled 2,422 seconds
-(40.37 minutes), versus the reference main run's 2,158 seconds (35.97 minutes).
-This first run was therefore not an overall compute improvement.
-
-The new archive keys required cold dependency/build setup and archive creation.
-Post-workspace steps alone consumed 209 runner-seconds, and the desktop build
-command took 111 seconds rather than restoring the baseline's warm build outputs.
-Static checks, now including release smoke, finished in 29 seconds versus the old
-39-second static job plus its separate 25-second smoke job. Native Windows
-finished in 146 seconds versus 261 seconds in the reference run.
-
-Cold initialization and subsequent warm operation must be reported separately.
-The PR verification discussion records the complete confirmation runs without
-changing the application code, test inventory or validation commands between them.
+The first complete PR run
+[34828358809](https://github.com/Emanuele-web04/synara/actions/runs/34828358809)
+passed all 15 then-current jobs but initialized new caches: 325 seconds and 2,422
+runner-seconds. The warm confirmation
+[34829293225](https://github.com/Emanuele-web04/synara/actions/runs/34829293225)
+passed all 15 jobs in 308 seconds and 1,943 runner-seconds, versus main's 323
+seconds / 2,158 runner-seconds. The final critical-path graph is measured again
+from scratch in the PR verification record; those earlier numbers are retained so
+cache initialization is not hidden.
