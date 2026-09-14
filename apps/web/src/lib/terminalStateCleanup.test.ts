@@ -1,9 +1,29 @@
 import { ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { collectActiveTerminalThreadIds } from "./terminalStateCleanup";
+import {
+  collectActiveTerminalThreadIds,
+  registerTerminalRuntimeCleanup,
+  removeOrphanedTerminalRuntimes,
+} from "./terminalStateCleanup";
 
 const threadId = (id: string): ThreadId => ThreadId.makeUnsafe(id);
+
+it("cleans up loaded runtimes synchronously without a stale registration replacing the current one", () => {
+  const active = new Set(["active", "dock-terminal:active", "draft"]);
+  expect(() => removeOrphanedTerminalRuntimes(active)).not.toThrow();
+  const oldCleanup = vi.fn();
+  const newCleanup = vi.fn();
+  const unregisterOld = registerTerminalRuntimeCleanup(oldCleanup);
+  const unregisterNew = registerTerminalRuntimeCleanup(newCleanup);
+  unregisterOld();
+  removeOrphanedTerminalRuntimes(active);
+  expect(oldCleanup).not.toHaveBeenCalled();
+  expect(newCleanup).toHaveBeenCalledWith(active);
+  unregisterNew();
+  removeOrphanedTerminalRuntimes(new Set());
+  expect(newCleanup).toHaveBeenCalledOnce();
+});
 
 describe("collectActiveTerminalThreadIds", () => {
   it("retains non-deleted server threads", () => {

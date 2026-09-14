@@ -1,3 +1,4 @@
+import type { PendingUserInputRecoveryDraft } from "./pendingUserInputRecovery";
 // FILE: composerDraftDomain.ts
 // Purpose: Defines composer draft state, stable defaults, and content/project normalization.
 // Exports: Internal domain primitives plus public facade types.
@@ -169,6 +170,7 @@ export interface QueuedComposerPlanFollowUp {
 export type QueuedComposerTurn = QueuedComposerChatTurn | QueuedComposerPlanFollowUp;
 
 export interface ComposerThreadDraftState {
+  pendingUserInputDrafts?: Record<string, PendingUserInputRecoveryDraft>;
   prompt: string;
   // Non-null only while composer prompt-history browsing is active: the user's
   // real draft, kept safe while `prompt` temporarily holds a recalled history
@@ -239,6 +241,10 @@ interface ProjectDraftThread extends DraftThreadState {
 }
 
 export interface ComposerDraftStoreState {
+  setPendingUserInputDrafts: (
+    threadId: ThreadId,
+    drafts: Record<string, PendingUserInputRecoveryDraft>,
+  ) => void;
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
@@ -839,6 +845,7 @@ function clonePromptHistorySavedDraft(
 
 export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
+    Object.keys(draft.pendingUserInputDrafts ?? {}).length === 0 &&
     draft.prompt.length === 0 &&
     draft.promptHistorySavedDraft === null &&
     draft.images.length === 0 &&

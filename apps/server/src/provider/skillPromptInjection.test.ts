@@ -28,10 +28,12 @@ const codeiumSkillPath = "/Users/me/.codeium/windsurf/skills/reviewer/SKILL.md";
 
 describe("shouldInlineSkillForProvider", () => {
   it("skips codex-native and synara roots for codex but inlines foreign provider roots", () => {
-    // Codex loads .codex roots natively and ~/.synara/skills via the extra
-    // skill root registered at session start.
     expect(shouldInlineSkillForProvider("codex", synaraSkillPath)).toBe(false);
     expect(shouldInlineSkillForProvider("codex", codexSkillPath)).toBe(false);
+    expect(shouldInlineSkillForProvider("codex", agentsSkillPath)).toBe(false);
+    expect(shouldInlineSkillForProvider("codex", "/repo/.agents/skills/reviewer/SKILL.md")).toBe(
+      false,
+    );
     expect(shouldInlineSkillForProvider("codex", claudeSkillPath)).toBe(true);
     expect(shouldInlineSkillForProvider("codex", cursorSkillPath)).toBe(true);
   });
@@ -125,12 +127,25 @@ describe("buildInlineSkillInstructions", () => {
     }
   });
 
-  it("does not inline synara-rooted skills for codex (covered by the extra skill root)", async () => {
-    const text = await buildInlineSkillInstructions({
-      provider: "codex",
-      skills: [{ name: "reviewer", path: synaraSkillPath }],
-      maxChars: 10_000,
-    });
-    expect(text).toBe("");
-  });
+  it.each([".synara", ".agents"])(
+    "does not duplicate %s skill instructions loaded natively by Codex",
+    async (skillRoot) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "skill-native-"));
+      const skillDir = path.join(root, skillRoot, "skills", "reviewer");
+      try {
+        await mkdir(skillDir, { recursive: true });
+        const skillPath = path.join(skillDir, "SKILL.md");
+        await writeFile(skillPath, "# Reviewer\n\nAlways review carefully.");
+
+        const text = await buildInlineSkillInstructions({
+          provider: "codex",
+          skills: [{ name: "reviewer", path: skillPath }],
+          maxChars: 10_000,
+        });
+        expect(text).toBe("");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

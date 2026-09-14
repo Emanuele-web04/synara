@@ -10,6 +10,7 @@ import {
   dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
+  normalizeThreadFromReadModel,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
@@ -395,4 +396,43 @@ describe("accounting activity retention", () => {
     );
     expect(accumulator.result()).toHaveLength(1999);
   });
+});
+
+it("keeps the source-message signal stable for equivalent snapshots and work-only changes", () => {
+  const incoming = makeReadModelThread({
+    messages: [
+      {
+        id: MessageId.makeUnsafe("signal-message"),
+        source: "native",
+        role: "assistant",
+        text: "Hello",
+        turnId: TurnId.makeUnsafe("signal-turn"),
+        streaming: true,
+        createdAt: "2026-09-13T00:00:00.000Z",
+        updatedAt: "2026-09-13T00:00:00.000Z",
+        textSegments: [
+          {
+            text: "Hello",
+            sequence: 1,
+            startedAt: "2026-09-13T00:00:00.000Z",
+            endedAt: "2026-09-13T00:00:00.000Z",
+          },
+        ],
+      },
+    ],
+  });
+  const initial = normalizeThreadFromReadModel(incoming, undefined);
+  const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial);
+  expect(replay.messages).toBe(initial.messages);
+  const workOnly = normalizeThreadFromReadModel(
+    { ...structuredClone(incoming), activities: [makeActivity({ id: "tool-status" })] },
+    replay,
+  );
+  expect(workOnly.messages).toBe(initial.messages);
+  const textDelta = normalizeThreadFromReadModel(
+    { ...incoming, messages: [{ ...incoming.messages[0]!, text: "Hello world" }] },
+    workOnly,
+  );
+  expect(textDelta.messages).not.toBe(initial.messages);
+  expect(textDelta.messages[0]?.text).toBe("Hello world");
 });
