@@ -1533,10 +1533,11 @@ describe("AppSnap permission guide", () => {
     }
   });
 
-  it("raises the accessibility prompt when its guide opens", async () => {
-    // Accessibility entries cannot be dragged into the pane's list, so opening
-    // the accessibility guide must fire the pane's own macOS request for the
-    // app to show up there at all.
+  it("never raises an OS prompt when a guide opens", async () => {
+    // No macOS prompt is ever raised by a guide: the inline steps plus the
+    // coach are the whole flow. A denied prompt cannot be re-raised, while the
+    // Settings page (toggle, or drag-and-drop where the list accepts it)
+    // always works.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-ax-"));
     const guideChild = createFakeChildProcess();
@@ -1568,7 +1569,7 @@ describe("AppSnap permission guide", () => {
     try {
       manager.showPermissionGuide("accessibility");
       await flushPromises();
-      expect(spawn).toHaveBeenCalledWith(
+      expect(spawn).not.toHaveBeenCalledWith(
         process.execPath,
         ["--request-permissions", "--permission", "accessibility"],
         expect.any(Object),
@@ -1578,19 +1579,18 @@ describe("AppSnap permission guide", () => {
         expect.arrayContaining(["--permission-guide", "--pane", "accessibility"]),
         expect.any(Object),
       );
-      // Renderer parity: the AX prompt fires exactly once. Later watch ticks
-      // re-check via --check-permissions (deduped while in flight) and never
-      // re-issue the macOS request dialog.
+      // Renderer parity: the OS request never fires. Later watch ticks
+      // re-check via --check-permissions (deduped while in flight).
       const requestCalls = () =>
         spawn.mock.calls.filter(([, args]) =>
           (args as readonly string[]).includes("--request-permissions"),
         );
-      expect(requestCalls()).toHaveLength(1);
+      expect(requestCalls()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(800);
       await flushPromises();
       await vi.advanceTimersByTimeAsync(800);
       await flushPromises();
-      expect(requestCalls()).toHaveLength(1);
+      expect(requestCalls()).toHaveLength(0);
     } finally {
       vi.useRealTimers();
       manager.dispose();
@@ -1794,6 +1794,7 @@ describe("AppSnap permission setup sessions", () => {
     guideChildren: FakeChildProcess[];
     requests: string[];
     openSettingsPane: Mock;
+    closeSettingsApp: Mock;
     onPermissionGuideState: Mock;
     dispose: () => void;
   } {
@@ -1801,6 +1802,7 @@ describe("AppSnap permission setup sessions", () => {
     const guideChildren: FakeChildProcess[] = [];
     const requests: string[] = [];
     const openSettingsPane = vi.fn();
+    const closeSettingsApp = vi.fn();
     const onPermissionGuideState = vi.fn();
     const spawn = vi.fn().mockImplementation((_file: string, args: readonly string[]) => {
       if (args.includes("--permission-guide")) {
@@ -1826,6 +1828,7 @@ describe("AppSnap permission setup sessions", () => {
       appBundlePath: "/Applications/Synara Test.app",
       spawn,
       openSettingsPane,
+      closeSettingsApp,
       onState: vi.fn(),
       onCaptured: vi.fn(),
       onError: vi.fn(),
@@ -1836,6 +1839,7 @@ describe("AppSnap permission setup sessions", () => {
       guideChildren,
       requests,
       openSettingsPane,
+      closeSettingsApp,
       onPermissionGuideState,
       dispose: () => {
         manager.dispose();
@@ -1844,9 +1848,9 @@ describe("AppSnap permission setup sessions", () => {
     };
   }
 
-  it("walks each missing pane in sequence, raising only that pane's request", async () => {
+  it("walks each missing pane in sequence with no OS prompt, then closes Settings", async () => {
     const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
-    const { manager, guideChildren, requests, openSettingsPane, dispose } =
+    const { manager, guideChildren, requests, openSettingsPane, closeSettingsApp, dispose } =
       createSessionManager(state);
     try {
       // Callers may pass kinds out of order with dupes: the queue build sorts
@@ -1854,10 +1858,10 @@ describe("AppSnap permission setup sessions", () => {
       // a single queue with its shift-only consumer still walks each pane once.
       await manager.startPermissionSetup(["screenRecording", "accessibility", "screenRecording"]);
       await flushPromises();
-      // Only the first missing pane is up: its settings page, its OS request,
-      // and its coach. The Screen Recording request must not fire yet.
+      // Only the first missing pane is up: its settings page and its coach.
+      // No macOS prompt ever fires.
       expect(openSettingsPane).toHaveBeenLastCalledWith("accessibility");
-      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+      expect(requests).toEqual([]);
       expect(guideChildren).toHaveLength(1);
 
       // The grant watch sees Accessibility flip: the first coach closes and the
@@ -1866,10 +1870,7 @@ describe("AppSnap permission setup sessions", () => {
       await vi.waitFor(() => expect(guideChildren).toHaveLength(2), { timeout: 4000 });
       expect(guideChildren[0]!.stdin.read()?.toString().trimEnd()).toBe("close");
       expect(openSettingsPane).toHaveBeenLastCalledWith("screen-recording");
-      expect(requests).toEqual([
-        "--request-permissions --permission accessibility",
-        "--request-permissions --permission screenRecording",
-      ]);
+      expect(requests).toEqual([]);
 
       state.screenRecording = "granted";
       await vi.waitFor(
@@ -1877,9 +1878,11 @@ describe("AppSnap permission setup sessions", () => {
         { timeout: 4000 },
       );
       await flushPromises();
-      // The session is done: two panes opened, two requests, two coaches.
+      // The session is done: two panes opened, two coaches, no OS prompts, and
+      // the Settings the session opened is closed again.
       expect(openSettingsPane).toHaveBeenCalledTimes(2);
       expect(guideChildren).toHaveLength(2);
+      expect(closeSettingsApp).toHaveBeenCalledTimes(1);
     } finally {
       dispose();
     }
@@ -1891,14 +1894,16 @@ describe("AppSnap permission setup sessions", () => {
       screenRecording: "denied",
       inputMonitoring: "denied",
     };
-    const { manager, guideChildren, requests, openSettingsPane, dispose } =
+    const { manager, guideChildren, requests, openSettingsPane, closeSettingsApp, dispose } =
       createSessionManager(state);
     try {
       await manager.startPermissionSetup(["accessibility", "screenRecording"]);
       await flushPromises();
       expect(openSettingsPane).toHaveBeenCalledExactlyOnceWith("screen-recording");
-      expect(requests).toEqual(["--request-permissions --permission screenRecording"]);
+      expect(requests).toEqual([]);
       expect(guideChildren).toHaveLength(1);
+      // The session is still mid-walk: Settings stays open.
+      expect(closeSettingsApp).not.toHaveBeenCalled();
     } finally {
       dispose();
     }
@@ -1906,7 +1911,7 @@ describe("AppSnap permission setup sessions", () => {
 
   it("ends the session when the coach is dismissed instead of respawning", async () => {
     const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
-    const { manager, guideChildren, requests, onPermissionGuideState, dispose } =
+    const { manager, guideChildren, requests, closeSettingsApp, onPermissionGuideState, dispose } =
       createSessionManager(state);
     try {
       await manager.startPermissionSetup(["accessibility", "screenRecording"]);
@@ -1914,12 +1919,14 @@ describe("AppSnap permission setup sessions", () => {
       expect(guideChildren).toHaveLength(1);
       // The user dismisses the first coach: the exit is not a grant, so the
       // session must stop rather than open the next pane over their dismissal.
+      // A dismissed session never closes the user's Settings either.
       guideChildren[0]!.emit("exit", 0, null);
       await flushPromises();
       await new Promise<void>((resolve) => setTimeout(resolve, 900));
       expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
       expect(guideChildren).toHaveLength(1);
-      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+      expect(requests).toEqual([]);
+      expect(closeSettingsApp).not.toHaveBeenCalled();
     } finally {
       dispose();
     }
@@ -1927,7 +1934,7 @@ describe("AppSnap permission setup sessions", () => {
 
   it("reports closed and ends the session when the guide helper fails to spawn", async () => {
     const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
-    const { manager, guideChildren, requests, onPermissionGuideState, dispose } =
+    const { manager, guideChildren, requests, closeSettingsApp, onPermissionGuideState, dispose } =
       createSessionManager(state);
     try {
       await manager.startPermissionSetup(["accessibility", "screenRecording"]);
@@ -1939,7 +1946,26 @@ describe("AppSnap permission setup sessions", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 900));
       expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
       expect(guideChildren).toHaveLength(1);
-      expect(requests).toEqual(["--request-permissions --permission accessibility"]);
+      expect(requests).toEqual([]);
+      expect(closeSettingsApp).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
+  });
+
+  it("opens and closes nothing when every grant is already held", async () => {
+    const { manager, guideChildren, openSettingsPane, closeSettingsApp, dispose } =
+      createSessionManager({
+        accessibility: "granted",
+        screenRecording: "granted",
+        inputMonitoring: "granted",
+      });
+    try {
+      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+      await flushPromises();
+      expect(guideChildren).toHaveLength(0);
+      expect(openSettingsPane).not.toHaveBeenCalled();
+      expect(closeSettingsApp).not.toHaveBeenCalled();
     } finally {
       dispose();
     }

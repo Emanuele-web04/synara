@@ -134,6 +134,12 @@ export interface DesktopAppSnapManagerOptions {
    * through IPC themselves.
    */
   openSettingsPane?: (pane: DesktopAppSnapSettingsPane) => void;
+  /**
+   * Closes System Settings after a setup session lands every grant. Only used
+   * when the session opened Settings itself; a dismissed or timed-out session
+   * never closes an app the user may be using for something else.
+   */
+  closeSettingsApp?: () => void;
   shortcutRegistry?: {
     register: (accelerator: string, callback: () => void) => boolean;
     unregister: (accelerator: string) => void;
@@ -523,6 +529,10 @@ export class DesktopAppSnapManager {
   #guideSessionKinds: readonly DesktopAppSnapPermissionKind[] = [];
   #lastEmittedStateJson: string | null = null;
   #guideSessionOpensSettings = false;
+  // Whether this session opened System Settings at least once. Only then may
+  // a successful drain close it again; a renderer-driven guide or a session
+  // that never reached a pane leaves the user's Settings alone.
+  #guideSessionOpenedSettings = false;
 
   constructor(options: DesktopAppSnapManagerOptions) {
     this.#options = {
@@ -656,19 +666,25 @@ export class DesktopAppSnapManager {
   }
 
   /**
-   * Backend-driven permission setup: fire the macOS prompts for the requested
-   * kinds, then walk the floating guide through each pane still missing a
-   * grant, opening System Settings at that pane as each step begins. The guide
-   * advances itself — when the helper reports a grant, the next missing pane's
-   * coach and settings page take over without the user returning to Synara.
+   * Backend-driven permission setup: check the requested kinds, then walk the
+   * floating guide through each pane still missing a grant, opening System
+   * Settings at that pane as each step begins. The guide advances itself —
+   * when a fresh check reports a grant, the next missing pane's coach and
+   * settings page take over without the user returning to Synara, and when
+   * every grant lands the session closes the Settings it opened.
+   *
+   * No macOS permission prompt is raised here on purpose: the prompt adds the
+   * app with its switch off and cannot be re-raised once denied, while the
+   * guide's own page (toggle, or drag-and-drop where the list accepts it)
+   * always works. Prompt args from tools never reach a request path either.
    */
   async startPermissionSetup(
     permissions: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
     if (permissions.length === 0) return this.getState();
-    // Check only — the OS prompt for each missing pane fires when its guide
-    // step begins, so setup never raises every macOS dialog at once.
+    // Check only — no OS prompt is ever raised. Each guide step opens its own
+    // System Settings page, and the coach plus inline steps do the rest.
     if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
       return this.getState();
     }
@@ -681,6 +697,7 @@ export class DesktopAppSnapManager {
       .map((kind) => APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]);
     this.#guideSessionKinds = [...permissions];
     this.#guideSessionOpensSettings = true;
+    this.#guideSessionOpenedSettings = false;
     this.#advancePermissionGuide();
     await this.#reconcileWatchProcess();
     return this.getState();
@@ -748,16 +765,31 @@ export class DesktopAppSnapManager {
   showPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
     // A renderer-driven guide covers exactly one pane and never auto-advances:
     // any in-flight setup session ends when the renderer takes over the coach.
+    // No OS prompt is raised: the inline steps plus the coach are the whole
+    // flow, and a denied prompt cannot be re-raised.
+    this.#finishGuideSession(false);
+    this.#spawnPermissionGuide(pane);
+  }
+
+  /**
+   * Ends a setup session. A successful drain closes the System Settings the
+   * session opened; every other ending (dismissal, timeout, renderer takeover,
+   * spawn failure) leaves Settings alone.
+   */
+  #finishGuideSession(success: boolean): void {
+    const shouldCloseSettings = success && this.#guideSessionOpenedSettings;
     this.#guidePaneQueue = [];
     this.#guideSessionKinds = [];
     this.#guideSessionOpensSettings = false;
-    // Accessibility entries cannot be dragged into the list, so raise the
-    // pane's own macOS prompt: it adds the app and lets the user allow the
-    // grant while the coach is already on screen.
-    if (pane === "accessibility") {
-      void this.#runPermissionCommand("--request-permissions", ["accessibility"]);
+    this.#guideSessionOpenedSettings = false;
+    if (shouldCloseSettings) {
+      try {
+        this.#options.closeSettingsApp?.();
+      } catch {
+        // Best effort: the grants already landed; a lingering Settings window
+        // is an annoyance, not a broken setup.
+      }
     }
-    this.#spawnPermissionGuide(pane);
   }
 
   #spawnPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
@@ -793,9 +825,7 @@ export class DesktopAppSnapManager {
         this.#guideOutputLines = null;
         this.#lastGuideState = "closed";
         this.#options.onPermissionGuideState("closed");
-        this.#guidePaneQueue = [];
-        this.#guideSessionKinds = [];
-        this.#guideSessionOpensSettings = false;
+        this.#finishGuideSession(false);
       });
       this.#guideOutputLines = this.#wireHelperOutput(child, (message) =>
         this.#handleGuideMessage(child, message),
@@ -817,9 +847,7 @@ export class DesktopAppSnapManager {
         if (finalState !== "granted") {
           // A dismissed (or crashed) coach ends the setup session rather than
           // respawning panes the user just waved away.
-          this.#guidePaneQueue = [];
-          this.#guideSessionKinds = [];
-          this.#guideSessionOpensSettings = false;
+          this.#finishGuideSession(false);
           return;
         }
         // Recheck before advancing so a pane the user already flipped while the
@@ -832,14 +860,10 @@ export class DesktopAppSnapManager {
               this.#advancePermissionGuide();
               return;
             }
-            this.#guidePaneQueue = [];
-            this.#guideSessionKinds = [];
-            this.#guideSessionOpensSettings = false;
+            this.#finishGuideSession(false);
           })
           .catch(() => {
-            this.#guidePaneQueue = [];
-            this.#guideSessionKinds = [];
-            this.#guideSessionOpensSettings = false;
+            this.#finishGuideSession(false);
           });
       });
     } catch {
@@ -868,29 +892,25 @@ export class DesktopAppSnapManager {
     }
     const pane = this.#guidePaneQueue[0];
     if (!pane) {
-      this.#guideSessionKinds = [];
-      this.#guideSessionOpensSettings = false;
+      // Every queued grant landed: close the Settings this session opened.
+      // When nothing was ever queued (all granted up front) the opened flag
+      // is false, so a no-op setup closes nothing.
+      this.#finishGuideSession(true);
       return;
     }
-    if (this.#guideSessionOpensSettings) {
+    if (this.#guideSessionOpensSettings && this.#options.openSettingsPane) {
       try {
-        this.#options.openSettingsPane?.(pane);
+        this.#options.openSettingsPane(pane);
       } catch {
         // The coach still follows System Settings when it opens by itself.
       }
+      this.#guideSessionOpenedSettings = true;
     }
-    // Raise this pane's own macOS prompt as its step begins: the request adds
-    // the app to the pane's list, and at most one OS dialog is ever on screen.
-    void this.#runPermissionCommand("--request-permissions", [
-      APP_SNAP_GUIDE_PANE_PERMISSION_KINDS[pane],
-    ]);
     this.#spawnPermissionGuide(pane);
   }
 
   hidePermissionGuide(): void {
-    this.#guidePaneQueue = [];
-    this.#guideSessionKinds = [];
-    this.#guideSessionOpensSettings = false;
+    this.#finishGuideSession(false);
     this.#stopGuideProcess();
   }
 
@@ -933,9 +953,7 @@ export class DesktopAppSnapManager {
         this.#stopGuideGrantWatch(child);
         this.#lastGuideState = "closed";
         this.#options.onPermissionGuideState("closed");
-        this.#guidePaneQueue = [];
-        this.#guideSessionKinds = [];
-        this.#guideSessionOpensSettings = false;
+        this.#finishGuideSession(false);
         this.#emitState();
         this.#stopGuideProcess();
         return;
@@ -992,14 +1010,10 @@ export class DesktopAppSnapManager {
           this.#advancePermissionGuide();
           return;
         }
-        this.#guidePaneQueue = [];
-        this.#guideSessionKinds = [];
-        this.#guideSessionOpensSettings = false;
+        this.#finishGuideSession(false);
       })
       .catch(() => {
-        this.#guidePaneQueue = [];
-        this.#guideSessionKinds = [];
-        this.#guideSessionOpensSettings = false;
+        this.#finishGuideSession(false);
       });
   }
 
@@ -1219,9 +1233,7 @@ export class DesktopAppSnapManager {
     this.#requestedCapture?.cancel();
     this.#stopWatchProcess();
     this.#stopGuideProcess();
-    this.#guidePaneQueue = [];
-    this.#guideSessionKinds = [];
-    this.#guideSessionOpensSettings = false;
+    this.#finishGuideSession(false);
     this.#releaseShortcutReservation();
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;

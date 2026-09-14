@@ -216,7 +216,9 @@ export function AppSnapPermissionSection({
 
   // The floating drag-in coach lives for exactly as long as the inline guide.
   // Only hide what this surface showed: mounting with no guide must not close a
-  // coach a startPermissionSetup session is still driving.
+  // coach a startPermissionSetup session is still driving. Unmounting with a
+  // shown guide hides it, so navigating away cannot strand the coach on screen;
+  // pressing Grant again re-shows it.
   const shownGuidePaneRef = useRef<DesktopAppSnapSettingsPane | null>(null);
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
@@ -228,6 +230,12 @@ export function AppSnapPermissionSection({
       shownGuidePaneRef.current = null;
       void bridge.hidePermissionGuide?.();
     }
+    return () => {
+      if (shownGuidePaneRef.current) {
+        shownGuidePaneRef.current = null;
+        void window.desktopBridge?.appSnap?.hidePermissionGuide?.();
+      }
+    };
   }, [guidePane]);
 
   useEffect(() => {
