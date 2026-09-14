@@ -1,14 +1,35 @@
 name: Setup workspace
-description: Shared tool setup, dependency install, and caches for Synara CI jobs
+description: Reproducible dependency setup sized to each CI lane
 
 inputs:
   electron:
     description: Install the Electron runtime binary.
     default: "false"
+  scope:
+    description: "Install scope: full, static (root and scripts), or runtime (all except marketing)."
+    default: "full"
+  turbo:
+    description: Persist Turbo build artifacts for jobs that use Turbo.
+    default: "false"
 
 runs:
   using: composite
   steps:
+    - name: Validate install scope
+      shell: bash
+      env:
+        WORKSPACE_SCOPE: ${{ inputs.scope }}
+        ELECTRON: ${{ inputs.electron }}
+      run: |
+        case "$WORKSPACE_SCOPE" in
+          full|static|runtime) ;;
+          *) echo "::error::Unknown workspace scope: $WORKSPACE_SCOPE"; exit 1 ;;
+        esac
+        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" = "static" ]; then
+          echo "::error::Electron requires a full or runtime install."
+          exit 1
+        fi
+
     - name: Setup Bun
       uses: oven-sh/setup-bun@v2
       with:
@@ -19,23 +40,12 @@ runs:
       with:
         node-version-file: package.json
 
-    - name: Cache Bun install
-      uses: actions/cache@v5
-      with:
-        path: ~/.bun/install/cache
-        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
-    # Phase 1c/3: node_modules survives across jobs keyed on the lockfile.
-    # bun install --frozen-lockfile still runs below (correctness), but a warm
-    # cache turns resolve + download into link. The key is scoped by the
-    # electron input: Install Electron test runtime extracts the binary into
-    # apps/desktop/node_modules/electron/dist INSIDE node_modules, so the
-    # electron lane's tree differs from other lanes and must not share a blob.
-    # Windows cache restores can leave Bun's isolated dependency links missing.
-    # Recreate that tree from the package cache instead of restoring node_modules.
+    # Small filtered installs cost less than archive transfer/extraction. Never
+    # restore a full tree into a filtered lane or save it under the full key.
+    # Windows isolated links are rebuilt by Bun, not restored from an archive.
     - name: Cache node_modules
-      if: ${{ runner.os != 'Windows' }}
+      id: modules
+      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}
       uses: actions/cache@v5
       with:
         path: |
@@ -43,40 +53,50 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}
 
-    # Phase 3h: persist Turbo's local cache store so cacheable build outputs
-    # survive across jobs. Turbo verifies its own fingerprints on hit, so a
-    # broad key is safe: stale entries simply miss inside turbo. test and
-    # typecheck stay cache:false in turbo.json (inputs not proven airtight).
-    # GitHub caches are immutable: each job/shard saves new results per commit
-    # and restores its previous snapshot before falling back to other lanes.
+    # A modules hit already contains the dependency payload. Restoring a second
+    # archive is redundant. The Windows package archive was slower than cold install.
+    - name: Cache Bun install
+      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' && steps.modules.outputs.cache-hit != 'true' }}
+      uses: actions/cache@v5
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
+
+    # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
+    # native build products from crossing platforms. Browser/Windows/static jobs
+    # do not consume Turbo outputs and must not restore or save this archive.
     - name: Cache Turbo outputs
+      if: ${{ inputs.turbo == 'true' }}
       uses: actions/cache@v5
       with:
         path: |
           .turbo
           node_modules/.cache/turbo
-        key: ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
-          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-
-          ${{ runner.os }}-turbo-
+          ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
+          ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}
       uses: actions/cache@v5
       with:
         path: ~/.cache/electron
-        key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ hashFiles('bun.lock') }}
 
     - name: Install dependencies
       shell: bash
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      run: bun install --frozen-lockfile
+        WORKSPACE_SCOPE: ${{ inputs.scope }}
+      run: |
+        case "$WORKSPACE_SCOPE" in
+          full) bun install --frozen-lockfile ;;
+          static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' ;;
+          runtime) bun install --frozen-lockfile --filter '!@synara/marketing' ;;
+        esac
 
     - name: Install Electron test runtime
       if: ${{ inputs.electron == 'true' }}
