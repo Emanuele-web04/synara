@@ -90,11 +90,16 @@ import {
 } from "./managedWorktrees";
 import {
   cancelResourceDiskScan,
-  killResourceProcessTree,
   measureDirectoryBytes,
   sampleResourceSnapshot,
   scanResourceDiskUsage,
 } from "./resourceMonitor";
+import {
+  killResourceSession,
+  requireResourceOwner,
+  resolveResourceScanPaths,
+  restartResourceProviders,
+} from "./resourceActions";
 import { listRegisteredProviderProcesses } from "./providerProcessRegistry";
 import {
   attachmentPrincipalForSession,
@@ -356,6 +361,7 @@ const makeWsRpcHandlersLayer = () =>
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
       const config = yield* ServerConfig;
+      const connectionSessions = yield* WsConnectionSessions;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
@@ -1780,40 +1786,11 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to load resource snapshot",
           ),
         [WS_METHODS.resourceKillSession]: (input) =>
-          rpcEffect(
-            Effect.gen(function* () {
-              if (!input.terminalId && !input.pid) {
-                return yield* Effect.fail(new Error("Provide a terminalId or pid to kill."));
-              }
-              if (input.terminalId) {
-                const terminals = yield* terminalManager.listActiveSessions();
-                const match = terminals.find((session) => session.terminalId === input.terminalId);
-                if (!match) {
-                  return yield* Effect.fail(
-                    new Error(`Terminal session '${input.terminalId}' was not found.`),
-                  );
-                }
-                if (match.status !== "exited" && match.pid !== null) {
-                  yield* terminalManager.close({
-                    threadId: match.threadId,
-                    terminalId: match.terminalId,
-                  });
-                  return { pid: match.pid, killed: true as const };
-                }
-              }
-              // Exited/unknown session, or explicit pid kill (orphans): drop to
-              // the reuse-guarded process-tree killer.
-              const pid = input.pid;
-              if (!pid) {
-                return yield* Effect.fail(new Error("Terminal session already exited."));
-              }
-              return yield* Effect.promise(() => killResourceProcessTree(pid));
-            }),
-            "Failed to kill session",
-          ),
+          rpcEffect(killResourceSession(input, terminalManager), "Failed to kill session"),
         [WS_METHODS.resourceKillAllSessions]: () =>
           rpcEffect(
             Effect.gen(function* () {
+              yield* requireResourceOwner;
               const terminals = yield* terminalManager.listActiveSessions();
               const live = terminals.filter(
                 (session) => session.status !== "exited" && session.pid !== null,
@@ -1822,7 +1799,10 @@ const makeWsRpcHandlersLayer = () =>
                 live,
                 (session) =>
                   terminalManager
-                    .close({ threadId: session.threadId, terminalId: session.terminalId })
+                    .close(
+                      { threadId: session.threadId, terminalId: session.terminalId },
+                      session.pid ?? undefined,
+                    )
                     .pipe(
                       Effect.catchCause((cause) =>
                         Effect.logWarning("resource kill-all could not close a session", {
@@ -1836,10 +1816,13 @@ const makeWsRpcHandlersLayer = () =>
               );
               const remaining = yield* terminalManager.listActiveSessions();
               const remainingKeys = new Set(
-                remaining.map((session) => `${session.threadId}${session.terminalId}`),
+                remaining
+                  .filter((session) => session.status !== "exited" && session.pid !== null)
+                  .map((session) => JSON.stringify([session.threadId, session.terminalId])),
               );
               const killed = live.filter(
-                (session) => !remainingKeys.has(`${session.threadId}${session.terminalId}`),
+                (session) =>
+                  !remainingKeys.has(JSON.stringify([session.threadId, session.terminalId])),
               );
               return {
                 killedCount: killed.length,
@@ -1851,6 +1834,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.resourceCleanWorkspaces]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
+              yield* requireResourceOwner;
               const listCandidates = Effect.gen(function* () {
                 const threads = yield* projectionReadModelQuery.listManagedWorktreeThreads();
                 return yield* listManagedWorktreeRemovalCandidates({
@@ -1925,14 +1909,33 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to clean workspaces",
           ),
-        [WS_METHODS.resourceScanDisk]: (input) =>
+        [WS_METHODS.resourceScanDisk]: (input, { headers }) =>
           rpcEffect(
-            Effect.promise(() => scanResourceDiskUsage(input.paths ?? [config.worktreesDir])),
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const owner = connectionSessions.lookup(
+                Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+              );
+              if (!owner)
+                return yield* Effect.fail(new Error("Resource scan requires a live connection."));
+              const paths = yield* Effect.tryPromise(() =>
+                resolveResourceScanPaths(input.paths, config.worktreesDir),
+              );
+              return yield* Effect.promise(() => scanResourceDiskUsage(paths, owner));
+            }),
             "Failed to scan disk usage",
           ),
-        [WS_METHODS.resourceCancelDiskScan]: () =>
+        [WS_METHODS.resourceCancelDiskScan]: (_, { headers }) =>
           rpcEffect(
-            Effect.sync(() => cancelResourceDiskScan()),
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const owner = connectionSessions.lookup(
+                Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+              );
+              if (!owner)
+                return yield* Effect.fail(new Error("Resource scan requires a live connection."));
+              return cancelResourceDiskScan(owner);
+            }),
             "Failed to cancel disk scan",
           ),
         [WS_METHODS.resourceRestartDaemon]: () =>
@@ -1941,38 +1944,7 @@ const makeWsRpcHandlersLayer = () =>
               // Restart = stop every provider session and adapter runtime; they
               // respawn lazily on the next turn. The Synara server itself is
               // never touched.
-              const sessions = yield* providerService.listSessions();
-              yield* Effect.forEach(
-                sessions,
-                (session) =>
-                  providerService.stopSession({ threadId: session.threadId }).pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("resource restart could not stop a provider session", {
-                        threadId: session.threadId,
-                        provider: session.provider,
-                        cause: String(cause),
-                      }).pipe(Effect.asVoid),
-                    ),
-                  ),
-                { concurrency: "unbounded", discard: true },
-              );
-              const providers = [...new Set(sessions.map((session) => session.provider))];
-              yield* Effect.forEach(
-                providers,
-                (provider) =>
-                  providerAdapterRegistry
-                    .getByProvider(provider)
-                    .pipe(Effect.flatMap((adapter) => adapter.stopAll()))
-                    .pipe(
-                      Effect.catchCause((cause) =>
-                        Effect.logWarning("resource restart could not stop a provider runtime", {
-                          provider,
-                          cause: String(cause),
-                        }).pipe(Effect.asVoid),
-                      ),
-                    ),
-                { concurrency: "unbounded", discard: true },
-              );
+              yield* restartResourceProviders(providerService, providerAdapterRegistry);
               yield* providerHealth.refresh;
               return { restarted: true as const };
             }),

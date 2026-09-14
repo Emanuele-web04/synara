@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { Schema } from "effect";
+import { ResourceKillSessionInput } from "./server";
 
 import {
   WsAutomationCreateRpc,
@@ -22,6 +24,10 @@ import {
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
 
 describe("WS RPC contracts", () => {
+  it("preserves the thread identity when decoding a resource terminal kill", () => {
+    const input = { terminalId: "default", threadId: "thread-b", pid: 220 };
+    expect(Schema.decodeUnknownSync(ResourceKillSessionInput)(input)).toEqual(input);
+  });
   it("exports the additive Effect RPC group", () => {
     expect(WsRpcGroup).toBeDefined();
     expect(WsBootstrapRpcGroup.requests.has("bootstrap.negotiate")).toBe(true);

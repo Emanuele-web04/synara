@@ -319,6 +319,7 @@ export type ResourceGetSnapshotResult = typeof ResourceGetSnapshotResult.Type;
 
 export const ResourceKillSessionInput = Schema.Struct({
   terminalId: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
   pid: Schema.optional(PositiveInt),
 });
 export type ResourceKillSessionInput = typeof ResourceKillSessionInput.Type;

@@ -1,13 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./processRunner", () => ({ runProcess: vi.fn() }));
+
+import { runProcess } from "./processRunner";
+import { defaultProcessTreeKiller } from "./terminal/processTreeKiller";
 
 import {
   buildResourceSnapshot,
+  cancelResourceDiskScan,
   computeCpuDeltas,
+  killResourceProcessTree,
   parseCpuTimeSeconds,
   parseResourceSampleOutput,
   resetResourceSamplerForTesting,
+  scanResourceDiskUsage,
+  verifyProviderProcessRoots,
   type ResourceSample,
 } from "./resourceMonitor";
+
+const runProcessMock = vi.mocked(runProcess);
+const successfulProcessResult = (stdout: string) => ({
+  stdout,
+  stderr: "",
+  code: 0,
+  signal: null,
+  timedOut: false,
+});
+
+afterEach(() => {
+  cancelResourceDiskScan();
+  runProcessMock.mockReset();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("parseCpuTimeSeconds", () => {
   it("parses mm:ss and fractional seconds", () => {
@@ -158,6 +183,49 @@ describe("buildResourceSnapshot", () => {
     expect(snapshot.projects[0]?.id).toBe("external");
     resetResourceSamplerForTesting();
   });
+
+  it("counts the same terminal id in different threads as distinct sessions", () => {
+    const worktreePath = "/repo/.synara/worktrees/abc";
+    const sample: ResourceSample = {
+      at: 1_000,
+      processes: [
+        { pid: 10, ppid: 1, rssBytes: 100, cpuSeconds: 1, command: "zsh", args: "" },
+        { pid: 11, ppid: 10, rssBytes: 100, cpuSeconds: 1, command: "node", args: "app" },
+        { pid: 20, ppid: 1, rssBytes: 100, cpuSeconds: 1, command: "zsh", args: "" },
+      ],
+    };
+    const snapshot = buildResourceSnapshot({
+      sample,
+      cpuDeltas: new Map(),
+      attribution: {
+        terminals: [
+          {
+            threadId: "thread-1",
+            terminalId: "main",
+            cwd: worktreePath,
+            status: "running",
+            pid: 10,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            threadId: "thread-2",
+            terminalId: "main",
+            cwd: worktreePath,
+            status: "running",
+            pid: 20,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        worktrees: [{ path: worktreePath, workspaceRoot: "/repo" }],
+      },
+      histories: new Map(),
+      serverPid: 1,
+    });
+
+    expect(snapshot.sessionCount).toBe(2);
+    expect(snapshot.projects[0]?.sessionCount).toBe(2);
+    expect(snapshot.projects[0]?.worktrees[0]?.sessionCount).toBe(2);
+  });
 });
 
 describe("buildResourceSnapshot provider attribution", () => {
@@ -239,5 +307,179 @@ describe("buildResourceSnapshot provider attribution", () => {
       provider: "OpenCode",
     });
     resetResourceSamplerForTesting();
+  });
+});
+
+describe("verifyProviderProcessRoots", () => {
+  it("returns the first verified command as the provider baseline", async () => {
+    runProcessMock.mockResolvedValue(successfulProcessResult("codex  app-server\n"));
+    vi.spyOn(defaultProcessTreeKiller, "capture").mockReturnValue({
+      descendants: [{ pid: 50, command: "codex app-server" }],
+      captureComplete: true,
+    });
+
+    await expect(
+      verifyProviderProcessRoots([
+        {
+          pid: 50,
+          provider: "codex",
+          threadIds: ["thread-9"],
+          commandBaseline: null,
+        },
+      ]),
+    ).resolves.toEqual([
+      {
+        pid: 50,
+        provider: "codex",
+        threadIds: ["thread-9"],
+        commandBaseline: "codex  app-server",
+      },
+    ]);
+  });
+
+  it("drops an unbaselined provider outside the current server tree", async () => {
+    runProcessMock.mockResolvedValue(successfulProcessResult("unrelated process\n"));
+    const captureSpy = vi.spyOn(defaultProcessTreeKiller, "capture").mockReturnValue({
+      descendants: [{ pid: 51, command: "codex app-server" }],
+      captureComplete: true,
+    });
+
+    await expect(
+      verifyProviderProcessRoots([
+        {
+          pid: 50,
+          provider: "codex",
+          threadIds: ["thread-9"],
+          commandBaseline: null,
+        },
+      ]),
+    ).resolves.toEqual([]);
+    expect(captureSpy).toHaveBeenCalledOnce();
+    expect(captureSpy).toHaveBeenCalledWith(process.pid);
+  });
+});
+
+describe("killResourceProcessTree", () => {
+  it("rejects a root whose command no longer matches the authorized identity", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runProcessMock
+      .mockResolvedValueOnce(successfulProcessResult("new-command\n"))
+      .mockResolvedValueOnce({ ...successfulProcessResult(""), code: 1 });
+    const captureSpy = vi
+      .spyOn(defaultProcessTreeKiller, "capture")
+      .mockReturnValue({ descendants: [], captureComplete: true });
+    vi.spyOn(defaultProcessTreeKiller, "inspect").mockReturnValue({
+      verified: true,
+      survivors: [],
+    });
+    const signalSpy = vi
+      .spyOn(defaultProcessTreeKiller, "signal")
+      .mockImplementation(() => undefined);
+
+    const resultPromise = killResourceProcessTree(42, "authorized-command");
+    await vi.runAllTimersAsync();
+
+    await expect(resultPromise).resolves.toEqual({
+      pid: 42,
+      killed: false,
+      message: "Process identity changed.",
+    });
+    expect(captureSpy).not.toHaveBeenCalled();
+    expect(signalSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the original captured identities when escalating reparented survivors", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runProcessMock
+      .mockResolvedValueOnce(successfulProcessResult("root-command\n"))
+      .mockResolvedValueOnce({ ...successfulProcessResult(""), code: 1 })
+      .mockResolvedValueOnce({ ...successfulProcessResult(""), code: 1 });
+    const originalTree = {
+      descendants: [{ pid: 43, command: "worker-command" }],
+      captureComplete: true,
+    };
+    const captureSpy = vi
+      .spyOn(defaultProcessTreeKiller, "capture")
+      .mockReturnValueOnce(originalTree)
+      .mockReturnValueOnce({ descendants: [], captureComplete: true });
+    vi.spyOn(defaultProcessTreeKiller, "inspect")
+      .mockReturnValueOnce({ verified: true, survivors: [...originalTree.descendants] })
+      .mockReturnValueOnce({ verified: true, survivors: [] });
+    const signalSpy = vi
+      .spyOn(defaultProcessTreeKiller, "signal")
+      .mockImplementation(() => undefined);
+
+    const resultPromise = killResourceProcessTree(42);
+    await vi.runAllTimersAsync();
+
+    await expect(resultPromise).resolves.toEqual({ pid: 42, killed: true });
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    expect(signalSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        rootPid: 42,
+        signal: "SIGKILL",
+        tree: originalTree,
+        includeRootTree: false,
+      }),
+    );
+    expect(signalSpy.mock.calls[1]?.[0].verifiedDescendants).not.toBe(true);
+  });
+});
+
+describe("resource disk scans", () => {
+  it("cancels scans only for the requested owner", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const requests: Array<{
+      signal: AbortSignal;
+      resolve: (result: ReturnType<typeof successfulProcessResult>) => void;
+    }> = [];
+    runProcessMock.mockImplementation(
+      (_command, _args, options) =>
+        new Promise((resolve) => {
+          if (!options?.signal) throw new Error("Expected a cancellable disk scan.");
+          requests.push({ signal: options.signal, resolve });
+        }),
+    );
+    const ownerA = {};
+    const ownerB = {};
+
+    const scanA = scanResourceDiskUsage(["/a"], ownerA);
+    const scanB = scanResourceDiskUsage(["/b"], ownerB);
+    expect(requests).toHaveLength(2);
+
+    expect(cancelResourceDiskScan(ownerA)).toEqual({ cancelled: true });
+    expect(requests[0]?.signal.aborted).toBe(true);
+    expect(requests[1]?.signal.aborted).toBe(false);
+
+    requests[0]?.resolve(successfulProcessResult("1 /a\n"));
+    requests[1]?.resolve(successfulProcessResult("1 /b\n"));
+    await Promise.all([scanA, scanB]);
+  });
+
+  it("keeps latest-call-wins behavior for the default owner", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const requests: Array<{
+      signal: AbortSignal;
+      resolve: (result: ReturnType<typeof successfulProcessResult>) => void;
+    }> = [];
+    runProcessMock.mockImplementation(
+      (_command, _args, options) =>
+        new Promise((resolve) => {
+          if (!options?.signal) throw new Error("Expected a cancellable disk scan.");
+          requests.push({ signal: options.signal, resolve });
+        }),
+    );
+
+    const firstScan = scanResourceDiskUsage(["/first"]);
+    const secondScan = scanResourceDiskUsage(["/second"]);
+    expect(requests[0]?.signal.aborted).toBe(true);
+    expect(requests[1]?.signal.aborted).toBe(false);
+
+    requests[0]?.resolve(successfulProcessResult("1 /first\n"));
+    requests[1]?.resolve(successfulProcessResult("1 /second\n"));
+    await Promise.all([firstScan, secondScan]);
   });
 });

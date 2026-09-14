@@ -16,6 +16,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
 import { DisclosureChevron } from "../../ui/DisclosureChevron";
+import { DisclosureRegion } from "../../ui/DisclosureRegion";
 import { DevicePowerIcon, RefreshCwIcon, TerminalIcon, TrashCanIcon, XIcon } from "~/lib/icons";
 import {
   resourceCleanWorkspacesMutationOptions,
@@ -158,6 +159,7 @@ function CollapsibleNode({
     <div className="flex flex-col">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={cn(
           TREE_GRID_CLASS,
@@ -171,7 +173,9 @@ function CollapsibleNode({
         <span className={CPU_CELL_CLASS}>{formatCpu(cpuPct)}</span>
         <span className={RSS_CELL_STRONG_CLASS}>{formatBytes(rssBytes)}</span>
       </button>
-      {open ? <div className="flex flex-col">{children}</div> : null}
+      <DisclosureRegion open={open} contentClassName="flex flex-col">
+        {children}
+      </DisclosureRegion>
     </div>
   );
 }
@@ -257,9 +261,7 @@ export function EnvironmentResourcesSection({ enabled }: { enabled: boolean }) {
   const snapshot = snapshotQuery.data;
   const projects = snapshot?.projects ?? [];
   const orphans = snapshot?.unattributed ?? [];
-  const killingKey = killSessionMutation.isPending
-    ? (killSessionMutation.variables?.terminalId ?? String(killSessionMutation.variables?.pid))
-    : null;
+  const killingPid = killSessionMutation.isPending ? killSessionMutation.variables?.pid : null;
 
   const cycleSort = () =>
     setSortMode((mode) => (mode === "rss" ? "cpu" : mode === "cpu" ? "name" : "rss"));
@@ -268,6 +270,7 @@ export function EnvironmentResourcesSection({ enabled }: { enabled: boolean }) {
     confirmAndRun(`Kill ${sessionLabel(session)} (${formatBytes(session.rssBytes)} RSS)?`, () =>
       killSessionMutation.mutate({
         ...(session.terminalId ? { terminalId: session.terminalId } : {}),
+        ...(session.threadId ? { threadId: session.threadId } : {}),
         pid: session.pid,
       }),
     );
@@ -460,9 +463,9 @@ export function EnvironmentResourcesSection({ enabled }: { enabled: boolean }) {
                   >
                     {sortProcesses(node.processes, sortMode).map((session) => (
                       <SessionRow
-                        key={session.terminalId ?? session.pid}
+                        key={session.pid}
                         session={session}
-                        killing={killingKey === (session.terminalId ?? String(session.pid))}
+                        killing={killingPid === session.pid}
                         onKill={(child) => void handleKill(child)}
                       />
                     ))}
@@ -479,7 +482,7 @@ export function EnvironmentResourcesSection({ enabled }: { enabled: boolean }) {
                   <SessionRow
                     key={orphan.pid}
                     session={orphan}
-                    killing={killingKey === String(orphan.pid)}
+                    killing={killingPid === orphan.pid}
                     onKill={(session) => void handleKill(session)}
                   />
                 ))}

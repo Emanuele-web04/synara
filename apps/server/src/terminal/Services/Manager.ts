@@ -172,8 +172,12 @@ export interface TerminalManagerShape {
    * Close an active terminal session.
    *
    * When `terminalId` is omitted, closes all sessions for the thread.
+   * When `expectedPid` is provided, closes only that terminal generation.
    */
-  readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+  readonly close: (
+    input: TerminalCloseInput,
+    expectedPid?: number,
+  ) => Effect.Effect<void, TerminalError>;
 
   /**
    * Close only sessions whose latest open/reattach predates an archive event.

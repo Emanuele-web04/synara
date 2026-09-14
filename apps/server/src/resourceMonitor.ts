@@ -159,6 +159,10 @@ function pushHistoryPoint(histories: Map<string, number[]>, key: string, value: 
   return [...history];
 }
 
+function terminalSessionKey(threadId: string, terminalId: string): string {
+  return JSON.stringify([threadId, terminalId]);
+}
+
 // ── Snapshot building (pure) ─────────────────────────────────────────────
 
 export interface ResourceSnapshotAttribution {
@@ -179,13 +183,24 @@ export interface ResourceProviderAttribution {
 
 /**
  * Keep only roots whose live command still matches the spawn baseline,
- * dropping dead or pid-reused entries from the registry. The first sighting
- * trusts the live command as the baseline (spawn and first sample are seconds
- * apart, so reuse in that window is implausible).
+ * dropping dead or pid-reused entries from the registry. An unbaselined root
+ * is learned only when one fresh server-tree capture contains the same pid and
+ * command, so registry-only stale pids fail closed.
  */
 export async function verifyProviderProcessRoots(
   roots: ReadonlyArray<ResourceProviderAttribution>,
 ): Promise<ResourceProviderAttribution[]> {
+  const needsServerTree = roots.some((root) => root.commandBaseline === null);
+  const serverTree = needsServerTree ? defaultProcessTreeKiller.capture(process.pid) : null;
+  const unbaselinedServerProcesses =
+    serverTree && serverTree.captureComplete !== false
+      ? new Map(
+          serverTree.descendants.map((capturedProcess) => [
+            capturedProcess.pid,
+            capturedProcess.command,
+          ]),
+        )
+      : null;
   const verified = await Promise.all(
     roots.map(async (root) => {
       const current = await readProcessCommand(root.pid);
@@ -194,8 +209,12 @@ export async function verifyProviderProcessRoots(
         return null;
       }
       if (root.commandBaseline === null) {
+        if (unbaselinedServerProcesses?.get(root.pid) !== current.trim().split(/\s+/).join(" ")) {
+          dropProviderProcess(root.pid);
+          return null;
+        }
         noteProviderProcessCommand(root.pid, current);
-        return root;
+        return { ...root, commandBaseline: current };
       }
       if (current !== root.commandBaseline) {
         dropProviderProcess(root.pid);
@@ -435,7 +454,13 @@ export function buildResourceSnapshot(input: {
       node.processes = node.processes.toSorted((left, right) => right.rssBytes - left.rssBytes);
       node.cpuPct = Math.round(node.processes.reduce((sum, row) => sum + row.cpuPct, 0) * 10) / 10;
       node.rssBytes = node.processes.reduce((sum, row) => sum + row.rssBytes, 0);
-      node.sessionCount = new Set(node.processes.map((row) => row.terminalId ?? row.pid)).size;
+      node.sessionCount = new Set(
+        node.processes.flatMap((row) =>
+          row.threadId !== undefined && row.terminalId !== undefined
+            ? [terminalSessionKey(row.threadId, row.terminalId)]
+            : [],
+        ),
+      ).size;
       node.history = pushHistoryPoint(histories, `worktree:${node.path}`, node.cpuPct);
     }
     project.worktrees = project.worktrees.toSorted((left, right) => right.rssBytes - left.rssBytes);
@@ -452,7 +477,7 @@ export function buildResourceSnapshot(input: {
   const sessionCount = new Set(
     owned.flatMap((row) => {
       const terminal = terminalPids.get(row.pid);
-      return terminal ? [terminal.terminalId] : [];
+      return terminal ? [terminalSessionKey(terminal.threadId, terminal.terminalId)] : [];
     }),
   ).size;
 
@@ -558,7 +583,7 @@ export function cpuCount(): number {
 
 // ── Kill ─────────────────────────────────────────────────────────────────
 
-async function readProcessCommand(pid: number): Promise<string | null> {
+export async function readProcessCommand(pid: number): Promise<string | null> {
   try {
     const result = await runProcess("ps", ["-p", String(pid), "-o", "command="], {
       timeoutMs: 1_000,
@@ -583,6 +608,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  */
 export async function killResourceProcessTree(
   pid: number,
+  expectedCommand?: string,
 ): Promise<{ pid: number; killed: boolean; message?: string }> {
   if (!Number.isInteger(pid) || pid <= 1) {
     return { pid, killed: false, message: `Refusing to kill pid ${pid}.` };
@@ -596,6 +622,9 @@ export async function killResourceProcessTree(
   const rootCommand = await readProcessCommand(pid);
   if (rootCommand === null) {
     return { pid, killed: false, message: "Process already exited." };
+  }
+  if (expectedCommand !== undefined && rootCommand !== expectedCommand) {
+    return { pid, killed: false, message: "Process identity changed." };
   }
   const tree = defaultProcessTreeKiller.capture(pid);
   const errors: Error[] = [];
@@ -619,8 +648,9 @@ export async function killResourceProcessTree(
     defaultProcessTreeKiller.signal({
       rootPid: pid,
       signal: "SIGKILL",
-      // Re-capture so a reparented tree is signalled by identity, not stale pids.
-      tree: defaultProcessTreeKiller.capture(pid),
+      // Keep the original identities so reparented survivors remain reachable.
+      // The killer rechecks each command immediately to reject PID reuse.
+      tree,
       includeRootTree: rootAlive,
       onError: (error) => errors.push(error),
     });
@@ -679,18 +709,20 @@ export async function measureDirectoryBytes(
   }
 }
 
-let activeDiskScan: AbortController | null = null;
+const defaultDiskScanOwner = {};
+const activeDiskScans = new Map<object, AbortController>();
 
 /**
- * Bounded, cancelable `du` scan. Latest call wins: a new scan aborts the
- * previous one. Never runs on a timer — on-demand only.
+ * Bounded, cancelable `du` scan. The latest call for one owner wins without
+ * interrupting other owners. Never runs on a timer — on-demand only.
  */
 export async function scanResourceDiskUsage(
   paths: readonly string[],
+  owner: object = defaultDiskScanOwner,
 ): Promise<ResourceDiskUsageReport> {
-  activeDiskScan?.abort();
+  activeDiskScans.get(owner)?.abort();
   const controller = new AbortController();
-  activeDiskScan = controller;
+  activeDiskScans.set(owner, controller);
   try {
     const unique = [...new Set(paths.filter((value) => value.length > 0))].slice(
       0,
@@ -713,13 +745,16 @@ export async function scanResourceDiskUsage(
       entries: sortedEntries,
     };
   } finally {
-    if (activeDiskScan === controller) activeDiskScan = null;
+    if (activeDiskScans.get(owner) === controller) activeDiskScans.delete(owner);
   }
 }
 
-export function cancelResourceDiskScan(): { cancelled: boolean } {
-  if (!activeDiskScan) return { cancelled: false };
-  activeDiskScan.abort();
-  activeDiskScan = null;
+export function cancelResourceDiskScan(owner: object = defaultDiskScanOwner): {
+  cancelled: boolean;
+} {
+  const controller = activeDiskScans.get(owner);
+  if (!controller) return { cancelled: false };
+  controller.abort();
+  activeDiskScans.delete(owner);
   return { cancelled: true };
 }

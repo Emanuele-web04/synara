@@ -1124,6 +1124,42 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("closes a terminal only when its current PID matches the expected PID", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const opened = await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process || opened.pid === null) return;
+
+    await manager.close({ threadId: "thread-1", terminalId: "default" }, opened.pid);
+
+    expect(process.killed).toBe(true);
+    expect(manager.listActiveSessions()).toEqual([]);
+    manager.dispose();
+  });
+
+  it("does not close a replacement terminal when the expected PID is stale", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const opened = await manager.open(openInput());
+    expect(opened.pid).not.toBeNull();
+    if (opened.pid === null) return;
+
+    const restarting = manager.restart(restartInput());
+    const conditionalClose = manager.close(
+      { threadId: "thread-1", terminalId: "default" },
+      opened.pid,
+    );
+    const restarted = await restarting;
+
+    await expect(conditionalClose).rejects.toThrow();
+    expect(restarted.pid).not.toBe(opened.pid);
+    expect(ptyAdapter.processes[1]?.killed).toBe(false);
+    expect(manager.listActiveSessions()).toMatchObject([
+      { threadId: "thread-1", terminalId: "default", pid: restarted.pid, status: "running" },
+    ]);
+    manager.dispose();
+  });
+
   it("closes all terminals for a thread when close omits terminalId", async () => {
     const { manager, ptyAdapter, logsDir } = makeManager();
     await manager.open(openInput({ terminalId: "default" }));
