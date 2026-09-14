@@ -27,7 +27,12 @@ import {
   type ComputerTarget,
 } from "@synara/contracts";
 
-import { actionableElements, ComputerTargetError } from "../computer/uiTreeTargeting.ts";
+import {
+  actionableElements,
+  diffActionableElements,
+  ComputerTargetError,
+  type ComputerActionableElements,
+} from "../computer/uiTreeTargeting.ts";
 import {
   COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
   DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION,
@@ -121,6 +126,10 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_write_clipboard",
   "computer_set_value",
   "computer_perform_action",
+  "computer_paste",
+  // A run is the same actions it contains, approved once for the list the
+  // model declared rather than once per dispatch.
+  "computer_run",
   // The only tool whose whole effect is on what the human sees on their own
   // screen, which is exactly why it is gated.
   "computer_activate_window",
@@ -225,6 +234,20 @@ const KEYBOARD_TARGET_HINT =
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
   'delivery.verified and delivery.effect report evidence, not retry permission. See "Reading a delivery verdict".';
+
+/** Longest step list one computer_run accepts. */
+const COMPUTER_RUN_MAX_STEPS = 25;
+
+/**
+ * Per-app notes that change how the standard tools behave, attached once to
+ * the first state read scoped to that app's window. Verified behavior only —
+ * a hint that guesses teaches the model a wrong move it then has to unlearn.
+ * Keyed by the lowercase appName computer_list_windows reports.
+ */
+const APP_GUIDANCE: Record<string, string> = {
+  slack:
+    "Slack: prefer set_value on the message composer — type_text submits the message on Return, while set_value inserts text and newlines without sending. When the composer holds 3+ characters, a hint button below it names the key combination that adds a new line; the combination not listed sends.",
+};
 
 function keyboardTargetProperty(): Record<string, unknown> {
   return {
@@ -766,6 +789,24 @@ export function makeAgentGatewayComputerTools(
   const disclosedFirstMutations = new Set<string>();
 
   /**
+   * The last element digest each thread saw, per observation scope
+   * (window_id + label_contains). `diff` on computer_get_state compares the
+   * fresh read against it; a batch's closing state re-baselines the scope it
+   * observed so a following diff does not re-report what the run already
+   * returned.
+   */
+  const elementDigests = new Map<string, ComputerActionableElements>();
+
+  /** Apps whose guidance note a thread has already been shown. */
+  const appHintsSeen = new Set<string>();
+
+  const digestScopeKey = (
+    threadId: string,
+    windowId: string | undefined,
+    labelContains: string | undefined,
+  ): string => JSON.stringify([threadId, windowId ?? null, labelContains ?? null]);
+
+  /**
    * PNG bytes travel as MCP image content and the metadata as the text part.
    * Delivering is also remembering: the screenshot becomes the frame the
    * thread's next x/y are measured in, and the metadata carries the id that
@@ -919,7 +960,11 @@ export function makeAgentGatewayComputerTools(
               () =>
                 name === "computer_get_state" ||
                 name === "computer_screenshot" ||
-                name === "computer_wait"
+                name === "computer_wait" ||
+                // A run's internal reads — the wait-step polls and the closing
+                // state — are the model's observations, with the same authority
+                // to satisfy a pending observation requirement.
+                name === "computer_run"
                   ? withModelDesktopObservation(() => run(args, context))
                   : run(args, context),
             );
@@ -1254,6 +1299,394 @@ export function makeAgentGatewayComputerTools(
         run(context.callerThreadId, readTarget(args, context), readModifiers(args)),
     );
 
+  /**
+   * The fields one `computer_run` step type accepts. Listed exhaustively so a
+   * mistyped field is refused at parse time instead of silently ignored — a
+   * step that drops the field the model meant is a step that does the wrong
+   * thing. Camel-case aliases are admitted because the argument readers accept
+   * them everywhere else.
+   */
+  const RUN_TARGET_FIELDS = [
+    "x",
+    "y",
+    "screenshot_id",
+    "screenshotId",
+    "label",
+    "role",
+    "window_id",
+    "windowId",
+  ] as const;
+  const RUN_STEP_FIELDS: Record<string, readonly string[]> = {
+    click: [...RUN_TARGET_FIELDS, "modifiers"],
+    double_click: [...RUN_TARGET_FIELDS, "modifiers"],
+    triple_click: [...RUN_TARGET_FIELDS, "modifiers"],
+    right_click: [...RUN_TARGET_FIELDS, "modifiers"],
+    move_cursor: RUN_TARGET_FIELDS,
+    drag: ["from", "to", "duration_ms"],
+    scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers"],
+    type_text: ["text", "window_id", "windowId"],
+    press_key: ["key", "window_id", "windowId"],
+    hotkey: ["keys", "window_id", "windowId"],
+    set_value: [...RUN_TARGET_FIELDS, "value"],
+    perform_action: [...RUN_TARGET_FIELDS, "action"],
+    wait: ["duration_ms", "label", "role", "window_id", "windowId"],
+    activate_window: ["window_id", "windowId"],
+    launch_app: ["app", "arguments", "wait_for_window"],
+    write_clipboard: ["text"],
+    paste: ["text", "window_id", "windowId"],
+  };
+
+  interface PreparedRunStep {
+    readonly type: string;
+    readonly run: () => Promise<unknown>;
+  }
+
+  /**
+   * Parse one step into a ready-to-call closure. Every argument reader runs
+   * now — including coordinate resolution against the frame registry — so a
+   * malformed batch is refused whole, before step zero dispatches anything.
+   * What stays deferred is what must stay fresh: semantic targets resolve
+   * against live state inside each manager call, at the moment that step runs.
+   */
+  const prepareRunStep = (
+    type: string,
+    step: Record<string, unknown>,
+    context: ToolContext,
+  ): (() => Promise<unknown>) => {
+    const threadId = context.callerThreadId;
+    switch (type) {
+      case "click":
+      case "double_click":
+      case "triple_click":
+      case "right_click": {
+        const target = readTarget(step, context);
+        const modifiers = readModifiers(step);
+        const method = {
+          click: manager.click,
+          double_click: manager.doubleClick,
+          triple_click: manager.tripleClick,
+          right_click: manager.rightClick,
+        }[type];
+        return () => method.call(manager, threadId, target, modifiers);
+      }
+      case "move_cursor": {
+        const target = readTarget(step, context);
+        return () => manager.moveCursor(threadId, target);
+      }
+      case "drag": {
+        const from = readNestedTarget(step, "from", context);
+        const to = readNestedTarget(step, "to", context);
+        const durationMs = readDragDurationMs(step);
+        return () => manager.drag(threadId, from, to, durationMs);
+      }
+      case "scroll": {
+        // The same frame mapping and half-window limit the standalone tool
+        // applies, minus its unchanged-scroll streak: a batch step observes
+        // nothing, so there is no travel to measure the streak from.
+        const raw = readScreenshotTarget(step);
+        const frame = frames.resolve(threadId, raw.screenshotId);
+        const resolved = resolveTarget(raw, threadId);
+        const target =
+          !hasTargetFields(resolved) && frame.windowId !== undefined
+            ? { ...resolved, windowId: frame.windowId }
+            : resolved;
+        const delta = screenshotDeltaToDesktop(
+          frame,
+          readDelta(step, "delta_x"),
+          readDelta(step, "delta_y"),
+        );
+        const limited = {
+          deltaX:
+            Math.sign(delta.deltaX) * Math.min(Math.abs(delta.deltaX), frame.region.width / 2),
+          deltaY:
+            Math.sign(delta.deltaY) * Math.min(Math.abs(delta.deltaY), frame.region.height / 2),
+        };
+        const modifiers = readModifiers(step);
+        return async () => {
+          const outcome = await manager.scrollCalibrated(
+            threadId,
+            hasTargetFields(target) ? target : null,
+            limited.deltaX,
+            limited.deltaY,
+            { observe: false, ...(modifiers.length > 0 ? { modifiers } : {}) },
+          );
+          if (
+            outcome.result.scroll &&
+            (limited.deltaX !== delta.deltaX || limited.deltaY !== delta.deltaY)
+          ) {
+            return {
+              ...outcome.result,
+              scroll: { ...outcome.result.scroll, requested: delta, limitedTo: limited },
+            };
+          }
+          return outcome.result;
+        };
+      }
+      case "type_text": {
+        const text = readRequiredText(step);
+        const windowId = readWindowIdArg(step);
+        return () => manager.typeText(threadId, text, windowId);
+      }
+      case "press_key": {
+        const key = readStringArg(step, "key", { required: true })!;
+        const windowId = readWindowIdArg(step);
+        return () => manager.pressKey(threadId, key, windowId);
+      }
+      case "hotkey": {
+        const keys = readHotkeyKeys(step);
+        const windowId = readWindowIdArg(step);
+        return () => manager.hotkey(threadId, keys, windowId);
+      }
+      case "set_value": {
+        const target = readTarget(step, context);
+        const value = readSetValueValue(step);
+        return () => manager.setValue(threadId, target, value);
+      }
+      case "perform_action": {
+        const target = readTarget(step, context);
+        const action = readActionName(step);
+        return () => manager.performAction(threadId, target, action);
+      }
+      case "wait": {
+        const durationMs = readWaitDurationMs(step);
+        const label = readVerbatimStringArg(step, "label");
+        const windowId = readWindowIdArg(step);
+        const role = readStringArg(step, "role");
+        if (label !== undefined) {
+          if (!windowId || !label.trim()) {
+            throw new ToolInputError(
+              'A "wait" step with "label" requires a nonempty label and "window_id".',
+            );
+          }
+          const target: ComputerTarget = { label, windowId, ...(role ? { role } : {}) };
+          return () =>
+            waitForControl(
+              () => manager.getState({ includeTree: true, windowId }),
+              target,
+              durationMs,
+              desktopOperationSignal(),
+            );
+        }
+        return async () => {
+          if (durationMs > 0)
+            await waitForComputer(durationMs, undefined, { signal: desktopOperationSignal() });
+          return { waitedMs: durationMs };
+        };
+      }
+      case "activate_window": {
+        const windowId = readWindowIdArg(step);
+        if (windowId === undefined) {
+          throw new ToolInputError('Step "activate_window" requires "window_id".');
+        }
+        // Foreground promotion is scoped to this one step: the rest of the
+        // run keeps the batch's delivery mode.
+        return () =>
+          withDesktopDeliveryMode("foreground", () =>
+            manager.foregroundWithRestore(threadId, windowId),
+          );
+      }
+      case "launch_app": {
+        const app = readStringArg(step, "app", { required: true })!;
+        const appArgs = readStringArrayArg(step, "arguments") ?? [];
+        const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
+        return () => manager.launchApp(threadId, app, appArgs, waitMs);
+      }
+      case "write_clipboard": {
+        const text = readClipboardText(step);
+        return () => manager.writeClipboard(threadId, text);
+      }
+      case "paste": {
+        const text = readClipboardText(step);
+        const windowId = readWindowIdArg(step);
+        return () => manager.paste(threadId, text, windowId);
+      }
+      default:
+        throw new ToolInputError(`Unknown run step type ${JSON.stringify(type)}.`);
+    }
+  };
+
+  /**
+   * The error one failed step reports. Same taxonomy the outer handler maps
+   * to whole-call results, kept compact: the batch result is data, and the
+   * step's failure is one entry in it.
+   */
+  const runStepError = (error: unknown): Record<string, unknown> =>
+    error instanceof ComputerBackendError && error.inputPause
+      ? {
+          code: "computer_input_paused",
+          ...error.inputPause,
+          ...(error instanceof CuaActionError ? { effect: error.effect } : {}),
+        }
+      : error instanceof CuaActionError
+        ? {
+            code: error.code,
+            effect: error.effect,
+            message: error.message,
+            retryAllowed: false,
+          }
+        : error instanceof ComputerTargetError
+          ? {
+              code: error.code,
+              message: error.message,
+              notFound: error.notFound,
+              candidates: error.candidates,
+            }
+          : error instanceof ComputerLeaseError
+            ? { code: error.code, message: error.message, retryable: error.retryable }
+            : error instanceof ToolInputError
+              ? { code: "invalid_step", message: error.message }
+              : {
+                  code: "step_failed",
+                  message: errorText(error),
+                  ...(error instanceof ComputerBackendError && error.retryable
+                    ? { retryable: true }
+                    : {}),
+                };
+
+  const runComputerBatch = async (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<unknown> => {
+    const threadId = context.callerThreadId;
+    const rawSteps = args.steps;
+    if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
+      throw new ToolInputError('"steps" must be a nonempty array of step objects.');
+    }
+    if (rawSteps.length > COMPUTER_RUN_MAX_STEPS) {
+      throw new ToolInputError(
+        `"steps" accepts at most ${COMPUTER_RUN_MAX_STEPS} steps; got ${rawSteps.length}. Split the sequence into multiple computer_run calls.`,
+      );
+    }
+    // Validate everything before anything dispatches: a batch that cannot
+    // parse is refused whole rather than running its good half.
+    const prepared: PreparedRunStep[] = rawSteps.map((entry, index) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new ToolInputError(`Step ${index} must be an object with a "type" field.`);
+      }
+      const step = entry as Record<string, unknown>;
+      const type = readStringArg(step, "type");
+      const fields = type === undefined ? undefined : RUN_STEP_FIELDS[type];
+      if (type === undefined || fields === undefined) {
+        throw new ToolInputError(
+          `Step ${index}: "type" must be one of ${Object.keys(RUN_STEP_FIELDS).join(", ")}.`,
+        );
+      }
+      const unknown = Object.keys(step).filter((key) => key !== "type" && !fields.includes(key));
+      if (unknown.length > 0) {
+        throw new ToolInputError(
+          `Step ${index} (${type}): unknown field ${unknown
+            .map((key) => JSON.stringify(key))
+            .join(", ")}.`,
+        );
+      }
+      return { type, run: prepareRunStep(type, step, context) };
+    });
+
+    const steps: Record<string, unknown>[] = [];
+    let stopped = false;
+    // The window the last step touched scopes the closing state read.
+    let lastWindowId: string | undefined;
+    for (const [index, preparedStep] of prepared.entries()) {
+      // Between steps, not just around the batch: a revocation or a dead turn
+      // stops the run before the next dispatch, not after it.
+      assertDesktopOperationActive();
+      await Effect.runPromise(context.assertCallerTurnActive(), {
+        signal: desktopOperationSignal(),
+      });
+      try {
+        const value = await preparedStep.run();
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          typeof (value as { windowId?: unknown }).windowId === "string"
+        ) {
+          lastWindowId = (value as { windowId: string }).windowId;
+        }
+        steps.push({
+          step: index,
+          type: preparedStep.type,
+          ok: true,
+          result:
+            typeof value === "object" && value !== null
+              ? (({ computerId: _omitted, ...rest }) => rest)(value as Record<string, unknown>)
+              : value,
+        });
+      } catch (error) {
+        // A cancelled desktop operation or dead turn is the call ending, not a
+        // step failing: propagate it rather than file it as batch data.
+        desktopOperationSignal()?.throwIfAborted();
+        await Effect.runPromise(context.assertCallerTurnActive(), {
+          signal: desktopOperationSignal(),
+        });
+        steps.push({ step: index, type: preparedStep.type, ok: false, error: runStepError(error) });
+        stopped = true;
+        break;
+      }
+    }
+
+    // The closing read is the batch's own observation: it satisfies a pending
+    // observation requirement (this call runs under withModelDesktopObservation),
+    // re-baselines the thread's diff scope, and reports the state the run left
+    // behind. It is best-effort — the steps already ran, so a read failure is
+    // reported beside them rather than converting a finished run into an error.
+    const stateFields = await (async (): Promise<Record<string, unknown>> => {
+      try {
+        const state = await manager.getState({
+          includeTree: true,
+          ...(lastWindowId ? { windowId: lastWindowId } : {}),
+        });
+        const { text: _text, root, screenshot: _screenshot, ...rest } = state;
+        const elements = root
+          ? actionableElements(root, lastWindowId === undefined ? {} : { windowId: lastWindowId })
+          : undefined;
+        if (elements) {
+          elementDigests.set(digestScopeKey(threadId, lastWindowId, undefined), elements);
+        }
+        return {
+          state: {
+            ...rest,
+            ...(elements
+              ? {
+                  elements: elements.items,
+                  ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+                  ...(elements.complete
+                    ? {}
+                    : { elementsTruncated: true, elementsOmitted: elements.omitted }),
+                }
+              : {}),
+          },
+        };
+      } catch (error) {
+        desktopOperationSignal()?.throwIfAborted();
+        return { stateError: errorText(error) };
+      }
+    })();
+
+    const payload: Record<string, unknown> = {
+      computerId: manager.computerId,
+      steps,
+      completed: steps.filter((entry) => entry.ok === true).length,
+      stopped,
+      ...stateFields,
+    };
+    if (readBooleanArg(args, "include_screenshot") !== true) return payload;
+    try {
+      const screenshot =
+        lastWindowId === undefined
+          ? (await manager.captureFocusedWindow(COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION))
+              .screenshot
+          : await manager.captureScreenshot({
+              kind: "window",
+              windowId: lastWindowId,
+              maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
+            });
+      return deliverScreenshot(threadId, payload, screenshot, lastWindowId);
+    } catch (error) {
+      desktopOperationSignal()?.throwIfAborted();
+      return { ...payload, screenshotError: errorText(error) };
+    }
+  };
+
   return [
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
@@ -1313,6 +1746,11 @@ export function makeAgentGatewayComputerTools(
               description:
                 "Restrict the elements list to controls whose label contains this text, case-insensitively. Use it when the list came back truncated, or to check whether one particular control is on screen.",
             },
+            diff: {
+              type: "boolean",
+              description:
+                "Return only what changed since your last state read in this scope (same window_id and label_contains): elementChanges with added, removed and changed entries instead of the full elements list. The first read in a scope reports every element as added. Position-only changes are not reported — use a screenshot when layout is the question.",
+            },
           },
           additionalProperties: false,
         },
@@ -1329,6 +1767,7 @@ export function makeAgentGatewayComputerTools(
         const labelContains =
           readVerbatimStringArg(args, "label_contains") ??
           readVerbatimStringArg(args, "labelContains");
+        const wantDiff = readBooleanArg(args, "diff") ?? false;
         const state = await manager.getState({
           includeScreenshot: readBooleanArg(args, "include_screenshot") ?? false,
           includeText: wantText,
@@ -1342,21 +1781,47 @@ export function makeAgentGatewayComputerTools(
               ...(labelContains === undefined ? {} : { labelContains }),
             })
           : undefined;
+        // The baseline moves on every successful digest, diff or not: the
+        // comparison is always against what this thread last saw in the scope.
+        const digestKey = digestScopeKey(context.callerThreadId, windowId, labelContains);
+        const before = elementDigests.get(digestKey);
+        if (elements) elementDigests.set(digestKey, elements);
+        const appHint = (() => {
+          if (windowId === undefined) return undefined;
+          const appName = rest.windows
+            .find((window) => window.id === windowId)
+            ?.appName?.toLowerCase();
+          const note = appName === undefined ? undefined : APP_GUIDANCE[appName];
+          const seenKey = JSON.stringify([context.callerThreadId, appName]);
+          if (note === undefined || appHintsSeen.has(seenKey)) return undefined;
+          appHintsSeen.add(seenKey);
+          return note;
+        })();
         const payload = {
           ...rest,
           ...(wantText && text !== undefined ? { text } : {}),
           ...(elements
-            ? {
-                elements: elements.items,
-                ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
-                // Both halves together: "there is more" is only actionable
-                // alongside how much more, which is what decides between
-                // looking again and narrowing the query.
-                ...(elements.complete
-                  ? {}
-                  : { elementsTruncated: true, elementsOmitted: elements.omitted }),
-              }
+            ? wantDiff
+              ? {
+                  elementChanges: diffActionableElements(before?.items ?? [], elements.items),
+                  // Either side reporting less than the full tree makes the
+                  // diff itself partial — removals beyond a cap are invisible.
+                  ...((before !== undefined && !before.complete) || !elements.complete
+                    ? { elementChangesIncomplete: true }
+                    : {}),
+                }
+              : {
+                  elements: elements.items,
+                  ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+                  // Both halves together: "there is more" is only actionable
+                  // alongside how much more, which is what decides between
+                  // looking again and narrowing the query.
+                  ...(elements.complete
+                    ? {}
+                    : { elementsTruncated: true, elementsOmitted: elements.omitted }),
+                }
             : {}),
+          ...(appHint !== undefined ? { appHint } : {}),
         };
         if (!screenshot) return mcpToolResultJson(payload);
         return deliverScreenshot(context.callerThreadId, payload, screenshot);
@@ -1842,6 +2307,22 @@ export function makeAgentGatewayComputerTools(
       async (args, context) =>
         manager.writeClipboard(context.callerThreadId, readClipboardText(args)),
     ),
+    observedActionEntry(
+      "computer_paste",
+      "Paste text",
+      `Paste text into the target control through the clipboard — the fast path for long or awkward text computer_type_text would spend many keystrokes on. It saves the current clipboard, writes the text, sends the paste shortcut, then puts the user's contents back and reports clipboardRestored. A clipboard holding an image or other non-text content cannot be saved and is replaced. ${SHARED_CLIPBOARD_NOTE} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "The exact text to paste at the caret." },
+          ...keyboardTargetProperties,
+        },
+        required: ["text"],
+        additionalProperties: false,
+      },
+      async (args, context) =>
+        manager.paste(context.callerThreadId, readClipboardText(args), readWindowIdArg(args)),
+    ),
     actionEntry(
       "computer_activate_window",
       "Activate window",
@@ -1908,6 +2389,68 @@ export function makeAgentGatewayComputerTools(
           readTarget(args, context),
           readActionName(args),
         ),
+    ),
+    actionEntry(
+      "computer_run",
+      "Run computer actions",
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), launch_app (app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      {
+        type: "object",
+        properties: {
+          steps: {
+            type: "array",
+            minItems: 1,
+            maxItems: COMPUTER_RUN_MAX_STEPS,
+            items: {
+              type: "object",
+              required: ["type"],
+              additionalProperties: false,
+              properties: {
+                type: { type: "string", enum: Object.keys(RUN_STEP_FIELDS) },
+                x: { type: "number" },
+                y: { type: "number" },
+                screenshot_id: { type: "string" },
+                label: { type: "string" },
+                role: { type: "string" },
+                window_id: { type: "string" },
+                modifiers: MODIFIERS_PROPERTY.modifiers,
+                from: {
+                  type: "object",
+                  description: "Drag start; the same target fields as a step.",
+                },
+                to: {
+                  type: "object",
+                  description: "Drag end; the same target fields as a step.",
+                },
+                duration_ms: { type: "integer", minimum: 0 },
+                delta_x: { type: "number" },
+                delta_y: { type: "number" },
+                text: { type: "string" },
+                key: { type: "string" },
+                keys: {
+                  type: "array",
+                  items: { type: "string" },
+                  maxItems: COMPUTER_HOTKEY_MAX_KEYS,
+                },
+                value: { type: "string" },
+                action: { type: "string", enum: [...semanticActionNames(dialect)] },
+                app: { type: "string" },
+                arguments: { type: "array", items: { type: "string" } },
+                wait_for_window: { type: "boolean" },
+              },
+            },
+            description:
+              "Ordered steps; the whole list is validated before anything runs, so a malformed step refuses the batch untouched.",
+          },
+          include_screenshot: {
+            type: "boolean",
+            description: "Attach a final screenshot of the affected window. Defaults to false.",
+          },
+        },
+        required: ["steps"],
+        additionalProperties: false,
+      },
+      runComputerBatch,
     ),
   ];
 }

@@ -37,6 +37,8 @@ export const COMPUTER_TOOL_TITLES = {
   computer_wait: "Wait",
   computer_read_clipboard: "Read the clipboard",
   computer_write_clipboard: "Write to the clipboard",
+  computer_paste: "Paste text",
+  computer_run: "Run a sequence",
 } as const;
 
 export type ComputerToolName = keyof typeof COMPUTER_TOOL_TITLES;
@@ -145,7 +147,9 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   if (
     tool === "computer_type_text" ||
     tool === "computer_set_value" ||
-    tool === "computer_write_clipboard"
+    tool === "computer_write_clipboard" ||
+    tool === "computer_paste" ||
+    tool === "computer_run"
   ) {
     return "";
   }
@@ -219,6 +223,17 @@ function describeParams(
   if (action) rows.push({ name: "Action", value: action });
   const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
   if (app) rows.push({ name: "App", value: app });
+  // A run approves the whole list at once, so the list is what the card must
+  // show: each step's verb, in order, never its arguments.
+  if (tool === "computer_run" && Array.isArray(args.steps)) {
+    const kinds = args.steps
+      .map((step) => readString(readRecord(step)?.type))
+      .filter((kind): kind is string => kind !== null);
+    rows.push({
+      name: "Steps",
+      value: truncate(kinds.length > 0 ? kinds.join(" → ") : `${args.steps.length}`, 200),
+    });
+  }
   return rows;
 }
 

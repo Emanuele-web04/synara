@@ -208,6 +208,8 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "writing to the clipboard",
     "wrote to the clipboard",
   ),
+  synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
+  synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
 } as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
 
 function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {

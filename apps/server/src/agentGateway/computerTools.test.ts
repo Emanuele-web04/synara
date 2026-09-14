@@ -149,7 +149,10 @@ describe("agent gateway computer tools", () => {
       Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    expect(JSON.stringify(definitions).length).toBeLessThan(40_000);
+    // The catalog grew by two tools (computer_paste, computer_run) whose value
+    // is replacing per-action round trips; the bound still trips on accidental
+    // schema bloat, so raise it only with the new surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(48_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -296,9 +299,11 @@ describe("agent gateway computer tools", () => {
       "computer_press_key",
       "computer_hotkey",
       "computer_write_clipboard",
+      "computer_paste",
       "computer_activate_window",
       "computer_set_value",
       "computer_perform_action",
+      "computer_run",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
@@ -319,6 +324,8 @@ describe("agent gateway computer tools", () => {
         "computer_write_clipboard",
         "computer_set_value",
         "computer_perform_action",
+        "computer_paste",
+        "computer_run",
         "computer_activate_window",
       ]),
     );
@@ -2428,6 +2435,449 @@ describe("computer_activate_window foreground restore", () => {
       expect(refused.isError).toBe(true);
       expect(backend.callsFor("raiseWindow")).toHaveLength(0);
       expect(backend.callsFor("focusWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("computer_run", () => {
+  it("runs steps in order through the same manager calls and closes with fresh state", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "click", label: "Display", window_id: "fake-calculator" },
+          { type: "type_text", text: "468", window_id: "fake-calculator" },
+          { type: "press_key", key: "enter", window_id: "fake-calculator" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = resultJson(result) as {
+        steps: { step: number; type: string; ok: boolean; result?: Record<string, unknown> }[];
+        completed: number;
+        stopped: boolean;
+        state: { elements: { label: string }[] };
+      };
+      expect(payload.completed).toBe(3);
+      expect(payload.stopped).toBe(false);
+      expect(payload.steps.map((entry) => [entry.step, entry.type, entry.ok])).toEqual([
+        [0, "click", true],
+        [1, "type_text", true],
+        [2, "press_key", true],
+      ]);
+      // computerId rides once on the envelope, not on every step.
+      for (const entry of payload.steps) expect(entry.result).not.toHaveProperty("computerId");
+      expect(payload.state.elements.map((element) => element.label)).toContain("Display");
+      expect(backend.callsFor("click")).toHaveLength(1);
+      expect(backend.callsFor("typeText").map((entry) => entry.args[0])).toEqual(["468"]);
+      expect(backend.callsFor("pressKey")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("stops at the first failure and reports which step and why", async () => {
+    const { backend, manager, call } = await setup();
+    backend.failNext("typeText", new ComputerBackendError("seat unavailable"));
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "click", label: "Display", window_id: "fake-calculator" },
+          { type: "type_text", text: "1" },
+          { type: "press_key", key: "enter" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = resultJson(result) as {
+        steps: { step: number; ok: boolean; error?: { message?: string } }[];
+        completed: number;
+        stopped: boolean;
+      };
+      expect(payload.stopped).toBe(true);
+      expect(payload.completed).toBe(1);
+      expect(payload.steps).toHaveLength(2);
+      expect(payload.steps[1]).toMatchObject({
+        step: 1,
+        type: "type_text",
+        ok: false,
+        error: { message: "seat unavailable" },
+      });
+      // The third step never dispatched.
+      expect(backend.callsFor("pressKey")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a malformed batch whole, before anything dispatches", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      for (const steps of [
+        [{ type: "click", label: "Display" }, { type: "levitate" }],
+        [{ type: "type_text", text: "hi", bogus: true }],
+        [{ type: "type_text" }],
+        [{ type: "click", label: "Display" }, 42],
+      ]) {
+        const result = await call("computer_run", { steps });
+        expect(result.isError).toBe(true);
+      }
+      expect(backend.callsFor("click")).toHaveLength(0);
+      expect(backend.callsFor("typeText")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("caps the step count", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      const result = await call("computer_run", {
+        steps: Array.from({ length: 26 }, () => ({ type: "press_key", key: "enter" })),
+      });
+      expect(result.isError).toBe(true);
+      expect(backend.callsFor("pressKey")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("asks approval once for the declared list and dispatches nothing when refused", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async (_name: string) => false);
+    const { call, manager } = await setup(backend, approval);
+    try {
+      const refused = await call("computer_run", {
+        steps: [{ type: "click", label: "Display", window_id: "fake-calculator" }],
+      });
+      expect(refused.isError).toBe(true);
+      expect(approval).toHaveBeenCalledTimes(1);
+      expect(approval.mock.calls[0]?.[0]).toBe("computer_run");
+      expect(backend.callsFor("click")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("scopes only the activate_window step to foreground delivery", async () => {
+    const backend = new FakeComputerBackend();
+    const modes: string[] = [];
+    const raise = backend.raiseWindow.bind(backend);
+    backend.raiseWindow = async (windowId: string) => {
+      modes.push(desktopDeliveryMode());
+      return raise(windowId);
+    };
+    const click = backend.click.bind(backend);
+    backend.click = async (point) => {
+      modes.push(desktopDeliveryMode());
+      return click(point);
+    };
+    const { call, manager } = await setup(backend);
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "activate_window", window_id: "fake-calculator" },
+          { type: "click", label: "Display", window_id: "fake-calculator" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      // raise + restore are foreground; everything the click path touches —
+      // its own window aim included — stays in the batch's background mode.
+      expect(modes.slice(0, 2)).toEqual(["foreground", "foreground"]);
+      expect(modes.slice(2).every((mode) => mode === "background")).toBe(true);
+      expect(modes.length).toBeGreaterThan(2);
+      // The restore re-covered the calculator, so the click restacks its own
+      // target — required on a compositing backend for the point to route.
+      expect(backend.callsFor("raiseWindow").map((entry) => entry.args[0])).toEqual([
+        "fake-calculator",
+        "fake-terminal",
+        "fake-calculator",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("waits for a label mid-run and resolves fresh targets per step", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "wait", duration_ms: 5_000, label: "Display", window_id: "fake-calculator" },
+          { type: "set_value", label: "Display", window_id: "fake-calculator", value: "42" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = resultJson(result) as { steps: { ok: boolean; result?: unknown }[] };
+      expect(payload.steps[0]).toMatchObject({ ok: true, result: { status: "ready" } });
+      expect(payload.steps[1]).toMatchObject({ ok: true });
+      expect(backend.callsFor("setValue")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("carries model-observation authority on its internal reads", async () => {
+    const backend = new FakeComputerBackend();
+    const observed: boolean[] = [];
+    const getState = backend.getState.bind(backend);
+    backend.getState = async (options) => {
+      observed.push(isModelDesktopObservationActive());
+      return getState(options);
+    };
+    const { call, manager } = await setup(backend);
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "wait", duration_ms: 2_000, label: "Display", window_id: "fake-calculator" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      // The wait-step poll and the closing state read both ran as model
+      // observations — they satisfy a pending post-resume observation gate.
+      expect(observed.length).toBeGreaterThanOrEqual(2);
+      expect(observed.every(Boolean)).toBe(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("propagates a dead turn instead of reporting a half-run as data", async () => {
+    const { backend, manager, byName } = await setup();
+    let checks = 0;
+    const context = {
+      ...makeContext(),
+      assertCallerTurnActive: () => {
+        checks += 1;
+        return checks <= 2
+          ? Effect.void
+          : Effect.fail(new GatewayToolError("caller_turn_inactive", "The requesting turn ended."));
+      },
+    };
+    try {
+      const result = await Effect.runPromise(
+        byName.get("computer_run")!.handler(
+          {
+            steps: [
+              { type: "click", label: "Display", window_id: "fake-calculator" },
+              { type: "type_text", text: "1" },
+            ],
+          },
+          context,
+        ),
+      );
+      expect(result.isError).toBe(true);
+      // The turn died before step two: one click dispatched, nothing typed.
+      expect(backend.callsFor("click")).toHaveLength(1);
+      expect(backend.callsFor("typeText")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("attaches a final screenshot of the affected window when asked", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      const result = await call("computer_run", {
+        steps: [{ type: "click", label: "Display", window_id: "fake-calculator" }],
+        include_screenshot: true,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.content.some((entry) => entry.type === "image")).toBe(true);
+      expect(resultJson(result)).toMatchObject({
+        screenshot: { windowId: "fake-calculator" },
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("pastes through the clipboard and restores the user's contents", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      await call("computer_write_clipboard", { text: "the user's copy" });
+      const result = await call("computer_run", {
+        steps: [
+          { type: "click", label: "Display", window_id: "fake-calculator" },
+          { type: "paste", text: "long agent payload", window_id: "fake-calculator" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = resultJson(result) as { steps: { result?: Record<string, unknown> }[] };
+      expect(payload.steps[1]?.result).toMatchObject({
+        action: "computer_paste",
+        clipboardRestored: true,
+      });
+      // write payload, send chord, write the user's contents back.
+      expect(backend.callsFor("writeClipboard").map((entry) => entry.args[0])).toEqual([
+        "the user's copy",
+        "long agent payload",
+        "the user's copy",
+      ]);
+      expect(backend.callsFor("hotkey").map((entry) => entry.args[0])).toEqual([["ctrl", "v"]]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("computer_paste", () => {
+  it("saves, pastes, and restores the shared clipboard", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      await call("computer_write_clipboard", { text: "keep me" });
+      const result = await call("computer_paste", {
+        text: "pasted text",
+        window_id: "fake-calculator",
+      });
+      expect(result.isError).not.toBe(true);
+      expect(resultJson(result)).toMatchObject({
+        action: "computer_paste",
+        clipboardRestored: true,
+      });
+      expect(backend.callsFor("hotkey").map((entry) => entry.args[0])).toEqual([["ctrl", "v"]]);
+      const clipboard = resultJson(await call("computer_read_clipboard", {})) as {
+        value: string;
+      };
+      expect(clipboard.value).toBe("keep me");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("uses the Command chord on a macOS backend", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const });
+    const { call, manager } = await setup(backend);
+    try {
+      const result = await call("computer_paste", {
+        text: "payload",
+        window_id: "fake-calculator",
+      });
+      expect(result.isError).not.toBe(true);
+      expect(backend.callsFor("hotkey").map((entry) => entry.args[0])).toEqual([["meta", "v"]]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("still restores the clipboard when the paste dispatch fails", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      await call("computer_write_clipboard", { text: "user text" });
+      backend.failNext("hotkey");
+      const result = await call("computer_paste", {
+        text: "agent text",
+        window_id: "fake-calculator",
+      });
+      expect(result.isError).toBe(true);
+      expect(backend.callsFor("writeClipboard").map((entry) => entry.args[0])).toEqual([
+        "user text",
+        "agent text",
+        "user text",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("computer_get_state diff", () => {
+  it("reports the first scoped read as all-added, then only the value that moved", async () => {
+    const { manager, call } = await setup();
+    try {
+      const baseline = resultJson(
+        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
+      ) as {
+        elementChanges: { added: { label: string }[]; removed: unknown[]; changed: unknown[] };
+      };
+      expect(baseline.elementChanges.added.map((item) => item.label).sort()).toEqual([
+        "Calculate",
+        "Display",
+      ]);
+      expect(baseline.elementChanges.removed).toEqual([]);
+      expect(baseline.elementChanges.changed).toEqual([]);
+
+      await call("computer_set_value", {
+        label: "Display",
+        window_id: "fake-calculator",
+        value: "468",
+        include_screenshot: false,
+      });
+      const diff = resultJson(
+        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
+      ) as {
+        elements?: unknown;
+        elementChanges: { added: unknown[]; removed: unknown[]; changed: unknown[] };
+      };
+      expect(diff.elements).toBeUndefined();
+      expect(diff.elementChanges).toEqual({
+        added: [],
+        removed: [],
+        changed: [
+          {
+            role: "text-field",
+            label: "Display",
+            windowId: "fake-calculator",
+            was: "0",
+            value: "468",
+          },
+        ],
+      });
+      // And a steady third read reports nothing at all.
+      const steady = resultJson(
+        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
+      ) as { elementChanges: { added: unknown[]; removed: unknown[]; changed: unknown[] } };
+      expect(steady.elementChanges).toEqual({ added: [], removed: [], changed: [] });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps scopes apart so a windowed read does not diff the desktop digest", async () => {
+    const { manager, call } = await setup();
+    try {
+      await call("computer_get_state", { window_id: "fake-calculator" });
+      // A different scope has its own baseline: this is a first read, not a diff.
+      const other = resultJson(await call("computer_get_state", { diff: true })) as {
+        elementChanges: { added: unknown[] };
+      };
+      expect(other.elementChanges.added.length).toBeGreaterThan(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("computer_get_state app hint", () => {
+  it("attaches a verified note once per thread for a scoped app read", async () => {
+    const backend = new FakeComputerBackend({
+      windows: [
+        {
+          id: "slack-window",
+          title: "general - Slack",
+          appName: "Slack",
+          bounds: { x: 10, y: 10, width: 900, height: 700 },
+          focused: true,
+          minimized: false,
+          visible: true,
+        },
+      ],
+    });
+    const { call, manager } = await setup(backend);
+    try {
+      const first = resultJson(await call("computer_get_state", { window_id: "slack-window" })) as {
+        appHint?: string;
+      };
+      expect(first.appHint).toContain("set_value");
+      const second = resultJson(
+        await call("computer_get_state", { window_id: "slack-window" }),
+      ) as { appHint?: string };
+      expect(second.appHint).toBeUndefined();
+      // A second thread has not seen it.
+      const other = resultJson(
+        await call("computer_get_state", { window_id: "slack-window" }, undefined, "other-thread"),
+      ) as { appHint?: string };
+      expect(other.appHint).toContain("set_value");
     } finally {
       await manager.dispose();
     }

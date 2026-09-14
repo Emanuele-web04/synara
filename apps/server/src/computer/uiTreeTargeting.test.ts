@@ -7,8 +7,10 @@ import {
   activationPointForNode,
   actionableElements,
   computerTargetCandidates,
+  diffActionableElements,
   resolveComputerPoint,
   resolveComputerSemanticTarget,
+  type ComputerActionableElement,
 } from "./uiTreeTargeting.ts";
 
 const windowId = (value: string): ComputerWindowId => value as ComputerWindowId;
@@ -355,4 +357,101 @@ it("includes native macOS controls and reports a partial accessibility source", 
   expect(result.items.map((item) => item.label)).toEqual(["Save", "File"]);
   expect(result.complete).toBe(false);
   expect(result.sourceIncomplete).toBe(true);
+});
+
+describe("diffActionableElements", () => {
+  const element = (
+    label: string,
+    extra: Partial<ComputerActionableElement> = {},
+  ): ComputerActionableElement => ({
+    role: "push button",
+    label,
+    windowId: windowId("editor"),
+    ...extra,
+  });
+
+  it("reports every element as added against an empty baseline", () => {
+    const after = [element("Save"), element("Cancel")];
+    expect(diffActionableElements([], after)).toEqual({
+      added: after,
+      removed: [],
+      changed: [],
+    });
+  });
+
+  it("reports an identical digest as no change", () => {
+    const items = [element("Save"), element("Cancel", { value: "armed" })];
+    expect(diffActionableElements(items, [...items])).toEqual({
+      added: [],
+      removed: [],
+      changed: [],
+    });
+  });
+
+  it("separates added, removed, and value-changed entries", () => {
+    const before = [element("Save"), element("Display", { value: "0" }), element("Help")];
+    const after = [element("Save"), element("Display", { value: "42" }), element("About")];
+    expect(diffActionableElements(before, after)).toEqual({
+      added: [element("About")],
+      removed: [element("Help")],
+      changed: [
+        {
+          role: "push button",
+          label: "Display",
+          windowId: windowId("editor"),
+          was: "0",
+          value: "42",
+        },
+      ],
+    });
+  });
+
+  it("treats a reordering of the same elements as no change", () => {
+    const before = [element("Save"), element("Cancel")];
+    const after = [element("Cancel"), element("Save")];
+    expect(diffActionableElements(before, after)).toEqual({
+      added: [],
+      removed: [],
+      changed: [],
+    });
+  });
+
+  it("keeps duplicate labels distinct by count", () => {
+    const before = [element("Save"), element("Save")];
+    const after = [element("Save")];
+    expect(diffActionableElements(before, after)).toEqual({
+      added: [],
+      removed: [element("Save")],
+      changed: [],
+    });
+  });
+
+  it("separates identical labels across windows", () => {
+    const before = [
+      element("Save", { windowId: windowId("editor") }),
+      element("Save", { windowId: windowId("browser") }),
+    ];
+    const after = [element("Save", { windowId: windowId("editor") })];
+    expect(diffActionableElements(before, after)).toEqual({
+      added: [],
+      removed: [element("Save", { windowId: windowId("browser") })],
+      changed: [],
+    });
+  });
+
+  it("reports a gained or lost value as a change, not a remove-add pair", () => {
+    const before = [element("Notes")];
+    const after = [element("Notes", { value: "draft text" })];
+    expect(diffActionableElements(before, after).changed).toEqual([
+      {
+        role: "push button",
+        label: "Notes",
+        windowId: windowId("editor"),
+        value: "draft text",
+      },
+    ]);
+    expect(diffActionableElements(after, before).changed).toEqual([
+      { role: "push button", label: "Notes", windowId: windowId("editor"), was: "draft text" },
+    ]);
+  });
 });

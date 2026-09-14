@@ -355,6 +355,83 @@ export function actionableElements(
   return { items, complete: omitted === 0 && !sourceIncomplete, omitted, sourceIncomplete };
 }
 
+/**
+ * What changed between two element digests, keyed on the element's identity —
+ * window, role, and label — rather than its position, so a list that reorders
+ * does not read as everything leaving and arriving.
+ *
+ * Identity is a multiset, not a key: duplicate labels are kept on purpose (a
+ * repeated "Save" is real ambiguity), so each identity maps to a list of values
+ * paired by index. A pair whose value moved reports `changed`; identities or
+ * values with no counterpart report `added` or `removed`.
+ *
+ * What it cannot see: an element that moved but kept its label, role and value
+ * diffs clean, because the digest carries no frame. When layout is the
+ * question the caller needs a screenshot, not a diff.
+ */
+export interface ComputerActionableElementsDiff {
+  readonly added: readonly ComputerActionableElement[];
+  readonly removed: readonly ComputerActionableElement[];
+  readonly changed: readonly {
+    readonly role: string;
+    readonly label: string;
+    readonly windowId: string | null;
+    /** Previous value; absent when the element had none. */
+    readonly was?: string;
+    readonly value?: string;
+  }[];
+}
+
+export function diffActionableElements(
+  before: readonly ComputerActionableElement[],
+  after: readonly ComputerActionableElement[],
+): ComputerActionableElementsDiff {
+  const identity = (item: ComputerActionableElement): string =>
+    JSON.stringify([item.windowId ?? null, item.role, item.label]);
+  const group = (
+    items: readonly ComputerActionableElement[],
+  ): Map<string, ComputerActionableElement[]> => {
+    const grouped = new Map<string, ComputerActionableElement[]>();
+    for (const item of items) {
+      const key = identity(item);
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(item);
+      else grouped.set(key, [item]);
+    }
+    return grouped;
+  };
+  const oldGroups = group(before);
+  const newGroups = group(after);
+  const added: ComputerActionableElement[] = [];
+  const removed: ComputerActionableElement[] = [];
+  const changed: ComputerActionableElementsDiff["changed"][number][] = [];
+  for (const [key, previous] of oldGroups) {
+    const current = newGroups.get(key);
+    if (current === undefined) {
+      removed.push(...previous);
+      continue;
+    }
+    const overlap = Math.min(previous.length, current.length);
+    for (let index = 0; index < overlap; index += 1) {
+      if (previous[index]!.value !== current[index]!.value) {
+        const item = current[index]!;
+        changed.push({
+          role: item.role,
+          label: item.label,
+          windowId: item.windowId,
+          ...(previous[index]!.value !== undefined ? { was: previous[index]!.value } : {}),
+          ...(item.value !== undefined ? { value: item.value } : {}),
+        });
+      }
+    }
+    removed.push(...previous.slice(overlap));
+    added.push(...current.slice(overlap));
+    newGroups.delete(key);
+  }
+  for (const current of newGroups.values()) added.push(...current);
+  return { added, removed, changed };
+}
+
 export function describeTarget(target: ComputerTarget): string {
   const parts = [
     target.label ? `label=${JSON.stringify(target.label)}` : null,

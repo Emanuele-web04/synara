@@ -13,6 +13,8 @@ export function cursorToolActivity(tool: string): string {
     case "computer_type_text":
     case "computer_set_value":
       return "Typing";
+    case "computer_paste":
+      return "Pasting";
     case "computer_hotkey":
     case "computer_press_key":
       return "Using keyboard";

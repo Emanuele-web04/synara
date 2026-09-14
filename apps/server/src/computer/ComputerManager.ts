@@ -107,6 +107,16 @@ export const COMPUTER_CONTROL_ENABLE_TIMEOUT_MS = 30_000;
 export const COMPUTER_ACTION_SETTLE_MS = 300;
 
 /**
+ * How long paste waits before restoring the user's previous clipboard. The
+ * target application reads the pasteboard off the keystroke asynchronously, so
+ * restoring immediately would hand it the old contents. There is no observable
+ * "the app read it" event, so this is a fixed settle like the action-screenshot
+ * one above — long enough for the paste to land, short enough that a user who
+ * reaches for their own clipboard next is not racing us.
+ */
+export const COMPUTER_PASTE_RESTORE_MS = 250;
+
+/**
  * Trailing-edge window on the republish that a backend window change triggers.
  *
  * A publish costs one availability read, one window read and one screen-size
@@ -1877,6 +1887,60 @@ export class ComputerManager {
       // The text is not echoed back on `value`: the caller already has it, and it
       // may be far larger than the contract bound on that field.
       return this.actionResult(threadId, "computer_write_clipboard", undefined, undefined);
+    });
+  }
+
+  /**
+   * Bulk text entry through the shared clipboard: save what the user had,
+   * write the payload, send the paste shortcut, then put their contents back.
+   * One keystroke pastes what hundreds would type, which is why it exists —
+   * but it still goes through the keyboard-target path, so it lands exactly
+   * where computer_type_text would and nowhere else.
+   *
+   * `clipboardRestored` reports whether the previous contents went back. A
+   * clipboard holding an image or other non-text content cannot be saved or
+   * restored and is replaced; a failed restore is reported rather than
+   * silently leaving the pasted text behind.
+   */
+  async paste(
+    threadId: string | undefined,
+    text: string,
+    windowId?: string,
+  ): Promise<ComputerActionResult & { readonly clipboardRestored: boolean }> {
+    return this.withDesktopControl(threadId, async () => {
+      const read = this.backend.readClipboard?.bind(this.backend);
+      const write = this.backend.writeClipboard?.bind(this.backend);
+      if (!read || !write) throw clipboardUnsupportedError();
+      const previous = await read().catch(() => undefined);
+      await write(text);
+      let restored = false;
+      let result: ComputerBackendActionResult | void;
+      try {
+        await this.prepareKeyboardTarget(windowId);
+        assertDesktopOperationActive();
+        result = await this.backend.hotkey(
+          this.agentDialect === "macos" ? ["meta", "v"] : ["ctrl", "v"],
+          windowId,
+        );
+      } finally {
+        // The restore runs whether or not the shortcut dispatched: the payload
+        // is already on the clipboard either way, and leaving it there leaks
+        // the agent's text into the next paste the human makes.
+        if (previous !== undefined) {
+          await new Promise((resolve) => setTimeout(resolve, COMPUTER_PASTE_RESTORE_MS));
+          restored = await write(previous).then(
+            () => true,
+            () => false,
+          );
+        }
+      }
+      return {
+        ...this.actionResult(threadId, "computer_paste", undefined, result, windowId),
+        // True only when what the user copied is back in place: a clipboard
+        // with no text had nothing to restore, and a failed restore reports
+        // false rather than claim their contents are safe.
+        clipboardRestored: restored,
+      };
     });
   }
 

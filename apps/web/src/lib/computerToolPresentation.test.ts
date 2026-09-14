@@ -46,6 +46,8 @@ describe("computerToolName", () => {
       "computer_wait",
       "computer_read_clipboard",
       "computer_write_clipboard",
+      "computer_paste",
+      "computer_run",
     ]);
   });
 
@@ -106,6 +108,21 @@ describe("describeComputerToolCall", () => {
     });
     expect(clipboard?.summary).toBe("Write to the clipboard");
     expect(clipboard?.params).toContainEqual({ name: "Clipboard", value: "secret" });
+    expect(
+      describeComputerToolCall({ toolName: "computer_paste", args: { text: "secret" } })?.summary,
+    ).toBe("Paste text");
+    const run = describeComputerToolCall({
+      toolName: "computer_run",
+      args: {
+        steps: [
+          { type: "click", label: "Save" },
+          { type: "type_text", text: "secret" },
+          { type: "press_key", key: "enter" },
+        ],
+      },
+    });
+    expect(run?.summary).toBe("Run a sequence");
+    expect(run?.params).toEqual([{ name: "Steps", value: "click → type_text → press_key" }]);
   });
 
   it("gives a scroll a direction and a shortcut its keys", () => {
