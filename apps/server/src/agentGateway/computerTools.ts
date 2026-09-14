@@ -886,6 +886,67 @@ export function makeAgentGatewayComputerTools(
     resolveTarget(readNestedScreenshotTarget(args, name), context.callerThreadId);
 
   /**
+   * Window-id → driven-app resolution for pre-queue consent. Mirrors the
+   * in-queue assert's keying: a window with no app name consents under its id
+   * rather than silently skipping the boundary. Best-effort — a read failure
+   * resolves nothing and the in-queue assert stays the backstop.
+   */
+  const drivenAppsForWindows = async (windowIds: ReadonlySet<string>): Promise<Set<string>> => {
+    const apps = new Set<string>();
+    if (windowIds.size === 0) return apps;
+    const windows = await manager
+      .listWindows()
+      .then((listed) => listed.windows)
+      .catch(() => undefined);
+    if (windows === undefined) return apps;
+    for (const window of windows) {
+      if (windowIds.has(window.id)) apps.add(window.appName ?? window.id);
+    }
+    return apps;
+  };
+
+  /**
+   * The apps a call is about to drive, resolved before the desktop queue so a
+   * consent prompt never holds the serialized operation slot. Steps inside a
+   * computer_run are scanned raw — full validation still happens in the
+   * dispatcher — and an unresolvable activate target skips admission for the
+   * in-queue assert to answer.
+   */
+  const drivenAppsForCall = async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<ReadonlySet<string>> => {
+    if (name === "computer_launch_app") {
+      return typeof args.app === "string" && args.app.trim().length > 0
+        ? new Set([args.app])
+        : new Set();
+    }
+    if (name === "computer_activate_window") {
+      return typeof args.window_id === "string" && args.window_id.length > 0
+        ? drivenAppsForWindows(new Set([args.window_id]))
+        : new Set();
+    }
+    if (name === "computer_run") {
+      const apps = new Set<string>();
+      const windowIds = new Set<string>();
+      for (const step of Array.isArray(args.steps) ? args.steps : []) {
+        if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
+        const type = Reflect.get(step, "type");
+        if (type === "launch_app") {
+          const app = Reflect.get(step, "app");
+          if (typeof app === "string" && app.trim().length > 0) apps.add(app);
+        } else if (type === "activate_window") {
+          const windowId = Reflect.get(step, "window_id");
+          if (typeof windowId === "string" && windowId.length > 0) windowIds.add(windowId);
+        }
+      }
+      for (const app of await drivenAppsForWindows(windowIds)) apps.add(app);
+      return apps;
+    }
+    return new Set();
+  };
+
+  /**
    * Raise the chat's setup card for this call, if it earned one, and hand the
    * result back either way. A card is user-facing feedback about the tool call,
    * never a substitute for answering it.
@@ -940,6 +1001,16 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
+          }
+          // Second-app consent runs here, on the caller's signal, before the
+          // desktop queue is taken: a prompt nobody can reach must never park
+          // the serialized operation slot.
+          for (const app of await drivenAppsForCall(name, args)) {
+            await manager.admitDrivenApp(context.callerThreadId, app, {
+              signal: abortSignal,
+              turnId: context.callerTurnId ?? undefined,
+              toolName: name,
+            });
           }
           // Any non-scroll call breaks an unchanged-scroll streak: the model
           // looked or did something else instead of scrolling blindly on.

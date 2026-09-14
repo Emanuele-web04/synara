@@ -57,7 +57,18 @@ const DRIVER_SESSION_DEATH_CODES = new Set([
  * dispatched, so retiring the generation and starting fresh once is replay-safe.
  */
 function isDriverSessionDeath(reply: CuaReply): boolean {
-  const result = reply.ok ? reply.result : undefined;
+  if (!reply.ok) {
+    // A transport rejection carries the same verdict in `error`: retired only
+    // when dispatch is ruled out, so input that may have landed is never
+    // replayed.
+    return (
+      reply.effect !== "dispatched-unknown" &&
+      typeof reply.error === "string" &&
+      reply.error.includes("has ended") &&
+      reply.error.includes("start_session")
+    );
+  }
+  const result = reply.result;
   if (!result?.isError) return false;
   const code = result.structuredContent?.code;
   if (typeof code === "string" && DRIVER_SESSION_DEATH_CODES.has(code)) return true;

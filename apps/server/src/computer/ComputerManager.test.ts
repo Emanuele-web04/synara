@@ -684,33 +684,94 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("re-asks approval when a thread drives a second app", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
-    const request = vi.spyOn(computerApprovalGate, "request");
+    const asked: string[] = [];
+    const decisions: boolean[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app }) => {
+      asked.push(app);
+      return decisions.shift() ?? true;
+    });
+    const admit = (app: string) =>
+      manager.admitDrivenApp("thread-1", app, { signal: new AbortController().signal });
     try {
+      // The first app records free; the prompt surface is not consulted.
+      await admit("kcalc");
       await manager.launchApp("thread-1", "kcalc");
       expect(backend.callsFor("launchApp")).toHaveLength(1);
-      expect(request).not.toHaveBeenCalled();
+      expect(asked).toEqual([]);
 
-      request.mockResolvedValueOnce(false);
-      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(/second app/i);
+      // A denied consent refuses before the backend runs.
+      decisions.push(false);
+      await expect(admit("firefox")).rejects.toThrow(/second app/i);
+      expect(asked).toEqual(["firefox"]);
+      // The in-queue backstop refuses it again — without ever parking.
+      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(
+        /needs its own approval/i,
+      );
       expect(backend.callsFor("launchApp")).toHaveLength(1);
 
-      request.mockResolvedValueOnce(true);
+      // An approved consent records: the app drives from then on unasked.
+      decisions.push(true);
+      await admit("firefox");
       await manager.launchApp("thread-1", "firefox");
       expect(backend.callsFor("launchApp")).toHaveLength(2);
-
-      request.mockClear();
+      await admit("firefox");
       await manager.launchApp("thread-1", "firefox");
-      expect(request).not.toHaveBeenCalled();
+      expect(asked).toEqual(["firefox", "firefox"]);
       expect(backend.callsFor("launchApp")).toHaveLength(3);
 
-      request.mockResolvedValueOnce(false);
+      // Switching back to a consented app is not a new boundary.
+      await admit("kcalc");
+      await manager.launchApp("thread-1", "kcalc");
+      expect(asked).toEqual(["firefox", "firefox"]);
+      expect(backend.callsFor("launchApp")).toHaveLength(4);
+
+      // The activation path asserts the same admission inside the queue.
       await expect(manager.activateWindow("thread-1", "fake-terminal")).rejects.toThrow(
-        /second app/i,
+        /needs its own approval/i,
       );
       expect(backend.callsFor("raiseWindow")).toHaveLength(0);
     } finally {
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
+  it("refuses an unadmitted second app inside the queue instead of waiting", async () => {
+    // A consent wait inside the serialized desktop queue once parked every
+    // computer call behind it for the gate's five-minute timeout. The
+    // in-queue path asserts admission now; it never asks.
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    const request = vi.spyOn(computerApprovalGate, "request");
+    try {
+      await manager.launchApp("thread-1", "kcalc");
+      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(
+        /needs its own approval/i,
+      );
+      expect(request).not.toHaveBeenCalled();
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+    } finally {
       request.mockRestore();
       computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
+  it("records a second app without prompting when no approval handler is wired", async () => {
+    // The tool-boundary approval already admitted the call, so with no prompt
+    // surface wired the boundary stands in rather than parking unanswerably.
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.admitDrivenApp("thread-1", "kcalc", {
+        signal: new AbortController().signal,
+      });
+      await manager.admitDrivenApp("thread-1", "firefox", {
+        signal: new AbortController().signal,
+      });
+      await manager.launchApp("thread-1", "firefox");
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+    } finally {
       await manager.dispose();
     }
   });

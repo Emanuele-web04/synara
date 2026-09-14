@@ -32,6 +32,7 @@ async function fixture(
     failAction?: boolean;
     crash?: boolean;
     sessionDeathOnce?: boolean;
+    sessionDeathTransport?: boolean;
     delayObservation?: boolean;
     deathFlag?: string;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
@@ -69,6 +70,7 @@ net.createServer(s=>{
       },30);
     }
     else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
+    else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
     else if(r.name==='type_text') {
       write('dispatch'); action=s;
       if(options.crash) { write('crash'); process.exit(1); }
@@ -309,6 +311,22 @@ describe("Cua GUI host retirement", () => {
     const events = await f.events();
     // The dead generation retired (new driver process) and the key reached
     // the fresh session exactly once.
+    expect(events.filter((event) => event.event === "start")).toHaveLength(2);
+    expect(events.filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("retires a transport-reported session death and retries once fresh", async () => {
+    // The live driver surfaced session death as an ok:false reply rather than
+    // an isError result: undetected, every later call died on the same id.
+    const f = await fixture(capability, { sessionDeathTransport: true });
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.result?.isError).not.toBe(true);
+    const events = await f.events();
     expect(events.filter((event) => event.event === "start")).toHaveLength(2);
     expect(events.filter((event) => event.event === "key")).toHaveLength(1);
   });

@@ -1083,6 +1083,52 @@ export const makeAgentGateway = Effect.gen(function* () {
       : []),
   ];
 
+  // Second-app consent asks through the same card path as tool approvals.
+  // The manager calls this before the desktop queue — never inside it — so a
+  // prompt the user is still reading cannot stall every other computer call.
+  if (computerService?.supported === true) {
+    computerService.manager.setSecondAppApprovalHandler(
+      ({ threadId, turnId, app, toolName, signal }) =>
+        computerApprovalGate.request({
+          threadId,
+          turnId,
+          signal,
+          publish: async (requestId, decision) => {
+            const createdAt = isoNow();
+            const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
+            await Effect.runPromise(
+              orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: CommandId.makeUnsafe(eventKey),
+                threadId: ThreadId.makeUnsafe(threadId),
+                activity: {
+                  id: EventId.makeUnsafe(eventKey),
+                  tone: "info",
+                  kind: decision === undefined ? "approval.requested" : "approval.resolved",
+                  summary:
+                    decision === undefined
+                      ? `Allow the agent to drive ${app}?`
+                      : "Computer approval resolved",
+                  payload: {
+                    requestId,
+                    requestKind: "tool",
+                    requestType: "tool",
+                    toolName: toolName ?? "computer_launch_app",
+                    toolParamsDisplay: JSON.stringify({ app }),
+                    sessionApprovalAvailable: false,
+                    ...(decision === undefined ? {} : { decision }),
+                  },
+                  turnId: turnId ? TurnId.makeUnsafe(turnId) : null,
+                  createdAt,
+                },
+                createdAt,
+              }),
+            );
+          },
+        }),
+    );
+  }
+
   // The computer family by name, read off the unfiltered catalog above: a
   // caller whose session was never granted computer control still gets a
   // capability_denied (and the denial card) when it calls one of these by

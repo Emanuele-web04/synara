@@ -2883,3 +2883,88 @@ describe("computer_get_state app hint", () => {
     }
   });
 });
+
+describe("second-app consent", () => {
+  it("asks before a launch names an app the thread has not driven", async () => {
+    const { call, manager } = await setup();
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
+      asked.push(`${toolName}:${app}`);
+      return true;
+    });
+    try {
+      // The first app is covered by task consent: no second prompt.
+      expect((await call("computer_launch_app", { app: "kcalc" })).isError).not.toBe(true);
+      expect(asked).toEqual([]);
+      expect((await call("computer_launch_app", { app: "firefox" })).isError).not.toBe(true);
+      expect(asked).toEqual(["computer_launch_app:firefox"]);
+      // Consent sticks for the thread.
+      expect((await call("computer_launch_app", { app: "firefox" })).isError).not.toBe(true);
+      expect(asked).toEqual(["computer_launch_app:firefox"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses without dispatching when second-app consent is denied", async () => {
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(backend);
+    manager.setSecondAppApprovalHandler(async () => false);
+    try {
+      await call("computer_launch_app", { app: "kcalc" });
+      const denied = await call("computer_launch_app", { app: "firefox" });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toMatch(/refused pending approval/);
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("consents every app a batch will drive before the first step runs", async () => {
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(backend);
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
+      asked.push(`${toolName}:${app}`);
+      return true;
+    });
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "launch_app", app: "kcalc" },
+          { type: "launch_app", app: "firefox" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      // kcalc records free as the first app; only firefox prompts, once.
+      expect(asked).toEqual(["computer_run:firefox"]);
+      expect(backend.callsFor("launchApp")).toHaveLength(2);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("resolves an activate target's app at admission, before the queue", async () => {
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(
+      backend,
+      vi.fn(async () => true),
+    );
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app }) => {
+      asked.push(app);
+      return true;
+    });
+    try {
+      // Driving kcalc first: the launch argument records it free.
+      await call("computer_launch_app", { app: "kcalc" });
+      expect(asked).toEqual([]);
+      // Activating the calculator window is a second app: the prompt names it.
+      await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(asked).toEqual(["org.kde.kcalc"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
