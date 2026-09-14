@@ -82,7 +82,26 @@ import {
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
-import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
+import {
+  defaultManagedWorktreeSnapshotsDir,
+  listManagedWorktrees,
+  listManagedWorktreeRemovalCandidates,
+  pruneProjectedArchivedManagedWorktrees,
+  removeManagedWorktreeRemovalCandidate,
+} from "./managedWorktrees";
+import {
+  cancelResourceDiskScan,
+  measureDirectoryBytes,
+  sampleResourceSnapshot,
+  scanResourceDiskUsage,
+} from "./resourceMonitor";
+import {
+  killResourceSession,
+  requireResourceOwner,
+  resolveResourceScanPaths,
+  restartResourceProviders,
+} from "./resourceActions";
+import { listRegisteredProviderProcesses } from "./providerProcessRegistry";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -344,6 +363,7 @@ const makeWsRpcHandlersLayer = () =>
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
       const config = yield* ServerConfig;
+      const connectionSessions = yield* WsConnectionSessions;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
@@ -1747,6 +1767,221 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.resourceGetSnapshot]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const terminals = yield* terminalManager.listActiveSessions();
+              const inventory = yield* listManagedWorktrees({
+                worktreesDir: config.worktreesDir,
+                git,
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("resource snapshot worktree inventory failed", {
+                    cause: String(cause),
+                  }).pipe(Effect.as([])),
+                ),
+              );
+              // Thread -> worktree attribution for single-owner provider
+              // runtimes. Best effort: unknown threads land in Providers/Shared.
+              const threadWorktrees = yield* projectionReadModelQuery
+                .listManagedWorktreeThreads()
+                .pipe(
+                  Effect.map((threads) => {
+                    const byThread = new Map<string, string>();
+                    for (const thread of threads) {
+                      const worktreePath = thread.associatedWorktreePath ?? thread.worktreePath;
+                      if (worktreePath) byThread.set(thread.id, worktreePath);
+                    }
+                    return byThread;
+                  }),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource snapshot thread worktrees failed", {
+                      cause: String(cause),
+                    }).pipe(Effect.as(new Map<string, string>())),
+                  ),
+                );
+              const providers = listRegisteredProviderProcesses().map((entry) => ({
+                pid: entry.pid,
+                provider: entry.provider,
+                threadIds: [...entry.threadIds],
+                commandBaseline: entry.commandBaseline,
+              }));
+              return yield* Effect.promise(() =>
+                sampleResourceSnapshot({
+                  terminals,
+                  worktrees: inventory,
+                  providers,
+                  threadWorktrees,
+                }),
+              );
+            }),
+            "Failed to load resource snapshot",
+          ),
+        [WS_METHODS.resourceKillSession]: (input) =>
+          rpcEffect(killResourceSession(input, terminalManager), "Failed to kill session"),
+        [WS_METHODS.resourceKillAllSessions]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const terminals = yield* terminalManager.listActiveSessions();
+              const live = terminals.filter(
+                (session) => session.status !== "exited" && session.pid !== null,
+              );
+              yield* Effect.forEach(
+                live,
+                (session) =>
+                  terminalManager
+                    .close(
+                      { threadId: session.threadId, terminalId: session.terminalId },
+                      session.pid ?? undefined,
+                    )
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("resource kill-all could not close a session", {
+                          threadId: session.threadId,
+                          terminalId: session.terminalId,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    ),
+                { concurrency: 4, discard: true },
+              );
+              const remaining = yield* terminalManager.listActiveSessions();
+              const remainingKeys = new Set(
+                remaining
+                  .filter((session) => session.status !== "exited" && session.pid !== null)
+                  .map((session) => JSON.stringify([session.threadId, session.terminalId])),
+              );
+              const killed = live.filter(
+                (session) =>
+                  !remainingKeys.has(JSON.stringify([session.threadId, session.terminalId])),
+              );
+              return {
+                killedCount: killed.length,
+                pids: killed.flatMap((session) => (session.pid !== null ? [session.pid] : [])),
+              };
+            }),
+            "Failed to kill all sessions",
+          ),
+        [WS_METHODS.resourceCleanWorkspaces]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const listCandidates = Effect.gen(function* () {
+                const threads = yield* projectionReadModelQuery.listManagedWorktreeThreads();
+                return yield* listManagedWorktreeRemovalCandidates({
+                  worktreesDir: config.worktreesDir,
+                  threads,
+                  git,
+                });
+              });
+              const withSizes = (candidates: ReadonlyArray<{ entry: { path: string } }>) =>
+                Effect.forEach(
+                  candidates,
+                  (candidate) =>
+                    Effect.promise(() => measureDirectoryBytes(candidate.entry.path)).pipe(
+                      Effect.map((bytes) => ({ candidate, bytes: bytes ?? 0 })),
+                    ),
+                  { concurrency: 2 },
+                );
+              const describe = (
+                sized: ReadonlyArray<{ candidate: { entry: { path: string } }; bytes: number }>,
+              ) =>
+                sized.map(({ candidate, bytes }) => ({
+                  path: candidate.entry.path,
+                  name: path.basename(candidate.entry.path),
+                  bytes,
+                  protected: false,
+                }));
+              const candidates = yield* listCandidates;
+              const sized = yield* withSizes(candidates);
+              const resourceCandidates = describe(sized);
+              if (input.dryRun) {
+                return {
+                  dryRun: true as const,
+                  candidates: resourceCandidates,
+                  reclaimedBytes: sized.reduce((sum, entry) => sum + entry.bytes, 0),
+                  removedPaths: [],
+                };
+              }
+              // Re-derive at execute time and intersect with the confirmed paths
+              // so a stale dry-run can never delete a revived worktree.
+              const fresh = yield* listCandidates;
+              const wanted = new Set(input.paths ?? fresh.map((entry) => entry.entry.path));
+              const selected = fresh.filter((entry) => wanted.has(entry.entry.path));
+              const snapshotsDir = defaultManagedWorktreeSnapshotsDir(config.homeDir);
+              const removedPaths: string[] = [];
+              let reclaimedBytes = 0;
+              for (const candidate of selected) {
+                const removed = yield* removeManagedWorktreeRemovalCandidate({
+                  snapshotsDir,
+                  candidate,
+                  git,
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource workspace cleanup skipped an unsafe removal", {
+                      worktreePath: candidate.entry.path,
+                      cause: String(cause),
+                    }).pipe(Effect.as(false)),
+                  ),
+                );
+                if (removed) {
+                  removedPaths.push(candidate.entry.path);
+                  reclaimedBytes +=
+                    sized.find((entry) => entry.candidate.entry.path === candidate.entry.path)
+                      ?.bytes ?? 0;
+                }
+              }
+              return {
+                dryRun: false as const,
+                candidates: resourceCandidates,
+                reclaimedBytes,
+                removedPaths,
+              };
+            }),
+            "Failed to clean workspaces",
+          ),
+        [WS_METHODS.resourceScanDisk]: (input, { headers }) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const owner = connectionSessions.lookup(
+                Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+              );
+              if (!owner)
+                return yield* Effect.fail(new Error("Resource scan requires a live connection."));
+              const paths = yield* Effect.tryPromise(() =>
+                resolveResourceScanPaths(input.paths, config.worktreesDir),
+              );
+              return yield* Effect.promise(() => scanResourceDiskUsage(paths, owner));
+            }),
+            "Failed to scan disk usage",
+          ),
+        [WS_METHODS.resourceCancelDiskScan]: (_, { headers }) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              yield* requireResourceOwner;
+              const owner = connectionSessions.lookup(
+                Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+              );
+              if (!owner)
+                return yield* Effect.fail(new Error("Resource scan requires a live connection."));
+              return cancelResourceDiskScan(owner);
+            }),
+            "Failed to cancel disk scan",
+          ),
+        [WS_METHODS.resourceRestartDaemon]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              // Restart = stop every provider session and adapter runtime; they
+              // respawn lazily on the next turn. The Synara server itself is
+              // never touched.
+              yield* restartResourceProviders(providerService, providerAdapterRegistry);
+              yield* providerHealth.refresh;
+              return { restarted: true as const };
+            }),
+            "Failed to restart provider runtime",
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {

@@ -113,6 +113,19 @@ export interface TerminalCloseOpenedAtOrBeforeInput {
 }
 
 /**
+ * Lightweight read-only descriptor for a resident terminal session.
+ * Powers the resource manager without exposing scrollback or PTY handles.
+ */
+export interface TerminalActiveSessionDescriptor {
+  readonly threadId: string;
+  readonly terminalId: string;
+  readonly cwd: string;
+  readonly status: TerminalSessionStatus;
+  readonly pid: number | null;
+  readonly updatedAt: string;
+}
+
+/**
  * TerminalManagerShape - Service API for terminal session lifecycle operations.
  */
 export interface TerminalManagerShape {
@@ -159,8 +172,12 @@ export interface TerminalManagerShape {
    * Close an active terminal session.
    *
    * When `terminalId` is omitted, closes all sessions for the thread.
+   * When `expectedPid` is provided, closes only that terminal generation.
    */
-  readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+  readonly close: (
+    input: TerminalCloseInput,
+    expectedPid?: number,
+  ) => Effect.Effect<void, TerminalError>;
 
   /**
    * Close only sessions whose latest open/reattach predates an archive event.
@@ -169,6 +186,16 @@ export interface TerminalManagerShape {
   readonly closeSessionsOpenedAtOrBefore: (
     input: TerminalCloseOpenedAtOrBeforeInput,
   ) => Effect.Effect<void, TerminalError>;
+
+  /**
+   * List resident terminal sessions as lightweight descriptors.
+   *
+   * Read-only: snapshots pid/cwd/thread ownership for the resource manager.
+   */
+  readonly listActiveSessions: () => Effect.Effect<
+    ReadonlyArray<TerminalActiveSessionDescriptor>,
+    TerminalError
+  >;
 
   /**
    * Subscribe to terminal runtime events.

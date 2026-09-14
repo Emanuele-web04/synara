@@ -47,6 +47,7 @@ import {
   TerminalError,
   TerminalManager,
   TerminalManagerShape,
+  type TerminalActiveSessionDescriptor,
   type TerminalCloseOpenedAtOrBeforeInput,
   TerminalSessionState,
   TerminalStartInput,
@@ -1144,9 +1145,25 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     });
   }
 
-  async close(raw: TerminalCloseInput): Promise<void> {
+  async close(raw: TerminalCloseInput, expectedPid?: number): Promise<void> {
     const input = decodeTerminalCloseInput(raw);
     await this.runWithThreadLock(input.threadId, async () => {
+      if (expectedPid !== undefined) {
+        if (!input.terminalId) {
+          throw new Error("A terminal ID is required for a conditional close.");
+        }
+        const session = this.sessions.get(toSessionKey(input.threadId, input.terminalId));
+        if (!session) {
+          throw new Error(
+            `Terminal not found for thread: ${input.threadId}, terminal: ${input.terminalId}`,
+          );
+        }
+        if (session.pid !== expectedPid) {
+          throw new Error(
+            `Terminal PID changed for thread: ${input.threadId}, terminal: ${input.terminalId}`,
+          );
+        }
+      }
       if (input.terminalId) {
         await this.closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
         return;
@@ -2267,6 +2284,17 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     return [...this.sessions.values()].filter((session) => session.threadId === threadId);
   }
 
+  listActiveSessions(): TerminalActiveSessionDescriptor[] {
+    return [...this.sessions.values()].map((session) => ({
+      threadId: session.threadId,
+      terminalId: session.terminalId,
+      cwd: session.cwd,
+      status: session.status,
+      pid: session.pid,
+      updatedAt: session.updatedAt,
+    }));
+  }
+
   private async deleteAllHistoryForThread(threadId: string): Promise<void> {
     const threadPrefix = `${toSafeThreadId(threadId)}_`;
     for (const key of [...this.persistedHistoryByKey.keys()]) {
@@ -2408,9 +2436,9 @@ export const TerminalManagerLive = Layer.effect(
           try: () => runtime.restart(input),
           catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
         }),
-      close: (input) =>
+      close: (input, expectedPid) =>
         Effect.tryPromise({
-          try: () => runtime.close(input),
+          try: () => runtime.close(input, expectedPid),
           catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
         }),
       closeSessionsOpenedAtOrBefore: (input) =>
@@ -2419,6 +2447,7 @@ export const TerminalManagerLive = Layer.effect(
           catch: (cause) =>
             terminalErrorFromCause("Failed to close archived thread terminals", cause),
         }),
+      listActiveSessions: () => Effect.sync(() => runtime.listActiveSessions()),
       subscribe: (listener) =>
         Effect.sync(() => {
           runtime.on("event", listener);
