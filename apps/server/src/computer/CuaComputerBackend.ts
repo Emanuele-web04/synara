@@ -418,7 +418,7 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   private refresh(force = false): Promise<void> {
     if (this.snapshot) return this.snapshot;
-    if (!force && Date.now() - this.snapshotAt < 250) return Promise.resolve();
+    if (!force && Date.now() - this.snapshotAt < 1_000) return Promise.resolve();
     this.snapshot = (async () => {
       const permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
