@@ -116,6 +116,29 @@ describe("human-only cookie import", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
+  it("accepts helium as an import source and forwards it to cookie sync", async () => {
+    const { importer } = fixture();
+    mocks.sources.mockResolvedValue([
+      { id: "chrome", name: "Chrome" },
+      { id: "firefox", name: "Firefox" },
+      { id: "helium", name: "Helium" },
+    ]);
+    await expect(importer.sources()).resolves.toEqual([
+      { id: "chrome", name: "Chrome" },
+      { id: "helium", name: "Helium" },
+    ]);
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({ ...input, browser: "helium" }),
+    ).not.toThrow();
+    await expect(importer.import({ ...input, browser: "helium" })).resolves.toMatchObject({
+      ok: true,
+      imported: 2,
+    });
+    expect(mocks.sync).toHaveBeenCalledWith(
+      expect.objectContaining({ source: { browser: "helium", profile: "Default" } }),
+    );
+  });
+
   it("does not report success or release human control before durable cookie writes finish", async () => {
     const { importer, contents, releaseHumanOperation } = fixture();
     let flushed!: () => void;
@@ -206,6 +229,29 @@ describe("human-only cookie import", () => {
     await expect(importer.import(input)).rejects.toThrow("destination changed");
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists a completed import even when the destination changes after the transfer", async () => {
+    const { importer, contents, rememberSessionImport, releaseHumanOperation } = fixture();
+    mocks.sync.mockImplementation(async () => {
+      contents.getURL = () => "https://other.test";
+      return {
+        ok: true,
+        synced: 2,
+        skipped: 1,
+        cookieImportDomains: ["example.test"],
+      };
+    });
+    const result = await importer.import(input);
+    expect(result).toEqual({
+      ok: true,
+      imported: 2,
+      skipped: 1,
+      warnings: [],
+    });
+    expect(contents.session.cookies.flushStore).toHaveBeenCalledOnce();
+    expect(rememberSessionImport).toHaveBeenCalledWith(["example.test"]);
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
   });
 
   it("requires explicit profile consent and permits all-sites import from a blank tab", async () => {
