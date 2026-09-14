@@ -114,7 +114,7 @@ interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
   welcome: WsWelcomePayload;
-  gitBranchByCwd: Record<string, string>;
+  gitBranchByCwd: Record<string, string | null>;
 }
 
 let fixture: TestFixture;
@@ -1215,7 +1215,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       branches: [
         {
           name: branchName,
-          current: true,
+          current: !cwd || fixture.gitBranchByCwd[cwd] !== null,
           isDefault: true,
           worktreePath: null,
         },
@@ -1224,9 +1224,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   }
   if (tag === WS_METHODS.gitStatus) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
-    const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
+    const branchName = cwd ? fixture.gitBranchByCwd[cwd] : undefined;
     return {
-      branch: branchName,
+      branch: branchName === undefined ? "main" : branchName,
       hasWorkingTreeChanges: false,
       workingTree: {
         files: [],
@@ -4141,6 +4141,71 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByTestId("composer-workspace-status"))
         .toHaveAccessibleName("Local checkout · main");
       expect(document.body.textContent).toContain("main");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    { envMode: "local" as const, worktreePath: null, label: "Local checkout" },
+    {
+      envMode: "worktree" as const,
+      worktreePath: "/repo/.worktrees/feature-chat",
+      label: "Worktree",
+    },
+  ])("omits a stale branch from the composer status for a detached $envMode checkout", async ({
+    envMode,
+    worktreePath,
+    label,
+  }) => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+      configureFixture: (nextFixture) => {
+        nextFixture.snapshot = {
+          ...nextFixture.snapshot,
+          threads: nextFixture.snapshot.threads.map((thread) => ({
+            ...thread,
+            envMode,
+            worktreePath,
+            branch: "feature/former-branch",
+          })),
+        };
+        nextFixture.gitBranchByCwd[worktreePath ?? "/repo/project"] = null;
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("composer-workspace-status"))
+        .toHaveAccessibleName(label);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("labels the composer status with the pending worktree's selected base", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+      configureFixture: (nextFixture) => {
+        nextFixture.snapshot = {
+          ...nextFixture.snapshot,
+          threads: nextFixture.snapshot.threads.map((thread) => ({
+            ...thread,
+            envMode: "worktree",
+            worktreePath: null,
+            branch: "feature/base",
+          })),
+        };
+        nextFixture.gitBranchByCwd["/repo/project"] = null;
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("composer-workspace-status"))
+        .toHaveAccessibleName("Worktree pending · Base: feature/base");
     } finally {
       await mounted.cleanup();
     }

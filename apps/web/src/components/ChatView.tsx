@@ -3808,6 +3808,7 @@ export default function ChatView({
     activeWorktreePath: resolvedThreadWorktreePath,
     activeThreadBranch: activeThread?.branch ?? null,
     currentGitBranch: currentActiveGitBranch,
+    gitStatusResolved: gitStatusQuery.data !== undefined,
   });
   const settledThreadBranchMismatch = resolveSettledThreadBranchMismatch({
     isSettled:

@@ -100,6 +100,58 @@ describe("resolveFixedLocalWorkspacePatch", () => {
 });
 
 describe("resolveBranchToolbarValue", () => {
+  it.each([
+    { envMode: "local" as const, activeWorktreePath: null },
+    { envMode: "worktree" as const, activeWorktreePath: "/repo/.worktrees/feature-chat" },
+  ])("does not show a stale branch for a detached $envMode checkout", (workspace) => {
+    expect(
+      resolveBranchToolbarValue({
+        ...workspace,
+        activeThreadBranch: "feature/former-branch",
+        currentGitBranch: null,
+        gitStatusResolved: true,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { envMode: "local" as const, activeWorktreePath: null },
+    { envMode: "worktree" as const, activeWorktreePath: "/repo/.worktrees/feature-chat" },
+  ])("keeps the $envMode thread branch while Git status is unavailable", (workspace) => {
+    expect(
+      resolveBranchToolbarValue({
+        ...workspace,
+        activeThreadBranch: "feature/saved-branch",
+        currentGitBranch: null,
+        gitStatusResolved: false,
+      }),
+    ).toBe("feature/saved-branch");
+  });
+
+  it("keeps a pending worktree's selected base when the project checkout is detached", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/base",
+        currentGitBranch: null,
+        gitStatusResolved: true,
+      }),
+    ).toBe("feature/base");
+  });
+
+  it("has no pending worktree base when neither metadata nor Git provides one", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: null,
+        gitStatusResolved: true,
+      }),
+    ).toBeNull();
+  });
+
   it("defaults new-worktree mode to current git branch when no explicit base branch is set", () => {
     expect(
       resolveBranchToolbarValue({
@@ -107,6 +159,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: null,
         currentGitBranch: "main",
+        gitStatusResolved: true,
       }),
     ).toBe("main");
   });
@@ -118,6 +171,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        gitStatusResolved: true,
       }),
     ).toBe("feature/base");
   });
@@ -129,6 +183,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        gitStatusResolved: true,
       }),
     ).toBe("main");
   });

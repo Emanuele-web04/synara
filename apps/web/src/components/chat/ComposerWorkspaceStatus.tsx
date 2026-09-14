@@ -17,9 +17,10 @@ export function ComposerWorkspaceStatus({
   branch?: string | null;
 }) {
   const environment = resolveThreadEnvironmentPresentation({ envMode, worktreePath });
-  const environmentLabel = environment.shortLabel;
-  const titleEnvironmentLabel = environment.mode === "local" ? "Local checkout" : "Worktree";
-  const title = branch ? `${titleEnvironmentLabel} · ${branch}` : titleEnvironmentLabel;
+  const environmentLabel = environment.worktreeBadgeLabel ?? environment.shortLabel;
+  const branchLabel =
+    branch && environment.workspaceState === "worktree-pending" ? `Base: ${branch}` : branch;
+  const title = branchLabel ? `${environment.fullLabel} · ${branchLabel}` : environment.fullLabel;
 
   return (
     <div
@@ -34,13 +35,13 @@ export function ComposerWorkspaceStatus({
         <CentralIcon name="macbook-air" className="size-3 shrink-0" />
       )}
       <span className="shrink-0">{environmentLabel}</span>
-      {branch ? (
+      {branchLabel ? (
         <>
           <span aria-hidden="true" className="opacity-45">
             ·
           </span>
           <GitBranchIcon className="size-3 shrink-0 opacity-70" />
-          <span className="min-w-0 truncate">{branch}</span>
+          <span className="min-w-0 truncate">{branchLabel}</span>
         </>
       ) : null}
     </div>

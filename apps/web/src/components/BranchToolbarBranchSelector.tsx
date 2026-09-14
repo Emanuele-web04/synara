@@ -402,12 +402,15 @@ export function BranchToolbarBranchSelector({
   );
   const hasOriginRemote = branchesQuery.data?.hasOriginRemote ?? false;
   const currentGitBranch =
-    branchStatusQuery.data?.branch ?? branches.find((branch) => branch.current)?.name ?? null;
+    branchStatusQuery.data !== undefined
+      ? branchStatusQuery.data.branch
+      : (branches.find((branch) => branch.current)?.name ?? null);
   const canonicalActiveBranch = resolveBranchToolbarValue({
     envMode: effectiveEnvMode,
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
+    gitStatusResolved: branchStatusQuery.data !== undefined,
   });
   const branchNames = useMemo(() => branches.map((branch) => branch.name), [branches]);
   const branchByName = useMemo(
