@@ -70,6 +70,14 @@ For focused web tests, pass paths relative to `apps/web` through the dedicated r
 bun run test:web:focused src/path/to/example.test.ts
 ```
 
+The pinned `@pierre/diffs` patch refreshes file-editor rows after line insertions
+and deletions. When upgrading the dependency, verify repeated Enter, subsequent
+typing, undo, and redo with the real editor browser tests before removing it:
+
+```bash
+bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.browser.tsx
+```
+
 ## Be Realistic
 
 Opening a PR does not create an obligation on our side.
