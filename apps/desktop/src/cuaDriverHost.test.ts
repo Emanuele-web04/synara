@@ -31,7 +31,9 @@ async function fixture(
     unpatched?: boolean;
     failAction?: boolean;
     crash?: boolean;
+    sessionDeathOnce?: boolean;
     delayObservation?: boolean;
+    deathFlag?: string;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
   } = {},
 ) {
@@ -39,6 +41,7 @@ async function fixture(
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const log = join(directory, "events.jsonl");
   const binary = join(directory, "driver");
+  options = { ...options, deathFlag: join(directory, "session-died") };
   await writeFile(
     binary,
     `#!${process.execPath}
@@ -65,6 +68,7 @@ net.createServer(s=>{
         reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:options.cleanup!=='incomplete',pending_input:options.cleanup==='incomplete'?1:0});
       },30);
     }
+    else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
     else if(r.name==='type_text') {
       write('dispatch'); action=s;
       if(options.crash) { write('crash'); process.exit(1); }
@@ -285,6 +289,28 @@ describe("Cua GUI host retirement", () => {
     });
     await expect(press()).resolves.toMatchObject({ ok: true });
     expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("retires a driver-ended session and retries once with a fresh one", async () => {
+    // The driver can end a session the host still holds (restart, timeout).
+    // Without a heal, every later call fails the same way and no model-side
+    // retry can recover. The driver confirms nothing dispatched, so one
+    // retire-plus-retry is replay-safe.
+    const f = await fixture(capability, { sessionDeathOnce: true });
+    const press = () =>
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } });
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.result?.isError).not.toBe(true);
+    const events = await f.events();
+    // The dead generation retired (new driver process) and the key reached
+    // the fresh session exactly once.
+    expect(events.filter((event) => event.event === "start")).toHaveLength(2);
+    expect(events.filter((event) => event.event === "key")).toHaveLength(1);
   });
 
   it("locking cancels active native input and rejects waiting input before dispatch", async () => {

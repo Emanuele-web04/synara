@@ -36,6 +36,35 @@ interface HostPermissions {
   screenRecording: boolean;
 }
 
+const DRIVER_SESSION_DEATH_CODES = new Set([
+  "session_ended",
+  "session-expired",
+  "session_expired",
+  "unknown_session",
+  "session_not_found",
+]);
+
+/**
+ * The native driver ended this session (restart, timeout, or eviction) while
+ * the host still held it: every later call with the same id fails the same
+ * way, and no model-side retry can heal it. The driver confirms nothing was
+ * dispatched, so retiring the generation and starting fresh once is replay-safe.
+ */
+function isDriverSessionDeath(reply: CuaReply): boolean {
+  const result = reply.ok ? reply.result : undefined;
+  if (!result?.isError) return false;
+  const code = result.structuredContent?.code;
+  if (typeof code === "string" && DRIVER_SESSION_DEATH_CODES.has(code)) return true;
+  const texts: string[] = [];
+  for (const part of result.content ?? []) {
+    if (part && typeof part.text === "string") texts.push(part.text);
+  }
+  const message = result.structuredContent?.message;
+  if (typeof message === "string") texts.push(message);
+  const joined = texts.join("\n");
+  return joined.includes("has ended") && joined.includes("start_session");
+}
+
 /** Lives in Electron's main process. Only this GUI process spawns the native
  * daemon: a bundle-id string sent by a standalone server cannot confer TCC. */
 export class CuaDriverHost {
@@ -311,27 +340,37 @@ export class CuaDriverHost {
     };
     connection.once("close", abort);
     try {
-      generation = await this.ensureStarted();
-      if (
-        connection.destroyed ||
-        generation.retired ||
-        admittedEpoch !== this.epoch ||
-        this.desktopPauses.size > 0
-      )
-        throw new Error("Cancelled before dispatch.");
-      const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
-      dispatched = true;
-      generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
-      const reply = await cuaRequest<CuaReply>(
-        generation.socket,
-        {
-          method: "call",
-          name,
-          args: { ...args, session: generation.session },
-        },
-        { timeoutMs: 30_000, mutation: CUA_ACTION_TOOLS.has(name) },
-      );
-      generation.inputInFlight = false;
+      let reply: CuaReply | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        generation = await this.ensureStarted();
+        if (
+          connection.destroyed ||
+          generation.retired ||
+          admittedEpoch !== this.epoch ||
+          this.desktopPauses.size > 0
+        )
+          throw new Error("Cancelled before dispatch.");
+        const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+        dispatched = true;
+        generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
+        const attemptReply = await cuaRequest<CuaReply>(
+          generation.socket,
+          {
+            method: "call",
+            name,
+            args: { ...args, session: generation.session },
+          },
+          { timeoutMs: 30_000, mutation: CUA_ACTION_TOOLS.has(name) },
+        );
+        generation.inputInFlight = false;
+        if (attempt === 0 && isDriverSessionDeath(attemptReply)) {
+          await this.retire(generation).catch(() => undefined);
+          continue;
+        }
+        reply = attemptReply;
+        break;
+      }
+      if (!reply || !generation) throw new Error("Cancelled before dispatch.");
       if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name))
         return this.desktopPauseReply();
       if (
@@ -587,7 +626,7 @@ export class CuaDriverHost {
     const message =
       this.desktopPauses.size > 0
         ? "Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing."
-        : "Computer input remains paused after the desktop resumed. Read fresh window or desktop state before continuing; do not replay an uncertain action.";
+        : "Computer input remains paused after the desktop resumed. Call computer_screenshot and inspect what it shows before continuing; do not replay an uncertain action.";
     return {
       ok: true,
       result: {
