@@ -82,6 +82,7 @@ export function useChatTranscriptScroll({
     container: HTMLElement;
     scrollTop: number;
     wasFollowing: boolean;
+    upward: boolean;
     keyboard?: boolean;
   } | null>(null);
   const pendingScrollGestureFrameRef = useRef<number | null>(null);
@@ -172,8 +173,9 @@ export function useChatTranscriptScroll({
     (isAtEnd: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
       const pending = pendingScrollGestureRef.current;
-      if (pending?.keyboard && container === pending.container) {
-        // Native key scrolling can begin after keyup and after multiple frames.
+      if (pending?.upward && container === pending.container) {
+        // Native wheel/key movement can begin after an edge notification or
+        // multiple frames. Keep gesture ownership until it moves or expires.
         if (container.scrollTop >= pending.scrollTop || isScrollContainerNearBottom(container, 1))
           return;
         pendingScrollGestureRef.current = null;
@@ -290,6 +292,32 @@ export function useChatTranscriptScroll({
   const onMessagesTouchStartBase = useCallback(() => {
     clearTranscriptAutoFollow(true);
   }, [clearTranscriptAutoFollow]);
+  const settlePendingScrollGesture = useCallback(() => {
+    const origin = pendingScrollGestureRef.current;
+    if (!origin) return;
+    const previousFrame = pendingScrollGestureFrameRef.current;
+    if (previousFrame !== null) window.cancelAnimationFrame(previousFrame);
+    // Allow delayed native movement before recovering a no-op or nested gesture.
+    const deadline = performance.now() + (origin.upward ? 150 : 0);
+    const check = () => {
+      pendingScrollGestureFrameRef.current = null;
+      if (pendingScrollGestureRef.current !== origin) return;
+      const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
+      if (!movedUp && performance.now() < deadline) {
+        pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+        return;
+      }
+      pendingScrollGestureRef.current = null;
+      if (origin.wasFollowing && !movedUp) {
+        setTranscriptScrollDetached(false);
+        onIsAtEndChange(true);
+        scrollToEnd();
+      } else {
+        releaseTranscriptScrollGesture();
+      }
+    };
+    pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+  }, [onIsAtEndChange, releaseTranscriptScrollGesture, scrollToEnd, setTranscriptScrollDetached]);
   const onMessagesScrollGesture = useCallback(
     (upward: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
@@ -302,6 +330,7 @@ export function useChatTranscriptScroll({
           : {
               container,
               scrollTop: container.scrollTop,
+              upward,
               wasFollowing:
                 isAtEndRef.current &&
                 !isUserScrollDetachedRef.current &&
@@ -309,32 +338,9 @@ export function useChatTranscriptScroll({
             };
       clearTranscriptAutoFollow(true);
       pendingScrollGestureRef.current = origin;
-      // Native scrolling can settle on the next rendering pass. Keep one
-      // pending check per gesture burst, preserving ownership from its first event.
-      pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
-        pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
-          pendingScrollGestureFrameRef.current = null;
-          pendingScrollGestureRef.current = null;
-          if (origin.wasFollowing && container.scrollTop >= origin.scrollTop) {
-            // A nested or no-op wheel must not strand follow, even if new text
-            // increased the distance from the bottom while the gesture settled.
-            setTranscriptScrollDetached(false);
-            onIsAtEndChange(true);
-            scrollToEnd();
-          } else {
-            releaseTranscriptScrollGesture();
-          }
-        });
-      });
+      settlePendingScrollGesture();
     },
-    [
-      legendListRef,
-      clearTranscriptAutoFollow,
-      onIsAtEndChange,
-      releaseTranscriptScrollGesture,
-      scrollToEnd,
-      setTranscriptScrollDetached,
-    ],
+    [legendListRef, clearTranscriptAutoFollow, settlePendingScrollGesture],
   );
   const onMessagesWheelBase = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
@@ -375,6 +381,7 @@ export function useChatTranscriptScroll({
             : {
                 container,
                 scrollTop: container.scrollTop,
+                upward: true,
                 wasFollowing: isAtEndRef.current && !isUserScrollDetachedRef.current,
                 keyboard: true,
               };
@@ -387,31 +394,7 @@ export function useChatTranscriptScroll({
       }
     };
     const releaseKeyboardGesture = () => {
-      const origin = pendingScrollGestureRef.current;
-      if (!origin?.keyboard) return;
-      const previousFrame = pendingScrollGestureFrameRef.current;
-      if (previousFrame !== null) window.cancelAnimationFrame(previousFrame);
-      // Native key scrolling may begin after keyup. Give it rendering time to
-      // move, then recover a no-op/nested gesture instead of holding indefinitely.
-      const deadline = performance.now() + 150;
-      const check = () => {
-        pendingScrollGestureFrameRef.current = null;
-        if (pendingScrollGestureRef.current !== origin) return;
-        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
-        if (!movedUp && performance.now() < deadline) {
-          pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
-          return;
-        }
-        pendingScrollGestureRef.current = null;
-        if (origin.wasFollowing && !movedUp) {
-          setTranscriptScrollDetached(false);
-          onIsAtEndChange(true);
-          scrollToEnd();
-        } else {
-          releaseTranscriptScrollGesture();
-        }
-      };
-      pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+      if (pendingScrollGestureRef.current?.keyboard) settlePendingScrollGesture();
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", releaseKeyboardGesture);
@@ -421,15 +404,7 @@ export function useChatTranscriptScroll({
       window.removeEventListener("keyup", releaseKeyboardGesture);
       window.removeEventListener("blur", releaseKeyboardGesture);
     };
-  }, [
-    legendListRef,
-    clearTranscriptAutoFollow,
-    onIsAtEndChange,
-    onMessagesScrollGesture,
-    releaseTranscriptScrollGesture,
-    scrollToEnd,
-    setTranscriptScrollDetached,
-  ]);
+  }, [legendListRef, clearTranscriptAutoFollow, onMessagesScrollGesture, settlePendingScrollGesture]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
