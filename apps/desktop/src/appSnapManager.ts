@@ -594,12 +594,13 @@ export class DesktopAppSnapManager {
     // Cache only an all-granted answer. A missing report must always reach the
     // helper again — a transient TCC negative could otherwise be served from
     // cache for five seconds while callers re-probe for the real state.
-    const effectiveKinds: readonly DesktopAppSnapPermissionKind[] =
-      permissions ?? ["accessibility", "screenRecording"];
+    const effectiveKinds: readonly DesktopAppSnapPermissionKind[] = permissions ?? [
+      "accessibility",
+      "screenRecording",
+    ];
     if (
       effectiveKinds.every(
-        (kind) =>
-          this.#panePermission(APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]) === "granted",
+        (kind) => this.#panePermission(APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]) === "granted",
       )
     ) {
       this.#permissionCheckCache = { at: Date.now(), kindsKey };

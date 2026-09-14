@@ -417,6 +417,35 @@ describe("Cua native boundary", () => {
     expect(await pending).toMatchObject({ kind: "available" });
   });
 
+  it("keeps re-probing until a delayed grant lands", async () => {
+    const f = fixture();
+    f.denyPermissions();
+    const gates: Array<() => void> = [];
+    const arm = () =>
+      f.waitForPermission(
+        new Promise<void>((resolve) => {
+          gates.push(resolve);
+        }),
+      );
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+    arm();
+    const pending = f.backend.availability();
+    await tick();
+    // Initial check reads missing; probe one reads missing too; the grant only
+    // exists by probe two — matching the multi-second transient seen live.
+    gates.shift()!();
+    await tick();
+    arm();
+    await tick();
+    gates.shift()!();
+    await tick();
+    arm();
+    f.grantPermissions();
+    await tick();
+    gates.shift()!();
+    expect(await pending).toMatchObject({ kind: "available" });
+  });
+
   it("clears an old capture failure after explicit setup so recovery can be retried", async () => {
     const f = fixture();
     f.failOverview();

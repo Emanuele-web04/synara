@@ -424,17 +424,21 @@ export class CuaComputerBackend implements ComputerBackend {
       let permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
       // tccd can report a transient negative for a freshly spawned session
-      // while it maps the running app to its grants. A missing report that
-      // follows a granted or unread state gets one delayed re-probe before it
-      // is published; a steady missing state converges on the second call and
-      // costs one extra probe only on the transition.
+      // while it maps the running app to its grants — observed to outlive a
+      // single 400ms re-probe at turn start. A missing report that follows a
+      // granted or unread state gets up to four delayed re-probes before it
+      // is published; a steady missing state converges on the last call and a
+      // granted answer short-circuits the remaining probes.
       if (
         (permission.accessibility !== true || permission.screen_recording !== true) &&
         !this.hadMissingPermissions
       ) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        permission =
-          (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          permission =
+            (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+          if (permission.accessibility === true && permission.screen_recording === true) break;
+        }
       }
       this.permissions = [];
       if (permission.accessibility !== true) this.permissions.push("accessibility");
