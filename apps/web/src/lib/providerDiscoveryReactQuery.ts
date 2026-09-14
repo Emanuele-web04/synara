@@ -236,6 +236,9 @@ function requireDiscoveredModels(
   // Initial degraded discovery can still expose an adapter's usable static
   // fallback. During a background refresh, however, keep a previously good
   // dynamic catalog and let React Query retry the transient failure.
+  if (result.source === "timeout" && previous && previous.models.length > 0) {
+    throw new Error(`${provider} model discovery timed out.`);
+  }
   if (
     provider === "devin" &&
     result.error &&
