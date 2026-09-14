@@ -625,6 +625,7 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
+  const nextAsyncUserInput = incomingMessage.asyncUserInput ?? existingMessage.asyncUserInput;
   const nextSkills =
     incomingMessage.skills && incomingMessage.skills.length > 0
       ? incomingMessage.skills
@@ -654,6 +655,7 @@ function mergeStreamingMessage(
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
     providerReferenceArraysEqual(existingMessage.skills, nextSkills) &&
@@ -671,6 +673,7 @@ function mergeStreamingMessage(
   return {
     ...existingMessage,
     text: nextText,
+    ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
     ...(nextAttachments ? { attachments: nextAttachments } : {}),
     ...(nextSkills && nextSkills.length > 0 ? { skills: [...nextSkills] } : {}),
@@ -702,6 +705,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       id: payload.messageId,
       role: payload.role,
       text: payload.text,
+      ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
       dispatchMode: payload.dispatchMode,
       dispatchOrigin: payload.dispatchOrigin,
       startsNewTurn: payload.startsNewTurn,

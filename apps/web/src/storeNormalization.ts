@@ -548,10 +548,15 @@ export function normalizeChatMessage(
   const previousSkills = previous?.skills ?? [];
   const previousMentions = previous?.mentions ?? [];
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
+  // Answers are immutable; a lagging snapshot must not reopen a submitted card.
+  const asyncUserInput = previous?.asyncUserInput?.response
+    ? previous.asyncUserInput
+    : (incoming.asyncUserInput ?? previous?.asyncUserInput);
   if (
     previous &&
     previous.role === incoming.role &&
     previous.text === incoming.text &&
+    previous.asyncUserInput === asyncUserInput &&
     previous.dispatchMode === incoming.dispatchMode &&
     previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.startsNewTurn === incoming.startsNewTurn &&
@@ -572,6 +577,7 @@ export function normalizeChatMessage(
     id: incoming.id,
     role: incoming.role,
     text: incoming.text,
+    ...(asyncUserInput ? { asyncUserInput } : {}),
     ...(incoming.textSegments !== undefined && incoming.textSegments.length > 0
       ? { textSegments: [...incoming.textSegments] }
       : {}),
@@ -637,6 +643,7 @@ function readModelMessageFromChatMessage(
     id: message.id,
     role: message.role,
     text: message.text,
+    ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
     ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
     ...(message.startsNewTurn !== undefined ? { startsNewTurn: message.startsNewTurn } : {}),
@@ -779,6 +786,9 @@ function mergeReadModelMessagesWithLiveHotPath(
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
       startsNewTurn: incomingMessage.startsNewTurn ?? previousMessage.startsNewTurn,
+      asyncUserInput: previousMessage.asyncUserInput?.response
+        ? previousMessage.asyncUserInput
+        : (incomingMessage.asyncUserInput ?? previousMessage.asyncUserInput),
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,

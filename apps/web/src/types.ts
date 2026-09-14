@@ -111,6 +111,7 @@ export interface ChatMessage {
   text: string;
   /** Slices of streamed assistant text between row-making provider events. */
   textSegments?: OrchestrationMessageTextSegment[];
+  asyncUserInput?: import("@synara/contracts").AsyncUserInput;
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];

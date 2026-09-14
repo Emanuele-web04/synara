@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
   IsoDateTime,
@@ -432,6 +433,7 @@ const TurnDiffUpdatedPayload = Schema.Struct({
 export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
 export const ItemLifecyclePayload = Schema.Struct({
+  asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),

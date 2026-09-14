@@ -123,3 +123,42 @@ runtime works independently but remains unavailable in Synara.
 Use the dedicated [provider guides](https://www.trysynara.com/docs/providers) for exact
 installation, authentication, verification, capabilities, update paths, and provider-specific
 failure checks.
+
+## Codex asynchronous questions
+
+On Codex versions and models that expose `request_user_input_async`, Synara shows
+an inline question card with optional suggested answers and an editable text
+answer. A suggested answer is never submitted automatically. The composer remains
+available and the agent can continue working while the question is unanswered.
+
+Questions and submitted answers are stored with the assistant message. Refreshing
+or restarting Synara restores that state. Concurrent submissions are admitted once
+by the server; a second client refreshes the accepted answer. Normal turn-delivery
+errors remain visible on the conversation, as for any other user message.
+
+### App-server protocol
+
+Verified with codex-cli **0.154.0**, its generated experimental TypeScript schemas,
+and an isolated native app-server session:
+
+- `request_user_input_async` is a model-facing tool, not a client RPC. It emits
+  `item/started` and `item/completed` for an `agentMessage` with
+  `delivery: "async"` and `questions: [{ title, options }]`, and immediately
+  returns to the agent. `options` may be null for a free-text-only question.
+- The answer is an ordinary user message containing the questions and answers.
+  Synara uses its existing turn dispatch: `turn/steer` with `expectedTurnId` while
+  a turn is active, and `turn/start` once the turn has finished. The existing
+  dispatch path also handles the turn finishing while the answer is being sent.
+- This differs from `item/tool/requestUserInput`, which carries a JSON-RPC request
+  ID and uses a response with an answer map. Its `isBlocking` field and deprecated
+  `autoResolutionMs` do not define the native asynchronous tool's answer path.
+  The inline asynchronous cards never enter Synara's pending approval/input queues.
+- Synara does not force a model or enable experimental model features. Older
+  app-server versions retain their existing text and blocking-question behavior;
+  malformed structured questions fall back to the provider's message text.
+
+Scope: native Codex questions in a top-level conversation. Other providers and
+subagent question routing are outside this implementation.
+
+Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/app-server),
+[upstream asynchronous tool handler](https://github.com/openai/codex/blob/b0d95427c2443e90998f48065902309187564085/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
