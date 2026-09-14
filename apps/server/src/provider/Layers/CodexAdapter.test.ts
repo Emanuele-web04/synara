@@ -288,6 +288,26 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+  it.effect("explicitly selects Standard when opening a session with Fast disabled", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-standard"),
+        resumeCursor: { threadId: "previously-fast-thread" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { fastMode: false },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(validationManager.startSessionImpl.mock.calls[0]?.[0].serviceTier, "default");
+    }),
+  );
 });
 
 const sessionErrorManager = new FakeCodexManager();
@@ -371,6 +391,32 @@ const turnPreparationLayer = it.layer(
 );
 
 turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
+  it.effect("clears Fast mode on the next turn while preserving an unspecified tier", () =>
+    Effect.gen(function* () {
+      turnPreparationManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      for (const fastMode of [true, false, undefined]) {
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tier-toggle"),
+          input: "Continue",
+          attachments: [],
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            ...(fastMode !== undefined ? { options: { fastMode } } : {}),
+          },
+        });
+      }
+
+      const requests = turnPreparationManager.sendTurnImpl.mock.calls.map(([input]) => input);
+      assert.deepStrictEqual(
+        requests.map((input) => input.serviceTier),
+        ["fast", "default", undefined],
+      );
+      assert.equal(Object.hasOwn(requests[2]!, "serviceTier"), false);
+    }),
+  );
   it.effect("prepares equivalent rich send and steer manager payloads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -770,6 +816,40 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("keeps inspected images out of generated output artifacts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const payload = {
+        item: {
+          type: "imageView",
+          id: "view_1",
+          path: "/attachments/objects/upload.png",
+        },
+      };
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-view"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("view_1"),
+        payload,
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") return;
+      assert.equal(firstEvent.value.payload.itemType, "image_view");
+      assert.equal(firstEvent.value.payload.title, "Image view");
+      assert.deepStrictEqual(firstEvent.value.payload.data, payload);
     }),
   );
 

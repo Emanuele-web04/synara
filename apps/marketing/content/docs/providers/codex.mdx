@@ -151,6 +151,12 @@ Check the selected Codex installation, account, CLI version, and `config.toml`. 
 
 Update the CLI and start a new session. Existing sessions may retain capabilities negotiated when they were created.
 
+## Default model and startup recovery
+
+Synara 0.8.4 uses **GPT-6 Astra** as the default Codex model for a fresh selection. Existing saved model choices remain available. Its supported effort ladder runs from Low through Ultra, with Medium as the default; actual availability still comes from your Codex runtime and account.
+
+After a confirmed startup failure, correct the reported provider problem and retry from the composer. Preserve any existing working-tree changes when restarting a provider session.
+
 ## Official documentation
 
 - [Codex documentation](https://developers.openai.com/codex)

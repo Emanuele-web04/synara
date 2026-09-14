@@ -35,17 +35,19 @@
  */
 import type {
   OrchestrationCommand,
+  OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
   OrchestrationSession,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
 } from "@synara/shared/threadSummary";
-import { Effect, Option } from "effect";
+import { Array as Arr, Effect, Option } from "effect";
 
 import type { ProjectionPendingInteraction } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
@@ -85,6 +87,14 @@ export interface ReconcilableThread {
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
+  readonly pendingInteractions?:
+    | ReadonlyArray<
+        Pick<
+          OrchestrationPendingInteraction,
+          "interactionKind" | "requestId" | "lifecycleGeneration" | "status" | "createdAt"
+        >
+      >
+    | undefined;
 }
 
 /**
@@ -132,10 +142,39 @@ function planStalePendingRequestCommands(input: {
   readonly pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
 }): ReadonlyArray<ThreadActivityAppendCommand> {
+  const commands: ThreadActivityAppendCommand[] = [];
+  if (input.thread.pendingInteractions !== undefined) {
+    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
+    for (const interaction of input.thread.pendingInteractions) {
+      // A process restart loses every live provider callback. Pending,
+      // responding, and previously retryable rows are therefore no longer
+      // answerable. Uncertain user-input responses are also retryable unless
+      // their callback has already been explicitly invalidated.
+      if (
+        interaction.status === "confirmed" ||
+        isAlreadyStale(interaction) ||
+        (interaction.status === "uncertain" && interaction.interactionKind === "approval")
+      ) {
+        continue;
+      }
+      commands.push(
+        buildStalePendingRequestCommand({
+          threadId: input.thread.id,
+          now: input.now,
+          requestKind: interaction.interactionKind === "approval" ? "approval" : "user-input",
+          requestId: interaction.requestId,
+          ...(interaction.lifecycleGeneration !== null
+            ? { lifecycleGeneration: interaction.lifecycleGeneration }
+            : {}),
+        }),
+      );
+    }
+    return commands;
+  }
+
   const pendingRequestIds = derivePendingThreadRequestIds({
     activities: input.thread.activities ?? [],
   });
-  const commands: ThreadActivityAppendCommand[] = [];
   const plannedRequests = new Set<string>();
   const planRequest = (requestKind: PendingThreadRequestKind, requestId: string) => {
     const requestKey = `${requestKind}:${requestId}`;
@@ -201,6 +240,7 @@ function buildStalePendingRequestCommand(input: {
   readonly now: string;
   readonly requestKind: PendingThreadRequestKind;
   readonly requestId: string;
+  readonly lifecycleGeneration?: string;
 }): ThreadActivityAppendCommand {
   const commandKey = [
     "restart-reconcile",
@@ -214,6 +254,7 @@ function buildStalePendingRequestCommand(input: {
     commandId: CommandId.makeUnsafe(commandKey),
     requestKind: input.requestKind,
     requestId: input.requestId,
+    lifecycleGeneration: input.lifecycleGeneration,
     now: input.now,
   });
 }
@@ -322,17 +363,16 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   const pendingInteractionRepository = yield* ProjectionPendingInteractionRepository;
 
   const readModel = yield* engine.getReadModel();
-  const pendingInteractions = yield* pendingInteractionRepository.listUnsettled().pipe(
+  const pendingInteractions = yield* pendingInteractionRepository.listUnsettled({}).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("restart reconciliation could not read pending interactions", {
         cause,
       }).pipe(Effect.as([] as ReadonlyArray<ProjectionPendingInteraction>)),
     ),
   );
-  const threadIdsWithUnsettledInteractions = new Set(
-    pendingInteractions.map((interaction) => interaction.threadId),
+  const unsettledByThread = new Map(
+    Object.entries(Arr.groupBy(pendingInteractions, (row) => row.threadId)),
   );
-
   const now = new Date().toISOString();
   const threadsNeedingRestartCleanup = readModel.threads.filter(
     (thread) =>
@@ -340,9 +380,7 @@ export const reconcileRestartStuckTurns: Effect.Effect<
       threadHasCheckpointRevertInProgress(thread) ||
       thread.hasPendingApprovals ||
       thread.hasPendingUserInput ||
-      // A row can be the only surviving evidence: the thread's session and turn
-      // projections look clean, yet an unanswerable question card is still up.
-      threadIdsWithUnsettledInteractions.has(thread.id),
+      unsettledByThread.has(thread.id),
   );
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
@@ -350,16 +388,19 @@ export const reconcileRestartStuckTurns: Effect.Effect<
 
   const reconcilableThreads = yield* Effect.forEach(
     threadsNeedingRestartCleanup,
-    (thread) =>
-      snapshotQuery.getThreadDetailById(thread.id).pipe(
-        Effect.map((detail) => Option.getOrElse(detail, () => thread)),
+    (thread) => {
+      const pendingInteractions = unsettledByThread.get(thread.id);
+      const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
+      return snapshotQuery.getThreadDetailById(thread.id).pipe(
+        Effect.map((detail) => Option.getOrElse(detail, () => fallback)),
         Effect.catchCause((cause) =>
           Effect.logWarning("restart turn reconciliation continuing without thread activities", {
             threadId: thread.id,
             cause,
-          }).pipe(Effect.as(thread)),
+          }).pipe(Effect.as(fallback)),
         ),
-      ),
+      );
+    },
     { concurrency: 4 },
   );
 

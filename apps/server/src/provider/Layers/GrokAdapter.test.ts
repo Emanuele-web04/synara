@@ -366,6 +366,11 @@ describe("GrokAdapter runtime event scoping", () => {
     ]);
   });
 
+  it("humanizes an unknown future Grok family through the shared formatter", () => {
+    const [model] = mergeGrokModelDescriptors([[{ slug: "grok-4-7", name: "" }]]);
+    expect(model?.name).toBe("Grok 4.7");
+  });
+
   it("keeps the live Grok CLI catalog instead of retired xAI API slugs", () => {
     const models = mergeGrokModelDescriptors(
       selectGrokDiscoveredModelGroups({

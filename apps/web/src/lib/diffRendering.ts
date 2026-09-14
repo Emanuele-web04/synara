@@ -208,12 +208,21 @@ export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string 
   return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
 }
 
+export const PARTIAL_DIFF_COPY_NOTICE =
+  "[Synara: partial diff. Output was truncated at the size limit; some files or changes may be missing.]";
+
 // Returns copyable source text for diff surfaces without depending on virtualized DOM rows.
-export function resolveDiffCopyText(patch: string | undefined): string | null {
+// A truncation notice travels with partial clipboard content so it cannot be mistaken for a
+// complete patch after it leaves Synara.
+export function resolveDiffCopyText(patch: string | undefined, truncated = false): string | null {
   if (typeof patch !== "string") {
     return null;
   }
-  return patch.trim().length > 0 ? patch : null;
+  if (patch.trim().length === 0) {
+    return null;
+  }
+  const noticeSeparator = patch.endsWith("\n") ? "\n" : "\n\n";
+  return truncated ? `${patch}${noticeSeparator}${PARTIAL_DIFF_COPY_NOTICE}\n` : patch;
 }
 
 export type RenderablePatch =

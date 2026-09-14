@@ -105,7 +105,7 @@ interface DiffPanelToolbarProps {
   diffWordWrap: boolean;
   diffIgnoreWhitespace: boolean;
   diffCopyText: string | null;
-  isDiffCopied: boolean;
+  diffCopyLabel: string;
   reloading: boolean;
   allFilesCollapsed: boolean;
   changeMarkersEnabled: boolean;
@@ -398,7 +398,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                     }}
                   >
                     <CopyIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
-                    <span>{props.isDiffCopied ? "Copied diff" : "Copy diff"}</span>
+                    <span>{props.diffCopyLabel}</span>
                   </MenuItem>
                 ) : null}
                 {props.renderableFiles.length > 0 ? (

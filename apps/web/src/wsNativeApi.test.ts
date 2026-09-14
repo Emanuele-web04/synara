@@ -87,6 +87,17 @@ vi.mock("./contextMenuFallback", () => ({
   showContextMenuFallback: showContextMenuFallbackMock,
 }));
 
+const withNativeMenuIconsMock = vi.fn(
+  async <T extends string>(items: readonly ContextMenuItem<T>[]) =>
+    items.map((item) =>
+      item.icon ? { ...item, iconDataUrl: `data:image/png;base64,${item.icon}` } : item,
+    ),
+);
+
+vi.mock("./lib/nativeMenuIcons", () => ({
+  withNativeMenuIcons: withNativeMenuIconsMock,
+}));
+
 let nextPushSequence = 1;
 
 function emitPush<C extends WsPushChannel>(channel: C, data: WsPushData<C>): void {
@@ -129,6 +140,7 @@ beforeEach(() => {
   requestMock.mockReset();
   disposeMock.mockReset();
   showContextMenuFallbackMock.mockReset();
+  withNativeMenuIconsMock.mockClear();
   subscribeMock.mockClear();
   channelListeners.clear();
   latestPushByChannel.clear();
@@ -1036,6 +1048,7 @@ describe("wsNativeApi", () => {
   });
 
   it("forwards context menu metadata to desktop bridge", async () => {
+    vi.stubGlobal("navigator", { platform: "Win32" });
     const showContextMenu = vi.fn().mockResolvedValue("delete");
     Object.defineProperty(getWindowForTest(), "desktopBridge", {
       configurable: true,
@@ -1055,10 +1068,48 @@ describe("wsNativeApi", () => {
       { x: 200, y: 300 },
     );
 
+    expect(api.browser.vault).toBeUndefined();
+
     expect(showContextMenu).toHaveBeenCalledWith(
       [
         { id: "rename", label: "Rename thread" },
         { id: "delete", label: "Delete", separatorBefore: true, destructive: true },
+      ],
+      { x: 200, y: 300 },
+    );
+    expect(withNativeMenuIconsMock).not.toHaveBeenCalled();
+  });
+
+  it("rasterizes context menu icons for the macOS desktop bridge", async () => {
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const showContextMenu = vi.fn().mockResolvedValue("rename");
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: {
+        showContextMenu,
+      },
+    });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    await api.contextMenu.show(
+      [
+        { id: "rename", label: "Rename thread", icon: "pencil" },
+        { id: "copy-thread-id", label: "Copy Thread ID" },
+      ],
+      { x: 200, y: 300 },
+    );
+
+    expect(showContextMenu).toHaveBeenCalledWith(
+      [
+        {
+          id: "rename",
+          label: "Rename thread",
+          icon: "pencil",
+          iconDataUrl: "data:image/png;base64,pencil",
+        },
+        { id: "copy-thread-id", label: "Copy Thread ID" },
       ],
       { x: 200, y: 300 },
     );

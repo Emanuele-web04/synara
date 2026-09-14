@@ -144,11 +144,11 @@
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 4%);
+    --seam-line: --alpha(var(--color-black) / 5%);
   }
 
   .dark .chat-content-card {
-    --seam-line: --alpha(var(--color-white) / 3%);
+    --seam-line: --alpha(var(--color-white) / 5%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
@@ -381,7 +381,7 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --radius-user-message: 0.8rem;
+  --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
     -apple-system,
@@ -810,20 +810,6 @@ label:has(> select#reasoning-effort) select {
   text-underline-offset: 0.18em;
 }
 
-.chat-markdown .thread-marker {
-  border-radius: 0.22em;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  transition:
-    background-color 160ms ease,
-    box-shadow 160ms ease,
-    text-decoration-color 160ms ease;
-}
-
-.chat-markdown .thread-marker-highlight {
-  padding: 0.02em 0.12em;
-}
-
 /* Find hits: yellow for every match, orange for the active one — dark text on
    both so highlights stay readable over prose and syntax-colored code. */
 .chat-markdown .chat-find-match {
@@ -850,60 +836,6 @@ label:has(> select#reasoning-effort) select {
   padding-right: 0;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
-}
-
-/* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
-.chat-markdown .thread-marker-highlight.thread-marker-continues-before {
-  padding-left: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.chat-markdown .thread-marker-highlight.thread-marker-continues-after {
-  padding-right: 0;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.chat-markdown .thread-marker-underline {
-  text-decoration-line: underline;
-  text-decoration-thickness: 0.14em;
-  text-underline-offset: 0.18em;
-}
-
-.chat-markdown .thread-marker-yellow {
-  background-color: color-mix(in srgb, var(--color-text-accent) 12%, transparent);
-  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
-}
-
-.chat-markdown .thread-marker-blue {
-  background-color: transparent;
-  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
-}
-
-.chat-markdown .thread-marker-green {
-  background-color: color-mix(in srgb, #34d399 24%, transparent);
-  text-decoration-color: color-mix(in srgb, #10b981 82%, transparent);
-}
-
-.chat-markdown .thread-marker-pink {
-  background-color: color-mix(in srgb, #f472b6 24%, transparent);
-  text-decoration-color: color-mix(in srgb, #ec4899 82%, transparent);
-}
-
-.chat-markdown .thread-marker-done {
-  opacity: 0.58;
-}
-
-.chat-markdown .thread-marker-active {
-  box-shadow:
-    0 0 0 2px var(--color-background-surface),
-    0 0 0 4px color-mix(in srgb, var(--color-text-foreground) 34%, transparent);
-}
-
-.chat-markdown .thread-marker-active.thread-marker-continues-before,
-.chat-markdown .thread-marker-active.thread-marker-continues-after {
-  box-shadow: none;
 }
 
 .chat-markdown blockquote {
@@ -1144,13 +1076,14 @@ label:has(> select#reasoning-effort) select {
 .editor-file-editor {
   min-height: 0;
   flex: 1;
+  min-width: 0;
   resize: none;
   overflow: auto;
   border: 0;
   border-radius: 0;
   outline: none;
   background: transparent;
-  padding: 1rem;
+  padding: 1rem 1rem 1rem 0.75rem;
   color: color-mix(in srgb, var(--foreground) 88%, transparent);
   font-family: var(--font-chat-code-family);
   font-size: var(--app-font-size-chat-code, 12px);
@@ -1161,6 +1094,61 @@ label:has(> select#reasoning-effort) select {
 
 .editor-file-editor:focus-visible {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
+/* Inline editor shell for the dock explorer: a plain textarea paired with a
+   line-number gutter column. The textarea keeps its own scroll container and
+   the gutter's inner column follows its scrollTop without a second clamped
+   scroll range (a horizontal scrollbar shortens only the textarea viewport).
+   Type metrics must stay identical to .editor-file-editor to keep rows aligned. */
+.editor-file-editor-wrap {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-file-editor__gutter {
+  flex: none;
+  overflow: hidden;
+  width: calc(4ch + 1.75rem);
+  padding: 1rem 0.5rem 1rem 1rem;
+  text-align: right;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.editor-file-editor__gutter-line {
+  display: block;
+  white-space: pre;
+}
+
+.editor-file-editor-wrap[hidden] {
+  display: none;
+}
+
+.editor-file-editor__pierre {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: transparent;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+}
+
+.editor-file-editor__pierre > diffs-container {
+  display: block;
+  min-height: 100%;
+  min-width: 100%;
+  width: max-content;
 }
 
 /* Line-number gutter for the read-only file preview. Rendered via CSS counters
@@ -2531,7 +2519,7 @@ diffs-container {
    Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
    they are transient overlays, not part of this raised-card family. */
 :root {
-  --surface-border-strength: 72%;
+  --surface-border-strength: 55%;
   --surface-border: color-mix(
     in srgb,
     color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
@@ -2572,20 +2560,23 @@ diffs-container {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
 }
 
-/* Electron: continuous macOS-style corners (do not stack with corner-shape). */
+/* Composer and user bubbles share continuous corners; their radii remain the fallback.
+   Electron smoothing must not stack with browser corner-shape. */
 :root[data-runtime="electron"] .chat-composer-shell,
 :root[data-runtime="electron"] .chat-composer-surface,
 :root[data-runtime="electron"] .chat-composer-stacked-top,
-:root[data-runtime="electron"] .chat-composer-surface-banner {
+:root[data-runtime="electron"] .chat-composer-surface-banner,
+:root[data-runtime="electron"] .chat-user-message-bubble {
   -electron-corner-smoothing: system-ui;
 }
 
 /* Browser: squircle via corner-shape when supported. */
-@supports (corner-shape: round) {
+@supports (corner-shape: squircle) {
   :root:not([data-runtime="electron"]) .chat-composer-shell,
   :root:not([data-runtime="electron"]) .chat-composer-surface,
   :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
-  :root:not([data-runtime="electron"]) .chat-composer-surface-banner {
+  :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
+  :root:not([data-runtime="electron"]) .chat-user-message-bubble {
     corner-shape: squircle;
   }
 }

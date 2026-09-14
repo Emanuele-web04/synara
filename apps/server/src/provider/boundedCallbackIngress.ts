@@ -30,6 +30,8 @@ export interface BoundedCallbackIngress<A> {
   readonly offer: (item: A) => BoundedCallbackIngressOfferResult;
   /** Stop admission and wait until every accepted item has been processed. */
   readonly stop: Effect.Effect<void>;
+  /** Release queued work when the owning scope and downstream consumer are closing. */
+  readonly abort: Effect.Effect<void>;
   readonly status: () => BoundedCallbackIngressStatus;
 }
 
@@ -186,11 +188,20 @@ export const makeBoundedCallbackIngress = <A, E, R>(
       return Fiber.join(worker).pipe(Effect.asVoid);
     });
 
-    yield* Effect.addFinalizer(() => stop);
+    const abort = Effect.suspend(() => {
+      accepting = false;
+      stopRequested = true;
+      buffer.length = 0;
+      queuedBytes = 0;
+      return Fiber.interrupt(worker).pipe(Effect.asVoid);
+    });
+
+    yield* Effect.addFinalizer(() => abort);
 
     return {
       offer,
       stop,
+      abort,
       status: () => ({
         accepting,
         queued: buffer.length,
