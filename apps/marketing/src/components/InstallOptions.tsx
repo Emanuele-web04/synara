@@ -98,16 +98,18 @@ export default function InstallOptions({
         />
       </div>
 
-      <div className="mt-8 w-full max-w-xl rounded-2xl border border-[var(--divide)] bg-[var(--block-elevated)] px-5 py-4 text-left">
-        <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-          macOS via Homebrew
-        </p>
-        <p className="mt-2 text-[13px] leading-[1.6] text-[var(--text-secondary)]">
-          Installs the same signed GitHub Release disk image as the macOS download above.
-        </p>
-        <pre className="mt-3 overflow-x-auto rounded-xl bg-[var(--page-bg)] px-4 py-3 font-mono text-[13px] text-[var(--text-primary)]">
-          <code>brew install --cask synara</code>
-        </pre>
+      <div className="mt-4 grid w-full items-center gap-3 rounded-xl border border-[var(--divide)] bg-[var(--block-elevated)] px-4 py-3 text-left sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-6 sm:px-5">
+        <div>
+          <p className="text-[13px] font-medium text-[var(--text-primary)]">
+            Prefer Homebrew on macOS?
+          </p>
+          <p className="mt-0.5 text-[12px] leading-[1.5] text-[var(--text-tertiary)]">
+            Install the same signed release from the command line.
+          </p>
+        </div>
+        <code className="overflow-x-auto rounded-lg bg-[var(--page-bg)] px-3.5 py-2.5 font-mono text-[12px] whitespace-nowrap text-[var(--text-primary)] sm:text-[13px]">
+          brew install --cask synara
+        </code>
       </div>
 
       <p className="mt-8 text-[12px] text-[var(--text-tertiary)]">
