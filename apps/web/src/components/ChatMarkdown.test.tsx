@@ -612,3 +612,179 @@ it("keeps dollar filenames separate from math and rejects escaped delimiters", a
   expect(markup).not.toContain("alias.md");
   expect(markup.match(/href=/g)).toHaveLength(1);
 });
+
+describe("ChatMarkdown directionMode", () => {
+  const renderDirectionMarkdown = async (text: string, directionMode?: "off" | "auto-blocks") => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    return renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd={undefined}
+        isStreaming={false}
+        {...(directionMode ? { directionMode } : {})}
+      />,
+    );
+  };
+
+  it("stays off by default: no direction attribute and no data-direction-mode", async () => {
+    const markup = await renderDirectionMarkdown("هذا نص عربي خالص للاختبار.");
+    expect(markup).not.toContain("data-direction-mode");
+    expect(markup).not.toContain('dir="');
+  });
+
+  it("marks the root and renders a pure Arabic paragraph rtl when enabled", async () => {
+    const markup = await renderDirectionMarkdown("هذا نص عربي خالص للاختبار.", "auto-blocks");
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+    expect(markup).toContain('<p dir="rtl">هذا نص عربي خالص للاختبار.</p>');
+  });
+
+  it("renders Arabic-majority text starting with a Latin term rtl", async () => {
+    const markup = await renderDirectionMarkdown(
+      "API إعدادات المشروع بالعربي الغالب هنا.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+  });
+
+  it("keeps Latin-majority paragraphs ltr", async () => {
+    const markup = await renderDirectionMarkdown(
+      "This English sentence contains the word مرحبا inside.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="ltr">');
+  });
+
+  it("keeps inline code ltr inside an rtl paragraph and preserves find offsets", async () => {
+    const markup = await renderDirectionMarkdown(
+      "الملف الرئيسي `src/main.ts` بالعربي.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('<code dir="ltr">src/main.ts</code>');
+  });
+
+  it("preserves find offsets in direction mode", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const text = "الملف الرئيسي `src/main.ts` بالعربي.";
+    const startOffset = text.indexOf("الرئيسي");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd={undefined}
+        directionMode="auto-blocks"
+        findQuery="الرئيسي"
+        findActiveRange={{ startOffset, endOffset: startOffset + 7 }}
+      />,
+    );
+    expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
+    expect(markup).toContain('<p dir="rtl">');
+  });
+
+  it("renders a human-labeled link inheriting the paragraph direction", async () => {
+    const markup = await renderDirectionMarkdown(
+      "اقرأ [رابط التوثيق](https://example.com/docs) للمزيد.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('href="https://example.com/docs"');
+    expect(markup).not.toContain('<a dir="ltr" href="https://example.com/docs"');
+  });
+
+  it("keeps an English human label with parentheses inheriting the rtl paragraph", async () => {
+    const markup = await renderDirectionMarkdown(
+      "هذا شرح عربي واضح عن [API (v2)](https://example.com/docs) للمشروع.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('href="https://example.com/docs"');
+    expect(markup).not.toContain('<a dir="ltr" href="https://example.com/docs"');
+  });
+
+  it("renders a bare URL link ltr inside an rtl paragraph", async () => {
+    const markup = await renderDirectionMarkdown(
+      "الرابط https://example.com/docs هنا.",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('<a dir="ltr" href="https://example.com/docs"');
+  });
+
+  it("keeps hrefs unchanged in direction mode", async () => {
+    const markup = await renderDirectionMarkdown(
+      "راجع [الملاحظات](./notes.md) و[[wikiPage|صفحة الويكي]].",
+      "auto-blocks",
+    );
+    expect(markup).toContain('href="./notes.md"');
+    expect(markup).toContain("صفحة الويكي");
+  });
+
+  it("keeps tables ltr with rtl cells", async () => {
+    const markup = await renderDirectionMarkdown(
+      ["| عمود | Column |", "| --- | --- |", "| خلية | cell |"].join("\n"),
+      "auto-blocks",
+    );
+    expect(markup).toContain('<table dir="ltr">');
+    expect(markup).toContain('<th dir="rtl">عمود</th>');
+    expect(markup).toContain('<th dir="ltr">Column</th>');
+    expect(markup).toContain('<td dir="rtl">خلية</td>');
+    expect(markup).toContain('<td dir="ltr">cell</td>');
+  });
+
+  it("renders tight list items with independent directions and marks mixed lists", async () => {
+    const markup = await renderDirectionMarkdown("- عنصر عربي\n- English item", "auto-blocks");
+    expect(markup).toContain('<li dir="rtl">عنصر عربي</li>');
+    expect(markup).toContain('<li dir="ltr">English item</li>');
+    expect(markup).toContain('data-mixed-direction-list="true"');
+  });
+
+  it("does not mark uniform rtl lists as mixed", async () => {
+    const markup = await renderDirectionMarkdown("- عنصر أول\n- عنصر ثانٍ", "auto-blocks");
+    expect(markup).not.toContain("data-mixed-direction-list");
+    expect(markup).toContain('<li dir="rtl">عنصر أول</li>');
+  });
+
+  it("keeps math katex ltr inside an rtl paragraph", async () => {
+    const markup = await renderDirectionMarkdown("المعادلة $x^2 + y^2$ بالعربي.", "auto-blocks");
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('class="katex"');
+    expect(markup).toContain('dir="ltr"');
+  });
+
+  it("keeps blockquotes and headings directional in mode on", async () => {
+    const markup = await renderDirectionMarkdown(
+      "> اقتباس عربي هنا\n\n## عنوان عربي",
+      "auto-blocks",
+    );
+    expect(markup).toContain('<blockquote dir="rtl">');
+    expect(markup).toContain('<h2 dir="rtl">');
+  });
+
+  it("isolates composer and terminal chips ltr inside an rtl user message", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text="راجع @src/utils/model.ts و@terminal-1:1 الآن"
+        cwd={undefined}
+        variant="user"
+        directionMode="auto-blocks"
+        terminalContexts={[{ header: "Terminal 1 line 1", body: "git status" }]}
+      />,
+    );
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('title="src/utils/model.ts"');
+    expect(markup).toContain(">Terminal 1 line 1</span>");
+    expect(markup.match(/<span dir="ltr">/g)).toHaveLength(2);
+  });
+
+  it("keeps pure LTR content semantically identical to off mode apart from explicit dir", async () => {
+    const text = "Plain English paragraph with `code` and [a link](https://example.com).";
+    const on = await renderDirectionMarkdown(text, "auto-blocks");
+    const off = await renderDirectionMarkdown(text);
+    const stripped = on
+      .replaceAll(' data-direction-mode="auto-blocks"', "")
+      .replaceAll(' dir="ltr"', "");
+    expect(stripped).toBe(off);
+    expect(on).toContain('<p dir="ltr">');
+    expect(on).toContain('<code dir="ltr">');
+  });
+});

@@ -1490,6 +1490,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  directionMode="auto-blocks"
                   {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
                 />
               </div>
@@ -2070,6 +2071,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
                   knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                  directionMode="auto-blocks"
                   {...threadFindMarkdownProps(findHighlight, item.message.id)}
                 />
               </div>
@@ -2184,6 +2186,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      directionMode="auto-blocks"
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
@@ -3419,6 +3422,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         style={props.chatTypographyStyle}
         findQuery={props.findQuery}
         findActiveRange={props.findActiveRange}
+        directionMode="auto-blocks"
       />
     );
   }
@@ -3462,6 +3466,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       style={props.chatTypographyStyle}
       findQuery={props.findQuery}
       findActiveRange={props.findActiveRange}
+      directionMode="auto-blocks"
     />
   );
 });

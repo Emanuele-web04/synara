@@ -83,6 +83,7 @@ import {
   FindAwareMarkdownText,
   FindAwareShikiHtml,
 } from "./ChatMarkdownFind";
+import { rehypeChatBlockDirection } from "./chatMarkdownDirection";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -152,6 +153,14 @@ interface ChatMarkdownProps {
    * inline-code chip uses one of these when the match is unique.
    */
   knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
+  /**
+   * Block-level text direction handling. Defaults to "off" so every consumer
+   * outside the chat transcript renders exactly as before. "auto-blocks"
+   * resolves an explicit RTL/LTR direction per text block (Arabic/Hebrew
+   * majority) while code, KaTeX, tables, URLs and paths stay LTR. Only the
+   * live chat transcript enables it.
+   */
+  directionMode?: "off" | "auto-blocks";
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -260,6 +269,17 @@ function rehypeRestoreLiteralDollars() {
 const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
+];
+// Direction-enabled chains used only when `directionMode="auto-blocks"`. The
+// direction plugin runs last, after KaTeX and literal-dollar restoration, and
+// the arrays stay module-level so plugin identity never churns across renders.
+const USER_MARKDOWN_REHYPE_PLUGINS_WITH_DIRECTION: MarkdownRehypePlugins = [
+  rehypeChatBlockDirection,
+];
+const MARKDOWN_REHYPE_PLUGINS_WITH_DIRECTION: MarkdownRehypePlugins = [
+  [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
+  rehypeRestoreLiteralDollars,
+  rehypeChatBlockDirection,
 ];
 type MarkdownTextNode = {
   type: "text";
@@ -1051,7 +1071,7 @@ const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(n
 
 // Stable component types preserve code highlighting timers, copy state and image state.
 const MARKDOWN_COMPONENTS: Components = {
-  a: function MarkdownLink({ node: _node, href, children, ...props }) {
+  a: function MarkdownLink({ node: _node, href, dir, children, ...props }) {
     const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme } =
       useContext(MarkdownRenderContext)!;
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
@@ -1067,7 +1087,13 @@ const MARKDOWN_COMPONENTS: Components = {
         restoredHref === `http://${plainText}` ||
         restoredHref === `https://${plainText}`
       ) {
-        return <InlineLinkChip url={restoredHref} interactive />;
+        return dir === "ltr" ? (
+          <span dir="ltr">
+            <InlineLinkChip url={restoredHref} interactive />
+          </span>
+        ) : (
+          <InlineLinkChip url={restoredHref} interactive />
+        );
       }
     }
     const targetPath = isExternalHttp
@@ -1077,6 +1103,7 @@ const MARKDOWN_COMPONENTS: Components = {
       return (
         <a
           {...props}
+          {...(dir ? { dir } : {})}
           href={restoredHref}
           target="_blank"
           rel="noopener noreferrer"
@@ -1090,7 +1117,7 @@ const MARKDOWN_COMPONENTS: Components = {
       );
     }
 
-    return (
+    const fileChip = (
       <OpenableFileChip
         targetPath={targetPath}
         theme={resolvedTheme}
@@ -1098,6 +1125,7 @@ const MARKDOWN_COMPONENTS: Components = {
         {...(restoredHref ? { href: restoredHref } : {})}
       />
     );
+    return dir === "ltr" ? <span dir="ltr">{fileChip}</span> : fileChip;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
     const { sourceText, diffThemeName, isStreaming } = useContext(MarkdownRenderContext)!;
@@ -1135,7 +1163,7 @@ const MARKDOWN_COMPONENTS: Components = {
       </MarkdownCodeBlock>
     );
   },
-  code: function MarkdownInlineCode({ node, className, children, ...props }) {
+  code: function MarkdownInlineCode({ node, className, dir, children, ...props }) {
     const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
       useContext(MarkdownRenderContext)!;
     // Fenced blocks carry a `language-*` class and are rendered by `pre`;
@@ -1153,12 +1181,13 @@ const MARKDOWN_COMPONENTS: Components = {
         };
         const knownTarget = resolveChatFileChipTarget(filePath, undefined, knownAbsoluteFilePaths);
         if (knownTarget) {
-          return (
+          const chip = (
             <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} {...findLabelProps} />
           );
+          return dir === "ltr" ? <span dir="ltr">{chip}</span> : chip;
         }
         if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
-          return (
+          const chip = (
             <VerifiedWorkspaceFileChip
               rawReference={filePath}
               cwd={cwd}
@@ -1166,11 +1195,12 @@ const MARKDOWN_COMPONENTS: Components = {
               {...findLabelProps}
             />
           );
+          return dir === "ltr" ? <span dir="ltr">{chip}</span> : chip;
         }
       }
     }
     return (
-      <code className={className} {...props}>
+      <code className={className} {...props} {...(dir ? { dir } : {})}>
         {children}
       </code>
     );
@@ -1221,18 +1251,21 @@ const MARKDOWN_COMPONENTS: Components = {
   ...({
     [COMPOSER_CHIP_TAG_NAME]: function MarkdownComposerChip(props: {
       className?: string | undefined;
+      dir?: string | undefined;
       [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
     }) {
       const { resolvedTheme, mentionReferences } = useContext(MarkdownRenderContext)!;
-      return (
+      const chip = (
         <ComposerChipElement
           serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
           theme={resolvedTheme}
           mentionReferences={mentionReferences ?? []}
         />
       );
+      return props.dir === "ltr" ? <span dir="ltr">{chip}</span> : chip;
     },
     [TERMINAL_CONTEXT_CHIP_TAG_NAME]: function MarkdownTerminalChip(props: {
+      dir?: string | undefined;
       [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
     }) {
       const { terminalContexts } = useContext(MarkdownRenderContext)!;
@@ -1244,7 +1277,8 @@ const MARKDOWN_COMPONENTS: Components = {
       }
       const tooltipText =
         context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-      return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      const chip = <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      return props.dir === "ltr" ? <span dir="ltr">{chip}</span> : chip;
     },
     [CHAT_FIND_TEXT_TAG_NAME]: function MarkdownFindText(props: {
       children?: ReactNode;
@@ -1277,6 +1311,7 @@ function ChatMarkdown({
   variant: variantProp,
   mentionReferences,
   terminalContexts,
+  directionMode: directionModeProp,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
@@ -1286,6 +1321,8 @@ function ChatMarkdown({
   const variant = variantProp ?? "assistant";
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
+  const directionMode = directionModeProp ?? "off";
+  const directionEnabled = directionMode === "auto-blocks";
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1347,7 +1384,13 @@ function ChatMarkdown({
       remarkFindableText,
     ];
   }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd]);
-  const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
+  const rehypePlugins = directionEnabled
+    ? isUserVariant
+      ? USER_MARKDOWN_REHYPE_PLUGINS_WITH_DIRECTION
+      : MARKDOWN_REHYPE_PLUGINS_WITH_DIRECTION
+    : isUserVariant
+      ? USER_MARKDOWN_REHYPE_PLUGINS
+      : MARKDOWN_REHYPE_PLUGINS;
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
@@ -1386,6 +1429,7 @@ function ChatMarkdown({
       ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
+      {...(directionEnabled ? { "data-direction-mode": "auto-blocks" } : {})}
     >
       <ChatFindRenderProvider
         query={findQuery}
