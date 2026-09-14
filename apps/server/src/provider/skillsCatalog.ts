@@ -533,6 +533,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   pi: ["pi", "agents"],
   devin: ["devin", "claude", "agents"],
   omp: ["omp", "agents"],
+  cline: [],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 
 function homeRootsForOrigin(

@@ -400,6 +400,8 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
+          omp: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -421,6 +423,8 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
+          omp: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -431,6 +435,78 @@ describe("resolveAppModelSelection", () => {
         "",
       ),
     ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
+
+  it("resolves display names through the shared resolver", () => {
+    expect(
+      resolveAppModelSelection(
+        "codex",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "GPT-5.3 Codex",
+      ),
+    ).toBe("gpt-5.3-codex");
+  });
+
+  it("resolves aliases through the shared resolver", () => {
+    expect(
+      resolveAppModelSelection(
+        "claudeAgent",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "sonnet",
+      ),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("resolves transient selected custom models included in app model options", () => {
+    expect(
+      resolveAppModelSelection(
+        "codex",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "custom/selected-model",
+      ),
+    ).toBe("custom/selected-model");
+  });
+});
+
+describe("timestamp format defaults", () => {
+  it("defaults timestamp format to locale", () => {
+    expect(DEFAULT_TIMESTAMP_FORMAT).toBe("locale");
   });
 });
 
@@ -738,6 +814,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "/usr/local/bin/devin",
         ompBinaryPath: "",
         ompAgentDir: "",
+        clineBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -783,6 +860,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        clineBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -1097,6 +1175,7 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         devinBinaryPath: "devin",
+        clineBinaryPath: "",
         droidBinaryPath: "droid",
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
@@ -1694,6 +1773,7 @@ describe("provider-indexed custom model settings", () => {
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
     customDevinModels: ["devin/custom-model"],
+    customClineModels: [],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
     customOmpModels: [],
@@ -1718,6 +1798,19 @@ describe("provider-indexed custom model settings", () => {
         },
       },
     });
+  it("exports one provider config per provider", () => {
+    expect(MODEL_PROVIDER_SETTINGS.map((config) => config.provider)).toEqual([
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "devin",
+      "cline",
+      "antigravity",
+      "grok",
+      "droid",
+      "opencode",
+      "pi",
+    ]);
   });
 
   it("patches custom models for a selected provider instance", () => {
@@ -1731,6 +1824,35 @@ describe("provider-indexed custom model settings", () => {
           config: { homePath: "/tmp/claude-work" },
         },
       },
+  it("keeps Droid persistence compatible without advertising unsupported custom slugs", () => {
+    expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
+      "droid",
+    );
+  });
+
+  it("reads custom models for each provider", () => {
+    expect(getCustomModelsForProvider(settings, "codex")).toEqual(["custom/codex-model"]);
+    expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
+    expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
+    expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
+    expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
+    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
+    expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
+    expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+  });
+
+  it("reads default custom models for each provider", () => {
+    const defaults = {
+      customCodexModels: ["default/codex-model"],
+      customClaudeModels: ["claude/default-opus"],
+      customCursorModels: ["cursor/default-model"],
+      customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
+      customGrokModels: ["grok/default-fast"],
+      customDroidModels: ["droid/default-model"],
+      customDevinModels: ["adaptive"],
+      customClineModels: [],
+      customOpenCodeModels: ["openai/gpt-5"],
+      customPiModels: ["anthropic/default-pi"],
     } as const;
 
     expect(
@@ -1876,6 +1998,7 @@ describe("provider-indexed custom model settings", () => {
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
       devin: ["devin/custom-model"],
+      cline: [],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
@@ -1972,6 +2095,30 @@ describe("revealHubsRailItemOnce", () => {
   it("shows Hubs saved under the old hidden default once, then keeps a later hide", () => {
     const storage = memoryStorage({
       "synara:app-settings:v1": JSON.stringify({ hiddenRailItems: ["studio", "kanban"] }),
+  it("normalizes and deduplicates custom model options per provider", () => {
+    const modelOptionsByProvider = getCustomModelOptionsByProvider({
+      customCodexModels: ["  custom/codex-model ", "gpt-5.4", "custom/codex-model"],
+      customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
+      customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
+      customAntigravityModels: [
+        " Gemini 3.5 Flash ",
+        "Gemini 3.5 Flash (Experimental)",
+        "Gemini 3.5 Flash (Experimental)",
+      ],
+      customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
+      customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
+      customDevinModels: [" adaptive ", "devin/custom-model", "devin/custom-model"],
+      customClineModels: [],
+      customOpenCodeModels: [
+        " openai/gpt-5 ",
+        "openrouter/gpt-oss-120b",
+        "openrouter/gpt-oss-120b",
+      ],
+      customPiModels: [
+        " anthropic/claude-sonnet-4-5 ",
+        "anthropic/custom-pi",
+        "anthropic/custom-pi",
+      ],
     });
 
     revealHubsRailItemOnce(storage);

@@ -16,6 +16,7 @@ import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { ClineIcon } from "./ClineIcon";
 import type { Icon } from "./Icons";
 
 export { providerIconToneClassName, type ProviderIconTone };
@@ -63,6 +64,7 @@ const OpenCodeProviderIcon = ({
 
 export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   ...PROVIDER_GLYPHS,
+  cline: ClineIcon,
   opencode: OpenCodeProviderIcon,
 };
 

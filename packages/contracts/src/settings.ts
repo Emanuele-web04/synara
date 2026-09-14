@@ -124,6 +124,12 @@ export const DevinServerProviderSettings = Schema.Struct({
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 
+export const ClineServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cline")),
+});
+export type ClineServerProviderSettings = typeof ClineServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -188,6 +194,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     devin: DevinServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    cline: ClineServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -292,6 +299,7 @@ export const ServerSettingsPatch = Schema.Struct({
           agentDir: Schema.optionalKey(StringSetting),
         }),
       ),
+      cline: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
     }),
   ),
   providerInstances: Schema.optionalKey(ProviderInstanceConfigMap),

@@ -17,6 +17,8 @@ import {
   SiXcode,
 } from "react-icons/si";
 
+export { ClineIcon } from "./ClineIcon";
+
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
 
 // Provider brand glyphs live in @synara/profile-ui (shared with the public profile
