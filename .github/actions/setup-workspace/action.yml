@@ -92,6 +92,12 @@ runs:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         WORKSPACE_SCOPE: ${{ inputs.scope }}
       run: |
+        # Hosted Windows checks out on D:, while Bun's default home cache is on C:.
+        # Match the measured setup so package hardlinks can stay on one volume.
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          export BUN_INSTALL_CACHE_DIR="$RUNNER_TEMP/bun-install-cache"
+          echo "Bun install cache: $BUN_INSTALL_CACHE_DIR"
+        fi
         case "$WORKSPACE_SCOPE" in
           full) bun install --frozen-lockfile ;;
           static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' ;;

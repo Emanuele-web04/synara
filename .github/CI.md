@@ -22,7 +22,9 @@ smaller installs:
   existing `--ignore-scripts`, Xcode pairs, probe, simulator smoke and diagnostics.
 
 Filtered scopes never restore/save a full `node_modules` archive. Windows
-installs cold rather than extracting the pathological Bun package cache. Full
+installs cold rather than extracting the pathological Bun package cache. Its
+install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matching
+the measured install layout and allowing Bun to hardlink package files. Full
 Linux installs retain their modules cache; the Bun package archive is restored
 only when modules are not an exact hit. Frozen installation and lifecycle patches
 still run on cache hits. Turbo persistence is opt-in for unit/build consumers.
@@ -90,7 +92,7 @@ launched Chromium, created a page and verified DOM content.
 
 ```text
 Preparation             Observations (s)         Median
---with-deps chromium     17.17 / 16.86 / 12.38   16.86
+--with-deps chromium     21.24 / 16.86 / 12.38   16.86
 chromium only             0.75 /  0.55 /  0.65    0.65
 ```
 
@@ -125,8 +127,10 @@ used, while test bodies, assertions, timeouts and quarantine semantics stay inta
 The [server benchmark](https://github.com/Emanuele-web04/synara/actions/runs/34833458963)
 compared Vitest's existing native two-way shard assignment with native three-way
 assignment. Each repetition ran both variants on the same runner and reversed
-order in the middle repetition. Exact JSON inventories matched at 5,025 assertion
-results with no shard overlap; all repetitions passed.
+order in the middle repetition. Exact JSON inventories matched at 5,030 assertion
+results (5,025 distinct inventory keys) with no shard overlap; all repetitions
+passed. Repeated test titles account for the difference; their multiplicities
+also match between variants.
 
 ```text
 Metric                         2-way median   3-way median   Change
@@ -142,8 +146,9 @@ custom timing-aware sequencer below.
 
 The [component benchmark](https://github.com/Emanuele-web04/synara/actions/runs/34833550200)
 compared the existing two native file shards with three native file shards. All
-three repetitions preserved exactly 408 assertion results with no overlap or
-omission and passed.
+three repetitions preserved exactly 411 assertion results (408 distinct inventory
+keys), including repeated-title multiplicities, with no overlap or omission and
+passed.
 
 ```text
 Metric                         2-way median   3-way median   Change
@@ -210,3 +215,46 @@ passed all 15 jobs in 308 seconds and 1,943 runner-seconds, versus main's 323
 seconds / 2,158 runner-seconds. The final critical-path graph is measured again
 from scratch in the PR verification record; those earlier numbers are retained so
 cache initialization is not hidden.
+
+### Full-workflow follow-up
+
+The final optimization commit `1d27eb0d9` ran twice, first in #1197 and again when
+the same branch reopened as #1202. Both completed successfully:
+
+| Run                                                                                              | Workflow elapsed | Raw runner minutes |
+| ------------------------------------------------------------------------------------------------ | ---------------: | -----------------: |
+| [Reference main](https://github.com/Emanuele-web04/synara/actions/runs/34792874548)              |            5m23s |              35.97 |
+| [First final-candidate run](https://github.com/Emanuele-web04/synara/actions/runs/34836521794)   |            4m17s |              33.40 |
+| [Reopened PR, same candidate](https://github.com/Emanuele-web04/synara/actions/runs/34851349076) |            6m45s |              38.67 |
+
+The first candidate run was 20.4% faster than the reference and used 7.1% fewer
+raw runner minutes. The second was 25.4% slower and used 7.5% more. Raw runner
+minutes sum job start-to-completion durations; they are not billed cost.
+
+In the second run, some jobs started up to 182 seconds after their dependency
+completed. Windows dependency installation also varied from 101.42 to 223.63
+seconds between the two candidate runs. These observations do not establish that
+the PR caused the scheduling delays. They do show why the paired test-command
+improvements cannot guarantee an overall percentage: the 18-job workflow also
+depends on runner availability and installation cost. Compare several full runs
+under similar load before treating either overall saving as repeatable.
+
+### Windows install cache placement
+
+The original install benchmark placed both fresh worktrees and empty Bun caches
+under `RUNNER_TEMP`. The actual Windows workflow instead used a `D:` checkout
+with Bun installed under the runner's `C:` home, without overriding its default
+cache location. That topology differed from the benchmark. Bun normally hardlinks
+packages from its cache on Windows, and its isolated installer falls back to
+copying when the cache and destination are on different volumes. See the
+[benchmark setup](https://github.com/Emanuele-web04/synara/blob/c1fb6bca967f9cdc9fbb8226d95d1ef52574a22e/.github/scripts/ci-benchmark.mjs#L48-L55)
+and [Bun installer](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/install/isolated_install/Installer.rs#L1339-L1410).
+
+Windows installation now selects and logs `RUNNER_TEMP/bun-install-cache`, matching
+the hosted benchmark's volume placement. Other platforms retain their cache
+selection. This does not restore a Windows archive, change the install scope, or
+disable lifecycle scripts. The original logs did not record the effective cache
+or linking backend, so the 101.42- and 223.63-second samples do not isolate copying
+as their cause. Fresh native Windows checks and installation timing are recorded
+in the PR verification; a same-runner paired comparison is needed to attribute a
+repeatable percentage to cache placement alone.

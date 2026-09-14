@@ -79,6 +79,46 @@ test("filtered scopes preserve lifecycle scripts and the scripts workspace links
   assert.equal(turbo.tasks.test.cache, false);
   assert.equal(turbo.tasks.typecheck.cache, false);
 });
+test("Windows install uses the runner-volume cache without changing other platforms", () => {
+  const install = setup.match(
+    /- name: Install dependencies[\s\S]*?      run: \|\n([\s\S]*?)(?=\n    - name:)/,
+  )?.[1];
+  assert.ok(install);
+  const command = install
+    .split("\n")
+    .map((line) => line.replace(/^        /, ""))
+    .join("\n");
+  for (const platform of ["Windows", "Linux", "macOS"]) {
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-c",
+        `bun() { printf 'cache=%s\\n' "$BUN_INSTALL_CACHE_DIR"; printf 'arg=%s\\n' "$@"; }\n${command}`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          RUNNER_OS: platform,
+          RUNNER_TEMP: "/runner temp",
+          WORKSPACE_SCOPE: "runtime",
+          BUN_INSTALL_CACHE_DIR: "/existing-cache",
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const expectedCache =
+      platform === "Windows" ? "/runner temp/bun-install-cache" : "/existing-cache";
+    assert.ok(result.stdout.includes(`cache=${expectedCache}\n`), platform);
+    assert.ok(
+      result.stdout.includes(
+        "arg=install\narg=--frozen-lockfile\narg=--filter\narg=!@synara/marketing\n",
+      ),
+      platform,
+    );
+  }
+});
 test("native Windows runtime and recovery tests are not replaced with Linux checks", () => {
   const windows = workflow.split("  windows_process:\n")[1].split("  migration_lineage:\n")[0];
   for (const file of [
