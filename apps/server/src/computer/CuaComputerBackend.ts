@@ -94,6 +94,10 @@ function rect(value: unknown): ComputerRect {
 }
 const sameRect = (a: ComputerRect, b: ComputerRect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+/** How long an observed element tree may serve internal target resolution.
+ * Native dispatch still validates the element token, so expiry is the drift
+ * bound for a control that survives but moved or changed meaning. */
+const RECENT_TREE_TTL_MS = 5_000;
 function cuaKey(value: string): string {
   const key = value.toLowerCase();
   if (key === "insert")
@@ -143,6 +147,14 @@ export class CuaComputerBackend implements ComputerBackend {
   private selectedWindow: string | undefined;
   private readonly elementTokens = new WeakMap<ComputerUiNode, string>();
   private readonly pressableElements = new WeakSet<ComputerUiNode>();
+  /**
+   * Element trees observed within the last few seconds, keyed by window id.
+   * Internal target resolution reuses them: the element tokens bound to these
+   * nodes are validated natively at dispatch, so an aged-out element refuses
+   * rather than pressing the wrong control. Retaining the root keeps every
+   * child node alive for the WeakMap token lookups.
+   */
+  private readonly recentTrees = new Map<string, { at: number; root: ComputerUiNode }>();
   private readonly observedGeometry = new Map<string, ComputerRect>();
   private readonly stills: StillFramePublisher;
   private cachedImage: ComputerScreenshot | undefined;
@@ -674,6 +686,7 @@ export class CuaComputerBackend implements ComputerBackend {
     includeScreenshot?: boolean;
     includeTree?: boolean;
     windowId?: string;
+    reuseRecentTree?: boolean;
   }): Promise<ComputerState> {
     await this.refresh();
     let state: ComputerState = {
@@ -695,6 +708,15 @@ export class CuaComputerBackend implements ComputerBackend {
     const { pid, window_id, window } = await this.target(options.windowId, false);
     state = { ...state, windows: [window] };
     if (!options.includeTree && !options.includeScreenshot) return state;
+    if (options.includeTree && options.reuseRecentTree && !options.includeScreenshot) {
+      const cached = this.recentTrees.get(options.windowId);
+      if (cached && Date.now() - cached.at < RECENT_TREE_TTL_MS)
+        return {
+          ...state,
+          root: cached.root,
+          accessibility: { status: "partial", unavailableWindowIds: [] },
+        };
+    }
     let result: CuaToolResult;
     try {
       result = await this.call("get_window_state", {
@@ -751,6 +773,10 @@ export class CuaComputerBackend implements ComputerBackend {
       truncated: data.elements_complete !== true,
       children,
     };
+    this.recentTrees.delete(options.windowId);
+    this.recentTrees.set(options.windowId, { at: Date.now(), root });
+    while (this.recentTrees.size > 8)
+      this.recentTrees.delete(this.recentTrees.keys().next().value!);
     const image = options.includeScreenshot ? this.previewImage(result, window.id) : undefined;
     if (image && "screenshot" in image) {
       if (image.screenshot.region) this.observedGeometry.set(window.id, image.screenshot.region);

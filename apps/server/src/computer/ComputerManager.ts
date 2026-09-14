@@ -2766,6 +2766,7 @@ export class ComputerManager {
     }
     const state = await this.backend.getState({
       includeTree: true,
+      reuseRecentTree: true,
       ...(target.windowId ? { windowId: target.windowId } : {}),
     });
     if (!state.root) {

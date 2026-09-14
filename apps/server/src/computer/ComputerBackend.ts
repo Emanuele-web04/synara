@@ -356,6 +356,14 @@ export interface ComputerBackend {
      */
     readonly includeTree?: boolean;
     readonly windowId?: string;
+    /**
+     * Internal target resolution may reuse a tree observed moments ago instead
+     * of paying for another accessibility walk. The agent-facing state tools
+     * never set this: what the model reads must stay fresh. Safe only because
+     * dispatch validates the resolved element natively — a stale candidate
+     * fails closed rather than acting on a moved control.
+     */
+    readonly reuseRecentTree?: boolean;
   }): Promise<ComputerState>;
   /**
    * Zoomed perception. `getState` downscales the whole multi-monitor workspace

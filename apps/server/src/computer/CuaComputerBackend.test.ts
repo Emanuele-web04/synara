@@ -275,6 +275,73 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "set_value")).toHaveLength(1);
   });
 
+  it("serves internal target resolution from a recent tree instead of walking again", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Equals",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+      },
+    ]);
+    const observed = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+
+    const resolved = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+      reuseRecentTree: true,
+    });
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+    expect(resolved.root).toBe(observed.root);
+
+    // The freshness requirement stands on the agent-facing path: a second
+    // observation without the reuse flag still pays for the walk.
+    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(2);
+  });
+
+  it("scopes the recent tree to its window and re-walks after it ages out", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Equals",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+      },
+    ]);
+    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+
+    // A window the cache never saw cannot borrow another window's tree: the
+    // fresh identity check runs before any cached state is served.
+    await expect(
+      f.backend.getState({
+        windowId: "cua:30:40",
+        includeTree: true,
+        reuseRecentTree: true,
+      }),
+    ).rejects.toMatchObject({ effect: "not-dispatched" });
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+
+    const now = vi.spyOn(Date, "now");
+    try {
+      let clock = Date.now();
+      now.mockImplementation(() => clock);
+      clock += 10_000;
+      await f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+        reuseRecentTree: true,
+      });
+      expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("allows the bounded native permission request to finish without extending action deadlines", async () => {
     const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
     const request: typeof cuaRequest = async (_endpoint, request, options) => {
