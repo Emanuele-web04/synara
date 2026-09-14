@@ -1,4 +1,4 @@
-name: CI Server Shard Benchmark
+name: CI Component Shard Benchmark
 
 on:
   pull_request:
@@ -8,13 +8,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-server-shard-benchmark-${{ github.event.pull_request.number }}-${{ github.sha }}
+  group: ci-component-shard-benchmark-${{ github.event.pull_request.number }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   compare:
     if: github.head_ref == 'codex/ci-cross-platform-measurements'
-    name: Server 2-way vs 3-way (${{ matrix.rep }})
+    name: Components 2-way vs 3-way (${{ matrix.rep }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -24,7 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-workspace
-      - name: Run paired server shard benchmark
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+      - name: Install cached browser runtime
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: ./apps/web/node_modules/.bin/playwright install chromium
+      - name: Run paired component shard benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -35,12 +43,12 @@ jobs:
           }
           baseline() {
             for shard in 1 2; do
-              run_one "baseline-${shard}" bun run --cwd apps/server test -- --shard="${shard}/2" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-${shard}.json"
+              run_one "baseline-${shard}" bun run --cwd apps/web test:browser:ci -- --project=components --shard="${shard}/2" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/baseline-${shard}.json"
             done
           }
           candidate() {
             for shard in 1 2 3; do
-              run_one "candidate-${shard}" bun run --cwd apps/server test -- --shard="${shard}/3" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/candidate-${shard}.json"
+              run_one "candidate-${shard}" bun run --cwd apps/web test:browser:ci -- --project=components --shard="${shard}/3" --reporter=json --outputFile="$GITHUB_WORKSPACE/benchmark/candidate-${shard}.json"
             done
           }
           if [ "${{ matrix.rep }}" = "1" ]; then candidate; baseline; else baseline; candidate; fi
@@ -90,6 +98,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: server-shards-${{ matrix.rep }}
+          name: component-shards-${{ matrix.rep }}
           path: benchmark
           if-no-files-found: warn
