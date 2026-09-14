@@ -11,7 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import {
+  deriveSidebarThreadActivity,
+  resolveThreadStatusPill,
+  type ThreadStatusPill,
+} from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -394,6 +398,45 @@ describe("SidebarActivityView", () => {
         .element()
         .parentElement?.querySelector('[aria-label="Unread completion"]'),
     ).toBeNull();
+    await mounted.unmount();
+  });
+
+  it("keeps the parent spinner visible until its last subagent finishes", async () => {
+    const parent = makeThread(500, {
+      title: "Review changes",
+      lastVisitedAt: new Date().toISOString(),
+    });
+    const child = makeThread(501, {
+      parentThreadId: parent.id,
+      title: "Check edge cases",
+      hasLiveTailWork: true,
+    });
+    const resolveThreadStatus = (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: thread.hasPendingApprovals,
+        hasPendingUserInput: thread.hasPendingUserInput,
+      });
+    const view = (threads: readonly SidebarThreadSummary[]) =>
+      renderActivity({
+        threads: deriveSidebarThreadActivity(threads),
+        resolveThreadStatus,
+      });
+    const mounted = await render(renderActivity({ threads: [parent, child], resolveThreadStatus }));
+    await page.getByRole("button", { name: "Activity options", exact: true }).hover();
+    await expect
+      .element(page.getByRole("img", { name: "Working", exact: true }))
+      .not.toBeInTheDocument();
+
+    await mounted.rerender(view([parent, child]));
+    await expect.element(page.getByRole("img", { name: "Working", exact: true })).toBeVisible();
+    await expect.element(page.getByTestId(`activity-thread-${child.id}`)).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Activity options", exact: true }).hover();
+
+    await mounted.rerender(view([parent, { ...child, hasLiveTailWork: false }]));
+    await expect
+      .element(page.getByRole("img", { name: "Working", exact: true }))
+      .not.toBeInTheDocument();
     await mounted.unmount();
   });
 
