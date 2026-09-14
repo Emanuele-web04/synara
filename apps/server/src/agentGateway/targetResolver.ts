@@ -227,6 +227,8 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // Cline advertises models, but no Synara reasoning/effort option controls.
+  cline: { primaryOptionKey: "", options: {} },
   devin: defineProviderOptionConfig<"devin">({
     primaryOptionKey: "modelVariant",
     options: {

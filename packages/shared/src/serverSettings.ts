@@ -80,6 +80,9 @@ export function providerStartOptionsFromServerSettings(
       ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
       ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
     },
+    cline: {
+      ...(providers.cline.binaryPath ? { binaryPath: providers.cline.binaryPath } : {}),
+    },
     devin: {
       ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),
     },

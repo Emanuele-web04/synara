@@ -159,11 +159,15 @@ export const DevinModelOptions = Schema.Struct({
 });
 export type DevinModelOptions = typeof DevinModelOptions.Type;
 
+export const ClineModelOptions = Schema.Struct({});
+export type ClineModelOptions = typeof ClineModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   devin: Schema.optional(DevinModelOptions),
+  cline: Schema.optional(ClineModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
@@ -1098,6 +1102,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   // Devin selects its model at process start via `devin acp --model`; the ACP
   // session does not expose a live model list. This list is a static fallback
   // for when the CLI is unreachable.
+  cline: [
+    { slug: "default", name: "Cline configured model", capabilities: EMPTY_MODEL_CAPABILITIES },
+  ],
   devin: [
     {
       slug: "adaptive",
@@ -1140,6 +1147,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   devin: "adaptive",
+  cline: "default",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
@@ -1305,6 +1313,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  cline: {},
   devin: {
     adaptive: "adaptive",
     auto: "adaptive",
@@ -1356,6 +1365,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   devin: "Devin",
+  cline: "Cline",
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",

@@ -9,6 +9,7 @@ import { AntigravityAdapter, AntigravityAdapterShape } from "../Services/Antigra
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { ClineAdapter, type ClineAdapterShape } from "../Services/ClineAdapter.ts";
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
@@ -176,6 +177,8 @@ const fakeAntigravityAdapter: AntigravityAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeClineAdapter: ClineAdapterShape = { ...fakeCodexAdapter, provider: "cline" };
+
 const registryLayer = (codexAdapter = fakeCodexAdapter) =>
   Layer.mergeAll(
     Layer.provide(
@@ -185,6 +188,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
         Layer.succeed(DevinAdapter, fakeDevinAdapter),
+        Layer.succeed(ClineAdapter, fakeClineAdapter),
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
@@ -214,6 +218,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
       assert.equal(devin, fakeDevinAdapter);
+      assert.equal(yield* registry.getByProvider("cline"), fakeClineAdapter);
       assert.equal(antigravity, fakeAntigravityAdapter);
       assert.equal(grok, fakeGrokAdapter);
       assert.equal(droid, fakeDroidAdapter);
@@ -226,6 +231,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "claudeAgent",
         "cursor",
         "devin",
+        "cline",
         "antigravity",
         "grok",
         "droid",

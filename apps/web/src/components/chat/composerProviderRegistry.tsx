@@ -142,6 +142,9 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "cline":
+      normalizedOptions = undefined;
+      break;
     case "devin": {
       const providerOptions = modelOptions?.devin;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);

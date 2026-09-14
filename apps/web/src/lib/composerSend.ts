@@ -230,6 +230,7 @@ export function resolvePromptEffortFromModelSelection(
         (modelSelection.options?.fastMode === true ? "fast" : null)
       );
     case "opencode":
+    case "cline":
       return null;
   }
 }

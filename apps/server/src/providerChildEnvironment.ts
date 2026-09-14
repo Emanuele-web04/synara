@@ -9,6 +9,7 @@ export type ProviderChildKind =
   | "codex"
   | "cursor"
   | "devin"
+  | "cline"
   | "droid"
   | "grok"
   | "opencode"
@@ -30,6 +31,7 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "FACTORY_API_KEY",
   "CURSOR_API_KEY",
   "DEVIN_API_KEY",
+  "CLINE_API_KEY",
   "WINDSURF_API_KEY",
   "DOCKER_AUTH_CONFIG",
 ]);
@@ -62,6 +64,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
+  cline: "all",
   codex: "all",
   opencode: "all",
   pi: "all",

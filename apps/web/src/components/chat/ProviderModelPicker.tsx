@@ -279,6 +279,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
+        provider === "cline" ||
         provider === "pi") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
