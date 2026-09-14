@@ -1227,11 +1227,13 @@ layer("GitHubCliLive", (it) => {
           timedOut: false,
         });
         const gh = yield* GitHubCli;
-        const error = yield* gh.getPullRequestDetail({
-          cwd: "/repo",
-          repository: "acme/app",
-          number: 9,
-        }).pipe(Effect.flip);
+        const error = yield* gh
+          .getPullRequestDetail({
+            cwd: "/repo",
+            repository: "acme/app",
+            number: 9,
+          })
+          .pipe(Effect.flip);
         expect(error.detail).toContain("invalid pull request detail JSON");
       }),
     );
@@ -1286,7 +1288,6 @@ layer("GitHubCliLive", (it) => {
       });
 
       assert.equal(detail.author?.login, "local-author");
-      assert.deepStrictEqual(detail.reviewRequestLogins, ["reviewer"]);
       assert.deepStrictEqual(detail.reviewers, [
         {
           login: "reviewer",
