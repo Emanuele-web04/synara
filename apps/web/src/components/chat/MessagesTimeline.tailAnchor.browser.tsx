@@ -371,6 +371,10 @@ describe("MessagesTimeline tail anchor", () => {
           handle().finishTurn();
         }
         await settleFrames(1);
+        // Sample after the frame's other rAF callbacks and mutation observers.
+        // Reading inside rAF can catch a row reposition before its pre-paint
+        // anchor correction, even though that intermediate position never paints.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
         if (offset !== null) {
           offsets.push(offset);

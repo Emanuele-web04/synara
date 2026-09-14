@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildLocalImageUrl, isLocalImageMarkdownSrc, localImageFileName } from "./localImageUrls";
+import {
+  buildLocalImageUrl,
+  isLocalImageMarkdownSrc,
+  localImageAbsolutePath,
+  localImageFileName,
+} from "./localImageUrls";
 
 describe("local image URL helpers", () => {
   afterEach(() => {
@@ -45,6 +50,21 @@ describe("local image URL helpers", () => {
         grant: "grant-token",
       }),
     ).toBe("/api/local-image?path=%2FUsers%2Fme%2FDownloads%2Fshot.png&grant=grant-token");
+  });
+
+  it("uses the same decoded absolute path for grants and image requests", () => {
+    for (const src of [
+      "/Users/me/Desktop/simulator%20shot.png",
+      "file:///Users/me/Downloads/simulator%20shot.png",
+      "C:\\Users\\me\\Desktop\\simulator.png",
+    ]) {
+      const url = new URL(buildLocalImageUrl({ src, cwd: undefined }), "http://localhost");
+      expect(localImageAbsolutePath(src)).toBe(url.searchParams.get("path"));
+    }
+    expect(localImageAbsolutePath("file:///Users/me/shot%2520.png")).toBe("/Users/me/shot%20.png");
+    for (const src of ["./shot.png", "../shot.png", "shot.png", "https://example.com/shot.png"]) {
+      expect(localImageAbsolutePath(src)).toBeNull();
+    }
   });
 
   it("cache-busts explicit preview reloads", () => {
