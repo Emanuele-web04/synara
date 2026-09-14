@@ -399,6 +399,24 @@ describe("Cua native boundary", () => {
     expect(await f.backend.availability()).toMatchObject({ kind: "available" });
   });
 
+  it("re-probes a transient missing report before publishing availability", async () => {
+    const f = fixture();
+    f.denyPermissions();
+    let release!: () => void;
+    f.waitForPermission(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const pending = f.backend.availability();
+    // Park the first check_permissions on the gate long enough to have read
+    // "missing", then flip to granted so the delayed re-probe sees the truth.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    f.grantPermissions();
+    release();
+    expect(await pending).toMatchObject({ kind: "available" });
+  });
+
   it("clears an old capture failure after explicit setup so recovery can be retried", async () => {
     const f = fixture();
     f.failOverview();

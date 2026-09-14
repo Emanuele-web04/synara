@@ -143,6 +143,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private captureFailed = false;
   private readonly listeners = new Set<ComputerBackendEventListener>();
   private snapshotAt = 0;
+  private hadMissingPermissions = false;
   private snapshot: Promise<void> | undefined;
   private selectedWindow: string | undefined;
   private readonly elementTokens = new WeakMap<ComputerUiNode, string>();
@@ -420,11 +421,25 @@ export class CuaComputerBackend implements ComputerBackend {
     if (this.snapshot) return this.snapshot;
     if (!force && Date.now() - this.snapshotAt < 1_000) return Promise.resolve();
     this.snapshot = (async () => {
-      const permission =
+      let permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+      // tccd can report a transient negative for a freshly spawned session
+      // while it maps the running app to its grants. A missing report that
+      // follows a granted or unread state gets one delayed re-probe before it
+      // is published; a steady missing state converges on the second call and
+      // costs one extra probe only on the transition.
+      if (
+        (permission.accessibility !== true || permission.screen_recording !== true) &&
+        !this.hadMissingPermissions
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        permission =
+          (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+      }
       this.permissions = [];
       if (permission.accessibility !== true) this.permissions.push("accessibility");
       if (permission.screen_recording !== true) this.permissions.push("screenRecording");
+      this.hadMissingPermissions = this.permissions.length > 0;
       // A capture failure clears only on an observed Screen Recording grant:
       // neither a previous-missing transition nor an explicit setup proves
       // pixels flow again, only a fresh probe saying so does.
