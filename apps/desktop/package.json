@@ -16,7 +16,7 @@
     "smoke-test": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
-    "betterwright": "2.4.0",
+    "betterwright": "2.7.3",
     "effect": "catalog:",
     "electron": "43.4.1",
     "electron-updater": "^6.6.2",

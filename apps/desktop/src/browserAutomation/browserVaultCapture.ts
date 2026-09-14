@@ -1,9 +1,34 @@
 import { EventEmitter } from "node:events";
-import { installVaultCapture, type CaptureContext, type CapturePage } from "betterwright/capture";
+import { randomUUID } from "node:crypto";
+import { installVaultCapture } from "betterwright/capture";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserVault } from "./browserVault";
 
-class NativeCapturePage extends EventEmitter implements CapturePage {
+/**
+ * Structural stand-ins for the Playwright surface the capture sensor calls:
+ * context.pages/on("page")/off("page")/newCDPSession and page.isClosed/once("close").
+ * Synara's Electron tabs are not Playwright objects, but the sensor only calls
+ * those members, so the shim satisfies it at runtime.
+ */
+export interface CapturePageShim {
+  readonly id: string;
+  isClosed(): boolean;
+  once(event: "close", listener: () => void): unknown;
+}
+
+export interface CaptureContextShim {
+  pages(): CapturePageShim[];
+  on(event: "page", callback: (page: CapturePageShim) => void): void;
+  off(event: "page", callback: (page: CapturePageShim) => void): void;
+  newCDPSession(page: CapturePageShim): Promise<{
+    send(method: string, parameters?: unknown): Promise<unknown>;
+    on(event: string, callback: (parameters: unknown) => void): void;
+    detach(): Promise<void>;
+  }>;
+}
+
+class NativeCapturePage extends EventEmitter implements CapturePageShim {
+  readonly id = randomUUID();
   closed = false;
   lastAgentActivity = 0;
   constructor(readonly runtime: BrowserAutomationVisibleRuntime) {
@@ -21,7 +46,7 @@ class NativeCapturePage extends EventEmitter implements CapturePage {
 /** Sensors run only in managed browser pages, never the application renderer. */
 export class BrowserVaultCapture {
   private readonly pages = new Set<NativeCapturePage>();
-  private readonly pageListeners = new Set<(page: CapturePage) => void>();
+  private readonly pageListeners = new Set<(page: CapturePageShim) => void>();
   private capture: ReturnType<typeof installVaultCapture> | undefined;
   private updating = Promise.resolve();
   private disposed = false;
@@ -65,51 +90,54 @@ export class BrowserVaultCapture {
           this.capture = undefined;
           return;
         }
-        this.capture = installVaultCapture(this.context(), {
-          sessionForPage: (page) => page,
-          vaultCallAtOrigin: async (session, origin, action, payload) => {
-            if (!(session instanceof NativeCapturePage) || session.isClosed())
-              throw new Error("Browser page is unavailable.");
-            if (action === "list") {
-              const snapshot = await this.vault.snapshot();
-              return { credentials: snapshot.logins.filter((login) => login.origin === origin) };
-            }
-            if (action !== "save") throw new Error("Unsupported capture operation.");
-            const { username, password, label } = payload;
-            if (
-              typeof username !== "string" ||
-              typeof password !== "string" ||
-              typeof label !== "string"
-            )
-              throw new Error("Invalid captured login.");
-            await this.vault.saveCaptured(
-              origin,
-              { username, password, label, deferToPending: true },
-              Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user",
-            );
-            return {};
+        this.capture = installVaultCapture(
+          this.context() as unknown as Parameters<typeof installVaultCapture>[0],
+          {
+            sessionForPage: (page) => page as unknown as NativeCapturePage,
+            vaultCallAtOrigin: async (session, origin, action, payload) => {
+              if (!(session instanceof NativeCapturePage) || session.isClosed())
+                throw new Error("Browser page is unavailable.");
+              if (action === "list") {
+                const snapshot = await this.vault.snapshot();
+                return { credentials: snapshot.logins.filter((login) => login.origin === origin) };
+              }
+              if (action !== "save") throw new Error("Unsupported capture operation.");
+              const { username, password, label } = payload;
+              if (
+                typeof username !== "string" ||
+                typeof password !== "string" ||
+                typeof label !== "string"
+              )
+                throw new Error("Invalid captured login.");
+              await this.vault.saveCaptured(
+                origin,
+                { username, password, label, deferToPending: true },
+                Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user",
+              );
+              return {};
+            },
+            trackSecret: (secret) => this.vault.trackSecret(secret),
+            isHeaded: () => true,
+            lastModelActivity: () => Number.NaN,
+            shouldCapture: (input) => this.vault.shouldOfferSave(input),
+            requestSave: ({ origin, username, mode }) =>
+              this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
+            matchMode: "exact-origin",
+            onError: () => this.vault.reportCaptureFailure(),
+            onReady: () => this.vault.reportCaptureReady(),
           },
-          trackSecret: (secret) => this.vault.trackSecret(secret),
-          isHeaded: () => true,
-          lastModelActivity: () => Number.NaN,
-          shouldCapture: (input) => this.vault.shouldOfferSave(input),
-          requestSave: ({ origin, username, mode }) =>
-            this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
-          matchMode: "exact-origin",
-          onError: () => this.vault.reportCaptureFailure(),
-          onReady: () => this.vault.reportCaptureReady(),
-        });
+        );
       })
       .catch(() => this.vault.reportCaptureFailure());
   }
 
-  private context(): CaptureContext {
+  private context(): CaptureContextShim {
     return {
       pages: () => [...this.pages],
-      on: (_event, callback) => {
+      on: (_event: "page", callback: (page: CapturePageShim) => void) => {
         this.pageListeners.add(callback);
       },
-      off: (_event, callback) => {
+      off: (_event: "page", callback: (page: CapturePageShim) => void) => {
         this.pageListeners.delete(callback);
       },
       newCDPSession: async (page) => {
@@ -117,11 +145,13 @@ export class BrowserVaultCapture {
           throw new Error("Browser page is unavailable.");
         const { webContents } = page.runtime;
         if (!webContents.debugger.isAttached()) webContents.debugger.attach("1.3");
-        const info = await webContents.debugger.sendCommand("Target.getTargetInfo");
-        const { sessionId } = await webContents.debugger.sendCommand("Target.attachToTarget", {
+        const info = (await webContents.debugger.sendCommand("Target.getTargetInfo")) as {
+          targetInfo: { targetId: string };
+        };
+        const { sessionId } = (await webContents.debugger.sendCommand("Target.attachToTarget", {
           targetId: info.targetInfo.targetId,
           flatten: true,
-        });
+        })) as { sessionId: string };
         const events = new EventEmitter();
         const onMessage = (
           _event: unknown,
@@ -139,9 +169,10 @@ export class BrowserVaultCapture {
         };
         webContents.debugger.on("message", onMessage);
         return {
-          send: (method, parameters) =>
+          send: (method: string, parameters?: Record<string, unknown>) =>
             webContents.debugger.sendCommand(method, parameters, sessionId),
-          on: (event, callback) => events.on(event, callback),
+          on: (event: string, callback: (parameters: unknown) => void) =>
+            void events.on(event, callback),
           detach: async () => {
             events.removeAllListeners();
             webContents.debugger.removeListener("message", onMessage);
