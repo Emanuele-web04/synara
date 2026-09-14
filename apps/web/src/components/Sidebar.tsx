@@ -112,6 +112,7 @@ import {
   type SidebarNavItemId,
 } from "../sidebarNavOrdering";
 import { isElectron } from "../env";
+import { mindListQueryKey } from "../lib/mindListQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
   isMacNavigatorPlatform,
@@ -214,7 +215,7 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -339,7 +340,6 @@ import {
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
-  type ThreadStatusPill,
   type SidebarDerivedProjectData,
   type SidebarActionBadge,
   type SidebarView,
@@ -443,6 +443,9 @@ import {
 const ExpandAllIcon = createCentralIconComponent("expand-45");
 const CollapseAllIcon = createCentralIconComponent("minimize-45");
 const SortFilterIcon = createCentralIconComponent("filter-2");
+// Mind nav glyph: the Central brain asset, matching the memory concept the same way
+// the clock carries "automations" across surfaces.
+const MindIcon = createCentralIconComponent("brain");
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const subscribeGitHubProvisioningCapability = (listener: () => void) =>
@@ -1408,6 +1411,7 @@ export default function Sidebar() {
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
+  const isOnMind = pathname.startsWith("/mind");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -1449,6 +1453,21 @@ export default function Sidebar() {
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
+  // Mind count shares the global ["mind","list","all"] cache with the Mind
+  // view, so the sidebar badge never adds a request the page would not make.
+  const mindListQuery = useQuery({
+    queryKey: mindListQueryKey(null),
+    queryFn: () => ensureNativeApi().mind.list({}),
+    staleTime: 30_000,
+  });
+  const mindBadge = useMemo(() => {
+    const count = mindListQuery.data?.count;
+    if (!count) return null;
+    return {
+      text: String(count),
+      accessibleLabel: `${count} ${pluralize(count, "memory", "memories")}`,
+    };
+  }, [mindListQuery.data]);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
@@ -3798,13 +3817,24 @@ export default function Sidebar() {
           void navigate({ to: "/automations" });
         },
       },
+      mind: {
+        icon: MindIcon,
+        label: "Mind",
+        active: isOnMind,
+        badge: mindBadge,
+        onClick: () => {
+          void navigate({ to: "/mind" });
+        },
+      },
     }),
     [
       automationAttentionBadge,
       handlePrimaryNewThread,
       isOnAutomations,
       isOnKanban,
+      isOnMind,
       isOnPullRequests,
+      mindBadge,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,

@@ -61,6 +61,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "notify-versus-silent criteria");
     assert.include(policy, 'later manual follow-up such as "continue"');
     assert.include(policy, "Never call this tool for a manual follow-up turn");
+    assert.include(policy, "proactively call synara_recall_memories");
+    assert.include(policy, "project conventions, preferences, prior decisions");
+    assert.include(policy, "no-query digest for broad memory questions");
   });
 
   it("asks agents to emit known absolute file URLs instead of invented relative links", () => {
@@ -149,7 +152,7 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_000);
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_250);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -158,5 +161,14 @@ describe("Synara harness policy", () => {
     // Promising tools this session cannot reach would be a lie.
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
+  });
+
+  it("withholds the memory contract from sessions with no gateway control", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    // The synara memory tools do not exist there; advertising them would send
+    // the agent hunting for tools it can never call.
+    assert.notInclude(policy, "synara_recall_memories");
+    assert.notInclude(policy, "synara_remember");
   });
 });

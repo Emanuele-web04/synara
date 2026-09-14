@@ -39,6 +39,7 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { MindService } from "./mind/Services/MindService";
 import {
   ServerAuth,
   type AuthError,
@@ -352,6 +353,7 @@ const makeWsRpcHandlersLayer = () =>
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
+      const mindService = yield* MindService;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerCommandReactor = yield* ProviderCommandReactor;
@@ -2049,6 +2051,81 @@ const makeWsRpcHandlersLayer = () =>
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
+          ),
+
+        [WS_METHODS.mindList]: (input) =>
+          rpcEffect(
+            // Omitted projectId returns one weight-desc global page (capped,
+            // `count` the true total so the UI can tell when it is truncated).
+            mindService.list(input),
+            "Failed to list memories",
+          ),
+        [WS_METHODS.mindSearch]: (input) =>
+          rpcEffect(mindService.search(input), "Failed to search memories"),
+        [WS_METHODS.mindForget]: (input) =>
+          rpcEffect(
+            mindService
+              .forget({
+                projectId: input.projectId,
+                memoryId: input.memoryId,
+                // The UI has no thread context; journal actor is the plain user.
+                actor: { kind: "user" },
+                threadId: null,
+                turnId: null,
+              })
+              .pipe(Effect.asVoid),
+            "Failed to forget memory",
+          ),
+        [WS_METHODS.mindSetPinned]: (input) =>
+          rpcEffect(
+            mindService.setPinned({
+              projectId: input.projectId,
+              memoryId: input.memoryId,
+              pinned: input.pinned,
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory pin",
+          ),
+        [WS_METHODS.mindAffirm]: (input) =>
+          rpcEffect(
+            mindService.affirm({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to affirm memory",
+          ),
+        [WS_METHODS.mindUpdate]: (input) =>
+          rpcEffect(
+            mindService.update({
+              projectId: input.projectId,
+              memoryId: input.memoryId,
+              text: input.text,
+              type: input.type,
+              // The UI has no thread context; journal actor is the plain user.
+              actor: { kind: "user" },
+              threadId: null,
+              turnId: null,
+            }),
+            "Failed to update memory",
+          ),
+        [WS_METHODS.mindHistory]: (input) =>
+          rpcEffect(
+            mindService.history({ projectId: input.projectId, memoryId: input.memoryId }),
+            "Failed to load memory history",
+          ),
+        [WS_METHODS.mindProfileGet]: (input) =>
+          rpcEffect(
+            mindService.profileGet({ projectId: input.projectId }),
+            "Failed to load project profile",
+          ),
+        [WS_METHODS.mindProfileSet]: (input) =>
+          rpcEffect(
+            // The UI has no thread context; profiles are user-only with no journal row.
+            mindService.profileSet({
+              projectId: input.projectId,
+              text: input.text,
+              optedIn: input.optedIn,
+            }),
+            "Failed to save project profile",
           ),
 
         ...makeWsDeviceHandlers(deviceService),

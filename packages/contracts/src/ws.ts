@@ -15,6 +15,17 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import {
+  MindAffirmInput,
+  MindForgetInput,
+  MindHistoryInput,
+  MindListInput,
+  MindProfileGetInput,
+  MindProfileSetInput,
+  MindSearchInput,
+  MindSetPinnedInput,
+  MindUpdateInput,
+} from "./mind";
+import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
   OrchestrationImportThreadInput,
@@ -299,6 +310,17 @@ export const WS_METHODS = {
   automationArchiveRun: "automation.archiveRun",
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
+
+  // Mind methods
+  mindList: "mind.list",
+  mindSearch: "mind.search",
+  mindForget: "mind.forget",
+  mindSetPinned: "mind.setPinned",
+  mindAffirm: "mind.affirm",
+  mindUpdate: "mind.update",
+  mindHistory: "mind.history",
+  mindProfileGet: "mind.profileGet",
+  mindProfileSet: "mind.profileSet",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -509,6 +531,17 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
+
+  // Mind methods
+  tagRequestBody(WS_METHODS.mindList, MindListInput),
+  tagRequestBody(WS_METHODS.mindSearch, MindSearchInput),
+  tagRequestBody(WS_METHODS.mindForget, MindForgetInput),
+  tagRequestBody(WS_METHODS.mindSetPinned, MindSetPinnedInput),
+  tagRequestBody(WS_METHODS.mindAffirm, MindAffirmInput),
+  tagRequestBody(WS_METHODS.mindUpdate, MindUpdateInput),
+  tagRequestBody(WS_METHODS.mindHistory, MindHistoryInput),
+  tagRequestBody(WS_METHODS.mindProfileGet, MindProfileGetInput),
+  tagRequestBody(WS_METHODS.mindProfileSet, MindProfileSetInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
