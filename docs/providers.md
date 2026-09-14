@@ -21,6 +21,12 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Local Auto approvals
+
+Codex and Claude Code tasks can use an optional on-device tool-call reviewer. Install it in
+**Settings → Auto mode**, then select **Auto (local)** in the task permissions menu. See
+[Local Auto mode](local-auto.md) for hardware support, input format, and review behavior.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:

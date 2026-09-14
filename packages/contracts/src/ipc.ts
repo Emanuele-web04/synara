@@ -1,3 +1,4 @@
+import type { LocalAutoManageInput, LocalAutoStatus } from "./localAuto";
 import { Schema } from "effect";
 
 import type {
@@ -867,6 +868,7 @@ export interface NativeApi {
     ) => Promise<ExternalMcpCreateIntegrationResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
+    localAuto: (input: LocalAutoManageInput) => Promise<LocalAutoStatus>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
     listLocalServers: () => Promise<ServerListLocalServersResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
