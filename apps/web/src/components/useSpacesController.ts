@@ -60,6 +60,7 @@ export function useSpacesController(input: {
   projectById: ReadonlyMap<ProjectId, Project>;
   sidebarThreads: readonly SidebarThreadSummary[];
   sidebarThreadSortOrder: SidebarThreadSortOrder;
+  manualThreadIds: readonly ThreadId[];
   routeThreadId: ThreadId | null;
   routeProjectId: ProjectId | null;
   isOnKanban: boolean;
@@ -74,6 +75,7 @@ export function useSpacesController(input: {
     activeRouteProject,
     activeRouteProjectId,
     isOnKanban,
+    manualThreadIds,
     onCloseProjectContextMenu,
     ordinarySpaceProjects,
     projectById,
@@ -209,7 +211,8 @@ export function useSpacesController(input: {
         rememberedThreadId: getLastSpaceThreadId(spaceId),
         rememberedProjectId: getLastSpaceProjectId(spaceId),
         paths: workspacePaths,
-        sortThreads: (threads) => sortThreadsForSidebar(threads, sidebarThreadSortOrder),
+        sortThreads: (threads) =>
+          sortThreadsForSidebar(threads, sidebarThreadSortOrder, manualThreadIds),
       });
 
       if (target.kind === "thread") {
@@ -241,6 +244,7 @@ export function useSpacesController(input: {
       activeSpaceId,
       getLastSpaceProjectId,
       getLastSpaceThreadId,
+      manualThreadIds,
       navigate,
       ordinarySpaceProjects,
       projectById,
