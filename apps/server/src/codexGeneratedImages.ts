@@ -25,7 +25,6 @@ const CODEX_GENERATED_IMAGE_ITEM_TYPES = new Set([
   "imagegeneration",
   "imagegenerationcall",
   "imagegenerationend",
-  "imageview",
 ]);
 
 const IMAGE_PATH_KEYS = ["saved_path", "savedPath", "path", "file_path"] as const;

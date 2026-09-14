@@ -25,7 +25,6 @@ import {
   SpaceId,
   ProviderItemId,
   ThreadId,
-  ThreadMarkerId,
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
@@ -332,9 +331,6 @@ export const THREAD_NOTES_MAX_CHARS = 16_384;
 export const THREAD_GOAL_MAX_CHARS = 4_096;
 export const PINNED_MESSAGES_MAX_COUNT = 100;
 export const PINNED_MESSAGE_LABEL_MAX_CHARS = 60;
-export const THREAD_MARKERS_MAX_COUNT = 200;
-export const THREAD_MARKER_LABEL_MAX_CHARS = 60;
-export const THREAD_MARKER_SELECTED_TEXT_MAX_CHARS = 4_000;
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
 export type CorrelationId = typeof CorrelationId.Type;
@@ -535,6 +531,7 @@ export const OrchestrationMessage = Schema.Struct({
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
+  startsNewTurn: Schema.optional(Schema.Boolean),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),
@@ -736,36 +733,6 @@ export const ThreadPinnedMessages = Schema.Array(PinnedMessage).check(
   Schema.isMaxLength(PINNED_MESSAGES_MAX_COUNT),
 );
 export type ThreadPinnedMessages = typeof ThreadPinnedMessages.Type;
-export const ThreadMarkerStyle = Schema.Literals(["highlight", "underline"]);
-export type ThreadMarkerStyle = typeof ThreadMarkerStyle.Type;
-export const ThreadMarkerColor = Schema.Literals(["yellow", "blue", "green", "pink"]);
-export type ThreadMarkerColor = typeof ThreadMarkerColor.Type;
-export const ThreadMarkerLabel = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(THREAD_MARKER_LABEL_MAX_CHARS),
-);
-export type ThreadMarkerLabel = typeof ThreadMarkerLabel.Type;
-export const ThreadMarker = Schema.Struct({
-  id: ThreadMarkerId,
-  messageId: MessageId,
-  startOffset: NonNegativeInt,
-  endOffset: NonNegativeInt,
-  selectedText: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(THREAD_MARKER_SELECTED_TEXT_MAX_CHARS),
-  ),
-  style: ThreadMarkerStyle,
-  color: ThreadMarkerColor,
-  label: Schema.optional(Schema.NullOr(ThreadMarkerLabel)).pipe(
-    Schema.withDecodingDefault(() => null),
-  ),
-  done: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-export type ThreadMarker = typeof ThreadMarker.Type;
-export const ThreadMarkers = Schema.Array(ThreadMarker).check(
-  Schema.isMaxLength(THREAD_MARKERS_MAX_COUNT),
-);
-export type ThreadMarkers = typeof ThreadMarkers.Type;
 
 export const ProjectionPendingInteractionKind = Schema.Literals(["approval", "userInput"]);
 export type ProjectionPendingInteractionKind = typeof ProjectionPendingInteractionKind.Type;
@@ -876,7 +843,6 @@ export const OrchestrationThread = Schema.Struct({
   deletedAt: Schema.NullOr(IsoDateTime),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
   pinnedMessages: Schema.optional(ThreadPinnedMessages),
-  threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
   ...ThreadGoalTimingFields,
@@ -1280,7 +1246,6 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   pinnedMessages: Schema.optional(ThreadPinnedMessages),
-  threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
   goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
@@ -1319,44 +1284,6 @@ const ThreadPinnedMessageLabelSetCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   label: Schema.NullOr(PinnedMessageLabel),
-});
-
-const ThreadMarkerAddCommand = Schema.Struct({
-  type: Schema.Literal("thread.marker.add"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  messageId: MessageId,
-  startOffset: NonNegativeInt,
-  endOffset: NonNegativeInt,
-  selectedText: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(THREAD_MARKER_SELECTED_TEXT_MAX_CHARS),
-  ),
-  style: ThreadMarkerStyle,
-  color: ThreadMarkerColor,
-});
-
-const ThreadMarkerRemoveCommand = Schema.Struct({
-  type: Schema.Literal("thread.marker.remove"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-});
-
-const ThreadMarkerDoneSetCommand = Schema.Struct({
-  type: Schema.Literal("thread.marker.done.set"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  done: Schema.Boolean,
-});
-
-const ThreadMarkerLabelSetCommand = Schema.Struct({
-  type: Schema.Literal("thread.marker.label.set"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  label: Schema.NullOr(ThreadMarkerLabel),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -1577,10 +1504,6 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPinnedMessageRemoveCommand,
   ThreadPinnedMessageDoneSetCommand,
   ThreadPinnedMessageLabelSetCommand,
-  ThreadMarkerAddCommand,
-  ThreadMarkerRemoveCommand,
-  ThreadMarkerDoneSetCommand,
-  ThreadMarkerLabelSetCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -1617,10 +1540,6 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPinnedMessageRemoveCommand,
   ThreadPinnedMessageDoneSetCommand,
   ThreadPinnedMessageLabelSetCommand,
-  ThreadMarkerAddCommand,
-  ThreadMarkerRemoveCommand,
-  ThreadMarkerDoneSetCommand,
-  ThreadMarkerLabelSetCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -1688,6 +1607,24 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadMessageUserBindTurnCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.user.bind-turn"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadMessageUserSetTurnBoundaryCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.user.set-turn-boundary"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  startsNewTurn: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
 const ThreadProposedPlanUpsertCommand = Schema.Struct({
   type: Schema.Literal("thread.proposed-plan.upsert"),
   commandId: CommandId,
@@ -1752,6 +1689,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadMessageUserBindTurnCommand,
+  ThreadMessageUserSetTurnBoundaryCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
@@ -1788,10 +1727,6 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.pinned-message-removed",
   "thread.pinned-message-done-set",
   "thread.pinned-message-label-set",
-  "thread.marker-added",
-  "thread.marker-removed",
-  "thread.marker-done-set",
-  "thread.marker-label-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1990,7 +1925,6 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   pinnedMessages: Schema.optional(ThreadPinnedMessages),
-  threadMarkers: Schema.optional(ThreadMarkers),
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
   goalStartBehavior: Schema.optional(ThreadGoalStartBehavior),
@@ -2026,32 +1960,6 @@ export const ThreadPinnedMessageLabelSetPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
-export const ThreadMarkerAddedPayload = Schema.Struct({
-  threadId: ThreadId,
-  marker: ThreadMarker,
-  updatedAt: IsoDateTime,
-});
-
-export const ThreadMarkerRemovedPayload = Schema.Struct({
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  updatedAt: IsoDateTime,
-});
-
-export const ThreadMarkerDoneSetPayload = Schema.Struct({
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  done: Schema.Boolean,
-  updatedAt: IsoDateTime,
-});
-
-export const ThreadMarkerLabelSetPayload = Schema.Struct({
-  threadId: ThreadId,
-  markerId: ThreadMarkerId,
-  label: Schema.NullOr(ThreadMarkerLabel),
-  updatedAt: IsoDateTime,
-});
-
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
   runtimeMode: RuntimeMode,
@@ -2082,6 +1990,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
+  startsNewTurn: Schema.optional(Schema.Boolean),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),
@@ -2328,26 +2237,6 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.pinned-message-label-set"),
     payload: ThreadPinnedMessageLabelSetPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("thread.marker-added"),
-    payload: ThreadMarkerAddedPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("thread.marker-removed"),
-    payload: ThreadMarkerRemovedPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("thread.marker-done-set"),
-    payload: ThreadMarkerDoneSetPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("thread.marker-label-set"),
-    payload: ThreadMarkerLabelSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

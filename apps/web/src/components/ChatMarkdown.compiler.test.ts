@@ -6,50 +6,21 @@
 //          for the whole component, which renders every chat message.
 // Layer: Web build-integrity test
 
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { transformSync } from "@babel/core";
 import { describe, expect, it } from "vitest";
 
-interface CompilerEvent {
-  kind: string;
-  fnName?: string | null;
-  detail?: { reason?: string; description?: string };
-}
-
-function compileEvents(filePath: string): CompilerEvent[] {
-  const events: CompilerEvent[] = [];
-  transformSync(readFileSync(filePath, "utf8"), {
-    filename: filePath,
-    configFile: false,
-    babelrc: false,
-    parserOpts: { plugins: ["typescript", "jsx"] },
-    plugins: [
-      [
-        "babel-plugin-react-compiler",
-        {
-          panicThreshold: "none",
-          logger: {
-            logEvent: (_fn: unknown, event: CompilerEvent) => {
-              events.push(event);
-            },
-          },
-        },
-      ],
-    ],
-  });
-  return events;
-}
+import { compileReactModule } from "../test/reactCompiler";
 
 describe("ChatMarkdown React Compiler coverage", () => {
   it("compiles every function in ChatMarkdown.tsx without bailouts", () => {
-    const events = compileEvents(join(import.meta.dirname, "ChatMarkdown.tsx"));
+    const events = compileReactModule(join(import.meta.dirname, "ChatMarkdown.tsx"));
     const errors = events
       .filter((event) => event.kind === "CompileError")
       .map(
         (event) =>
           `${event.fnName ?? "<anonymous>"}: ${event.detail?.reason ?? event.detail?.description ?? "unknown"}`,
       );
+    expect(events.filter((event) => event.kind === "PipelineError")).toEqual([]);
     expect(errors).toEqual([]);
     expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
   });

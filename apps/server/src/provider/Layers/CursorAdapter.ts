@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * CursorAdapterLive — Cursor CLI (`cursor-agent acp`) via ACP.
  *
@@ -1552,7 +1553,7 @@ export function makeCursorAdapter(
     const readThread: CursorAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const rollbackThread: CursorAdapterShape["rollbackThread"] = (threadId, numTurns) =>
@@ -1567,7 +1568,7 @@ export function makeCursorAdapter(
         }
         const nextLength = Math.max(0, ctx.turns.length - numTurns);
         ctx.turns.splice(nextLength);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const stopSession: CursorAdapterShape["stopSession"] = (threadId) =>
