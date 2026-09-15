@@ -54,3 +54,14 @@ For the same 512 KiB sample image, retained ingress serialization decreased from
 The earlier live fixture, provider approval and RAM measurements in [qualification.md](qualification.md) apply to native revision 1. They do not qualify revision 2. Fresh signed-app native actuation, full provider-to-desktop qualification, long-running RAM/CPU comparison, mixed-display coverage and production signing/notarization have not been established by this refresh.
 
 The initial integration did not run `bun fmt`, `bun lint` or `bun typecheck` because explicit authorization was then missing. The user's subsequent final-check request authorized them; all now pass. See the [final verification ledger](evidence/final-checks-2026-09-08/verification.json) for the current source and results.
+
+## Native revisions 6–9 (driver-internal; live-verified 2026-09-15)
+
+Revisions 6–9 change driver internals only; the integration-layer guarantees above are unchanged. The authoritative descriptions live in the [patch README](../../apps/desktop/patches/cua-driver/README.md). Verified live on the packaged app (signed build, real provider turns):
+
+- **Rev 6** — per-element AX attributes fetched in one `AXUIElementCopyMultipleAttributeValues` IPC; `SYNARA_CUA_BACKGROUND_OBSERVATION_MS` bounds background post-action observation.
+- **Rev 7** — bounded parallel attribute fetch across sibling arrays, serial assembly order preserved: measured tree walks ~673 ms → ~207 ms on the test desktop.
+- **Rev 8** — `CUA_DRIVER_EMBEDDED_HOST_PID` liveness poll (`kill(pid, 0)`, 2 s) alongside stdin EOF; immune to leaked lifetime fds.
+- **Rev 9** — `catch_unwind` around the serve thread guarantees `exit(0)` runs; a panicking shutdown can no longer strand the process under the AppKit run loop.
+
+Host-side fixes verified in the same runs: orphaned-daemon startup sweep (daemon dead ~1 s after host SIGKILL vs 6+ min immortal pre-fix), stale socket-dir reaping, mid-input driver death heals after a confirmed OS-level held-input release (helper verified on a real held button, `buttonState` true→false), and the embedded driver's upstream self-update check disabled via `CUA_DRIVER_RS_UPDATE_CHECK=0`.
