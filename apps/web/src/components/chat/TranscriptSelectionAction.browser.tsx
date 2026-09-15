@@ -1,5 +1,6 @@
 import "../../index.css";
 
+import { ThreadId } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -160,3 +161,61 @@ it.each(["", "Let me add more context"])(
     }
   },
 );
+
+it.each(["Check this part", ""])(
+  "opens the note composer on Add to Chat and submits comment %j",
+  async (comment) => {
+    const callbacks = props();
+    const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+    try {
+      await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+      const input = page.getByRole("textbox", { name: "Note for selection" });
+      await expect.element(input).toHaveFocus();
+      await expect.element(page.getByText("1 selection")).toBeVisible();
+      if (comment) await input.fill(comment);
+      await page.getByRole("button", { name: "Add to chat", exact: true }).click();
+      expect(callbacks.onAddToChat).toHaveBeenCalledExactlyOnceWith(action.selection, comment);
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  },
+);
+
+it("cancels the note composer on Escape without attaching the quote", async () => {
+  const callbacks = props();
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note for selection" }).fill("draft note");
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(callbacks.onAddToChat).not.toHaveBeenCalled();
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("shows the voice note button in the note composer when voice options exist", async () => {
+  const callbacks = {
+    ...props(),
+    voice: {
+      activeProject: undefined,
+      activeThreadId: null,
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      selectedProvider: "codex" as const,
+      activeProviderStatus: null,
+      pendingUserInputCount: 0,
+      refreshVoiceStatus: async () => null,
+    },
+  };
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    await expect.element(page.getByRole("button", { name: "Record voice note" })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  } finally {
+    await screen.unmount();
+  }
+});

@@ -2801,7 +2801,7 @@ export default function ChatView({
   );
   const {
     pendingTranscriptSelectionAction,
-    commitTranscriptAssistantSelection,
+    addAssistantSelectionToDraft,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,
     onMessagesMouseUp,
@@ -5874,7 +5874,21 @@ export default function ChatView({
           canUseWorktree={isGitRepo && !isContainerLandingProject}
           canAddToSide={isServerThread && !activeThread.sidechatSourceThreadId}
           onDismiss={dismissTranscriptSelectionAction}
-          onAddToChat={commitTranscriptAssistantSelection}
+          voice={{
+            activeProject,
+            activeThreadId: activeThread?.id ?? null,
+            threadId,
+            selectedProvider,
+            activeProviderStatus: voiceProviderStatus,
+            pendingUserInputCount: pendingUserInputs.length,
+            refreshVoiceStatus: refreshProviderStatuses,
+            actionArmDelayMs: VOICE_RECORDER_ACTION_ARM_DELAY_MS,
+            failureCopy: {
+              transcriptionFailedTitle: "Couldn't transcribe voice note",
+            },
+            onGuardWarning: warnVoiceGuard,
+          }}
+          onAddToChat={addAssistantSelectionToDraft}
           onAddToSide={(selection) =>
             addSelectionToSide({
               selection,

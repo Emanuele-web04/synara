@@ -168,6 +168,7 @@ const PersistedAssistantSelectionDraft = Schema.Struct({
   id: Schema.String,
   assistantMessageId: Schema.String,
   text: Schema.String,
+  comment: Schema.optionalKey(Schema.String),
 });
 
 type PersistedAssistantSelectionDraft = typeof PersistedAssistantSelectionDraft.Type;
@@ -275,6 +276,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
         id: Schema.String,
         assistantMessageId: Schema.String,
         text: Schema.String,
+        comment: Schema.optionalKey(Schema.String),
       }),
     ),
   ),
@@ -509,7 +511,7 @@ function normalizePersistedQueuedTerminalContextDraft(
 
 function normalizePersistedAssistantSelection(
   value: unknown,
-): { id: string; assistantMessageId: string; text: string } | null {
+): { id: string; assistantMessageId: string; text: string; comment?: string } | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -518,14 +520,15 @@ function normalizePersistedAssistantSelection(
   const assistantMessageId =
     typeof candidate.assistantMessageId === "string" ? candidate.assistantMessageId : "";
   const text = typeof candidate.text === "string" ? candidate.text : "";
+  const comment = typeof candidate.comment === "string" ? candidate.comment : undefined;
   if (id.length === 0) {
     return null;
   }
-  const normalized = normalizeAssistantSelectionAttachment({ assistantMessageId, text });
+  const normalized = normalizeAssistantSelectionAttachment({ assistantMessageId, text, comment });
   if (!normalized) {
     return null;
   }
-  return { id, assistantMessageId: normalized.assistantMessageId, text: normalized.text };
+  return { id, ...normalized };
 }
 
 function normalizePersistedFileCommentDraft(value: unknown): PersistedFileCommentDraft | null {
