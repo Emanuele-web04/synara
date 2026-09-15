@@ -11,12 +11,19 @@ import type {
   ProjectWatchFileInput,
 } from "@synara/contracts";
 import { StrictMode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { render, cleanup } from "vitest-browser-react";
 
+import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
+
+/** Mirrors the Source control pane: a mounted observer of the unstaged patch. */
+function UnstagedChangesObserver(props: { cwd: string }) {
+  useQuery(gitWorkingTreeDiffQueryOptions({ cwd: props.cwd, scope: "unstaged" }));
+  return null;
+}
 
 const WORKSPACE_ROOT = "/Users/tester/project";
 const FILE_PATH = "src/app.ts";
@@ -185,6 +192,61 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
     await vi.waitFor(() =>
       expect(document.querySelector('[aria-label="Unsaved changes"]')).toBeNull(),
     );
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("refreshes mounted unstaged changes after a save and after watched file events", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "", truncated: false });
+  const subscription: { listener?: (event: ProjectFileChangeEvent) => void } = {};
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, listener: (event: ProjectFileChangeEvent) => void) => {
+      subscription.listener = listener;
+      return () => undefined;
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, writeFile, onFileChange },
+    git: { readWorkingTreeDiff },
+  } as unknown as NativeApi);
+  const unstagedCalls = () =>
+    readWorkingTreeDiff.mock.calls.filter(
+      (call) => (call[0] as { scope?: string } | undefined)?.scope === "unstaged",
+    ).length;
+
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <UnstagedChangesObserver cwd={WORKSPACE_ROOT} />
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await vi.waitFor(() => expect(unstagedCalls()).toBe(1));
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+    // Editable files never request the read-only change gutter.
+    expect(readWorkingTreeDiff).not.toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "workingTree" }),
+    );
+
+    await replaceEditorContents(editor, "export const value = 2;\n");
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(unstagedCalls()).toBe(2));
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
+      cwd: WORKSPACE_ROOT,
+      scope: "unstaged",
+    });
+
+    // An external write to the open file must refresh the pane as well, not
+    // merely mark it stale until the window regains focus.
+    subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: Date.now() });
+    await vi.waitFor(() => expect(unstagedCalls()).toBe(3));
   } finally {
     restoreNativeApi();
   }
@@ -454,6 +516,56 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
     );
     completeTaskWrite({ relativePath: markdownPath, version: taskVersion });
   } finally {
+    restoreNativeApi();
+  }
+});
+
+it("keeps rapid Markdown checkbox edits while a save is in flight", async () => {
+  let finish!: (value: { relativePath: string; version: string }) => void;
+  const writeFile = vi
+    .fn()
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    )
+    .mockResolvedValue({ relativePath: "README.md", version: SAVED_VERSION });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      readFile: vi
+        .fn()
+        .mockResolvedValue(
+          loadedFile({ relativePath: "README.md", contents: "- [ ] first\n- [ ] second\n" }),
+        ),
+      writeFile,
+    },
+  } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+      </QueryClientProvider>,
+    );
+    await expect.element(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    const boxes = page.getByRole("checkbox");
+    await boxes.nth(0).click();
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await boxes.nth(1).click();
+    await expect.element(boxes.nth(0)).toBeChecked();
+    await expect.element(boxes.nth(1)).toBeChecked();
+    finish({ relativePath: "README.md", version: "sha256:first-toggle" });
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          contents: "- [x] first\n- [x] second\n",
+          expectedVersion: "sha256:first-toggle",
+        }),
+      ),
+    );
+  } finally {
+    await cleanup();
     restoreNativeApi();
   }
 });

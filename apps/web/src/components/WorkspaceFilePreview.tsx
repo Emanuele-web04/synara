@@ -5,12 +5,7 @@
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
-import type {
-  ProjectFileEncoding,
-  ProjectFileChangeEvent,
-  ProjectFileLineEnding,
-  ProjectReadFileResult,
-} from "@synara/contracts";
+import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
 import type { FileContents as PierreFileContents } from "@pierre/diffs";
 import {
   Editor as PierreEditor,
@@ -45,6 +40,7 @@ import {
 } from "react";
 
 import { basenameOfPath } from "~/file-icons";
+import { useWorkspaceFileEditorBuffer } from "~/hooks/useWorkspaceFileEditor";
 import { useTheme } from "~/hooks/useTheme";
 import { useProjectFileChangeSubscription } from "~/hooks/useProjectFileChangeSubscription";
 import {
@@ -67,12 +63,11 @@ import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import {
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
-  projectQueryKeys,
   projectReadFileQueryOptions,
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
-import { gitQueryKeys, refreshGitWorkingTreeDiffsForCwd } from "~/lib/gitReactQuery";
+import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -566,51 +561,6 @@ export interface WorkspaceFilePreviewProps {
   onEditFile?: ((filePath: string) => void) | undefined;
 }
 
-type EditableLineEnding = Exclude<ProjectFileLineEnding, "mixed">;
-
-interface EditableFileDocument {
-  key: string;
-  relativePath: string;
-  contents: string;
-  version: string;
-  encoding: ProjectFileEncoding;
-  lineEnding: EditableLineEnding;
-}
-
-interface FileEditBuffer extends EditableFileDocument {
-  savedContents: string;
-  saving: boolean;
-  error: string | null;
-}
-
-function makeFileEditBuffer(document: EditableFileDocument): FileEditBuffer {
-  return {
-    ...document,
-    savedContents: document.contents,
-    saving: false,
-    error: null,
-  };
-}
-
-function resolveFileEditBuffer(
-  current: FileEditBuffer | null,
-  document: EditableFileDocument,
-): FileEditBuffer {
-  if (current?.key !== document.key) {
-    return makeFileEditBuffer(document);
-  }
-  const dirty = current.contents !== current.savedContents;
-  const sourceChanged =
-    current.version !== document.version || current.savedContents !== document.contents;
-  return !dirty && sourceChanged ? makeFileEditBuffer(document) : current;
-}
-
-function readFileSaveError(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "Could not save this file.";
-}
-
 function hasFileContentsReadyForFind(input: {
   hasFileContents: boolean;
   fileIsImage: boolean;
@@ -631,7 +581,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
-  const [editBuffer, setEditBuffer] = useState<FileEditBuffer | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [findFocusNonce, setFindFocusNonce] = useState(0);
   const findMatchesRef = useRef<readonly FilePreviewFindMatch[]>([]);
@@ -723,9 +672,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     isWorkspaceRelativePathSafe(requestedFilePath)
       ? requestedFilePath
       : null);
-  // Decided below once the file and its editability are known; the watcher
-  // callback reads the latest value through the ref.
-  const changeGutterEnabledRef = useRef(false);
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
@@ -733,16 +679,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd: workspaceRoot,
         relativePath: requestedFilePath,
       });
-      if (changeGutterEnabledRef.current) {
-        // The gutter renders from the active diff query, so refresh it now;
-        // a bare invalidation would leave the markers stale until refocus.
-        void refreshGitWorkingTreeDiffsForCwd(queryClient, workspaceRoot);
-      } else {
-        void queryClient.invalidateQueries({
-          queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
-          refetchType: "none",
-        });
-      }
+      // The read-only change gutter and any mounted Source control / diff pane
+      // render from the active working-tree diff queries, so refresh them now
+      // (serialized on the shared Git queue); a bare invalidation would leave
+      // them stale until the window regains focus. Only active variants are
+      // re-read, so an idle workspace costs nothing here.
+      void refreshGitAfterFileWrite(queryClient, workspaceRoot);
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
@@ -830,38 +772,34 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
 
   const fileContents = fileQuery.data?.contents ?? "";
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
-  const editableDocument: EditableFileDocument | null =
+  const editor = useWorkspaceFileEditorBuffer({
+    cwd: workspaceRoot,
+    filePath,
+    enabled: Boolean(props.editable && fileIsWorkspaceRelative),
+    file: fileQuery.data,
+  });
+  const editableDocument =
     props.editable &&
-    workspaceRoot !== null &&
-    filePath !== null &&
     fileIsWorkspaceRelative &&
-    fileQuery.data !== undefined &&
-    !fileQuery.data.truncated &&
-    fileQuery.data.version !== null &&
-    fileQuery.data.encoding !== null &&
-    fileQuery.data.lineEnding !== null &&
-    fileQuery.data.lineEnding !== "mixed" &&
-    !fileQuery.data.symlink
+    workspaceRoot &&
+    fileQuery.data &&
+    editor.readOnlyReason === null
+      ? fileQuery.data
+      : null;
+  const activeEditBuffer =
+    editableDocument && editor.canEdit
       ? {
-          key: `${workspaceRoot}\0${fileQuery.data.relativePath}`,
-          relativePath: fileQuery.data.relativePath,
-          contents: fileQuery.data.contents,
-          version: fileQuery.data.version,
-          encoding: fileQuery.data.encoding,
-          lineEnding: fileQuery.data.lineEnding,
+          key: editor.state.key!,
+          contents: editor.state.value,
+          saving: editor.state.saving,
+          error: editor.state.saveError,
         }
       : null;
-  const activeEditBuffer = editableDocument
-    ? resolveFileEditBuffer(editBuffer, editableDocument)
-    : null;
-  const editBufferDirty =
-    activeEditBuffer !== null && activeEditBuffer.contents !== activeEditBuffer.savedContents;
+  const editBufferDirty = editor.dirty;
   const editBufferExternallyChanged =
     editBufferDirty &&
-    activeEditBuffer !== null &&
-    editableDocument !== null &&
-    (activeEditBuffer.version !== editableDocument.version ||
-      activeEditBuffer.savedContents !== editableDocument.contents);
+    editableDocument != null &&
+    editor.state.format?.expectedVersion !== editableDocument.version;
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
@@ -870,80 +808,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
-        : resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data);
-
-  const handleEditBufferChange = (contents: string) => {
-    if (!editableDocument) return;
-    setEditBuffer((current) => ({
-      ...resolveFileEditBuffer(current, editableDocument),
-      contents,
-      error: null,
-    }));
-  };
-
-  const handleEditBufferSave = async () => {
-    if (
-      !workspaceRoot ||
-      !editableDocument ||
-      !activeEditBuffer ||
-      !editBufferDirty ||
-      activeEditBuffer.saving
-    ) {
-      return;
-    }
-    const api = readNativeApi();
-    if (!api) {
-      setEditBuffer((current) => ({
-        ...resolveFileEditBuffer(current, editableDocument),
-        error: "File saving is unavailable.",
-      }));
-      return;
-    }
-
-    const documentKey = activeEditBuffer.key;
-    const contentsToSave = activeEditBuffer.contents;
-    const expectedVersion = activeEditBuffer.version;
-    setEditBuffer((current) => ({
-      ...resolveFileEditBuffer(current, editableDocument),
-      saving: true,
-      error: null,
-    }));
-
-    try {
-      const result = await api.projects.writeFile({
-        cwd: workspaceRoot,
-        relativePath: activeEditBuffer.relativePath,
-        contents: contentsToSave,
-        expectedVersion,
-        encoding: activeEditBuffer.encoding,
-        lineEnding: activeEditBuffer.lineEnding,
-      });
-      const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-      // A watcher read started before the save must not replace the saved snapshot.
-      await queryClient.cancelQueries({ queryKey: options.queryKey, exact: true });
-      queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (current) =>
-        current ? { ...current, contents: contentsToSave, version: result.version } : current,
-      );
-      taskFileDiskVersionRef.current.set(`${workspaceRoot}\0${filePath}`, result.version);
-      setEditBuffer((current) =>
-        current?.key === documentKey
-          ? {
-              ...current,
-              savedContents: contentsToSave,
-              version: result.version,
-              saving: false,
-              error: null,
-            }
-          : current,
-      );
-    } catch (error) {
-      setEditBuffer((current) =>
-        current?.key === documentKey
-          ? { ...current, saving: false, error: readFileSaveError(error) }
-          : current,
-      );
-    }
-  };
+        : editor.readOnlyReason;
+  const handleEditBufferChange = editor.handleChange;
+  const handleEditBufferSave = editor.save;
 
   const handleFileReload = useCallback(() => {
     if (!filePath) return;
@@ -958,28 +825,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     });
   }, [fileIsImage, fileIsPdf, filePath, queryClient, workspaceRoot]);
 
-  const handleEditBufferReload = () => {
-    if (!editableDocument || !filePath) return;
-    const documentKey = editableDocument.key;
-    const queryKey = projectQueryKeys.readFile(workspaceRoot, filePath);
-    void refetchFreshProjectFileQuery(queryClient, {
-      cwd: workspaceRoot,
-      relativePath: filePath,
-    })
-      .then(() => {
-        const queryState = queryClient.getQueryState(queryKey);
-        if (queryState?.error) throw queryState.error;
-        if (queryClient.getQueryData(queryKey) === undefined) {
-          throw new Error("Could not reload this file from disk.");
-        }
-        setEditBuffer((current) => (current?.key === documentKey ? null : current));
-      })
-      .catch((error: unknown) => {
-        setEditBuffer((current) =>
-          current?.key === documentKey ? { ...current, error: readFileSaveError(error) } : current,
-        );
-      });
-  };
+  const handleEditBufferReload = editor.reloadFromDisk;
   // Wait for the file read before asking for the working-tree diff: while the
   // read is pending the editable document is still unresolved, and an editor
   // that turns out to be editable never needs the read-only gutter.
@@ -991,7 +837,6 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     !fileIsPdf &&
     !showMarkdownPreview &&
     editableDocument === null;
-  changeGutterEnabledRef.current = changeGutterEnabled;
   const workingTreeDiffQuery = useQuery(
     gitWorkingTreeDiffQueryOptions({
       cwd: props.workspaceRoot,
@@ -1076,12 +921,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     ) {
       return;
     }
-    // Capture the narrowed disk metadata in locals: the write below runs in a
-    // deferred closure where TypeScript no longer sees the null guards above.
-    const loadedVersion = current.version;
-    const loadedEncoding = current.encoding;
-    const loadedLineEnding = current.lineEnding;
-    const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
+    const nextContents = toggleMarkdownTaskMarker(
+      editor.canEdit ? editor.state.value : current.contents,
+      sourceLine,
+      checked,
+    );
     if (nextContents === null) {
       return;
     }
@@ -1089,6 +933,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     // so the preview never shows a toggle that was silently dropped.
     const api = readNativeApi();
     if (!api) {
+      return;
+    }
+    if (editor.canEdit) {
+      editor.handleChange(nextContents);
+      editor.save();
       return;
     }
     queryClient.setQueryData(options.queryKey, { ...current, contents: nextContents });
@@ -1149,7 +998,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.encoding !== null &&
     fileQuery.data.lineEnding !== null &&
     fileQuery.data.lineEnding !== "mixed" &&
-    !editBufferDirty;
+    (!editBufferDirty || (editor.canEdit && !editor.state.saveError && !editor.state.conflict));
   const { onEditFile } = props;
   // The editor writes the path back in place, so it is offered only for
   // sources the shared editor rules consider writable (symlinks included).
@@ -1382,6 +1231,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         truncated={fileQuery.data?.truncated ?? false}
         onEditFile={editFile}
         dirty={editBufferDirty}
+        saveState={
+          activeEditBuffer
+            ? activeEditBuffer.error
+              ? "Save failed"
+              : activeEditBuffer.saving
+                ? "Saving..."
+                : editBufferDirty
+                  ? "Unsaved changes"
+                  : "Saved"
+            : undefined
+        }
+        onSave={activeEditBuffer ? editor.save : undefined}
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
