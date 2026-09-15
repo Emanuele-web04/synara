@@ -32,8 +32,10 @@ export const joinMessageTextChunks = (row: {
   readonly textChunks?: ReadonlyArray<string> | undefined;
 }) => (row.encodedText ?? row.text) + (row.textChunks?.join("") ?? "");
 
-// SQLite TEXT is UTF-8; only unmatched UTF-16 code units need a JSON fallback.
+// SQLite TEXT is UTF-8, and Node 24's SQLite binding truncates TEXT reads at NUL.
+// JSON preserves both embedded NULs and unmatched UTF-16 code units.
 export const encodeMessageTextFallback = (text: string): string | null =>
+  text.includes("\u0000") ||
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)
     ? JSON.stringify(text)
     : null;

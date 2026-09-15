@@ -1,11 +1,11 @@
-// FILE: ComposerExtrasMenu.browser.tsx
-// Purpose: Verifies the composer `+` menu exposes generic file uploads, quick mode toggles, and the AppSnap window picker.
+// FILE: ComposerExtrasPanel.browser.tsx
+// Purpose: Verifies the composer `+` panel exposes generic file uploads, quick mode toggles, and the AppSnap window picker.
 // Layer: Browser UI test
-// Depends on: vitest browser rendering helpers and the ComposerExtrasMenu component.
+// Depends on: vitest browser rendering helpers and the ComposerExtrasPanel component.
 
 import "../../index.css";
 
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import type {
@@ -28,7 +28,7 @@ vi.mock("~/components/ui/toast", () => ({
   toastManager: { add: harness.toastAdd },
 }));
 
-import { ComposerExtrasMenu } from "./ComposerExtrasMenu";
+import { ComposerExtrasPanel } from "./ComposerExtrasPanel";
 
 const threadId = "thread-1" as ThreadId;
 
@@ -116,10 +116,13 @@ async function mountMenu(props?: {
   const onAddAttachments = vi.fn();
   const onToggleFastMode = vi.fn();
   const onInteractionModeChange = vi.fn();
+  const onInsertGoal = vi.fn();
+  const onClose = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
   const screen = await render(
-    <ComposerExtrasMenu
+    <ComposerExtrasPanel
+      panelId="composer-extras-panel"
       interactionMode={props?.interactionMode ?? "default"}
       supportsFastMode={props?.supportsFastMode ?? true}
       fastModeEnabled={props?.fastModeEnabled ?? false}
@@ -127,6 +130,8 @@ async function mountMenu(props?: {
       onAddAttachments={onAddAttachments}
       onToggleFastMode={onToggleFastMode}
       onInteractionModeChange={onInteractionModeChange}
+      onInsertGoal={onInsertGoal}
+      onClose={onClose}
     />,
     { container: host },
   );
@@ -142,10 +147,14 @@ async function mountMenu(props?: {
     onAddAttachments,
     onToggleFastMode,
     onInteractionModeChange,
+    onInsertGoal,
+    onClose,
   };
 }
 
-describe("ComposerExtrasMenu", () => {
+const otherWindowsButton = () => page.getByRole("button", { name: "Choose another window" });
+
+describe("ComposerExtrasPanel", () => {
   beforeEach(() => {
     harness.insertAppSnapCaptureIntoDraft.mockReset().mockResolvedValue("persisted");
     harness.toastAdd.mockReset();
@@ -179,67 +188,70 @@ describe("ComposerExtrasMenu", () => {
     ]);
   });
 
-  it("shows the attachment action in the menu", async () => {
+  it("lists every composer extra as one flat Add list", async () => {
     await using _ = await mountMenu({ interactionMode: "plan", fastModeEnabled: true });
-
-    await page.getByLabelText("Composer extras").click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Add files");
-      expect(text).toContain("Mode");
-      expect(text).toContain("Fast");
-      expect(text).not.toContain("Plugins");
+      expect(text).toContain("Files and folders");
+      expect(text).toContain("Goal");
+      expect(text).toContain("Turn plan mode off");
+      expect(text).toContain("Turn debug mode on");
+      expect(text).toContain("Turn fast mode off");
+      expect(text).not.toContain("Speed");
+      expect(document.querySelectorAll("[data-slot='command-group-label']")).toHaveLength(1);
     });
   });
 
-  it("selects Default, Plan, and Debug exclusively", async () => {
+  it("toggles the interaction mode and closes", async () => {
+    await using menu = await mountMenu({ interactionMode: "debug" });
+
+    await page.getByText("Plan mode", { exact: true }).click();
+    expect(menu.onInteractionModeChange).toHaveBeenLastCalledWith("plan");
+
+    await page.getByText("Debug mode", { exact: true }).click();
+    expect(menu.onInteractionModeChange).toHaveBeenLastCalledWith("default");
+    expect(menu.onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("inserts the goal command and closes", async () => {
     await using menu = await mountMenu();
 
-    await page.getByLabelText("Composer extras").click();
-    await page.getByText("Mode").click();
-    await page.getByRole("menuitemradio", { name: "Debug" }).click();
+    await page.getByText("Set a goal to keep pursuing").click();
 
-    expect(menu.onInteractionModeChange).toHaveBeenCalledWith("debug");
+    expect(menu.onInsertGoal).toHaveBeenCalledTimes(1);
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("wires the speed control", async () => {
     await using menu = await mountMenu();
 
-    await page.getByLabelText("Composer extras").click();
-    await page.getByText("Fast").click();
-    await page.getByRole("menuitemradio", { name: "Fast" }).click();
+    await page.getByText("Fast mode", { exact: true }).click();
 
     expect(menu.onToggleFastMode).toHaveBeenCalledTimes(1);
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("hides the AppSnap window picker without a desktop bridge", async () => {
     await using _ = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
-
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Add files");
+      expect(text).toContain("Files and folders");
       expect(text).not.toContain("Attach window");
     });
   });
 
-  it("lists windows and captures the picked window into the composer draft", async () => {
+  it("captures the frontmost app window straight from the root row", async () => {
     const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
     const acknowledgeCapture = vi.fn(() => Promise.resolve());
     setDesktopBridge(appSnapBridge({ captureWindow, acknowledgeCapture }));
-    await using _ = await mountMenu({ threadId });
+    await using menu = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
-    await page.getByText("Attach window").click();
+    await expect.element(page.getByText("Attach Ghostty")).toBeVisible();
+    expect(document.body.textContent ?? "").not.toContain("Finder");
 
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Ghostty");
-      expect(text).toContain("Finder");
-    });
-    await page.getByText("Ghostty").click();
+    await page.getByText("Attach Ghostty").click();
 
     await vi.waitFor(() => {
       expect(captureWindow).toHaveBeenCalledWith({ windowId: 42 });
@@ -249,6 +261,95 @@ describe("ComposerExtrasMenu", () => {
         expect.objectContaining({ type: "success", title: "AppSnap added" }),
       );
     });
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "prefers its titled document over an untitled overlay",
+      titled: true,
+      identity: true,
+      expected: 44,
+    },
+    {
+      name: "keeps its untitled window instead of another app's document",
+      titled: false,
+      identity: true,
+      expected: 42,
+    },
+    {
+      name: "does not guess an app identity from a shared name",
+      titled: true,
+      identity: false,
+      expected: 42,
+    },
+  ])("$name", async ({ titled, identity, expected }) => {
+    const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
+    const frontmost = {
+      windowId: 42,
+      appName: "Ghostty",
+      bundleIdentifier: identity ? "com.mitchellh.ghostty" : null,
+      windowTitle: null,
+      appIconDataUrl: null,
+    };
+    setDesktopBridge(
+      appSnapBridge({
+        captureWindow,
+        listWindows: async () => [
+          frontmost,
+          {
+            ...frontmost,
+            windowId: 43,
+            bundleIdentifier: "com.apple.finder",
+            windowTitle: "Downloads",
+          },
+          { ...frontmost, windowId: 44, windowTitle: titled ? "dev" : null },
+        ],
+      }),
+    );
+    await using menu = await mountMenu({ threadId });
+
+    await page.getByText("Attach Ghostty").click();
+
+    await vi.waitFor(() => expect(captureWindow).toHaveBeenCalledWith({ windowId: expected }));
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the full window list from the row's arrow and captures the picked window", async () => {
+    const captureWindow = vi.fn(() => Promise.resolve(CAPTURE));
+    setDesktopBridge(appSnapBridge({ captureWindow }));
+    await using menu = await mountMenu({ threadId });
+
+    await expect.element(page.getByText("Attach Ghostty")).toBeVisible();
+    await otherWindowsButton().click();
+    expect(captureWindow).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Back");
+      expect(text).toContain("Ghostty");
+      expect(text).toContain("Finder");
+    });
+    await page.getByText("Finder").click();
+
+    await vi.waitFor(() => {
+      expect(captureWindow).toHaveBeenCalledWith({ windowId: 43 });
+    });
+    expect(menu.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the window list with ArrowRight and returns with ArrowLeft", async () => {
+    setDesktopBridge(appSnapBridge({}));
+    await using _ = await mountMenu({ threadId });
+
+    await expect.element(page.getByText("Attach Ghostty")).toBeVisible();
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{ArrowRight}");
+    await expect.element(page.getByText("Finder")).toBeVisible();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    await expect.element(page.getByText("Attach Ghostty")).toBeVisible();
+    expect(document.body.textContent ?? "").not.toContain("Finder");
   });
 
   it("keeps the desktop recovery copy when draft persistence is unverified", async () => {
@@ -257,8 +358,7 @@ describe("ComposerExtrasMenu", () => {
     setDesktopBridge(appSnapBridge({ acknowledgeCapture }));
     await using _ = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
-    await page.getByText("Attach window").click();
+    await otherWindowsButton().click();
     await expect.element(page.getByText("Ghostty")).toBeVisible();
     await page.getByText("Ghostty").click();
 
@@ -286,7 +386,6 @@ describe("ComposerExtrasMenu", () => {
     );
     await using _ = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
     await page.getByText("Attach window").click();
 
     await expect.element(page.getByText("Enable AppSnap in Settings")).toBeVisible();
@@ -319,7 +418,6 @@ describe("ComposerExtrasMenu", () => {
     );
     const menu = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
     await page.getByText("Attach window").click();
     await expect.element(page.getByText("AppSnap is starting…")).toBeVisible();
     expect(listWindows).not.toHaveBeenCalled();
@@ -358,7 +456,6 @@ describe("ComposerExtrasMenu", () => {
     );
     await using _ = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
     await page.getByText("Attach window").click();
     await expect.element(page.getByText("Could not list windows.")).toBeVisible();
 
@@ -384,7 +481,6 @@ describe("ComposerExtrasMenu", () => {
     );
     await using _ = await mountMenu({ threadId });
 
-    await page.getByLabelText("Composer extras").click();
     await page.getByText("Attach window").click();
     await expect.element(page.getByText("Could not list windows.")).toBeVisible();
 
