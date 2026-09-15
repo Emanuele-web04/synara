@@ -683,11 +683,18 @@ export class CuaDriverHost {
     const graceful = setTimeout(() => generation.child.kill("SIGTERM"), 500);
     const force = setTimeout(() => generation.child.kill("SIGKILL"), 1_500);
     try {
-      await generation.exited;
+      // Every retire branch that reaches terminate() has already proven the
+      // generation cannot hold OS input, so even a kernel-wedged process
+      // that survives SIGKILL must not hang the whole retirement chain.
+      await Promise.race([generation.exited, delay(4_000)]);
     } finally {
       clearTimeout(graceful);
       clearTimeout(force);
     }
+    if (!generation.didExit)
+      log(
+        `driver pid=${generation.child.pid} did not exit after SIGKILL; releasing the generation anyway`,
+      );
   }
 
   private retire(generation: Generation): Promise<void> {
@@ -814,14 +821,21 @@ export class CuaDriverHost {
     this.desktopEpoch += 1;
     for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
-    this.stopping = this.stopping.then(async () => {
+    const stopping = this.stopping.then(async () => {
       if (this.generation) await this.retire(this.generation);
       await this.starting?.catch(() => undefined);
       if (this.generation) await this.retire(this.generation);
       await admitted;
       await this.retiring;
     });
-    return this.stopping;
+    // Same discipline as `retiring`: the caller sees the failure but the
+    // chain must not — one admission-closed stop must not refuse every
+    // later stop() for the host's lifetime.
+    this.stopping = stopping.then(
+      () => undefined,
+      () => undefined,
+    );
+    return stopping;
   }
 
   /** User Stop revokes the turn without changing OS grants. */

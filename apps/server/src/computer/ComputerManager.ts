@@ -180,6 +180,8 @@ interface DesktopLease {
   readonly turnId?: string;
   lastActivityMs: number;
   releaseRequested?: boolean;
+  /** The turn the deferred release was requested for — a renewed lease ignores it. */
+  releaseRequestedTurnId?: string | undefined;
 }
 
 export interface ComputerManagerOptions {
@@ -2119,7 +2121,10 @@ export class ComputerManager {
         if (remaining === 0) {
           this.agentCallsInFlight.delete(owner);
           if (this.lease?.threadId === owner && this.lease.releaseRequested) {
-            await withoutDesktopCancellation(() => this.releaseDesktopControl(owner));
+            const requestedTurnId = this.lease.releaseRequestedTurnId;
+            await withoutDesktopCancellation(() =>
+              this.releaseDesktopControl(owner, requestedTurnId),
+            );
           } else {
             this.publishCached(owner);
           }
@@ -2262,7 +2267,12 @@ export class ComputerManager {
       threadId: owner,
       ...(this.authorityTurns.has(owner) ? { turnId: this.authorityTurns.get(owner)! } : {}),
       lastActivityMs: now,
-      ...(!changed && held?.releaseRequested ? { releaseRequested: true } : {}),
+      ...(!changed && held?.releaseRequested
+        ? {
+            releaseRequested: true,
+            releaseRequestedTurnId: held.releaseRequestedTurnId,
+          }
+        : {}),
     };
     if (changed) {
       await this.announceDrivingAgent(owner);
@@ -2334,6 +2344,10 @@ export class ComputerManager {
       if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
       if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
         this.lease.releaseRequested = true;
+        // A thread-level release names no turn: stamp whoever holds the lease
+        // at request time so a newer turn's renewal is not torn down by a
+        // stale deferred release.
+        this.lease.releaseRequestedTurnId = turnId ?? this.lease.turnId;
         return;
       }
       await this.operations.run(async () => {
@@ -2441,7 +2455,11 @@ export class ComputerManager {
   }
 
   async handleThreadRestored(threadId: string): Promise<void> {
-    await this.pendingStops.get(threadId);
+    // A pending stop's rejection (e.g. preview cleanup that failed during the
+    // release) must not keep a restored thread suspended forever — the
+    // suspension exists to block input while teardown runs, and a rejected
+    // teardown is still a settled teardown.
+    await this.pendingStops.get(threadId)?.catch(() => undefined);
     this.suspendedThreads.delete(threadId);
     this.authorityRevocations.delete(threadId);
   }

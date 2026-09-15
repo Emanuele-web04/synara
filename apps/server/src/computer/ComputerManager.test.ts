@@ -1041,6 +1041,56 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("does not tear down a renewed lease for a stale deferred release", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    await manager.getThreadState("thread-a");
+    await manager.getThreadState("thread-b");
+
+    const started = deferred();
+    const releaseRecorded = deferred();
+    const finish = deferred();
+    const inFlight = manager.withAgentActivity(
+      "thread-a",
+      async () => {
+        await manager.click("thread-a", { x: 10, y: 10 });
+        started.resolve();
+        await releaseRecorded.promise;
+        // Turn two renews the lease while turn one's release is still only
+        // recorded — the deferred release must not tear the renewal down.
+        await manager.withAgentActivity(
+          "thread-a",
+          () => manager.click("thread-a", { x: 11, y: 11 }),
+          undefined,
+          "turn-2",
+        );
+        await finish.promise;
+      },
+      undefined,
+      "turn-1",
+    );
+    await started.promise;
+    await manager.releaseDesktopControl("thread-a", "turn-1");
+    releaseRecorded.resolve();
+    finish.resolve();
+    await inFlight;
+
+    // Turn one's deferred release matched the stamped turn and left turn
+    // two's lease alone: the desktop still belongs to thread-a.
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: true,
+    });
+    await expect(manager.typeText("thread-b", "hi")).rejects.toThrow(/another conversation/);
+
+    // The owning turn can still release normally.
+    await manager.releaseDesktopControl("thread-a", "turn-2");
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: false,
+    });
+
+    await manager.dispose();
+  });
+
   it("reacquires the lease for a new turn after the previous operation drains", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
