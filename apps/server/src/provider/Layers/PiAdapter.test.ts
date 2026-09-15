@@ -144,6 +144,67 @@ describe("Pi native Synara gateway tools", () => {
     expect(callSignal).toBe(controller.signal);
     expect(controller.signal.aborted).toBe(true);
   });
+
+  it("registers Computer fallbacks only for names absent from the catalog", async () => {
+    const calls: string[] = [];
+    const catalogWithClick = [
+      {
+        name: "computer_click",
+        description: "Click.",
+        inputSchema: { type: "object", properties: { x: { type: "number" } } },
+      },
+      {
+        name: "synara_create_threads",
+        description: "Create Synara threads.",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ];
+    let listCalls = 0;
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/list") {
+        listCalls += 1;
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { tools: listCalls === 1 ? catalogWithClick : catalogWithClick.slice(1) },
+        });
+      }
+      calls.push(body.params.name);
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { content: [{ type: "text", text: `denied ${body.params.name}` }] },
+      });
+    };
+    const defineTool = (tool: any) => tool;
+    const granted = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" },
+      defineTool,
+      fetch,
+    });
+    // The leased computer_click is projected once; the rest of the family
+    // still falls back so a call the lease later revokes still reaches the
+    // gateway's refusal.
+    expect(granted.filter((tool: any) => tool.name === "computer_click")).toHaveLength(1);
+    expect(
+      granted.some(
+        (tool: any) =>
+          tool.name === "computer_click" && tool.parameters.properties?.x !== undefined,
+      ),
+    ).toBe(true);
+
+    const denied = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" },
+      defineTool,
+      fetch,
+    });
+    const fallback = denied.find((tool: any) => tool.name === "computer_click");
+    expect(fallback).toBeDefined();
+    const result = await fallback!.execute("call-x", { x: 1 }, undefined, undefined, {} as never);
+    expect(calls.at(-1)).toBe("computer_click");
+    expect(result).toMatchObject({ content: [{ type: "text", text: "denied computer_click" }] });
+  });
 });
 
 describe("Pi Bash process supervision", () => {

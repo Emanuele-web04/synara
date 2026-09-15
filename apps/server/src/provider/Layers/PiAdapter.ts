@@ -56,6 +56,7 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayMcpConnection,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
@@ -536,7 +537,7 @@ export async function buildPiAgentGatewayCustomTools(input: {
   if (tools.length === 0) {
     throw new Error("Synara MCP returned an empty tool catalog.");
   }
-  return tools.map((tool) =>
+  const projected = tools.map((tool) =>
     input.defineTool({
       name: tool.name,
       label: tool.name,
@@ -554,6 +555,34 @@ export async function buildPiAgentGatewayCustomTools(input: {
         ),
     }),
   );
+  // A session without Computer control gets no computer_* entries in the
+  // catalog; a Pi-native call to one would fail inside the SDK as a bare
+  // unknown tool instead of reaching the gateway's capability_denied (and
+  // its denial card). Register forwarders for the absent family names so
+  // the gateway itself produces the refusal.
+  const catalog = new Set(tools.map((tool) => tool.name));
+  for (const name of SYNARA_COMPUTER_TOOL_NAMES) {
+    if (catalog.has(name)) continue;
+    projected.push(
+      input.defineTool({
+        name,
+        label: name,
+        description: "Computer control is not enabled for this conversation.",
+        parameters: { type: "object", properties: {} } as ToolDefinition["parameters"],
+        execute: async (_toolCallId, params, signal) =>
+          piGatewayToolResult(
+            await callAgentGatewayMcpTool({
+              connection: input.connection,
+              name,
+              arguments: params as Record<string, unknown>,
+              ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+              ...(signal === undefined ? {} : { signal }),
+            }),
+          ),
+      }),
+    );
+  }
+  return projected;
 }
 
 function toMessage(cause: unknown, fallback: string): string {
