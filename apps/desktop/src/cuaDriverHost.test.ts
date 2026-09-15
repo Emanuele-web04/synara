@@ -34,6 +34,9 @@ async function fixture(
     sessionDeathOnce?: boolean;
     sessionDeathTransport?: boolean;
     delayObservation?: boolean;
+    hangSession?: boolean;
+    dropCancel?: boolean;
+    startupTimeoutMs?: number;
     deathFlag?: string;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
     releaseHeldInput?: () => Promise<void>;
@@ -62,6 +65,7 @@ net.createServer(s=>{
     if(r.method==='metadata') reply({driver_version:${JSON.stringify(CUA_DRIVER_VERSION)},synara_native_revision:options.unpatched?undefined:${CUA_NATIVE_REVISION},embedded:true,pid:process.pid});
     else if(r.method==='cancel_input') {
       write('cancel');
+      if(options.dropCancel) { s.destroy(); return; }
       if(r.args.expected_pid!==process.pid) throw new Error('Wrong generation');
       clearTimeout(timer);
       if(action) { write('release'); action.end(JSON.stringify({ok:false,error:'cancelled'})+'\\n'); action=undefined; }
@@ -78,6 +82,7 @@ net.createServer(s=>{
       else if(options.failAction) s.destroy();
       else timer=setTimeout(()=>{write('effect');reply({});action=undefined},10000);
     }
+    else if(options.hangSession && r.name==='start_session' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag,'1'); write('session-hang'); }
     else if(r.name==='set_agent_cursor_motion') { write('motion-'+r.args.glide_duration_ms+'-'+r.args.dwell_after_click_ms); reply({}); }
     else if(r.name==='press_key') { write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply({}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
@@ -100,6 +105,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     setup: async () => {},
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
     ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
+    ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -258,6 +264,13 @@ describe("Cua GUI host retirement", () => {
     });
     await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
     await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
+    // A dispatched action makes this generation's input state unprovable, so
+    // the failed cleanup must keep the driver alive and admission closed.
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
     granted = false;
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
@@ -301,8 +314,6 @@ describe("Cua GUI host retirement", () => {
     // retry can recover. The driver confirms nothing dispatched, so one
     // retire-plus-retry is replay-safe.
     const f = await fixture(capability, { sessionDeathOnce: true });
-    const press = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } });
     const reply = await cuaRequest<CuaReply>(f.endpoint, {
       method: "call",
       name: "press_key",
@@ -358,6 +369,11 @@ describe("Cua GUI host retirement", () => {
   it("unlock does not bypass an unacknowledged cleanup barrier", async () => {
     const f = await fixture(capability, { cleanup: "incomplete" });
     await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
     await expect(f.host.pauseDesktop("screen-lock")).rejects.toThrow(
       "did not confirm native input cleanup",
     );
@@ -612,6 +628,34 @@ describe("Cua GUI host retirement", () => {
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     await expect(f.host.stop()).rejects.toThrow("admission is closed");
   });
+  it("replaces a driver that wedges during startup instead of closing admission", async () => {
+    const f = await fixture(capability, {
+      hangSession: true,
+      dropCancel: true,
+      startupTimeoutMs: 150,
+    });
+    // The wedged startup call is bounded by the startup timeout; its
+    // retirement cannot confirm cleanup (the socket drops mid-request), but
+    // no action ever reached this generation so nothing can be held.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    // Terminating the provably input-free generation clears it, so the next
+    // request spawns a fresh driver instead of failing closed forever.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: true });
+    const events = await f.events();
+    const starts = events.filter((event) => event.event === "start");
+    expect(starts).toHaveLength(2);
+    expect(events.filter((e) => e.pid === starts[0].pid).map((e) => e.event)).toEqual([
+      "start",
+      "session-hang",
+      "cancel",
+      "retiring",
+      "exit",
+    ]);
+  });
   it("rejects later backend requests throughout suspension and resumes only on explicit restart", async () => {
     const f = await fixture();
     await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
@@ -647,6 +691,11 @@ describe("Cua GUI host retirement", () => {
   it("does not let resume bypass failed cleanup during backend suspension", async () => {
     const f = await fixture(capability, { cleanup: "incomplete" });
     await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
     await expect(f.host.suspend()).rejects.toThrow("did not confirm native input cleanup");
     f.host.resume();
     await expect(
@@ -664,6 +713,13 @@ describe("Cua GUI host retirement", () => {
     async (cleanup) => {
       const f = await fixture(capability, { cleanup });
       await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+      // An input-dispatched generation can hold OS state the acknowledgement
+      // cannot account for, so the driver stays alive and unreplaced.
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter" },
+      });
       await expect(f.host.stop()).rejects.toThrow("did not confirm native input cleanup");
       await expect(
         cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
@@ -672,6 +728,8 @@ describe("Cua GUI host retirement", () => {
       expect(events.map((e) => e.event)).toEqual([
         "start",
         "motion-100-0",
+        "key",
+        "observation-budget-100",
         "cancel",
         "cleanup-ack",
       ]);

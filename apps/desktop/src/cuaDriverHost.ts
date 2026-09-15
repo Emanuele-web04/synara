@@ -29,6 +29,10 @@ interface Generation {
   retired: boolean;
   cancellationReady: boolean;
   inputInFlight: boolean;
+  /** Stays set once any action tool was dispatched to this generation, so a
+   * driver that wedges before ever receiving input stays distinguishable
+   * from one that may still hold OS input it never confirmed releasing. */
+  inputEverDispatched: boolean;
   retirement?: Promise<void>;
 }
 
@@ -181,6 +185,8 @@ export class CuaDriverHost {
       setup: () => Promise<void>;
       checkPermissions?: () => Promise<HostPermissions>;
       releaseHeldInput?: () => Promise<void>;
+      /** Bound on each post-handshake startup call; defaults to 5s. */
+      startupTimeoutMs?: number;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
     },
   ) {}
@@ -456,6 +462,7 @@ export class CuaDriverHost {
         const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
         dispatched = true;
         generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
+        generation.inputEverDispatched ||= generation.inputInFlight;
         const attemptReply = await cuaRequest<CuaReply>(
           generation.socket,
           {
@@ -587,6 +594,7 @@ export class CuaDriverHost {
         retired: false,
         cancellationReady: false,
         inputInFlight: false,
+        inputEverDispatched: false,
       };
       this.generation = generation;
       void exited.then(() => {
@@ -622,20 +630,33 @@ export class CuaDriverHost {
         await chmod(endpoint, 0o600);
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
-        const session = await cuaRequest<CuaReply>(endpoint, {
-          method: "call",
-          name: "start_session",
-          args: { session: generation.session },
-        });
+        const startupTimeoutMs = this.options.startupTimeoutMs ?? 5_000;
+        const session = await cuaRequest<CuaReply>(
+          endpoint,
+          {
+            method: "call",
+            name: "start_session",
+            args: { session: generation.session },
+          },
+          { timeoutMs: startupTimeoutMs },
+        );
         if (!session.ok || session.result?.isError)
           throw new Error("Cua session initialization failed.");
         // Configure once per native generation, not before each input. The
         // cursor remains visible without making travel distance delay the action.
-        const motion = await cuaRequest<CuaReply>(endpoint, {
-          method: "call",
-          name: "set_agent_cursor_motion",
-          args: { session: generation.session, glide_duration_ms: 100, dwell_after_click_ms: 0 },
-        });
+        const motion = await cuaRequest<CuaReply>(
+          endpoint,
+          {
+            method: "call",
+            name: "set_agent_cursor_motion",
+            args: {
+              session: generation.session,
+              glide_duration_ms: 100,
+              dwell_after_click_ms: 0,
+            },
+          },
+          { timeoutMs: startupTimeoutMs },
+        );
         if (!motion.ok || motion.result?.isError)
           throw new Error("Cua cursor initialization failed.");
         return generation;
@@ -648,6 +669,21 @@ export class CuaDriverHost {
       this.starting = undefined;
     });
     return this.starting;
+  }
+
+  private async terminate(generation: Generation): Promise<void> {
+    if (generation.didExit) return;
+    // End the lifetime pipe too: Tokio's blocking stdin reader otherwise
+    // keeps the native runtime alive during graceful shutdown.
+    generation.child.stdin?.end();
+    const graceful = setTimeout(() => generation.child.kill("SIGTERM"), 500);
+    const force = setTimeout(() => generation.child.kill("SIGKILL"), 1_500);
+    try {
+      await generation.exited;
+    } finally {
+      clearTimeout(graceful);
+      clearTimeout(force);
+    }
   }
 
   private retire(generation: Generation): Promise<void> {
@@ -725,6 +761,17 @@ export class CuaDriverHost {
               "Cua Driver exited during input without confirming native cleanup. Computer admission is closed.",
             );
           }
+          if (!generation.inputEverDispatched) {
+            // The driver only ever holds OS input in response to a dispatched
+            // action, and none ever reached this generation — a wedge during
+            // startup or between reads cannot leave input held. Terminate and
+            // clear so the next request spawns a replacement instead of
+            // closing admission for the host's lifetime.
+            await this.terminate(generation);
+            if (this.generation === generation) this.generation = undefined;
+            await rm(generation.socket, { force: true });
+            return;
+          }
           // The process is genuinely alive and its acknowledgement could not
           // be trusted — the in-gate releases may never have run, so the
           // helper posts the OS-level ups before admission closes on this
@@ -739,19 +786,7 @@ export class CuaDriverHost {
       // Before the validated handshake no action can have been dispatched.
       // Otherwise the authenticated acknowledgement above covers all matching
       // releases and native context restoration before termination is allowed.
-      if (!generation.didExit) {
-        // End the lifetime pipe too: Tokio's blocking stdin reader otherwise
-        // keeps the native runtime alive during graceful shutdown.
-        generation.child.stdin?.end();
-        const terminate = setTimeout(() => generation.child.kill("SIGTERM"), 500);
-        const force = setTimeout(() => generation.child.kill("SIGKILL"), 1_500);
-        try {
-          await generation.exited;
-        } finally {
-          clearTimeout(terminate);
-          clearTimeout(force);
-        }
-      }
+      await this.terminate(generation);
       if (this.generation === generation) this.generation = undefined;
       await rm(generation.socket, { force: true });
     });
