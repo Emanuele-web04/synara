@@ -1,3 +1,4 @@
+import type * as Acp from "@agentclientprotocol/sdk";
 import type { ProviderInteractionMode, ProviderModelDescriptor } from "@synara/contracts";
 import { resolveExecutable } from "@synara/shared/executable";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -67,10 +68,18 @@ export const makeClineAcpRuntime = (
   });
 
 export function clineDefaultModel(result: AcpSessionRuntimeStartResult): string | undefined {
-  const config = result.sessionSetupResult.configOptions?.find(
-    (option) => option.category === "model" || option.id === "model",
-  );
+  const config = findClineModelOption(result.sessionSetupResult.configOptions);
   return config?.type === "select" ? config.currentValue : undefined;
+}
+
+/**
+ * Cline advertises its provider selector with `category: "model"` too. The
+ * provider selector must not be mistaken for the actual model selector.
+ */
+function findClineModelOption(
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
+): Acp.SessionConfigOption | undefined {
+  return configOptions?.find((option) => option.id.trim().toLowerCase() === "model");
 }
 
 /** Preserve provider-scoped IDs verbatim; Cline, not Synara, owns this catalog. */
@@ -89,9 +98,7 @@ export function mapClineModels(result: AcpSessionRuntimeStartResult): ProviderMo
       optionDescriptors: [],
     });
   };
-  const config = result.sessionSetupResult.configOptions?.find(
-    (option) => option.category === "model" || option.id === "model",
-  );
+  const config = findClineModelOption(result.sessionSetupResult.configOptions);
   if (config?.type === "select") {
     for (const entry of config.options) {
       for (const option of "value" in entry ? [entry] : entry.options) {
@@ -121,9 +128,7 @@ export function configureClineSession(input: {
   return Effect.gen(function* () {
     yield* input.runtime.awaitLoadReplayReady;
     const options = yield* input.runtime.getConfigOptions;
-    const modelOption = options.find(
-      (option) => option.category === "model" || option.id === "model",
-    );
+    const modelOption = findClineModelOption(options);
     const model = input.model === "default" ? input.defaultModel : input.model;
     if (!model || !modelOption) {
       return yield* new AcpRequestError({
