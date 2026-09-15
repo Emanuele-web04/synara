@@ -3718,6 +3718,32 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // A start that never reached the provider (session pinned in `starting`
+    // or a turn-less `running` with no live turn) has nothing to interrupt.
+    // Settle it locally so Stop rescues stuck-starting threads instead of
+    // failing against a runtime that owns nothing. A late turn.started still
+    // re-establishes running afterwards via the normal ingestion path.
+    const interruptSession = thread.session;
+    if (
+      interruptSession !== null &&
+      (interruptSession.status === "starting" || interruptSession.status === "running") &&
+      interruptSession.activeTurnId === null &&
+      thread.latestTurn?.state !== "running"
+    ) {
+      yield* setThreadSession({
+        threadId: input.threadId,
+        session: {
+          ...interruptSession,
+          threadId: input.threadId,
+          status: "interrupted",
+          activeTurnId: null,
+          updatedAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
     const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>
       appendProviderFailureActivity({
         threadId: input.threadId,

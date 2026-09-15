@@ -1323,6 +1323,49 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("settles a stuck-starting session on interrupt without a live turn", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    // Pin the projection the way a lost turn.started leaves it: session
+    // starting, no active turn, no live runtime behind it.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-stuck-starting-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "starting",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-stop-stuck-starting"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "interrupted",
+      activeTurnId: null,
+    });
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+  });
+
   it("REL-01B gate: advances the durable cursor through irrelevant events", async () => {
     const harness = await createHarness({ startReactor: false });
     const before = await Effect.runPromise(
