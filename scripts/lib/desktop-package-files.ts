@@ -67,6 +67,16 @@ export function createDesktopPackageFilePatterns(
       "!**/node_modules/node-pty/src/**",
       "!**/node_modules/node-pty/lib/*.test.js",
     );
+
+    if (platform === "win") {
+      // Native rebuilds leave MSVC linker caches and project tracking files
+      // beside the finished binaries. Keep .node/.dll/.exe runtime payloads;
+      // only omit audited build intermediates from these two native packages.
+      patterns.push(
+        "!**/node_modules/{node-pty,msgpackr-extract}/build/**/*.{iobj,ipdb,exp,lib,tlog,lastbuildstate,recipe,vcxproj,filters}",
+        "!**/node_modules/node-pty/node-addon-api/**/*.{recipe,vcxproj,filters}",
+      );
+    }
   }
 
   const nativePlatform = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";

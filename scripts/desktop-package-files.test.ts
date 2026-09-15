@@ -110,6 +110,36 @@ describe("desktop package file policy", () => {
     }
   });
 
+  it("omits Windows compiler intermediates but retains finished native binaries", () => {
+    for (const path of [
+      "node_modules/node-pty/build/Release/winpty-agent.iobj",
+      "node_modules/node-pty/build/Release/conpty.ipdb",
+      "node_modules/node-pty/build/Release/conpty.exp",
+      "node_modules/node-pty/build/Release/conpty.lib",
+      "node_modules/node-pty/build/Release/obj/pty/pty.tlog/CL.read.1.tlog",
+      "node_modules/node-pty/build/Release/obj/pty/pty.node.recipe",
+      "node_modules/node-pty/build/deps/winpty/src/winpty.vcxproj",
+      "node_modules/node-pty/build/pty.vcxproj.filters",
+      "node_modules/node-pty/node-addon-api/node_addon_api.vcxproj",
+      "node_modules/msgpackr-extract/build/Release/extract.ipdb",
+    ]) {
+      assert.equal(ships(path, "win"), false, path);
+      assert.equal(ships(path, "win", { SYNARA_DESKTOP_SOURCEMAP: "1" }), true, path);
+      assert.equal(ships(path, "linux"), true, path);
+      assert.equal(ships(path, "mac"), true, path);
+    }
+    for (const path of [
+      "node_modules/node-pty/build/Release/conpty.node",
+      "node_modules/node-pty/build/Release/pty.node",
+      "node_modules/node-pty/build/Release/conpty_console_list.node",
+      "node_modules/node-pty/build/Release/winpty-agent.exe",
+      "node_modules/node-pty/build/Release/winpty.dll",
+      "node_modules/msgpackr-extract/build/Release/extract.node",
+      "node_modules/other-package/runtime/data.lib",
+    ])
+      assert.equal(ships(path, "win"), true, path);
+  });
+
   it("preserves every target appearance and notification asset", () => {
     const required = {
       mac: [

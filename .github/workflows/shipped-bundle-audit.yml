@@ -1,4 +1,4 @@
-name: Verify shipped bundle reductions
+name: Verify final Windows bundle reduction
 
 on:
   push:
@@ -11,29 +11,9 @@ permissions:
 
 jobs:
   measure:
-    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    name: Verify win-x64
+    runs-on: windows-2022
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            platform: mac
-            target: dmg
-            arch: arm64
-          - runner: macos-15-intel
-            platform: mac
-            target: dmg
-            arch: x64
-          - runner: ubuntu-24.04
-            platform: linux
-            target: AppImage
-            arch: x64
-          - runner: windows-2022
-            platform: win
-            target: nsis
-            arch: x64
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -48,8 +28,7 @@ jobs:
           bun-version-file: package.json
       - uses: actions/setup-node@v6
         with:
-          # Match the exact Node version recorded by each baseline runner.
-          node-version: ${{ matrix.platform == 'mac' && matrix.arch == 'x64' && '24.19.0' || '24.20.0' }}
+          node-version: 24.20.0
       - name: Retain identical baseline measurement script
         shell: bash
         run: |
@@ -58,14 +37,28 @@ jobs:
       - name: Install frozen release build dependencies
         shell: bash
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Verify packaging policy and unchanged non-Windows configurations
+        shell: bash
+        run: |
+          bun run --cwd scripts test -- desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
+          git show b28d09428e4130bba8c2d617b95509c00677a708:scripts/lib/desktop-package-files.ts > scripts/lib/audited-package-policy.ts
+          node --input-type=module <<'NODE'
+          import {strict as assert} from 'node:assert';
+          import {createDesktopPackageFilePatterns as before} from './scripts/lib/audited-package-policy.ts';
+          import {createDesktopPackageFilePatterns as after} from './scripts/lib/desktop-package-files.ts';
+          for(const platform of ['mac','linux']) for(const env of [{},{SYNARA_DESKTOP_SOURCEMAP:'1'}]) assert.deepEqual(after(platform,env),before(platform,env));
+          assert.deepEqual(after('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}),before('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}));
+          console.log('macOS, Linux, and Windows diagnostic packaging policies are unchanged from the verified matrix.');
+          NODE
+          rm scripts/lib/audited-package-policy.ts
       - name: Build unsigned production candidate
         shell: bash
         run: |
-          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/shipped-size-audit/artifacts"
+          bun run dist:desktop:artifact -- --platform win --target nsis --arch x64 --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/shipped-size-audit/artifacts"
       - name: Measure candidate
         shell: bash
         run: |
-          node "$RUNNER_TEMP/shipped-size-audit/measure.mjs" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/shipped-size-audit/candidate" '${{ matrix.platform }}'
+          node "$RUNNER_TEMP/shipped-size-audit/measure.mjs" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/shipped-size-audit/candidate" win
       - name: Verify packaged payload inventory
         shell: bash
         run: |
@@ -75,27 +68,25 @@ jobs:
           import {join} from 'node:path';
           const report=JSON.parse(readFileSync(join(process.env.RUNNER_TEMP,'shipped-size-audit/candidate/bundle-size.json'),'utf8'));
           const files=new Set(report.asar.files.map(file=>file.path));
-          const dependencyMaps=[...files].filter(path=>path.includes('node_modules/') && /\.(js|mjs|cjs|ts|mts|cts|css)\.map$/.test(path));
-          assert.equal(dependencyMaps.length,0,`Unexpected dependency maps: ${dependencyMaps.slice(0,5)}`);
+          assert.equal([...files].filter(path=>path.includes('node_modules/') && /\.(js|mjs|cjs|ts|mts|cts|css)\.map$/.test(path)).length,0);
           assert.equal([...files].filter(path=>path.includes('node_modules/') && /(?:\.d\.(mts|cts)|\.tsbuildinfo)$/.test(path)).length,0);
-          assert.ok(files.has('node_modules/effect/dist/Effect.js'));
-          assert.ok(files.has('node_modules/betterwright/dist/src/index.js'));
+          assert.equal([...files].filter(path=>/node_modules\/(node-pty|msgpackr-extract)\/(build|node-addon-api)\//.test(path) && /\.(iobj|ipdb|exp|lib|tlog|lastbuildstate|recipe|vcxproj|filters)$/.test(path)).length,0);
+          for(const path of ['node_modules/effect/dist/Effect.js','node_modules/betterwright/dist/src/index.js','node_modules/node-pty/build/Release/conpty.node','node_modules/node-pty/build/Release/winpty-agent.exe','node_modules/node-pty/build/Release/winpty.dll','node_modules/msgpackr-extract/build/Release/extract.node']) assert.ok(files.has(path),`Missing runtime: ${path}`);
           assert.ok([...files].some(path=>path.startsWith(`node_modules/@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`)));
           for(const path of files) {
             if(path.includes('/central-icons-') && /\.(gz|br)$/.test(path)) assert.ok(files.has(path.replace(/\.(gz|br)$/,'')),`Orphan sidecar: ${path}`);
             assert.ok(!path.startsWith('apps/server/dist/client/mockServiceWorker.js'));
-            if(process.platform==='linux') assert.ok(!path.includes('claude-agent-sdk-linux-x64-musl/'));
           }
-          console.log('Production inventory verified; runtime code, native Claude executable and compressed icon integrity preserved.');
+          console.log('Final Windows production payload inventory verified.');
           NODE
       - name: Smoke isolated packaged desktop startup and runtime dependencies
         shell: bash
         run: |
-          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/shipped-size-audit/artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/shipped-size-audit/artifacts" --platform win --arch x64 --version 0.8.4
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: shipped-size-${{ matrix.platform }}-${{ matrix.arch }}
+          name: shipped-size-win-x64
           path: ${{ runner.temp }}/shipped-size-audit/candidate
           retention-days: 14
           if-no-files-found: warn
