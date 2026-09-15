@@ -25,9 +25,7 @@ describe("desktopPackageFiles", () => {
     for (const platform of ["linux", "mac", "win"] as const) {
       assert.ok(!desktopPackageFiles({ platform, linuxGlibc: false }).includes(exclusion));
     }
-    assert.ok(
-      !desktopPackageFiles({ platform: "linux", linuxGlibc: false }).includes(exclusion),
-    );
+    assert.ok(!desktopPackageFiles({ platform: "linux", linuxGlibc: false }).includes(exclusion));
   });
 
   it("requires affirmative libc evidence", () => {
@@ -45,13 +43,7 @@ describe("desktopPackageFiles", () => {
 
   it("keeps each platform's selectable icons and the common notification icon", () => {
     const required = {
-      mac: [
-        "app-icon-macos.png",
-        "dock-icon.png",
-        "dock-icon-dark.png",
-        "icon.icns",
-        "icon.png",
-      ],
+      mac: ["app-icon-macos.png", "dock-icon.png", "dock-icon-dark.png", "icon.icns", "icon.png"],
       linux: ["app-icon-linux.png", "icon.png", "synara.png"],
       win: ["app-icon-windows.ico", "icon.ico", "synara.png"],
     } as const;

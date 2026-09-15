@@ -62,9 +62,9 @@ describe("production public assets", () => {
       expect(await readFile(path.join(root, "dist", directory, "keep.svg"))).toEqual(
         await readFile(path.join(root, "public", directory, "keep.svg")),
       );
-      expect(
-        await readFile(path.join(root, "public", directory, "unused.svg"), "utf8"),
-      ).toContain("unused.svg");
+      expect(await readFile(path.join(root, "public", directory, "unused.svg"), "utf8")).toContain(
+        "unused.svg",
+      );
     }
     expect(await readdir(path.join(root, "dist"))).not.toContain("mockServiceWorker.js");
     expect(await readFile(path.join(root, "public", "mockServiceWorker.js"), "utf8")).toBe(
