@@ -5,13 +5,13 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { hasUnseenCompletion, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -66,6 +66,20 @@ function makeThread(
   };
 }
 
+function makeRunningThread(index: number, turnId: string): SidebarThreadSummary {
+  return makeThread(index, {
+    hasLiveTailWork: true,
+    latestTurn: {
+      turnId,
+      state: "running",
+      requestedAt: "2026-08-02T10:01:00.000Z",
+      startedAt: "2026-08-02T10:01:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } as SidebarThreadSummary["latestTurn"],
+  });
+}
+
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
@@ -112,9 +126,299 @@ function renderActivity(input: {
   );
 }
 
+function StatefulReadOrderActivity({
+  initialThreads,
+}: {
+  initialThreads: readonly SidebarThreadSummary[];
+}) {
+  const [threads, setThreads] = useState(initialThreads);
+  const [activeThreadId, setActiveThreadId] = useState<ThreadId | null>(null);
+  const [settledOverrideByThreadId, setSettledOverrideByThreadId] = useState<
+    ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
+  const markRead = (threadId: ThreadId, completedAt?: string) => {
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === threadId && thread.latestTurn?.completedAt === completedAt
+          ? { ...thread, lastVisitedAt: new Date().toISOString() }
+          : thread,
+      ),
+    );
+  };
+
+  return (
+    <SidebarActivityView
+      threads={threads}
+      projectById={new Map([[PROJECT_A, makeProject(PROJECT_A, "Project A")]])}
+      activeThreadId={activeThreadId}
+      pinnedThreadIdSet={new Set()}
+      settledOverrideByThreadId={settledOverrideByThreadId}
+      threadsHydrated
+      prByThreadId={new Map()}
+      onVisibleThreadIdsChange={() => {}}
+      resolveThreadStatus={(thread) =>
+        hasUnseenCompletion(thread)
+          ? {
+              label: "Completed",
+              colorClass: "text-emerald-600",
+              dotClass: "bg-emerald-500",
+              pulse: false,
+            }
+          : null
+      }
+      onOpenThread={(threadId) => {
+        const thread = threads.find((candidate) => candidate.id === threadId);
+        setActiveThreadId(threadId);
+        markRead(threadId, thread?.latestTurn?.completedAt ?? undefined);
+      }}
+      onOpenThreadPullRequest={() => {}}
+      onSetThreadSettled={(threadId, settled) => {
+        setSettledOverrideByThreadId((current) => {
+          const next = new Map(current);
+          next.set(threadId, settled);
+          return next;
+        });
+      }}
+      onToggleThreadPinned={() => {}}
+      onArchiveThread={() => {}}
+      onMarkThreadRead={markRead}
+      onRenameThread={() => {}}
+      onThreadRenamePointerUp={() => {}}
+      onThreadContextMenu={() => {}}
+      onProjectContextMenu={() => {}}
+      renderThreadHoverCard={() => null}
+      onCreateChat={() => {}}
+      onAddProject={() => {}}
+    />
+  );
+}
+
+function renderedActivityThreadIds(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-testid^='activity-thread-']"))
+    .map((element) => element.dataset.testid)
+    .filter((testId): testId is string => testId !== undefined)
+    .map((testId) => testId.replace("activity-thread-", ""));
+}
+
 describe("SidebarActivityView", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("reveals the active thread from collapsed Earlier with current-page semantics", async () => {
+    const completedAt = "2000-01-02T10:00:00.000Z";
+    const active = makeThread(490, {
+      title: "المحادثة الحالية https://example.com/a/very/long/path",
+      updatedAt: completedAt,
+      lastVisitedAt: "2000-01-02T11:00:00.000Z",
+      latestTurn: {
+        turnId: "activity-turn-active-earlier",
+        state: "completed",
+        requestedAt: completedAt,
+        startedAt: completedAt,
+        completedAt,
+        assistantMessageId: null,
+      } as SidebarThreadSummary["latestTurn"],
+    });
+    const leadingRows = Array.from({ length: 5 }, (_, index) =>
+      makeRunningThread(600 + index, `activity-turn-leading-${index}`),
+    );
+    const activity = renderActivity({
+      threads: [...leadingRows, active],
+      activeThreadId: active.id,
+    });
+    const mounted = await render(
+      <>
+        <button type="button" data-testid="focus-sentinel">
+          Keep focus
+        </button>
+        <div data-slot="scroll-area-viewport" className="h-32 overflow-y-auto">
+          {activity}
+        </div>
+      </>,
+    );
+    const focusSentinel = page.getByTestId("focus-sentinel").element();
+    focusSentinel.focus();
+
+    await vi.waitFor(() => {
+      const row = document.querySelector<HTMLElement>(
+        `[data-testid='activity-thread-${active.id}']`,
+      );
+      const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      expect(row).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      expect(row?.getAttribute("aria-current")).toBe("page");
+      expect(row?.getBoundingClientRect().height).toBeGreaterThan(0);
+      expect(row!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        viewport!.getBoundingClientRect().top - 1,
+      );
+      expect(row!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        viewport!.getBoundingClientRect().bottom + 1,
+      );
+      expect(viewport!.scrollTop).toBeGreaterThan(0);
+    });
+    expect(document.activeElement).toBe(focusSentinel);
+
+    await page.getByRole("button", { name: "Earlier", exact: true }).click();
+    await mounted.rerender(
+      <>
+        <button type="button" data-testid="focus-sentinel">
+          Keep focus
+        </button>
+        <div data-slot="scroll-area-viewport" className="h-32 overflow-y-auto">
+          {activity}
+        </div>
+      </>,
+    );
+    expect(
+      page
+        .getByRole("button", { name: "Earlier", exact: true })
+        .element()
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    await mounted.unmount();
+  });
+
+  it("retains a deep active project row without mounting the skipped middle page", async () => {
+    const threads = Array.from({ length: 25 }, (_, index) => makeThread(700 + index));
+    const active = threads[24]!;
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads,
+        activeThreadId: active.id,
+        onVisibleThreadIdsChange,
+      }),
+    );
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Project" }).click();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => {
+      const renderedIds = renderedActivityThreadIds();
+      expect(renderedIds).toHaveLength(21);
+      expect(renderedIds.at(-1)).toBe(active.id);
+      expect(new Set(renderedIds).size).toBe(renderedIds.length);
+      expect(onVisibleThreadIdsChange.mock.lastCall?.[0]).toEqual(renderedIds);
+      expect(
+        page.getByTestId(`activity-thread-${active.id}`).element().getAttribute("aria-current"),
+      ).toBe("page");
+    });
+    await mounted.unmount();
+  });
+
+  it("opens Done when it owns the active thread", async () => {
+    const active = makeThread(750, { settledAt: "2026-08-02T12:30:00.000Z" });
+    const mounted = await render(renderActivity({ threads: [active], activeThreadId: active.id }));
+
+    await vi.waitFor(() => {
+      expect(
+        page
+          .getByRole("button", { name: "Done", exact: true })
+          .element()
+          .getAttribute("aria-expanded"),
+      ).toBe("true");
+      expect(
+        page.getByTestId(`activity-thread-${active.id}`).element().getAttribute("aria-current"),
+      ).toBe("page");
+    });
+    await mounted.unmount();
+  });
+
+  it("keeps an opened unread completion ahead of running work until another thread opens", async () => {
+    const unread = makeThread(500, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(501, "activity-turn-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+    expect(
+      page
+        .getByTestId(`activity-thread-${unread.id}`)
+        .element()
+        .parentElement?.querySelector('[aria-label="Unread completion"]'),
+    ).not.toBeNull();
+
+    await page.getByTestId(`activity-thread-${unread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+      expect(
+        page
+          .getByTestId(`activity-thread-${unread.id}`)
+          .element()
+          .parentElement?.querySelector('[aria-label="Unread completion"]'),
+      ).toBeNull();
+    });
+
+    await page.getByTestId(`activity-thread-${running.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([running.id, unread.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it("preserves the same read-order hold for keyboard activation in project grouping", async () => {
+    const unread = makeThread(510, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(511, "activity-turn-project-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Project" }).click();
+    await userEvent.keyboard("{Escape}");
+    const unreadRow = page.getByTestId(`activity-thread-${unread.id}`).element();
+    unreadRow.focus();
+    await userEvent.keyboard("{Enter}");
+
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+      expect(unreadRow.parentElement?.querySelector('[aria-label="Unread completion"]')).toBeNull();
+    });
+    await mounted.unmount();
+  });
+
+  it("releases the read-order hold when the opened thread is explicitly marked done", async () => {
+    const unread = makeThread(520, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(521, "activity-turn-done-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    await page.getByTestId(`activity-thread-${unread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+    });
+
+    const unreadRow = page.getByTestId(`activity-thread-${unread.id}`).element();
+    unreadRow.parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Done"]')?.click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([running.id, unread.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it("releases the read-order hold when all activity is explicitly marked read", async () => {
+    const openedUnread = makeThread(530, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const backgroundUnread = makeThread(529, {
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const running = makeRunningThread(531, "activity-turn-mark-all-running");
+    const mounted = await render(
+      <StatefulReadOrderActivity initialThreads={[running, backgroundUnread, openedUnread]} />,
+    );
+
+    await page.getByTestId(`activity-thread-${openedUnread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([
+        openedUnread.id,
+        backgroundUnread.id,
+        running.id,
+      ]);
+    });
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()[0]).toBe(running.id);
+      expect(document.querySelector('[aria-label="Unread completion"]')).toBeNull();
+    });
+    await mounted.unmount();
   });
 
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {

@@ -15,6 +15,16 @@ import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
  */
 export type ActivityStatusGroup = "attention" | "unseenCompleted" | "running" | "seen";
 
+/**
+ * Ephemeral presentation state for the exact completion a user opened from
+ * Activity. It never changes the completion's read semantics; it only keeps
+ * that row in its pre-read ordering group while the thread remains selected.
+ */
+export interface ActivityReadOrderHold {
+  readonly threadId: ThreadId;
+  readonly completedAt: string;
+}
+
 const ACTIVITY_GROUP_ORDER: Record<ActivityStatusGroup, number> = {
   attention: 0,
   unseenCompleted: 1,
@@ -65,6 +75,27 @@ export function resolveActivityStatusGroup(thread: SidebarThreadSummary): Activi
     return "unseenCompleted";
   }
   return "seen";
+}
+
+/**
+ * The status group used only for Activity ordering and section placement.
+ * Real attention, running, and unread states always win. A visited completion
+ * can retain its previous unread rank only when the hold matches that exact
+ * completion, so newer work never inherits stale presentation state.
+ */
+export function resolveActivityOrderingStatusGroup(
+  thread: SidebarThreadSummary,
+  readOrderHold?: ActivityReadOrderHold | null,
+): ActivityStatusGroup {
+  const statusGroup = resolveActivityStatusGroup(thread);
+  if (statusGroup !== "seen") return statusGroup;
+  if (
+    readOrderHold?.threadId === thread.id &&
+    thread.latestTurn?.completedAt === readOrderHold.completedAt
+  ) {
+    return "unseenCompleted";
+  }
+  return statusGroup;
 }
 
 /**
@@ -158,6 +189,7 @@ export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
+  readOrderHold?: ActivityReadOrderHold | null;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
 }): ActivityViewModel {
@@ -173,7 +205,7 @@ export function buildActivityViewModel(input: {
       pinned.push(thread);
       continue;
     }
-    const statusGroup = resolveActivityStatusGroup(thread);
+    const statusGroup = resolveActivityOrderingStatusGroup(thread, input.readOrderHold);
     if (
       isThreadSettledForActivity(thread, input.settledOverrideByThreadId) &&
       statusGroup === "seen"
@@ -191,8 +223,8 @@ export function buildActivityViewModel(input: {
   );
   active.sort((left, right) => {
     const groupDelta =
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(left)] -
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(right)];
+      ACTIVITY_GROUP_ORDER[resolveActivityOrderingStatusGroup(left, input.readOrderHold)] -
+      ACTIVITY_GROUP_ORDER[resolveActivityOrderingStatusGroup(right, input.readOrderHold)];
     if (groupDelta !== 0) return groupDelta;
     return (
       resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
@@ -416,14 +448,17 @@ export function resolveActivityDayStartMs(nowMs: number): number {
  * set. `active` is already status-sorted, so both returned arrays preserve the
  * intended attention → unseen completion → running → seen ordering.
  */
-export function splitPriorityActivityThreads(active: readonly SidebarThreadSummary[]): {
+export function splitPriorityActivityThreads(
+  active: readonly SidebarThreadSummary[],
+  readOrderHold?: ActivityReadOrderHold | null,
+): {
   priority: SidebarThreadSummary[];
   seen: SidebarThreadSummary[];
 } {
   const priority: SidebarThreadSummary[] = [];
   const seen: SidebarThreadSummary[] = [];
   for (const thread of active) {
-    if (resolveActivityStatusGroup(thread) === "seen") {
+    if (resolveActivityOrderingStatusGroup(thread, readOrderHold) === "seen") {
       seen.push(thread);
     } else {
       priority.push(thread);
@@ -474,6 +509,69 @@ export function splitRecentActivityThreads(
     recent,
     rest: active.filter((thread) => !recentThreadIds.has(thread.id)),
   };
+}
+
+/** The semantic Activity section that owns the route-active thread. */
+export type ActiveActivityThreadOwner =
+  | { kind: "pinned" }
+  | { kind: "priority" }
+  | { kind: "recent" }
+  | { kind: ActivityDateBucket }
+  | { kind: "project"; groupKey: string }
+  | { kind: "settled" };
+
+/**
+ * Resolves the route-active row against the already scoped and partitioned
+ * presentation model. A missing result is intentional when an explicit scope
+ * excludes the open thread.
+ */
+export function resolveActiveActivityThreadOwner(input: {
+  activeThreadId: ThreadId | null;
+  groupMode: ActivityGroupMode;
+  pinned: readonly SidebarThreadSummary[];
+  priority: readonly SidebarThreadSummary[];
+  recent: readonly SidebarThreadSummary[];
+  today: readonly SidebarThreadSummary[];
+  yesterday: readonly SidebarThreadSummary[];
+  earlier: readonly SidebarThreadSummary[];
+  projectGroups: readonly ActivityProjectGroup[];
+  settled: readonly SidebarThreadSummary[];
+}): ActiveActivityThreadOwner | null {
+  const { activeThreadId } = input;
+  if (activeThreadId === null) return null;
+  const includesActive = (threads: readonly SidebarThreadSummary[]) =>
+    threads.some((thread) => thread.id === activeThreadId);
+
+  if (includesActive(input.pinned)) return { kind: "pinned" };
+  if (input.groupMode === "project") {
+    const projectGroup = input.projectGroups.find((group) => includesActive(group.threads));
+    if (projectGroup) return { kind: "project", groupKey: projectGroup.key };
+  } else {
+    if (includesActive(input.priority)) return { kind: "priority" };
+    if (includesActive(input.recent)) return { kind: "recent" };
+    if (includesActive(input.today)) return { kind: "today" };
+    if (includesActive(input.yesterday)) return { kind: "yesterday" };
+    if (includesActive(input.earlier)) return { kind: "earlier" };
+  }
+  return includesActive(input.settled) ? { kind: "settled" } : null;
+}
+
+/**
+ * Keeps paging bounded while guaranteeing that its section can mount the
+ * route-active row. The normal prefix stays untouched; at most one extra row
+ * is appended when the active thread lies beyond it.
+ */
+export function retainActiveActivityThreadInPreview(
+  threads: readonly SidebarThreadSummary[],
+  previewLimit: number,
+  activeThreadId: ThreadId | null,
+): SidebarThreadSummary[] {
+  const preview = threads.slice(0, Math.max(0, previewLimit));
+  if (activeThreadId === null || preview.some((thread) => thread.id === activeThreadId)) {
+    return preview;
+  }
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  return activeThread ? [...preview, activeThread] : preview;
 }
 
 /**

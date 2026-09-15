@@ -11,6 +11,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
   type ReactNode,
 } from "react";
 
@@ -43,6 +44,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
+  hasUnseenCompletion,
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
@@ -56,12 +58,15 @@ import {
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
+  resolveActiveActivityThreadOwner,
   resolveActivityScope,
+  retainActiveActivityThreadInPreview,
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
+  type ActivityReadOrderHold,
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
@@ -93,6 +98,11 @@ const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 
+type ActivityReadOrderHoldState = ActivityReadOrderHold & {
+  pinnedAtOpen: boolean;
+  settledAtOpen: boolean;
+} & ({ phase: "pending"; previousActiveThreadId: ThreadId | null } | { phase: "active" });
+
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
   event.preventDefault();
@@ -116,6 +126,7 @@ function ActivityThreadRow({
   onRenamePointerUp,
   onContextMenu,
   renderHoverCard,
+  rowRef,
 }: {
   thread: SidebarThreadSummary;
   project: Project | undefined;
@@ -133,6 +144,7 @@ function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
+  rowRef?: Ref<HTMLButtonElement>;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const branch = resolveThreadDisplayBranch(thread);
@@ -175,8 +187,10 @@ function ActivityThreadRow({
         }
       >
         <button
+          ref={rowRef}
           type="button"
           onClick={onOpen}
+          aria-current={isActive ? "page" : undefined}
           data-testid={`activity-thread-${thread.id}`}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
@@ -594,6 +608,45 @@ export function SidebarActivityView({
   const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   );
+  const [readOrderHoldState, setReadOrderHoldState] = useState<ActivityReadOrderHoldState | null>(
+    null,
+  );
+
+  const readOrderHeldThread = readOrderHoldState
+    ? threads.find((thread) => thread.id === readOrderHoldState.threadId)
+    : undefined;
+  const readOrderHoldStructureIsCurrent =
+    readOrderHoldState !== null &&
+    readOrderHeldThread !== undefined &&
+    readOrderHeldThread.latestTurn?.completedAt === readOrderHoldState.completedAt &&
+    pinnedThreadIdSet.has(readOrderHeldThread.id) === readOrderHoldState.pinnedAtOpen &&
+    isThreadSettledForActivity(readOrderHeldThread, settledOverrideByThreadId) ===
+      readOrderHoldState.settledAtOpen;
+  const readOrderHoldIsCurrent =
+    readOrderHoldState !== null &&
+    readOrderHoldStructureIsCurrent &&
+    (readOrderHoldState.phase === "active"
+      ? activeThreadId === readOrderHoldState.threadId
+      : activeThreadId === readOrderHoldState.previousActiveThreadId ||
+        activeThreadId === readOrderHoldState.threadId);
+  const readOrderHold = readOrderHoldIsCurrent ? readOrderHoldState : null;
+
+  useEffect(() => {
+    setReadOrderHoldState((current) => {
+      if (current === null) return current;
+      if (current.phase === "pending") {
+        if (activeThreadId === current.threadId) {
+          return { ...current, phase: "active" };
+        }
+        return activeThreadId === current.previousActiveThreadId ? current : null;
+      }
+      return activeThreadId === current.threadId ? current : null;
+    });
+  }, [activeThreadId]);
+
+  const clearReadOrderHoldForThread = (threadId: ThreadId) => {
+    setReadOrderHoldState((current) => (current?.threadId === threadId ? null : current));
+  };
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
   // Scope options and the unread sweep intentionally ignore the active scope:
@@ -614,11 +667,13 @@ export function SidebarActivityView({
     pinnedThreadIdSet,
     settledOverrideByThreadId,
     projectFilterIds,
+    readOrderHold,
   });
   const scopedPinnedThreads = model.pinned;
   const nowMs = Date.now();
   const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
     model.active,
+    readOrderHold,
   );
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
     seenThreads,
@@ -629,6 +684,39 @@ export function SidebarActivityView({
     groupMode === "project"
       ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
       : EMPTY_PROJECT_GROUPS;
+
+  const activeThreadOwner = resolveActiveActivityThreadOwner({
+    activeThreadId,
+    groupMode,
+    pinned: scopedPinnedThreads,
+    priority: priorityThreads,
+    recent: recentThreads,
+    today: dateBuckets.today,
+    yesterday: dateBuckets.yesterday,
+    earlier: dateBuckets.earlier,
+    projectGroups,
+    settled: model.settled,
+  });
+  const activeDisclosureKind =
+    activeThreadOwner?.kind === "pinned" ||
+    activeThreadOwner?.kind === "earlier" ||
+    activeThreadOwner?.kind === "settled"
+      ? activeThreadOwner.kind
+      : null;
+  const lastAutoRevealKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeThreadId === null) {
+      lastAutoRevealKeyRef.current = null;
+      return;
+    }
+    const revealKey = `${activeThreadId}:${activeDisclosureKind ?? "visible"}`;
+    if (lastAutoRevealKeyRef.current === revealKey) return;
+    lastAutoRevealKeyRef.current = revealKey;
+    if (activeDisclosureKind === null) return;
+    if (activeDisclosureKind === "pinned") setPinnedOpen(true);
+    else if (activeDisclosureKind === "earlier") setEarlierOpen(true);
+    else setSettledOpen(true);
+  }, [activeDisclosureKind, activeThreadId]);
 
   const earlierPaging = resolveSidebarThreadListPaging({
     totalCount: dateBuckets.earlier.length,
@@ -642,6 +730,16 @@ export function SidebarActivityView({
     pageSize: ACTIVITY_LIST_PAGE_SIZE,
     requestedExtraPages: settledExtraPages,
   });
+  const visibleEarlierThreads = retainActiveActivityThreadInPreview(
+    dateBuckets.earlier,
+    earlierPaging.previewLimit,
+    activeThreadOwner?.kind === "earlier" ? activeThreadId : null,
+  );
+  const visibleSettledThreads = retainActiveActivityThreadInPreview(
+    model.settled,
+    settledPaging.previewLimit,
+    activeThreadOwner?.kind === "settled" ? activeThreadId : null,
+  );
   const pagedProjectGroups = projectGroups.map((group) => {
     const paging = resolveSidebarThreadListPaging({
       totalCount: group.threads.length,
@@ -652,7 +750,13 @@ export function SidebarActivityView({
     return {
       group,
       paging,
-      threads: group.threads.slice(0, paging.previewLimit),
+      threads: retainActiveActivityThreadInPreview(
+        group.threads,
+        paging.previewLimit,
+        activeThreadOwner?.kind === "project" && activeThreadOwner.groupKey === group.key
+          ? activeThreadId
+          : null,
+      ),
     };
   });
 
@@ -667,26 +771,24 @@ export function SidebarActivityView({
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
-        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
+        earlier: visibleEarlierThreads,
         projectGroups: pagedProjectGroups.map((group) => group.threads),
         settledOpen,
-        settled: model.settled.slice(0, settledPaging.previewLimit),
+        settled: visibleSettledThreads,
       }),
     [
-      dateBuckets.earlier,
       dateBuckets.today,
       dateBuckets.yesterday,
       earlierOpen,
-      earlierPaging.previewLimit,
       groupMode,
-      model.settled,
       pagedProjectGroups,
       pinnedOpen,
       priorityThreads,
       recentThreads,
       scopedPinnedThreads,
       settledOpen,
-      settledPaging.previewLimit,
+      visibleEarlierThreads,
+      visibleSettledThreads,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -702,10 +804,66 @@ export function SidebarActivityView({
     [onVisibleThreadIdsChange],
   );
 
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
+  const lastActiveScrollKeyRef = useRef<string | null>(null);
+  const activeScrollKey =
+    activeThreadId !== null && activeThreadOwner !== null
+      ? `${activeThreadId}:${groupMode}:${activeScope ?? "all"}`
+      : null;
+  useEffect(() => {
+    if (activeScrollKey === null || lastActiveScrollKeyRef.current === activeScrollKey) return;
+    if (
+      (activeThreadOwner?.kind === "pinned" && !pinnedOpen) ||
+      (activeThreadOwner?.kind === "earlier" && !earlierOpen) ||
+      (activeThreadOwner?.kind === "settled" && !settledOpen)
+    ) {
+      return;
+    }
+    const activeRow = activeRowRef.current;
+    if (activeRow === null) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const row = activeRowRef.current;
+      const viewport = row?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      if (!row || !viewport) return;
+      lastActiveScrollKeyRef.current = activeScrollKey;
+      const rowBounds = row.getBoundingClientRect();
+      const viewportBounds = viewport.getBoundingClientRect();
+      if (rowBounds.top < viewportBounds.top || rowBounds.bottom > viewportBounds.bottom) {
+        row.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeScrollKey, activeThreadOwner?.kind, earlierOpen, pinnedOpen, settledOpen]);
+
   const markAllRead = () => {
+    setReadOrderHoldState(null);
     for (const thread of unreadThreads) {
       onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
     }
+  };
+
+  const openThread = (thread: SidebarThreadSummary) => {
+    const completedAt = thread.latestTurn?.completedAt;
+    setReadOrderHoldState((current) => {
+      if (completedAt && current?.threadId === thread.id && current.completedAt === completedAt) {
+        return current;
+      }
+      if (!completedAt || !hasUnseenCompletion(thread)) return null;
+      const base = {
+        threadId: thread.id,
+        completedAt,
+        pinnedAtOpen: pinnedThreadIdSet.has(thread.id),
+        settledAtOpen: isThreadSettledForActivity(thread, settledOverrideByThreadId),
+      };
+      return activeThreadId === thread.id
+        ? { ...base, phase: "active" }
+        : {
+            ...base,
+            phase: "pending",
+            previousActiveThreadId: activeThreadId,
+          };
+    });
+    onOpenThread(thread.id);
   };
 
   const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
@@ -730,18 +888,26 @@ export function SidebarActivityView({
             })
       }
       status={resolveThreadStatus(thread)}
-      onOpen={() => onOpenThread(thread.id)}
+      onOpen={() => openThread(thread)}
       onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
+        clearReadOrderHoldForThread(thread.id);
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
         onSetThreadSettled(thread.id, settled);
       }}
-      onTogglePinned={() => onToggleThreadPinned(thread.id)}
-      onArchive={() => onArchiveThread(thread.id)}
+      onTogglePinned={() => {
+        clearReadOrderHoldForThread(thread.id);
+        onToggleThreadPinned(thread.id);
+      }}
+      onArchive={() => {
+        clearReadOrderHoldForThread(thread.id);
+        onArchiveThread(thread.id);
+      }}
       onRename={onRenameThread}
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
+      {...(activeThreadId === thread.id ? { rowRef: activeRowRef } : {})}
     />
   );
   const renderActiveRow = (thread: SidebarThreadSummary) =>
@@ -780,7 +946,10 @@ export function SidebarActivityView({
           options={scopeOptions}
           projectById={projectById}
           scopeSelection={activeScope}
-          onChangeScopeSelection={setScopeSelection}
+          onChangeScopeSelection={(selection) => {
+            setReadOrderHoldState(null);
+            setScopeSelection(selection);
+          }}
         />
         <SidebarSectionToolbar revealOnHover className="mr-0">
           <SidebarIconButton
@@ -882,7 +1051,7 @@ export function SidebarActivityView({
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
             >
-              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
+              {visibleEarlierThreads.map(renderActiveRow)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
@@ -902,9 +1071,7 @@ export function SidebarActivityView({
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
         >
-          {model.settled
-            .slice(0, settledPaging.previewLimit)
-            .map((thread) => renderRow(thread, true))}
+          {visibleSettledThreads.map((thread) => renderRow(thread, true))}
           <ActivityShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
