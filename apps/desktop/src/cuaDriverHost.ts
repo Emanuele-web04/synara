@@ -68,6 +68,11 @@ export function sweepOrphanedCuaDrivers(): void {
     const pid = Number(line.trim().split(/\s+/)[0]);
     if (!pid || pid === process.pid) continue;
     const socketDir = line.match(/--socket\s+(\S+)\//)?.[1];
+    // The dir of every still-running daemon is protected whether or not its
+    // env can be read: a transient ps failure or a daemon without the host
+    // marker is skipped below but stays alive, and reaping its socket dir
+    // would sever every new connection to it.
+    if (socketDir) liveSocketDirs.add(socketDir);
     let env: string;
     try {
       env = execFileSync("ps", ["eww", "-p", String(pid), "-o", "command"], {
@@ -80,7 +85,6 @@ export function sweepOrphanedCuaDrivers(): void {
     if (!hostPid) continue;
     try {
       process.kill(hostPid, 0);
-      if (socketDir) liveSocketDirs.add(socketDir);
       continue;
     } catch {
       // Host is gone: the daemon is an orphan.
