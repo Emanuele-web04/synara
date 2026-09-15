@@ -1119,6 +1119,99 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("still fully removes a thread whose stop rejects in preview cleanup", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      endTask: vi.fn(async () => {
+        throw new Error("Preview cleanup failed");
+      }),
+    });
+    const manager = new ComputerManager({ backend });
+    await manager.getThreadState("thread-b");
+    await manager.launchApp("thread-a", "kcalc");
+
+    // The rejection is still reported — but every removal step must have run:
+    // the lease released, the thread's state gone, nobody left blocked.
+    await expect(manager.handleThreadRemoved("thread-a")).rejects.toThrow("Preview cleanup failed");
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: false,
+    });
+    await expect(manager.typeText("thread-b", "hi")).resolves.toMatchObject({
+      action: "computer_type_text",
+    });
+    await manager.dispose();
+  });
+
+  it("clears an evicted owner's turn stamp along with its stale lease", async () => {
+    const backend = new FakeComputerBackend();
+    let nowMs = 0;
+    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    await manager.getThreadState("thread-a");
+    await manager.getThreadState("thread-b");
+
+    // thread-a holds the desktop under turn-1, then goes silent past idle.
+    await manager.withAgentActivity(
+      "thread-a",
+      () => manager.click("thread-a", { x: 10, y: 10 }),
+      undefined,
+      "turn-1",
+    );
+    nowMs = 2_000;
+    // thread-b evicts the stale lease — turn-1's authority dies with it.
+    await manager.withAgentActivity(
+      "thread-b",
+      () => manager.click("thread-b", { x: 10, y: 10 }),
+      undefined,
+      "turn-9",
+    );
+    // thread-b goes idle too; thread-a re-claims with no turn attribution.
+    nowMs = 4_000;
+    await manager.withAgentActivity("thread-a", () => manager.click("thread-a", { x: 11, y: 11 }));
+    // Had the dead stamp survived eviction, this release would be refused as
+    // turn-mismatched — the anonymous lease must release for any named turn.
+    await manager.releaseDesktopControl("thread-a", "turn-5");
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: false,
+    });
+    await manager.dispose();
+  });
+
+  it("drops an anonymous deferred release once a turn renews the lease", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    await manager.getThreadState("thread-a");
+    await manager.getThreadState("thread-b");
+
+    const started = deferred();
+    const releaseRecorded = deferred();
+    const finish = deferred();
+    const inFlight = manager.withAgentActivity("thread-a", async () => {
+      await manager.click("thread-a", { x: 10, y: 10 });
+      started.resolve();
+      await releaseRecorded.promise;
+      // A real turn renews while the anonymous release is only recorded.
+      await manager.withAgentActivity(
+        "thread-a",
+        () => manager.click("thread-a", { x: 11, y: 11 }),
+        undefined,
+        "turn-2",
+      );
+      await finish.promise;
+    });
+    await started.promise;
+    // A thread-level (turnId-less) release on an anonymous lease: nothing to
+    // match later, so it must not outlive the turn-2 renewal.
+    await manager.releaseDesktopControl("thread-a");
+    releaseRecorded.resolve();
+    finish.resolve();
+    await inFlight;
+
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: true,
+    });
+    await expect(manager.typeText("thread-b", "hi")).rejects.toThrow(/another conversation/);
+    await manager.dispose();
+  });
+
   it("reacquires the lease for a new turn after the previous operation drains", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });

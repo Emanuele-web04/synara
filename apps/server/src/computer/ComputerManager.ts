@@ -2123,9 +2123,23 @@ export class ComputerManager {
           this.agentCallsInFlight.delete(owner);
           if (this.lease?.threadId === owner && this.lease.releaseRequested) {
             const requestedTurnId = this.lease.releaseRequestedTurnId;
-            await withoutDesktopCancellation(() =>
-              this.releaseDesktopControl(owner, requestedTurnId),
-            );
+            // The deferred release is only valid while the lease still names
+            // the turn it was requested for — and an anonymous request only
+            // while the lease is still anonymous. A renewed lease drops it
+            // rather than letting a dead turn's intent kill live work.
+            const stillMatches =
+              requestedTurnId === undefined
+                ? this.lease.turnId === undefined
+                : this.lease.turnId === requestedTurnId;
+            if (stillMatches) {
+              await withoutDesktopCancellation(() =>
+                this.releaseDesktopControl(owner, requestedTurnId),
+              );
+            } else {
+              delete this.lease.releaseRequested;
+              delete this.lease.releaseRequestedTurnId;
+              this.publishCached(owner);
+            }
           } else {
             this.publishCached(owner);
           }
@@ -2255,9 +2269,13 @@ export class ComputerManager {
       this.lastKnownWindowIds ?? (await this.readWindows().then(windowIdSet, () => undefined));
     const now = this.now();
     const held = this.lease;
-    if (held && held.threadId !== owner && !this.isLeaseStale(held, now)) {
+    const heldStale = held !== null && this.isLeaseStale(held, now);
+    if (held && held.threadId !== owner && !heldStale) {
       throw new ComputerLeaseError();
     }
+    // A dead lease's turn stamp is dead with it: an anonymous re-claim must
+    // not inherit it, and an evicted owner's entry can never be useful again.
+    if (heldStale) this.authorityTurns.delete(held.threadId);
     const changed = held?.threadId !== owner;
     assertDesktopOperationActive();
     if (changed) {
@@ -2453,7 +2471,10 @@ export class ComputerManager {
     // settle now rather than at the gate's timeout.
     computerApprovalGate.cancelThread(threadId);
     this.suspendedThreads.add(threadId);
-    await this.revokeControl(threadId);
+    // A rejected stop (e.g. preview cleanup failing inside the release) must
+    // not skip removal — a removed thread that keeps its lease can reappear
+    // as the desktop's owner until the idle backstop fires.
+    await this.revokeControl(threadId).catch(() => undefined);
     this.publishChains.delete(threadId);
     this.threads.delete(threadId);
     this.threadLabels.delete(threadId);
