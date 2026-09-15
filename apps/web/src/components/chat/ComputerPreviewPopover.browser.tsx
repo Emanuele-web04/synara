@@ -1,8 +1,8 @@
 // FILE: ComputerPreviewPopover.browser.tsx
 // Purpose: Interactive coverage the server-markup test cannot reach — the
 //          mounted-armed -> live transition, close hiding for the task,
-//          expand routing to the dock pane path, and Stop hitting the
-//          desktop-control interrupt.
+//          expand routing to the dock pane path while staying live, and Stop
+//          hitting the desktop-control interrupt.
 // Layer: Component browser tests (vitest-browser-react + playwright)
 // Depends on: ComputerPreviewPopover, the real computerPreviewStore.
 
@@ -80,7 +80,7 @@ it("hides for the rest of the task when closed", async () => {
   await screen.unmount();
 });
 
-it("routes expand to the dock pane path and dismisses the preview", async () => {
+it("routes expand to the dock pane path and keeps the session live", async () => {
   const onExpand = vi.fn();
   useComputerPreviewStore.getState().requestPreviewSurface(threadId);
   const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={onExpand} />);
@@ -88,7 +88,9 @@ it("routes expand to the dock pane path and dismisses the preview", async () => 
 
   await screen.getByRole("button", { name: "Open the Computer pane", exact: true }).click();
   expect(onExpand).toHaveBeenCalledTimes(1);
-  await expect.poll(() => session()?.phase).toBe("hidden-for-task");
+  // The popover yields to the open dock pane via dockComputerPaneVisible and
+  // returns when the pane closes: expanding must not hide for the task.
+  await expect.poll(() => session()?.phase).toBe("live");
   await screen.unmount();
 });
 

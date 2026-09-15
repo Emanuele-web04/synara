@@ -196,9 +196,9 @@ function ComputerPreviewPopoverCard(props: {
             size="icon-sm"
             className="size-6"
             onClick={() => {
-              // The detailed pane takes over: the ambient preview is done for
-              // this task either way.
-              hidePreviewForTask(threadId);
+              // The dock pane takes over while open: the popover yields
+              // via dockComputerPaneVisible and returns when the pane
+              // closes, so the session must NOT hide for the task here.
               props.onExpand();
             }}
             title="Open the Computer pane"
