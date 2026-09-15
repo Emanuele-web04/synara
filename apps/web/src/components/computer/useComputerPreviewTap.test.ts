@@ -10,7 +10,7 @@
 // plain mocked object under a stubbed `window`, matching real Electron
 // delivery where frames arrive as {windowId, seq, jpeg} payloads.
 
-import type { DesktopComputerPreviewFrame, ThreadId } from "@synara/contracts";
+import type { DesktopComputerPreviewFrame, ThreadComputerState, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactHarness = vi.hoisted(() => {
@@ -76,9 +76,38 @@ vi.mock("react", () => ({
   useState: reactHarness.useState,
 }));
 
+// Ownership the tap hook reads from the shared computer state store. Empty by
+// default, which the hook treats as a single surface that keeps drawing, so
+// the pre-existing tests below exercise the un-gated path unchanged.
+const tapOwnership = vi.hoisted(() => ({ state: undefined as ThreadComputerState | undefined }));
+
+vi.mock("../../computerStateStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../computerStateStore")>();
+  return {
+    ...actual,
+    useComputerStateStore: (selector: (store: unknown) => unknown) =>
+      selector({
+        threadStatesByThreadId: tapOwnership.state
+          ? { [tapOwnership.state.threadId]: tapOwnership.state }
+          : {},
+        lastActionByThreadId: {},
+      }),
+  };
+});
+
 import { COMPUTER_PREVIEW_TAP_QUIET_MS, useComputerPreviewTap } from "./useComputerPreviewTap";
 
 const THREAD_ID = "thread-tap" as ThreadId;
+
+function ownedThreadState(overrides: Partial<ThreadComputerState> = {}): ThreadComputerState {
+  return {
+    threadId: THREAD_ID,
+    controlOwnerThreadId: THREAD_ID,
+    agentActive: true,
+    controlledByOtherThread: false,
+    ...overrides,
+  } as ThreadComputerState;
+}
 
 interface FakeCanvas {
   canvas: {
@@ -157,6 +186,7 @@ const createImageBitmapMock = vi.hoisted(() => vi.fn());
 
 beforeEach(() => {
   reactHarness.reset();
+  tapOwnership.state = undefined;
   vi.unstubAllGlobals();
   createImageBitmapMock.mockReset();
   createImageBitmapMock.mockImplementation(async () => ({
@@ -398,4 +428,69 @@ describe("useComputerPreviewTap", () => {
     expect(disabled.frameSize).toEqual({ width: 320, height: 200 });
   });
 
+  it("stays inactive and draws nothing when another thread drives the desktop", async () => {
+    // A refused call: agent mid-turn, but another thread owns the lease.
+    tapOwnership.state = ownedThreadState({
+      controlOwnerThreadId: "other-thread" as ThreadId,
+      agentActive: true,
+      controlledByOtherThread: true,
+    });
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+
+    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    expect(output.active).toBe(false);
+    expect(output.frameSize).toBeNull();
+    // Not the driving thread, so the host-wide tap is never even subscribed:
+    // a split leaf must not draw its sibling's frames.
+    expect(bridge.onFrame).not.toHaveBeenCalled();
+
+    feed(bridge, 1);
+    await flushDecode();
+    expect(createImageBitmapMock).not.toHaveBeenCalled();
+    expect(context.drawImage).not.toHaveBeenCalled();
+    const still = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    expect(still.active).toBe(false);
+    expect(still.frameSize).toBeNull();
+  });
+
+  it("draws when its thread owns the desktop lease", async () => {
+    tapOwnership.state = ownedThreadState({
+      controlOwnerThreadId: THREAD_ID,
+      agentActive: false,
+      controlledByOtherThread: false,
+    });
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+
+    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    feed(bridge, 1);
+    await flushDecode();
+
+    expect(createImageBitmapMock).toHaveBeenCalledOnce();
+    expect(context.drawImage).toHaveBeenCalledOnce();
+    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    expect(output.active).toBe(true);
+    expect(output.frameSize).toEqual({ width: 320, height: 200 });
+  });
+
+  it("draws while its agent call is in flight before the lease arrives", async () => {
+    tapOwnership.state = ownedThreadState({
+      controlOwnerThreadId: undefined,
+      agentActive: true,
+      controlledByOtherThread: false,
+    });
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+
+    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    feed(bridge, 1);
+    await flushDecode();
+
+    expect(context.drawImage).toHaveBeenCalledOnce();
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+  });
 });

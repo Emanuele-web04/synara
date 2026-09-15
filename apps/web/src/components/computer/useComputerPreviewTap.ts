@@ -12,6 +12,8 @@
 import type { ThreadId } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import { useComputerStateStore } from "../../computerStateStore";
+
 /**
  * Silence longer than this ends tap ownership of the canvas: the popover
  * falls back to the stills stream until fresh tap frames arrive again.
@@ -36,6 +38,20 @@ export function useComputerPreviewTap(input: {
   const [active, setActive] = useState(false);
   const [frameSize, setFrameSize] = useState<ComputerPreviewTapFrameSize | null>(null);
   const generationRef = useRef(0);
+  // The tap is host-wide, so in a split with two live leaves both cards would
+  // otherwise draw the same frame. Only the driving thread draws, using the
+  // same arm-identity rule as the preview popover: the lease owner, or an
+  // agent mid-call that was not refused for another owner's lease. No thread
+  // state (or no thread) means a single surface, which keeps drawing.
+  const isDrivingThread = useComputerStateStore((store) => {
+    if (threadId === undefined) return true;
+    const threadState = store.threadStatesByThreadId[threadId];
+    if (!threadState) return true;
+    return (
+      threadState.controlOwnerThreadId === threadId ||
+      (threadState.agentActive && !threadState.controlledByOtherThread)
+    );
+  });
   const [pageVisible, setPageVisible] = useState(
     () => typeof document !== "undefined" && document.visibilityState !== "hidden",
   );
@@ -51,6 +67,7 @@ export function useComputerPreviewTap(input: {
     if (
       !enabled ||
       !pageVisible ||
+      !isDrivingThread ||
       typeof onFrame !== "function" ||
       !isImageBitmapAvailable()
     ) {
@@ -145,8 +162,9 @@ export function useComputerPreviewTap(input: {
     };
     // The tap stream is host-wide rather than per thread; threadId keys the
     // subscription so a card remounted for another thread restarts sequence
-    // tracking instead of inheriting stale seq state.
-  }, [canvasRef, enabled, pageVisible, threadId]);
+    // tracking instead of inheriting stale seq state. isDrivingThread re-keys
+    // it the same way when ownership moves between split leaves.
+  }, [canvasRef, enabled, pageVisible, threadId, isDrivingThread]);
 
   return { active, frameSize };
 }
