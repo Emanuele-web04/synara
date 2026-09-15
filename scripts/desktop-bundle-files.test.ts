@@ -91,6 +91,27 @@ describe("desktop bundle file selection", () => {
     }
   });
 
+  it("removes MSVC build intermediates, not terminal runtime binaries", () => {
+    const patterns = createDesktopBundleFilePatterns("win");
+    for (const file of [
+      "build/Release/winpty-agent.iobj",
+      "build/Release/pty.ipdb",
+      "build/deps/winpty/src/Release/obj/winpty/winpty.tlog/CL.read.1.tlog",
+      "build/pty.vcxproj",
+      "build/Release/pty.lib",
+    ]) {
+      expect(excluded(`node_modules/node-pty/${file}`, patterns), file).toBe(true);
+    }
+    for (const file of [
+      "build/Release/conpty.node",
+      "build/Release/winpty.dll",
+      "build/Release/winpty-agent.exe",
+      "third_party/conpty/1.23.251008001/win10-x64/OpenConsole.exe",
+    ]) {
+      expect(excluded(`node_modules/node-pty/${file}`, patterns), file).toBe(false);
+    }
+  });
+
   it("keeps native PTY prebuilds for the target platform, including both Mac architectures", () => {
     const mac = createDesktopBundleFilePatterns("mac");
     expect(excluded("node_modules/node-pty/prebuilds/darwin-arm64/pty.node", mac)).toBe(false);

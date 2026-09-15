@@ -31,6 +31,11 @@ export function createDesktopBundleFilePatterns(
   if (platform !== "mac") files.push("!node_modules/node-pty/prebuilds/darwin-*/**");
   if (platform !== "win") files.push("!node_modules/node-pty/prebuilds/win32-*/**");
   files.push("!node_modules/node-pty/lib/*.test.js");
+  // MSVC leaves incremental-link inputs and build logs next to the rebuilt
+  // addon. These are build products, not DLLs, executables, or native addons.
+  files.push(
+    "!node_modules/node-pty/build/**/*.{iobj,ipdb,tlog,vcxproj,filters,recipe,lastbuildstate,exp,lib}",
+  );
 
   // All icon preferences for the target OS and the menu fallback remain intact.
   // Build resources (signing entitlements / installer icons) are left untouched;
