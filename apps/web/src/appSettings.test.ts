@@ -64,6 +64,12 @@ describe("computer control defaults", () => {
     expect(normalized.computerControlEnabled).toBe(true);
     expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
   });
+
+  it("defaults the in-chat preview to the compact footprint", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerPreviewSize).toBe("compact");
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ computerPreviewSize: "large" });
+    expect(normalizeStoredAppSettings(decoded).computerPreviewSize).toBe("large");
+  });
 });
 
 describe("server-backed provider enablement", () => {

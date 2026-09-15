@@ -21,7 +21,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
-import type { AppSettingsBinding } from "~/appSettings";
+import type { AppSettingsBinding, ComputerPreviewSize } from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
   computerLastFailureNote,
@@ -43,7 +43,7 @@ import {
   computerStatusQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { SettingResetButton } from "./SettingControls";
+import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
 import {
   SettingsCard,
   SettingsRow,
@@ -383,6 +383,31 @@ export function ComputerSettingsPanel({
                 updateSettings({ autoOpenComputerPane: Boolean(checked) })
               }
               aria-label="Show the computer preview automatically when an agent drives the desktop"
+            />
+          }
+        />
+        <SettingsRow
+          title="Preview size"
+          description="Compact keeps the in-chat preview small and glanceable; large gives it the full wide card."
+          resetAction={
+            settings.computerPreviewSize !== defaults.computerPreviewSize ? (
+              <SettingResetButton
+                label="preview size"
+                onClick={() =>
+                  updateSettings({ computerPreviewSize: defaults.computerPreviewSize })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl<ComputerPreviewSize>
+              value={settings.computerPreviewSize}
+              onValueChange={(value) => updateSettings({ computerPreviewSize: value })}
+              options={[
+                { value: "compact", label: "Compact" },
+                { value: "large", label: "Large" },
+              ]}
+              ariaLabel="In-chat computer preview size"
             />
           }
         />

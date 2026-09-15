@@ -159,4 +159,11 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).not.toContain("/computer-use");
     expect(markup).not.toContain("How agents use the desktop");
   });
+
+  it("offers a preview size choice next to the automatic preview", () => {
+    const markup = render({ status: status() });
+    expect(markup).toContain("Preview size");
+    expect(markup).toContain("Compact");
+    expect(markup).toContain("Large");
+  });
 });

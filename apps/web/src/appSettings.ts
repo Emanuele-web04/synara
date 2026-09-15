@@ -103,6 +103,9 @@ export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_a
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
+export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
+export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
@@ -349,6 +352,10 @@ export const AppSettingsSchema = Schema.Struct({
   enableAppshots: Schema.optionalKey(Schema.Boolean),
   // Open the Computer pane automatically when an agent starts driving the desktop.
   autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
+  // In-chat computer preview footprint. Compact is the default: a small
+  // glanceable card that reserves a narrow gutter. Large restores the
+  // previous wide card for users who want the detail inline.
+  computerPreviewSize: ComputerPreviewSize.pipe(withDefaults(() => DEFAULT_COMPUTER_PREVIEW_SIZE)),
   // Computer control is off by default. When on, the agent may use the desktop
   // in any chat. Approval gates and Stop still apply.
   computerControlEnabled: Schema.Boolean.pipe(withDefaults(() => false)),
