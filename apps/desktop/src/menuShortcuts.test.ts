@@ -7,6 +7,7 @@ import {
   applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
+  resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -91,6 +92,115 @@ describe("resolveDesktopPhysicalZoomAction", () => {
     expect(
       resolveDesktopPhysicalZoomAction("linux", { ...windowsCtrlInput, code: "Minus" }),
     ).toBeNull();
+  });
+});
+
+describe("resolveDesktopZoomShortcutAction", () => {
+  const linuxCtrlInput = {
+    type: "keyDown",
+    key: "",
+    control: true,
+    meta: false,
+    shift: false,
+    alt: false,
+  };
+
+  it("zooms in on Ctrl+= and Ctrl++ (shifted plus included)", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "=", code: "Equal" }),
+    ).toBe("zoomIn");
+    // Italian and other layouts type "+" with Shift held.
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "BracketRight",
+        shift: true,
+      }),
+    ).toBe("zoomIn");
+  });
+
+  it("zooms in on the numpad plus key", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "Add",
+        code: "NumpadAdd",
+      }),
+    ).toBe("zoomIn");
+  });
+
+  it("zooms out on Ctrl+- and resets on Ctrl+0", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "-", code: "Minus" }),
+    ).toBe("zoomOut");
+    expect(
+      resolveDesktopZoomShortcutAction("linux", { ...linuxCtrlInput, key: "0", code: "Digit0" }),
+    ).toBe("resetZoom");
+  });
+
+  it("does not steal shifted minus/zero or modified chords", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "_",
+        code: "Minus",
+        shift: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "0",
+        code: "Digit0",
+        shift: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "Equal",
+        alt: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "+",
+        code: "Equal",
+        meta: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores NumLock-off numpad presses that surface as navigation keys", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        key: "Insert",
+        code: "Numpad0",
+      }),
+    ).toBeNull();
+  });
+
+  it("only handles Linux Ctrl key-down events", () => {
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        type: "keyUp",
+        key: "=",
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopZoomShortcutAction("linux", {
+        ...linuxCtrlInput,
+        control: false,
+        key: "=",
+      }),
+    ).toBeNull();
+    expect(resolveDesktopZoomShortcutAction("win32", { ...linuxCtrlInput, key: "=" })).toBeNull();
+    expect(resolveDesktopZoomShortcutAction("darwin", { ...linuxCtrlInput, key: "=" })).toBeNull();
   });
 });
 
