@@ -584,6 +584,32 @@ describe("Cua GUI host retirement", () => {
       ),
     ).resolves.toMatchObject({ ok: false });
     expect(releaseCalls).toBe(1);
+    // A confirmed release makes the desktop provably clean: the dead
+    // generation clears, so the next request spawns a replacement instead of
+    // poisoning admission for the host's lifetime.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+  it("keeps admission closed for the host's lifetime when held-input release fails", async () => {
+    const f = await fixture(capability, {
+      crash: true,
+      releaseHeldInput: () => Promise.reject(new Error("helper gone")),
+    });
+    await expect(
+      cuaRequest(
+        f.endpoint,
+        { method: "call", name: "type_text", args: { text: "fixture" } },
+        { timeoutMs: 1_000, mutation: true },
+      ),
+    ).resolves.toMatchObject({ ok: false });
+    // Without a confirmed release the held state is unprovable — no
+    // replacement generation may spawn over it, now or later.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     await expect(f.host.stop()).rejects.toThrow("admission is closed");
   });
   it("rejects later backend requests throughout suspension and resumes only on explicit restart", async () => {

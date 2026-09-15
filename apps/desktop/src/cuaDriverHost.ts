@@ -660,16 +660,27 @@ export class CuaDriverHost {
       // is held, and a user click landing under it feels dead system-wide.
       const inputUncertain = generation.inputInFlight;
       const releaseHeldInput = async () => {
-        if (!inputUncertain || !this.options.releaseHeldInput) return;
+        if (!inputUncertain || !this.options.releaseHeldInput) return false;
         try {
           await this.options.releaseHeldInput();
           log("released held input left by the dead driver generation");
+          return true;
         } catch (error) {
           log(`held-input release failed: ${String(error)}`);
+          return false;
         }
       };
       if (generation.didExit && generation.inputInFlight) {
-        await releaseHeldInput();
+        // A confirmed release makes the desktop provably clean again — the
+        // generation clears and the next request spawns a replacement. Without
+        // a confirmed release the held state is unprovable: keep the dead
+        // generation referenced so every later request fails closed instead
+        // of a replacement compounding the uncertainty.
+        if (await releaseHeldInput()) {
+          if (this.generation === generation) this.generation = undefined;
+          await rm(generation.socket, { force: true });
+          return;
+        }
         throw new Error(
           "Cua Driver exited during input without confirming native cleanup. Computer admission is closed.",
         );
@@ -696,9 +707,28 @@ export class CuaDriverHost {
           cleanupConfirmed = false;
         }
         if (!cleanupConfirmed) {
-          // The socket died or the acknowledgement could not be trusted — the
-          // in-gate releases may never have run, so the helper posts the
-          // OS-level ups before admission closes on this uncertainty.
+          // A dead socket can outrun the exit event: the process may already
+          // be gone, in which case this is the crash path, not a live driver
+          // withholding its acknowledgement. Give the exit a short grace.
+          if (!generation.didExit) await Promise.race([generation.exited, delay(500)]);
+          if (generation.didExit) {
+            // No input in flight means nothing is uncertain — the dead
+            // generation clears outright. With input in flight, only a
+            // confirmed release clears it.
+            const cleared = !generation.inputInFlight || (await releaseHeldInput());
+            if (cleared) {
+              if (this.generation === generation) this.generation = undefined;
+              await rm(generation.socket, { force: true });
+              return;
+            }
+            throw new Error(
+              "Cua Driver exited during input without confirming native cleanup. Computer admission is closed.",
+            );
+          }
+          // The process is genuinely alive and its acknowledgement could not
+          // be trusted — the in-gate releases may never have run, so the
+          // helper posts the OS-level ups before admission closes on this
+          // uncertainty. The driver is not killed or replaced.
           await releaseHeldInput();
           throw new Error(
             "Cua Driver did not confirm native input cleanup. Computer admission is closed; the driver was not killed or replaced.",
@@ -726,7 +756,15 @@ export class CuaDriverHost {
       await rm(generation.socket, { force: true });
     });
     generation.retirement = this.retiring;
-    return this.retiring;
+    // The rejection belongs to whoever retired this generation — not to the
+    // sequencing chain. A cleanup that throws ("admission closed") must not
+    // leave `this.retiring` rejected forever, or one mid-input daemon death
+    // would refuse every generation the host ever tries to spawn.
+    this.retiring = this.retiring.then(
+      () => undefined,
+      () => undefined,
+    );
+    return generation.retirement;
   }
 
   stop(): Promise<void> {
