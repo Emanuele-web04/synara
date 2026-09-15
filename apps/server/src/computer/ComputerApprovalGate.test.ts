@@ -243,4 +243,39 @@ describe("ComputerApprovalGate", () => {
     ).rejects.toMatchObject({ code: "approval_queue_full", retryable: true });
     for (const threadId of threads) gate.cancelThread(threadId);
   });
+
+  it("an abort releases a consent whose publish never resolves", async () => {
+    const gate = new ComputerApprovalGate();
+    const abort = new AbortController();
+    const request = gate.request({
+      threadId: "stuck",
+      signal: abort.signal,
+      publish: () => new Promise(() => {}),
+    });
+    abort.abort();
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    // The slot was released: the thread can prompt again.
+    const next = gate.request({
+      threadId: "stuck",
+      signal: new AbortController().signal,
+      publish: async () => {},
+    });
+    gate.cancelThread("stuck");
+    await expect(next).resolves.toBe(false);
+  });
+
+  it("a dismissal publish failure cannot convert an accepted consent into a rejection", async () => {
+    const gate = new ComputerApprovalGate();
+    let requestId = "";
+    const decision = gate.request({
+      threadId: "dismiss",
+      signal: new AbortController().signal,
+      publish: async (id, resolved) => {
+        if (resolved === undefined) requestId = id;
+        else throw new Error("socket gone");
+      },
+    });
+    gate.respond("dismiss", requestId, "accept");
+    await expect(decision).resolves.toBe(true);
+  });
 });

@@ -134,16 +134,28 @@ export class ComputerApprovalGate {
     timeout.unref?.();
     let decision: ProviderApprovalDecision = "cancel";
     try {
-      await input.publish(requestId);
-      if (input.signal.aborted) cancel();
-      decision = await answer;
+      // Publish is on the critical path but is not the decision path: an
+      // answer that settles first (a cancel, or a decision that arrived
+      // while publish was still in flight) releases the slot instead of
+      // leaving the consent pending on a wedged publish forever.
+      const published = input.publish(requestId).then(() => "ok" as const);
+      const outcome = await Promise.race([published, answer]);
+      void published.catch(() => undefined);
+      if (outcome === "ok") {
+        if (input.signal.aborted) cancel();
+        decision = await answer;
+      } else {
+        decision = outcome;
+      }
       input.signal.throwIfAborted();
       return decision === "accept";
     } finally {
       clearTimeout(timeout);
       input.signal.removeEventListener("abort", cancel);
       this.pending.delete(requestId);
-      await input.publish(requestId, decision);
+      // Best-effort dismissal: a hung or failed publish must not turn an
+      // accepted consent into a rejection or hold the caller.
+      void input.publish(requestId, decision).catch(() => undefined);
     }
   }
 }
