@@ -5721,6 +5721,8 @@ describe("AgentGateway", () => {
       providerStatuses: [
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "error",
           available: false,
           authStatus: "unauthenticated",
