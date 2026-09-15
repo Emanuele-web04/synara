@@ -1,4 +1,7 @@
-import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS } from "@synara/contracts";
+import {
+  CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS,
+  CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -154,5 +157,105 @@ describe("assistantSelections", () => {
     expect(formatAssistantSelectionQueuePreview(2)).toBe("Referenced selections");
     expect(formatAssistantSelectionTitleSeed(1)).toBe("Referenced assistant selection");
     expect(formatAssistantSelectionTitleSeed(2)).toBe("Referenced assistant selections");
+  });
+
+  it("serializes a user note after the quoted entry", () => {
+    expect(
+      appendAssistantSelectionsToPrompt("Investigate this", [
+        {
+          assistantMessageId: "msg-1",
+          text: "selected line",
+          comment: "this looks wrong",
+        },
+      ]),
+    ).toBe(
+      "Investigate this\n\n<assistant_selection>\n- assistant message msg-1:\n  selected line\n- user note:\n  this looks wrong\n</assistant_selection>",
+    );
+  });
+
+  it("round-trips comments through extraction", () => {
+    const prompt = appendAssistantSelectionsToPrompt("Investigate this", [
+      {
+        assistantMessageId: "msg-1",
+        text: "first line\nsecond line",
+        comment: "check this\nand that",
+      },
+      {
+        assistantMessageId: "msg-2",
+        text: "other quote",
+      },
+      {
+        assistantMessageId: "msg-3",
+        text: "third quote",
+        comment: "also this",
+      },
+    ]);
+
+    expect(extractTrailingAssistantSelections(prompt)).toEqual({
+      promptText: "Investigate this",
+      selections: [
+        {
+          assistantMessageId: "msg-1",
+          text: "first line\nsecond line",
+          comment: "check this\nand that",
+        },
+        { assistantMessageId: "msg-2", text: "other quote" },
+        {
+          assistantMessageId: "msg-3",
+          text: "third quote",
+          comment: "also this",
+        },
+      ],
+    });
+  });
+
+  it("keeps quoted lines that look like markers inside the quote", () => {
+    const prompt = appendAssistantSelectionsToPrompt("Investigate this", [
+      {
+        assistantMessageId: "msg-1",
+        text: "> user note:\n> not a comment",
+      },
+    ]);
+
+    expect(extractTrailingAssistantSelections(prompt)).toEqual({
+      promptText: "Investigate this",
+      selections: [
+        {
+          assistantMessageId: "msg-1",
+          text: "> user note:\n> not a comment",
+        },
+      ],
+    });
+  });
+
+  it("normalizes and caps the comment on created attachments", () => {
+    expect(
+      createAssistantSelectionAttachment({
+        assistantMessageId: "msg-1",
+        text: "selected line",
+        comment: "  remember this  ",
+      }),
+    ).toMatchObject({
+      type: "assistant-selection",
+      assistantMessageId: "msg-1",
+      text: "selected line",
+      comment: "remember this",
+    });
+
+    const whitespaceOnlyComment = createAssistantSelectionAttachment({
+      assistantMessageId: "msg-1",
+      text: "selected line",
+      comment: "   ",
+    });
+    expect(whitespaceOnlyComment).not.toBeNull();
+    expect(whitespaceOnlyComment).not.toHaveProperty("comment");
+
+    expect(
+      createAssistantSelectionAttachment({
+        assistantMessageId: "msg-1",
+        text: "selected line",
+        comment: "x".repeat(CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS + 10),
+      })?.comment,
+    ).toHaveLength(CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS);
   });
 });

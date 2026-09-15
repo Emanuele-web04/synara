@@ -5,6 +5,7 @@
 import { pluralize } from "@synara/shared/text";
 
 import { MessageCircleIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { type ChatAssistantSelectionAttachment } from "../../types";
 import { AttachmentSummaryChip } from "./AttachmentSummaryChip";
 
@@ -29,9 +30,16 @@ export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummary
       removeLabel="Remove selections"
       onRemove={props.onRemove}
       tooltip={props.selections.map((selection) => (
-        <p key={selection.id} className="text-xs leading-relaxed">
-          {selection.text}
-        </p>
+        <div key={selection.id} className="space-y-0.5">
+          {selection.comment ? (
+            <p className="text-xs font-medium leading-relaxed">{selection.comment}</p>
+          ) : null}
+          <p
+            className={cn("text-xs leading-relaxed", selection.comment && "text-muted-foreground")}
+          >
+            {selection.text}
+          </p>
+        </div>
       ))}
     />
   );

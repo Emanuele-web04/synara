@@ -24,11 +24,17 @@ smaller installs:
 Filtered scopes never restore/save a full `node_modules` archive. Windows
 installs cold rather than extracting the pathological Bun package cache. Its
 install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matching
-the measured install layout and allowing Bun to hardlink package files. Full
-Linux installs retain their modules cache; the Bun package archive is restored
-only when modules are not an exact hit. Frozen installation and lifecycle patches
-still run on cache hits. Turbo persistence is opt-in for unit/build consumers.
-OS, architecture and lockfile boundaries prevent incompatible archive reuse.
+the measured install layout and allowing Bun to hardlink package files. Windows
+also serializes lifecycle scripts (`--concurrent-scripts=1`): the workspace
+`prepare` scripts all run `effect-language-service patch` against the same
+isolated-store `typescript.js`, and a patcher that require()s the file while a
+sibling process is rewriting it falls back to the `@typescript/native` (7.x)
+store entry — which has no `ScriptTarget` — and crashes the install with
+`Cannot read properties of undefined (reading 'ES2022')`. Full Linux installs
+retain their modules cache; the Bun package archive is restored only when
+modules are not an exact hit. Frozen installation and lifecycle patches still
+run on cache hits. Turbo persistence is opt-in for unit/build consumers. OS,
+architecture and lockfile boundaries prevent incompatible archive reuse.
 Test and typecheck task results remain uncached.
 
 Release smoke shares the static runner, removing one checkout/install/runner and

@@ -487,6 +487,7 @@ function normalizeChatAttachments(
             id: attachment.id,
             assistantMessageId: attachment.assistantMessageId,
             text: attachment.text,
+            ...(attachment.comment !== undefined ? { comment: attachment.comment } : {}),
           }
         : attachment.type === "file"
           ? {
@@ -510,7 +511,8 @@ function normalizeChatAttachments(
       ((existing.type === "assistant-selection" &&
         nextAttachment.type === "assistant-selection" &&
         existing.assistantMessageId === nextAttachment.assistantMessageId &&
-        existing.text === nextAttachment.text) ||
+        existing.text === nextAttachment.text &&
+        existing.comment === nextAttachment.comment) ||
         (existing.type === "image" &&
           nextAttachment.type === "image" &&
           existing.name === nextAttachment.name &&
@@ -610,6 +612,7 @@ function readModelAttachmentsFromChatMessage(
             type: "assistant-selection" as const,
             assistantMessageId: MessageId.makeUnsafe(attachment.assistantMessageId),
             text: attachment.text,
+            ...(attachment.comment !== undefined ? { comment: attachment.comment } : {}),
           }
         : attachment.type === "file"
           ? {

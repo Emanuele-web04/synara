@@ -44,6 +44,7 @@ function commandIntent(command: Command): Record<string, unknown> {
               type: attachment.type,
               assistantMessageId: attachment.assistantMessageId,
               text: attachment.text,
+              comment: attachment.comment,
             };
           case "image":
           case "file":

@@ -295,6 +295,7 @@ export async function stageUploadComposerAttachments(input: {
     type: "assistant-selection" as const,
     assistantMessageId: MessageId.makeUnsafe(selection.assistantMessageId),
     text: selection.text,
+    ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
   }));
 
   // Upload sequentially so selecting several maximum-size files never creates a

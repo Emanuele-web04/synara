@@ -1536,6 +1536,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   id: `fallback-selection-${row.message.id}-${index}`,
                   assistantMessageId: selection.assistantMessageId,
                   text: selection.text,
+                  ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
                 }));
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;

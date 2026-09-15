@@ -129,6 +129,7 @@ export function buildThreadHandoffImportedMessages(
                   id: attachment.id,
                   assistantMessageId: attachment.assistantMessageId,
                   text: attachment.text,
+                  ...(attachment.comment !== undefined ? { comment: attachment.comment } : {}),
                 }
               : {
                   type: attachment.type,
