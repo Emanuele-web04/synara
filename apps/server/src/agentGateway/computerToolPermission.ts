@@ -80,27 +80,23 @@ export function qualifiedSynaraComputerToolName(
  * A session that was never granted computer control must still surface the
  * denial card path when the model reaches for a Computer tool, or the attempt
  * dies as a silent tool error and the user never learns control is off. Two
- * gaps lose it today:
+ * gaps used to lose it:
  *
  * 1. Gateway transport (all MCP providers): `makeAgentGatewayMcpTransport`
  *    (`apps/server/src/agentGateway/mcpTransport.ts`) denies an unknown tool
  *    name with `capability_denied` plus the denial hook only when
- *    `isComputerToolName` matches. That predicate is wired in
- *    `apps/server/src/agentGateway/Layers/AgentGateway.ts` as an exact match
- *    against the served catalog names (`computer_click`, ...), so a prefixed
- *    spelling from a session that never saw the catalog —
- *    `synara_computer_click`, `mcp__synara__computer_click` — falls through
- *    to Unknown-tool INVALID_PARAMS with no `computer-control-denied`
- *    activity and no card. Minimal patch at that call site:
- *    `isComputerToolName: (toolName) => isSynaraComputerToolFamilyName(toolName)`.
+ *    `isComputerToolName` matches. Wired in
+ *    `apps/server/src/agentGateway/Layers/AgentGateway.ts` as the catalog
+ *    membership test OR this family matcher, so a prefixed spelling from a
+ *    session that never saw the catalog —
+ *    `synara_computer_click`, `mcp__synara__computer_click` — still reaches
+ *    the denial hook and the card.
  * 2. Pi native projection: `buildPiAgentGatewayCustomTools`
- *    (`apps/server/src/provider/Layers/PiAdapter.ts`) projects only the
- *    leased catalog into Pi's custom-tool API, so without computer control
- *    the family is absent and a Pi-local `computer_*` call fails inside the
- *    Pi SDK without ever reaching the gateway transport above. Minimal patch
- *    there: register one fallback custom tool per family name that forwards
- *    to `callAgentGatewayMcpTool`, letting the gateway deny it with the card,
- *    or surface a local `capability_denied` shaped like the gateway's.
+ *    (`apps/server/src/provider/Layers/PiAdapter.ts`) projects the leased
+ *    catalog into Pi's custom-tool API and registers a forwarding fallback
+ *    for every family name absent from it, so a Pi-local `computer_*` call
+ *    without computer control reaches the gateway's `capability_denied`
+ *    instead of failing silently inside the Pi SDK.
  *
  * Entirely-unknown names (`computer_future_tool`, another server's
  * `mcp__other__computer_click`) must keep their current behavior — unknown
