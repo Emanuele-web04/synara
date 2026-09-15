@@ -4,6 +4,7 @@ import {
   type CodexModelOptions,
   type ModelSlug,
   type ProviderKind,
+  type ServerProviderStatus,
   ThreadId,
 } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
@@ -51,8 +52,24 @@ const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
 
 const CODEX_THREAD_ID = ThreadId.makeUnsafe("thread-codex-effort-slider");
 const GPT_5_5 = "gpt-5.5" as ModelSlug;
+const GPT_5_4 = "gpt-5.4" as ModelSlug;
 
-function CodexSliderHarness() {
+const CODEX_PROVIDER_STATUS: ServerProviderStatus = {
+  provider: "codex",
+  status: "ready",
+  available: true,
+  authStatus: "authenticated",
+  checkedAt: "2026-04-10T10:00:00.000Z",
+};
+
+type CodexSliderHarnessProps = {
+  // Unlocked providers nest the model list one level deeper (provider → models).
+  lockedProvider?: ProviderKind | null;
+  onProviderModelChange?: (provider: ProviderKind, model: ModelSlug) => void;
+};
+
+function CodexSliderHarness(props: CodexSliderHarnessProps) {
+  const lockedProvider = props.lockedProvider === undefined ? "codex" : props.lockedProvider;
   const prompt = useComposerThreadDraft(CODEX_THREAD_ID).prompt;
   const setPrompt = useComposerDraftStore((store) => store.setPrompt);
   const { modelOptions, selectedModel } = useEffectiveComposerModelState({
@@ -68,13 +85,17 @@ function CodexSliderHarness() {
       model={(selectedModel ?? GPT_5_5) as ModelSlug}
       // Started threads pin their provider, which also gives the model submenu a
       // flat model list instead of one submenu per provider.
-      lockedProvider="codex"
+      lockedProvider={lockedProvider}
+      providers={[CODEX_PROVIDER_STATUS]}
       modelOptionsByProvider={{
         ...EMPTY_MODEL_OPTIONS_BY_PROVIDER,
-        codex: [{ slug: GPT_5_5, name: "GPT-5.5" }],
+        codex: [
+          { slug: GPT_5_5, name: "GPT-5.5" },
+          { slug: GPT_5_4, name: "GPT-5.4" },
+        ],
       }}
       effortControl="slider"
-      onProviderModelChange={vi.fn()}
+      onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       threadId={CODEX_THREAD_ID}
       modelOptions={modelOptions?.codex}
       prompt={prompt}
@@ -83,7 +104,10 @@ function CodexSliderHarness() {
   );
 }
 
-async function mountCodexSlider(options?: CodexModelOptions) {
+async function mountCodexSlider(
+  options?: CodexModelOptions,
+  harnessProps: CodexSliderHarnessProps = {},
+) {
   const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
     [CODEX_THREAD_ID]: {
       prompt: "",
@@ -118,7 +142,7 @@ async function mountCodexSlider(options?: CodexModelOptions) {
     draftThreadsByThreadId: {},
     projectDraftThreadIdByProjectId: {},
   });
-  const screen = await render(<CodexSliderHarness />);
+  const screen = await render(<CodexSliderHarness {...harnessProps} />);
   return {
     cleanup: async () => {
       await screen.unmount();
@@ -195,6 +219,48 @@ describe("ComposerModelEffortPicker (effort slider)", () => {
       await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
 
       await expect.element(page.getByRole("menuitemradio", { name: "GPT-5.5" })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("keeps the slider open after picking a model so effort can be adjusted", async () => {
+    const onProviderModelChange = vi.fn();
+    const { cleanup } = await mountCodexSlider(undefined, { onProviderModelChange });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      await page.getByRole("menuitemradio", { name: "GPT-5.4" }).click();
+
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      // Only the model list closes; the card stays up with the slider ready to use.
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
+      });
+      await expect.element(page.getByRole("slider", { name: "Reasoning effort" })).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("closes nested provider lists too when a model is picked", async () => {
+    const onProviderModelChange = vi.fn();
+    const { cleanup } = await mountCodexSlider(undefined, {
+      lockedProvider: null,
+      onProviderModelChange,
+    });
+    try {
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      await page.getByRole("menuitem", { name: "Codex" }).click();
+      await page.getByRole("menuitemradio", { name: "GPT-5.4" }).click();
+
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
+        expect(document.body.textContent ?? "").not.toContain("Add Providers");
+      });
+      await expect.element(page.getByRole("slider", { name: "Reasoning effort" })).toBeVisible();
     } finally {
       await cleanup();
     }
