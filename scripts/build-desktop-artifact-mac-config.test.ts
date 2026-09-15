@@ -46,7 +46,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
     assert.equal(config.files?.[0], "**/*");
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
-    assert.ok(config.files?.includes(`!${MAC_DEVICE_HELPER_STAGE_PATH}/**`));
+    assert.ok(config.files?.includes("!apps/server/dist/device-helper/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",

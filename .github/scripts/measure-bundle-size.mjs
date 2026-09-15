@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 
 // Read-only inventory: count regular-file bytes, never follow symlinks or
 // double-count an ASAR's contents in the installed application total.
@@ -59,7 +59,8 @@ function readAsar(path) {
     if (readSync(fd, prefix, 0, prefix.length, 0) !== prefix.length)
       throw new Error(`Truncated ASAR: ${path}`);
     const length = prefix.readUInt32LE(12);
-    if (length < 2 || length > 128 * 1024 * 1024) throw new Error(`Invalid ASAR header: ${path}`);
+    if (length < 2 || length > 128 * 1024 * 1024)
+      throw new Error(`Invalid ASAR header: ${path}`);
     const header = Buffer.alloc(length);
     if (readSync(fd, header, 0, length, 16) !== length)
       throw new Error(`Truncated ASAR header: ${path}`);
@@ -117,33 +118,25 @@ const packagedDirectories = readdirSync(dist).filter(
     (name.startsWith("mac") || name.endsWith("-unpacked")),
 );
 if (packagedDirectories.length !== 1)
-  throw new Error(
-    `Expected one native packaged application, got ${packagedDirectories.join(", ")}`,
-  );
+  throw new Error(`Expected one native packaged application, got ${packagedDirectories.join(", ")}`);
 const packagedRoot = join(dist, packagedDirectories[0]);
 const packagedFiles = inventory(packagedRoot);
 const asarFiles = packagedFiles.filter((file) => basename(file.path) === "app.asar");
-if (asarFiles.length !== 1) throw new Error("Expected one app.asar in the packaged application.");
+if (asarFiles.length !== 1)
+  throw new Error("Expected one app.asar in the packaged application.");
 const asar = readAsar(join(packagedRoot, asarFiles[0].path));
 const artifacts = readdirSync(dist)
   .filter((name) => /\.(dmg|zip|AppImage|exe)$/.test(name))
   .map((name) => ({
     name,
     bytes: lstatSync(join(dist, name)).size,
-    sha256: createHash("sha256")
-      .update(readFileSync(join(dist, name)))
-      .digest("hex"),
+    sha256: createHash("sha256").update(readFileSync(join(dist, name))).digest("hex"),
   }));
 if (artifacts.length === 0) throw new Error("No installer/update archives found.");
 const report = {
   schemaVersion: 1,
-  sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: source,
-    encoding: "utf8",
-  }).trim(),
-  lockfileSha256: createHash("sha256")
-    .update(readFileSync(join(source, "bun.lock")))
-    .digest("hex"),
+  sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(),
+  lockfileSha256: createHash("sha256").update(readFileSync(join(source, "bun.lock"))).digest("hex"),
   platform: process.platform,
   arch: process.arch,
   node: process.version,

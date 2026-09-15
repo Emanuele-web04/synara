@@ -3,10 +3,7 @@
 // Layer: Release/build helper
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
-import {
-  desktopDependencyFileExclusions,
-  desktopPlatformFileExclusions,
-} from "./desktop-package-files.ts";
+import { desktopPackageFiles, includeDesktopDependencySources } from "./desktop-package-files.ts";
 
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
@@ -38,8 +35,8 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly signed?: boolean;
-  readonly includeDependencySources?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
+  readonly includeDependencySources?: boolean;
 }
 
 export interface DesktopNativeBuildHostInput {
@@ -73,12 +70,13 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const files = [
-    "**/*",
-    ...desktopDependencyFileExclusions(input.includeDependencySources),
-    ...desktopPlatformFileExclusions(input.platform),
-  ];
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    files: desktopPackageFiles(
+      input.platform,
+      input.includeDependencySources ?? includeDesktopDependencySources(process.env),
+    ),
+  };
 
   if (input.platform === "mac") {
     const mac = {
@@ -108,11 +106,11 @@ export function createDesktopPlatformBuildConfig(
         writeUpdateInfo: false,
       },
       files: [
-        ...files,
+        ...nativePackaging.files,
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
-        // The physical-device helper is compiled at runtime from the intact
-        // extraFiles copy under Contents/Resources; do not duplicate it in ASAR.
-        `!${MAC_DEVICE_HELPER_STAGE_PATH}/**`,
+        // macOS uses the external copy through SYNARA_DEVICE_HELPER_SOURCE_DIR.
+        // Keep extraFiles below: physical-device setup needs these Swift sources.
+        "!apps/server/dist/device-helper/**",
       ],
       extraFiles: [
         {

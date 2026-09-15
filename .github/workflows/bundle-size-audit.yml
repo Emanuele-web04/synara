@@ -6,18 +6,44 @@ on:
       - perf/production-bundle-size-audit
     paths:
       - .github/workflows/bundle-size-audit.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  inspect:
-    name: Inspect pinned runtime dependency files
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  measure:
+    name: Measure ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
@@ -25,14 +51,40 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: package.json
-      - name: Install pinned packages without lifecycle scripts
-        run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
-      - name: Archive runtime inspection inputs and local checking tools
+      - name: Prepare read-only audit helper
         shell: bash
         run: |
-          tar -czf "$RUNNER_TEMP/dependency-inspection.tar.gz" --exclude='*.map' --exclude='*.node' --exclude='*.wasm' --exclude='*.png' --exclude='*.jpg' --exclude='*.jpeg' --exclude='*.woff*' --exclude='*.ttf' --exclude='*.exe' --exclude='claude' node_modules/effect node_modules/@effect/platform-node node_modules/@effect/platform-node-shared node_modules/@earendil-works node_modules/@pierre/diffs node_modules/node-pty node_modules/@mariozechner/clipboard node_modules/@anthropic-ai/sdk node_modules/openai node_modules/zod node_modules/playwright-core node_modules/patchright-core node_modules/web-streams-polyfill node_modules/betterwright node_modules/oxfmt node_modules/@oxfmt node_modules/oxlint node_modules/@oxlint
+          mkdir -p "$RUNNER_TEMP/size-audit"
+          cp .github/scripts/measure-bundle-size.mjs "$RUNNER_TEMP/size-audit/measure.mjs"
+      - name: Archive audited source
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/size-audit/source.tar.gz" HEAD
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
         with:
-          name: dependency-inspection
-          path: ${{ runner.temp }}/dependency-inspection.tar.gz
+          name: bundle-audit-candidate-source
+          path: ${{ runner.temp }}/size-audit/source.tar.gz
           retention-days: 7
+      - name: Install frozen release build dependencies
+        shell: bash
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-audit/artifacts"
+      - name: Measure candidate
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/size-audit/measure.mjs" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/size-audit/candidate" '${{ matrix.platform }}'
+      - name: Verify packaged desktop startup and runtime dependencies
+        shell: bash
+        run: |
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-audit/artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bundle-size-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/size-audit/candidate
+          retention-days: 14
+          if-no-files-found: warn
