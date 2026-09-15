@@ -286,6 +286,26 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+  it.effect("explicitly selects Standard when opening a session with Fast disabled", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-standard"),
+        resumeCursor: { threadId: "previously-fast-thread" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { fastMode: false },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(validationManager.startSessionImpl.mock.calls[0]?.[0].serviceTier, "default");
+    }),
+  );
 });
 
 const sessionErrorManager = new FakeCodexManager();
@@ -369,6 +389,32 @@ const turnPreparationLayer = it.layer(
 );
 
 turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
+  it.effect("clears Fast mode on the next turn while preserving an unspecified tier", () =>
+    Effect.gen(function* () {
+      turnPreparationManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      for (const fastMode of [true, false, undefined]) {
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tier-toggle"),
+          input: "Continue",
+          attachments: [],
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            ...(fastMode !== undefined ? { options: { fastMode } } : {}),
+          },
+        });
+      }
+
+      const requests = turnPreparationManager.sendTurnImpl.mock.calls.map(([input]) => input);
+      assert.deepStrictEqual(
+        requests.map((input) => input.serviceTier),
+        ["fast", "default", undefined],
+      );
+      assert.equal(Object.hasOwn(requests[2]!, "serviceTier"), false);
+    }),
+  );
   it.effect("prepares equivalent rich send and steer manager payloads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

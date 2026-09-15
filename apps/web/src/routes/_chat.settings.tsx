@@ -6,6 +6,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -450,6 +451,7 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
+      <SafariAccessSetupButton />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
@@ -711,15 +713,6 @@ function SettingsRouteView() {
             description: "Show the pinned-messages checklist in the Environment panel.",
             resetLabel: "pinned messages section",
             ariaLabel: "Show the Pinned messages section in the Environment panel",
-          })}
-
-          {renderBooleanSettingRow({
-            settingKey: "showEnvironmentMarkers",
-            title: "Text markers",
-            description:
-              "Show highlighted and underlined transcript text in the Environment panel.",
-            resetLabel: "text markers section",
-            ariaLabel: "Show the Text markers section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({

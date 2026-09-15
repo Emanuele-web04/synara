@@ -135,51 +135,89 @@ async function assertReaders(system: Awaited<ReturnType<typeof openSystem>>, tex
   return row;
 }
 
-it("preserves split Unicode across segments, restart and completion in every reader", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "synara-chunk-restart-"));
+it("stores contiguous CJK token deltas as one segment across reload and settlement", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "synara-cjk-chunks-"));
   let system = await openSystem(dir);
+  const text = "知道。\n\n- 前端 Web：`/project/web`\n- `erp-code` 是 ERP 项目。";
   try {
     await system.seed();
-    await system.delta("first", "é漢\u0000\ud83d", 101);
-    await assertReaders(system, "é漢\u0000\ud83d");
+    for (const [index, delta] of Array.from(text).entries()) {
+      await system.delta(`cjk-${index}`, delta);
+    }
+    const streaming = await assertReaders(system, text);
+    expect(streaming.textSegments).toHaveLength(1);
+    expect(
+      await system.run(system.sql`SELECT COUNT(*) AS count FROM message_text_segments`),
+    ).toEqual([{ count: 1 }]);
     await system.runtime.dispose();
     system = await openSystem(dir);
-    await assertReaders(system, "é漢\u0000\ud83d");
-    await system.delta("second", "\ude80 tail", 303);
-    const streaming = await assertReaders(system, "é漢\u0000🚀 tail");
-    expect(streaming.textSegments?.map((segment) => [segment.sequence, segment.text])).toEqual([
-      [101, "é漢\u0000\ud83d"],
-      [303, "\ude80 tail"],
-    ]);
+    expect((await assertReaders(system, text)).textSegments).toHaveLength(1);
     await system.complete();
-    const completed = await assertReaders(system, "é漢\u0000🚀 tail");
-    expect(completed.textSegments?.map((segment) => segment.text)).toEqual([
-      "é漢\u0000\ud83d",
-      "\ude80 tail",
-    ]);
-    expect(await system.run(system.sql`SELECT * FROM message_text_chunks`)).toEqual([]);
+    expect((await assertReaders(system, text)).textSegments).toBeUndefined();
     await system.runtime.dispose();
     system = await openSystem(dir);
-    await assertReaders(system, "é漢\u0000🚀 tail");
+    expect((await assertReaders(system, text)).textSegments).toBeUndefined();
   } finally {
     await system.runtime.dispose();
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-it("preserves an unmatched surrogate when a message completes and resumes", async () => {
-  const system = await openSystem();
-  try {
-    await system.seed();
-    await system.delta("first", "hello \ud83d");
-    await system.complete();
-    await assertReaders(system, "hello \ud83d");
-    await system.delta("resume", "\ude80");
-    await assertReaders(system, "hello 🚀");
-  } finally {
-    await system.runtime.dispose();
-  }
-});
+it.each([
+  ["é漢\u0000\ud83d", "\ude80 tail"],
+  ["\u0000 head", " tail\u0000 end"],
+])(
+  "preserves split Unicode across segments, restart and completion in every reader: %j / %j",
+  async (first, second) => {
+    const dir = await mkdtemp(join(tmpdir(), "synara-chunk-restart-"));
+    let system = await openSystem(dir);
+    try {
+      await system.seed();
+      await system.delta("first", first, 101);
+      await assertReaders(system, first);
+      await system.runtime.dispose();
+      system = await openSystem(dir);
+      await assertReaders(system, first);
+      await system.delta("second", second, 303);
+      const streaming = await assertReaders(system, first + second);
+      expect(streaming.textSegments?.map((segment) => [segment.sequence, segment.text])).toEqual([
+        [101, first],
+        [303, second],
+      ]);
+      await system.complete();
+      const completed = await assertReaders(system, first + second);
+      expect(completed.textSegments?.map((segment) => segment.text)).toEqual([first, second]);
+      expect(await system.run(system.sql`SELECT * FROM message_text_chunks`)).toEqual([]);
+      await system.runtime.dispose();
+      system = await openSystem(dir);
+      await assertReaders(system, first + second);
+    } finally {
+      await system.runtime.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+it.each([
+  ["hello \ud83d", "\ude80", "hello 🚀"],
+  ["hello\u0000", " world", "hello\u0000 world"],
+  ["\u0000", "tail", "\u0000tail"],
+])(
+  "preserves encoded text when a message completes and resumes: %j",
+  async (first, second, expected) => {
+    const system = await openSystem();
+    try {
+      await system.seed();
+      await system.delta("first", first);
+      await system.complete();
+      await assertReaders(system, first);
+      await system.delta("resume", second);
+      await assertReaders(system, expected);
+    } finally {
+      await system.runtime.dispose();
+    }
+  },
+);
 
 it("completes an older resumed message outside the transcript window after restart", async () => {
   const dir = await mkdtemp(join(tmpdir(), "synara-old-chunk-message-"));

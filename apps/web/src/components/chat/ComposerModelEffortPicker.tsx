@@ -203,8 +203,9 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     </span>
   );
 
-  // Shared between the radio and slider layouts so both reach the same model list.
-  const modelSubmenuPopup = (
+  // Shared between the radio and slider layouts so both reach the same model list;
+  // each layout decides what a committed model selection closes.
+  const renderModelSubmenuPopup = (onAfterSelection: () => void) => (
     <ComposerPickerMenuSubPopup
       fixedWidth
       className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
@@ -225,7 +226,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
         onProviderModelChange={props.onProviderModelChange}
-        onAfterSelection={handleAfterModelSelection}
+        onAfterSelection={onAfterSelection}
       />
     </ComposerPickerMenuSubPopup>
   );
@@ -292,7 +293,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
               modelOptions={props.modelOptions}
               prompt={props.prompt}
               onPromptChange={props.onPromptChange}
-              modelSubmenuPopup={modelSubmenuPopup}
+              renderModelSubmenuPopup={renderModelSubmenuPopup}
             />
             {hasSliderCompanionTraits ? (
               <>
@@ -324,7 +325,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
                 />
                 <span className="truncate">{modelLabel}</span>
               </MenuSubTrigger>
-              {modelSubmenuPopup}
+              {renderModelSubmenuPopup(handleAfterModelSelection)}
             </MenuSub>
           </>
         )}

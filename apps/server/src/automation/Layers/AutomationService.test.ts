@@ -21,6 +21,9 @@ import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
+import { resolveAgentGatewayTarget } from "../../agentGateway/targetResolver.ts";
+import { readModelSelectionArg } from "../../agentGateway/toolInput.ts";
+import type { ProviderDiscoveryServiceShape } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
@@ -124,10 +127,12 @@ function makeThreadShell(overrides: {
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
   readonly lastError?: string | null;
+  readonly modelSelection?: OrchestrationThreadShell["modelSelection"];
 }): OrchestrationThreadShell {
   return {
     id: overrides.id ?? ThreadId.makeUnsafe("thread-shell"),
     projectId: overrides.projectId ?? projectId,
+    modelSelection: overrides.modelSelection ?? { provider: "codex", model: "gpt-5-codex" },
     latestTurn: overrides.latestTurn ?? null,
     hasPendingApprovals: overrides.hasPendingApprovals,
     hasPendingUserInput: overrides.hasPendingUserInput,
@@ -567,6 +572,190 @@ layer("AutomationService", (it) => {
       assert.strictEqual(listed.definitions.length, 1);
       assert.strictEqual(listed.definitions[0]?.id, created.id);
     }),
+  );
+
+  it.effect("persists discovered Claude Auto targets through exact-target create and update", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const target = readModelSelectionArg(
+        { target: { provider: "claudeAgent", model: "claude-sonnet-5" } },
+        "target",
+      )!;
+      const resolved = yield* resolveAgentGatewayTarget({
+        target,
+        discovery: {
+          listModels: () =>
+            Effect.succeed({
+              models: [{ slug: "claude-sonnet-5", name: "Sonnet", supportsAutoMode: true }],
+            }),
+        } as unknown as ProviderDiscoveryServiceShape,
+      });
+      const created = yield* service.create({
+        ...createInput(),
+        runtimeMode: "auto",
+        modelSelection: resolved,
+      });
+      assert.deepEqual(created.modelSelection, {
+        provider: "claudeAgent",
+        model: target.model,
+        supportsAutoMode: true,
+      });
+      const updated = yield* service.update({
+        id: created.id,
+        modelSelection: resolved,
+        name: "Retargeted Auto",
+      });
+      assert.strictEqual(updated.runtimeMode, "auto");
+      const listed = yield* service.list({ projectId });
+      assert.deepEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
+        { provider: "claudeAgent", model: target.model, supportsAutoMode: true },
+      );
+    }),
+  );
+
+  it.effect(
+    "preserves an established dedicated provider while allowing model and metadata updates",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const created = yield* service.create({
+          ...createInput(),
+          mode: "dedicated",
+          heartbeatCooldownSeconds: 0,
+        });
+        // Before any run, the automation has no provider-owned task to preserve.
+        const selected = yield* service.update({
+          id: created.id,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        });
+        assert.strictEqual(selected.targetThreadId, null);
+        const first = yield* service.runNow({ automationId: created.id });
+        const ownedThreadId = first.run.threadId!;
+        yield* completeAutomationRun({
+          run: first.run,
+          threadId: ownedThreadId,
+          turnId: TurnId.makeUnsafe("dedicated-provider-first"),
+        });
+        // A closed/missing session does not erase a task's already-run provider.
+        threadShell = Option.some(
+          makeThreadShell({
+            id: ownedThreadId,
+            latestTurn: makeLatestTurn("completed"),
+            modelSelection: selected.modelSelection,
+          }),
+        );
+        yield* service.reconcileThread({ threadId: ownedThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "the dedicated run to finish",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === first.run.id)?.status === "succeeded",
+        });
+        const rejected = yield* service
+          .update({ id: created.id, modelSelection: { provider: "codex", model: "gpt-5-codex" } })
+          .pipe(Effect.flip);
+        assert.match(rejected.message, /bound to "claudeAgent"/);
+        const unchanged = yield* service.list({ projectId });
+        assert.deepEqual(
+          unchanged.definitions.find((entry) => entry.id === created.id)?.modelSelection,
+          selected.modelSelection,
+        );
+        const nextSelection = {
+          provider: "claudeAgent" as const,
+          model: "claude-opus-4-8",
+          options: { effort: "high" as const },
+        };
+        const updated = yield* service.update({ id: created.id, modelSelection: nextSelection });
+        assert.strictEqual(updated.targetThreadId, ownedThreadId);
+        yield* service.update({ id: created.id, name: "Updated without retargeting" });
+        const second = yield* service.runNow({ automationId: created.id });
+        assert.strictEqual(second.run.threadId, ownedThreadId);
+        const turn = dispatchedCommands.findLast((command) => command.type === "thread.turn.start");
+        assert.deepEqual(turn?.modelSelection, nextSelection);
+      }),
+  );
+
+  it.effect("rejects provider changes while the first dedicated run is opening its task", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({ ...createInput(), mode: "dedicated" });
+      let rejection: string | undefined;
+      dispatchHook = (command) =>
+        command.type === "thread.create"
+          ? service
+              .update({
+                id: created.id,
+                modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
+              })
+              .pipe(
+                Effect.match({
+                  onFailure: (error) => {
+                    rejection = error.message;
+                  },
+                  onSuccess: () => assert.fail("Expected the active provider change to fail."),
+                }),
+              )
+          : Effect.void;
+      yield* service.runNow({ automationId: created.id });
+      assert.match(rejection!, /while a run is active/);
+      const listed = yield* service.list({ projectId });
+      assert.deepEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
+        created.modelSelection,
+      );
+    }),
+  );
+
+  it.effect(
+    "checks the owned dedicated task before provider changes, but not unrelated edits",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const repository = yield* AutomationRepository;
+        const created = yield* service.create({ ...createInput(), mode: "dedicated" });
+        const ownedThreadId = ThreadId.makeUnsafe("dedicated-unstarted");
+        yield* repository.attachDefinitionThread({
+          id: created.id,
+          threadId: ownedThreadId,
+          updatedAt: now,
+        });
+        threadShell = Option.some(makeThreadShell({ id: ownedThreadId }));
+        const unstarted = yield* service.update({
+          id: created.id,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        });
+        assert.strictEqual(unstarted.targetThreadId, ownedThreadId);
+        // The actual session wins over a stale stored automation/model selection.
+        threadShell = Option.some({
+          ...makeThreadShell({ id: ownedThreadId, modelSelection: unstarted.modelSelection }),
+          session: {
+            threadId: ownedThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        });
+        yield* service.update({ id: created.id, modelSelection: created.modelSelection });
+        const bound = yield* service
+          .update({ id: created.id, modelSelection: unstarted.modelSelection })
+          .pipe(Effect.flip);
+        assert.match(bound.message, /bound to "codex"/);
+        threadShell = Option.none();
+        const missing = yield* service
+          .update({ id: created.id, modelSelection: unstarted.modelSelection })
+          .pipe(Effect.flip);
+        assert.match(missing.message, /task was not found/);
+        const paused = yield* service.update({ id: created.id, enabled: false });
+        assert.strictEqual(paused.enabled, false);
+      }),
   );
 
   it.effect("rejects Claude Auto automations for models that do not support Auto", () =>

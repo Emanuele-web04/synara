@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { THREAD_GOAL_MAX_CHARS } from "@synara/contracts";
 
 import {
+  buildGoalSlashCommandPrompt,
   buildReviewPrompt,
   buildSubagentsPrompt,
   canExecuteSideSlashCommand,
@@ -142,6 +143,40 @@ describe("composerSlashCommands", () => {
     expect(parseGoalSlashCommandArgs("x".repeat(THREAD_GOAL_MAX_CHARS + 1))).toEqual({
       action: "too-long",
     });
+  });
+
+  it.each([
+    "clear",
+    "pause",
+    "resume",
+    "edit",
+    "  CLEAR  ",
+    " PaUsE ",
+    "-- clear",
+    "--",
+    "--flag",
+    "Ship the release",
+    "first line\nsecond line",
+  ])("round-trips a prefilled goal as literal text: %j", (goal) => {
+    const invocation = parseComposerSlashInvocation(buildGoalSlashCommandPrompt(goal));
+    expect(invocation?.command).toBe("goal");
+    expect(parseGoalSlashCommandArgs(invocation?.args ?? "")).toEqual({
+      action: "set",
+      goal: goal.trim(),
+    });
+  });
+
+  it("keeps an empty Goal prefill ready for literal text and limits the objective length", () => {
+    expect(buildGoalSlashCommandPrompt("  ")).toBe("/goal -- ");
+    expect(parseGoalSlashCommandArgs("-- ")).toEqual({ action: "show" });
+    expect(parseGoalSlashCommandArgs(`-- ${"x".repeat(THREAD_GOAL_MAX_CHARS)}`)).toEqual({
+      action: "set",
+      goal: "x".repeat(THREAD_GOAL_MAX_CHARS),
+    });
+    expect(parseGoalSlashCommandArgs(`-- ${"x".repeat(THREAD_GOAL_MAX_CHARS + 1)}`)).toEqual({
+      action: "too-long",
+    });
+    expect(parseGoalSlashCommandArgs("--flag")).toEqual({ action: "set", goal: "--flag" });
   });
 
   it("only offers /fork for an otherwise empty default composer", () => {

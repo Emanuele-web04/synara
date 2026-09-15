@@ -1,3 +1,4 @@
+import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
@@ -11,6 +12,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { BrowserVaultDialog } from "~/components/BrowserVault";
 import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
@@ -39,6 +41,7 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
+import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
@@ -313,13 +316,17 @@ function RootRouteView() {
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
           <EventRouter />
+          <EditorDirtyRouteGuard />
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <BrowserVaultDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <AppSnapWelcomeDialog />
+          <SafariAccessOnboarding>
+            <AppSnapWelcomeDialog />
+          </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
