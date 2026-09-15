@@ -25,12 +25,7 @@ describe("ChatMarkdown automatic block direction", () => {
     ["Welcome **back** today", "ltr"],
   ])("joins real highlight fragments in %s", async (text, direction) => {
     await render(
-      <ChatMarkdown
-        text={text}
-        cwd={undefined}
-        directionMode="auto-blocks"
-        findQuery={text}
-      />,
+      <ChatMarkdown text={text} cwd={undefined} directionMode="auto-blocks" findQuery={text} />,
     );
     const root = markdownRoot();
     expect(getComputedStyle(root.querySelector("p")!).direction).toBe(direction);
