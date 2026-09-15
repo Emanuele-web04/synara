@@ -1,0 +1,109 @@
+name: Verified production size comparison
+on:
+  push:
+    branches: [audit/bundle-size-a7f3]
+    paths: [.github/workflows/size-comparison-a7f3.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  measure:
+    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: 58565220fac09befd4fac0793227aab45567febb
+          path: candidate
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: candidate/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: candidate/package.json
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35034732080
+          name: bundle-size-${{ matrix.platform }}-${{ matrix.arch }}
+          path: size-reports/before
+      - name: Install same frozen production build dependencies
+        working-directory: candidate
+        shell: bash
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production candidate
+        working-directory: candidate
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/candidate-artifacts"
+      - name: Measure using identical baseline helper
+        shell: bash
+        run: node .github/scripts/measure-bundle-size.mjs "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/size-reports/after" '${{ matrix.platform }}'
+      - name: Verify comparability and retained runtime dependency bytes
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const before = JSON.parse(readFileSync('size-reports/before/bundle-size.json', 'utf8'));
+          const after = JSON.parse(readFileSync('size-reports/after/bundle-size.json', 'utf8'));
+          assert.equal(before.sourceCommit, 'dd88d9272f97e4dda5735281e73ce14de388ad25');
+          assert.equal(after.sourceCommit, '58565220fac09befd4fac0793227aab45567febb');
+          for (const key of ['lockfileSha256', 'platform', 'arch', 'node', 'bun', 'signed', 'method']) assert.equal(after[key], before[key], key);
+          const retained = new Map(after.asar.files.map(file => [file.path, file]));
+          let unchangedRuntimeJavaScript = 0;
+          for (const file of before.asar.files) {
+            if (!file.path.startsWith('node_modules/') || !/\.[mc]?js$/.test(file.path) || file.path.endsWith('.test.js')) continue;
+            const candidate = retained.get(file.path);
+            assert(candidate, `Missing runtime JavaScript: ${file.path}`);
+            assert.equal(candidate.sha256, file.sha256, `Changed runtime JavaScript: ${file.path}`);
+            unchangedRuntimeJavaScript++;
+          }
+          const compare = (a, b) => ({ before: a, after: b, saved: a - b, percent: (a - b) * 100 / a });
+          const result = { unchangedRuntimeJavaScript, installed: compare(before.installed.bytes, after.installed.bytes), asar: compare(before.asar.archiveBytes, after.asar.archiveBytes), web: compare(before.web.bytes, after.web.bytes), artifacts: before.artifacts.map(a => ({ name: a.name, ...compare(a.bytes, after.artifacts.find(b => b.name === a.name).bytes) })) };
+          assert(after.installed.bytes < before.installed.bytes, 'No installed-size improvement');
+          writeFileSync('size-reports/comparison.json', JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+      - name: Verify bundled Claude executable and packaged native terminal
+        shell: bash
+        run: node .github/scripts/verify-bundle-native.mjs "$GITHUB_WORKSPACE/candidate" '${{ matrix.platform }}' "$GITHUB_WORKSPACE/size-reports/after"
+      - name: Smoke production startup and all packaged lazy provider imports
+        working-directory: candidate
+        shell: bash
+        run: node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/candidate-artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verified-size-${{ matrix.platform }}-${{ matrix.arch }}
+          path: size-reports/
+          retention-days: 30
