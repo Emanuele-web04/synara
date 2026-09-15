@@ -69,7 +69,10 @@ import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
-import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CaptureCheckpointPolicy,
+} from "../../checkpointing/Services/CheckpointStore.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
@@ -445,6 +448,12 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+const MESSAGE_START_CHECKPOINT_POLICY = {
+  timeoutMs: 5_000,
+  maxOutputBytes: 64 * 1_024,
+  unseededScanMaxOutputBytes: 1_000_000,
+  failureCooldownMs: 60_000,
+} satisfies CaptureCheckpointPolicy;
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -2405,8 +2414,17 @@ const make = Effect.gen(function* () {
           MessageId.makeUnsafe(input.messageId),
         ),
         skipIfExists: true,
+        policy: MESSAGE_START_CHECKPOINT_POLICY,
       });
     }).pipe(
+      Effect.catchTag("CheckpointCaptureBudgetExceededError", (error) =>
+        Effect.logWarning("skipped provider turn start checkpoint within resource budget", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          reason: error.reason,
+          timeoutMs: error.timeoutMs,
+        }),
+      ),
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to capture provider turn start checkpoint", {
           threadId: input.threadId,
