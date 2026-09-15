@@ -6,9 +6,11 @@ import type {
   ModelSelection,
   NativeApi,
   OrchestrationShellSnapshot,
+  RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
 import { newCommandId, newMessageId, newThreadId } from "./utils";
 import { buildThreadHandoffImportedMessages } from "./threadHandoff";
@@ -181,10 +183,21 @@ export function clearSidechatPaneRetention(threadId: ThreadId): void {
   }
 }
 
+function resolveSidechatRuntimeMode(
+  runtimeMode: RuntimeMode,
+  modelSelection: ModelSelection,
+): RuntimeMode {
+  // Changing provider can lose Auto support; never turn that fallback into Full access.
+  return autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection })
+    ? "approval-required"
+    : runtimeMode;
+}
+
 export async function sendSidechatPrompt(input: {
   api: NativeApi;
   threadId: ThreadId;
   selectedModelSelection: ModelSelection;
+  runtimeMode: RuntimeMode;
   prompt: string;
 }): Promise<void> {
   const prompt = input.prompt.trim();
@@ -202,7 +215,7 @@ export async function sendSidechatPrompt(input: {
       attachments: [],
     },
     modelSelection: input.selectedModelSelection,
-    runtimeMode: "approval-required",
+    runtimeMode: resolveSidechatRuntimeMode(input.runtimeMode, input.selectedModelSelection),
     interactionMode: "default",
     createdAt: new Date().toISOString(),
   });
@@ -213,6 +226,7 @@ export async function createSidechatThread(input: {
   project: Project;
   sourceThread: Thread;
   selectedModelSelection: ModelSelection;
+  runtimeMode?: RuntimeMode;
   initialPrompt?: string | undefined;
   openSidechat: (threadId: ThreadId) => void;
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
@@ -220,6 +234,10 @@ export async function createSidechatThread(input: {
   const nextThreadId = newThreadId();
   const createdAt = new Date().toISOString();
   const initialPrompt = input.initialPrompt?.trim() ?? "";
+  const runtimeMode = resolveSidechatRuntimeMode(
+    input.runtimeMode ?? input.sourceThread.runtimeMode,
+    input.selectedModelSelection,
+  );
   const titleSeed =
     initialPrompt.length > 0
       ? buildPromptThreadTitleFallback(initialPrompt)
@@ -234,7 +252,7 @@ export async function createSidechatThread(input: {
     projectId: input.project.id,
     title: `Sidechat: ${titleSeed}`,
     modelSelection: input.selectedModelSelection,
-    runtimeMode: "approval-required",
+    runtimeMode,
     interactionMode: "default",
     envMode: input.sourceThread.envMode ?? (input.sourceThread.worktreePath ? "worktree" : "local"),
     branch: input.sourceThread.branch,
@@ -270,6 +288,7 @@ export async function createSidechatThread(input: {
         api: input.api,
         threadId: nextThreadId,
         selectedModelSelection: input.selectedModelSelection,
+        runtimeMode,
         prompt: initialPrompt,
       });
       return null;

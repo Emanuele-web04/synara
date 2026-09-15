@@ -4,7 +4,7 @@ import { basenameOfPath } from "~/file-icons";
 import {
   ChevronRightIcon,
   Redo2Icon,
-  RotateCcwIcon,
+  ResetIcon,
   TriangleAlertIcon,
   Undo2Icon,
   XIcon,
@@ -81,7 +81,7 @@ export function WorkspaceFileEditorHistoryActions(props: WorkspaceFileEditorHist
         disabled={!props.canRevert}
         onClick={props.onRevert}
       >
-        <RotateCcwIcon aria-hidden="true" className="size-3.5" />
+        <ResetIcon aria-hidden="true" className="size-3.5" />
       </ChatHeaderIconButton>
     </>
   );
@@ -144,6 +144,9 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
 
       <span className="shrink-0 text-[11px] text-muted-foreground/70">{props.title}</span>
 
+      <span role="status" className="shrink-0 text-[11px] text-muted-foreground">
+        {props.saving ? "Saving..." : props.dirty ? "Unsaved changes" : "Saved"}
+      </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.actions}
         <Button
@@ -205,7 +208,6 @@ interface WorkspaceFileEditorConflictBarProps {
   conflict: boolean;
   onReload: () => void;
   onOverwrite: () => void;
-  onDismiss: () => void;
 }
 
 export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflictBarProps) {
@@ -218,38 +220,26 @@ export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflic
       <p className="min-w-0 flex-1 truncate text-[11px] text-foreground/85" title={props.message}>
         {props.message}
       </p>
-      {props.conflict ? (
-        <>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onReload}
-          >
-            Reload from disk
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onOverwrite}
-          >
-            Overwrite
-          </Button>
-        </>
-      ) : null}
-      <ChatHeaderIconButton
+      <Button
         type="button"
-        tone="plain"
-        label="Dismiss"
-        title="Dismiss"
-        className="!size-6"
-        onClick={props.onDismiss}
+        size="xs"
+        variant="chrome-outline"
+        className="!h-6 shrink-0 rounded-md text-[11px]"
+        onClick={props.onReload}
       >
-        <XIcon aria-hidden="true" className="size-3" />
-      </ChatHeaderIconButton>
+        Reload from disk
+      </Button>
+      {props.conflict ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="chrome-outline"
+          className="!h-6 shrink-0 rounded-md text-[11px]"
+          onClick={props.onOverwrite}
+        >
+          Overwrite
+        </Button>
+      ) : null}
     </div>
   );
 }

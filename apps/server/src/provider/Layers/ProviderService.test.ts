@@ -1056,6 +1056,43 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
 });
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-cleanup-retry");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const bindingBefore = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const stopCallsBefore = routing.codex.stopSession.mock.calls.length;
+      const originalStop = routing.codex.stopSession.getMockImplementation()!;
+      routing.codex.stopSession.mockImplementationOnce((id) =>
+        Effect.gen(function* () {
+          // Real adapters stop routing before attempting process-tree cleanup.
+          yield* originalStop(id);
+          return yield* new ProviderAdapterProcessError({
+            provider: "codex",
+            threadId: id,
+            detail: "Process exit could not be verified",
+          });
+        }),
+      );
+      const firstStop = yield* Effect.exit(provider.stopRuntimeSession!({ threadId }));
+      assert.isTrue(Exit.isFailure(firstStop));
+      assert.deepEqual(Option.getOrUndefined(yield* directory.getBinding(threadId)), bindingBefore);
+      assert.isFalse(yield* routing.codex.adapter.hasSession(threadId));
+      yield* provider.stopRuntimeSession!({ threadId });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stopCallsBefore + 2);
+      const stoppedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(stoppedBinding?.status, "stopped");
+      assert.deepEqual(stoppedBinding?.resumeCursor, bindingBefore?.resumeCursor);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("reports native resume and persists bootstrap state until completion", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1252,6 +1289,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.respondToRequest",
           issue: `Cannot respond to stale request 'request-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+          reason: "stale-interaction",
         }),
       );
       assert.equal(routing.codex.respondToRequest.mock.calls.length, responseCallCount);
@@ -1270,6 +1308,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.respondToUserInput",
           issue: `Cannot respond to stale request 'user-input-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+          reason: "stale-interaction",
         }),
       );
       assert.equal(routing.codex.respondToUserInput.mock.calls.length, userInputResponseCallCount);
@@ -1924,6 +1963,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.sendTurn",
           issue: `Cannot route thread '${session.threadId}' because no persisted provider binding exists.`,
+          reason: "runtime-unavailable",
         }),
       );
     }),
@@ -3121,6 +3161,43 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, initial.threadId);
       }
       assert.equal(routing.claude.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("classifies a lost Claude question runtime without silently recovering it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("lost-question-runtime");
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      yield* routing.claude.stopAll();
+      const starts = routing.claude.startSession.mock.calls.length;
+      const responses = routing.claude.respondToUserInput.mock.calls.length;
+      const result = yield* Effect.result(
+        provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("lost-question"),
+          lifecycleGeneration: binding.lifecycleGeneration,
+          answers: { Q: "Answer" },
+        }),
+      );
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue:
+            "Cannot respond to request 'lost-question' because the provider runtime is not active.",
+          reason: "runtime-unavailable",
+        }),
+      );
+      assert.equal(routing.claude.startSession.mock.calls.length, starts);
+      assert.equal(routing.claude.respondToUserInput.mock.calls.length, responses);
+      yield* provider.stopSession({ threadId });
     }),
   );
 
@@ -4478,6 +4555,116 @@ piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it)
 
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
+  it.effect("retries failed idle teardown after a delayed session exit notification", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-cleanup-retry");
+      const originalStop = idleCleanup.codex.stopSession.getMockImplementation()!;
+      idleCleanup.codex.stopSession.mockClear();
+      idleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+        originalStop(id).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderAdapterProcessError({
+                provider: "codex",
+                threadId: id,
+                detail: "Descendant still alive",
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("idle-retry-completed"),
+        provider: "codex",
+        threadId,
+        createdAt: new Date().toISOString(),
+        payload: { state: "completed" },
+      });
+      yield* waitUntil(() => idleCleanup.codex.stopSession.mock.calls.length === 1);
+      yield* sleep(30);
+      idleCleanup.codex.emit({
+        type: "session.exited",
+        eventId: asEventId("runtime-idle-delayed-exit"),
+        provider: "codex",
+        threadId,
+        createdAt: new Date().toISOString(),
+        payload: { reason: "stopped" },
+      });
+      yield* waitUntilEffect(() =>
+        directory
+          .getBinding(threadId)
+          .pipe(
+            Effect.map(
+              (binding) =>
+                asRuntimePayloadRecord(Option.getOrUndefined(binding)?.runtimePayload)
+                  .lastRuntimeEvent === "session.exited",
+            ),
+          ),
+      );
+      assert.isFalse(yield* idleCleanup.codex.adapter.hasSession(threadId));
+      yield* waitUntil(() => idleCleanup.codex.stopSession.mock.calls.length === 2, 2_000);
+      yield* waitUntilEffect(() =>
+        directory
+          .getBinding(threadId)
+          .pipe(
+            Effect.map(
+              (binding) =>
+                asRuntimePayloadRecord(Option.getOrUndefined(binding)?.runtimePayload)
+                  .lastRuntimeEvent === "provider.stopRuntimeSession",
+            ),
+          ),
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("cancels a pending idle cleanup retry when new user work starts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-idle-retry-new-work");
+      idleCleanup.codex.stopSession.mockClear();
+      idleCleanup.codex.stopSession.mockReturnValueOnce(
+        Effect.fail(
+          new ProviderAdapterProcessError({
+            provider: "codex",
+            threadId,
+            detail: "Temporary cleanup failure",
+          }),
+        ),
+      );
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("idle-retry-new-work-completed"),
+        provider: "codex",
+        threadId,
+        createdAt: new Date().toISOString(),
+        payload: { state: "completed" },
+      });
+      yield* waitUntil(() => idleCleanup.codex.stopSession.mock.calls.length === 1);
+      yield* sleep(30);
+      yield* provider.sendTurn({ threadId, input: "new work" });
+      yield* sleep(1_100);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 1);
+      assert.isTrue(yield* idleCleanup.codex.adapter.hasSession(threadId));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("does not schedule idle cleanup for a stale terminal event", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -5374,7 +5561,9 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(stopFiber);
 
-      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 1);
+      // The explicit stop also crosses the idempotent cleanup barrier after
+      // the idle stop settles, even though the session is no longer routable.
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 2);
       assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
     }),
   );

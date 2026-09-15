@@ -10,6 +10,8 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
+import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache";
+import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -274,6 +276,48 @@ export async function refreshGitWorkingTreeDiffsForCwd(
   }
 }
 
+const activeFileWriteRefreshes = new WeakMap<
+  QueryClient,
+  Map<string, { generation: number; promise: Promise<void> }>
+>();
+
+/** Refresh only working-copy data after file writes. Autosave must not refetch
+ * PRs, branches or revision blobs for each pause in typing. Watcher echoes join
+ * the pending refresh; events arriving during a read request one fresh pass. */
+export function refreshGitAfterFileWrite(queryClient: QueryClient, cwd: string): Promise<void> {
+  let refreshes = activeFileWriteRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeFileWriteRefreshes.set(queryClient, refreshes);
+  }
+  const existing = refreshes.get(cwd);
+  if (existing) {
+    existing.generation += 1;
+    return existing.promise;
+  }
+  const entry = { generation: 0, promise: Promise.resolve() };
+  refreshes.set(cwd, entry);
+  entry.promise = (async () => {
+    let completed: number;
+    do {
+      completed = entry.generation;
+      // Keep the visible patch first: status may need a separate Git process.
+      await refreshGitWorkingTreeDiffsForCwd(queryClient, cwd);
+      await queryClient.invalidateQueries({
+        queryKey: gitQueryKeys.status(cwd),
+        exact: true,
+        refetchType: "none",
+      });
+      await enqueueGitRefresh(queryClient, () =>
+        refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
+      );
+    } while (completed !== entry.generation);
+  })().finally(() => {
+    if (refreshes.get(cwd) === entry) refreshes.delete(cwd);
+  });
+  return entry.promise;
+}
+
 /**
  * Coalesces refreshes by repository and serializes their expensive reads across the client.
  * Availability is refreshed first; active diff/PR details follow one at a time so Git UI work
@@ -381,10 +425,15 @@ export function refreshGitQueriesScoped(
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.status(cwd),
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git status is unavailable.");
-      return api.git.status({ cwd });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.status({ cwd }),
+        readFence,
+      );
     },
     enabled: enabled && cwd !== null,
     staleTime: GIT_STATUS_STALE_TIME_MS,
@@ -490,12 +539,17 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request snapshot is unavailable.");
       }
-      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference }),
+        readFence,
+      );
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
