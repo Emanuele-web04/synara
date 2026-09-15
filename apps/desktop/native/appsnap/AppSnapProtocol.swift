@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 struct AppSnapFailure: Error {
@@ -15,6 +16,11 @@ enum AppSnapMode {
         excludedBundleIdentifier: String,
         externalTrigger: Bool
     )
+    case computerFrames(
+        windowID: CGWindowID,
+        ownerPID: pid_t?,
+        socketPath: String
+    )
 }
 
 struct AppSnapOptions {
@@ -29,6 +35,9 @@ struct AppSnapOptions {
         var guidePane: String?
         var guideAppPath: String?
         var guideAppName: String?
+        var frameWindowID: String?
+        var frameSocketPath: String?
+        var frameOwnerPID: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -57,7 +66,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide":
+            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -86,6 +95,12 @@ struct AppSnapOptions {
                 guideAppPath = try readValue("--app-path", "a path")
             case "--app-name":
                 guideAppName = try readValue("--app-name", "a value")
+            case "--window-id":
+                frameWindowID = try readValue("--window-id", "a window number")
+            case "--out":
+                frameSocketPath = try readValue("--out", "a socket path")
+            case "--pid":
+                frameOwnerPID = try readValue("--pid", "a process identifier")
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -98,6 +113,10 @@ struct AppSnapOptions {
         if requestedMode != "--permission-guide",
            guidePane != nil || guideAppPath != nil || guideAppName != nil {
             throw AppSnapFailure(code: "invalid_arguments", message: "Guide metadata is only used by the permission guide.")
+        }
+        if requestedMode != "--computer-frames",
+           frameWindowID != nil || frameSocketPath != nil || frameOwnerPID != nil {
+            throw AppSnapFailure(code: "invalid_arguments", message: "Frame arguments are only used by the computer frames mode.")
         }
         switch requestedMode {
         case "--permission-guide":
@@ -157,10 +176,50 @@ struct AppSnapOptions {
                     externalTrigger: externalTrigger
                 )
             )
+        case "--computer-frames":
+            try rejectWatchArguments("Computer frames do not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames does not accept permission selectors."
+                )
+            }
+            guard let windowIDText = frameWindowID,
+                  let windowID = CGWindowID(windowIDText), windowID > 0 else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames requires --window-id with a window number."
+                )
+            }
+            guard let socketPath = frameSocketPath,
+                  socketPath.hasPrefix("/"),
+                  socketPath.utf8.count < 104 else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames requires --out with a unix socket path."
+                )
+            }
+            var ownerPID: pid_t?
+            if let pidText = frameOwnerPID {
+                guard let pid = pid_t(pidText), pid > 0 else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--pid requires a process identifier."
+                    )
+                }
+                ownerPID = pid
+            }
+            return AppSnapOptions(
+                mode: .computerFrames(
+                    windowID: windowID,
+                    ownerPID: ownerPID,
+                    socketPath: socketPath
+                )
+            )
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, or --permission-guide."
+                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, or --computer-frames."
             )
         }
     }

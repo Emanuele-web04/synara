@@ -1,4 +1,5 @@
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
+import { ComputerFrameTap } from "./computerFrameTap";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -3647,6 +3648,15 @@ async function startCuaHost(): Promise<void> {
       initializeDesktopAppSnap();
       await appSnapManager!.releaseHeldInput();
     },
+    frameTap: new ComputerFrameTap({
+      helperPath: resolveAppSnapHelperPath(),
+      send: (channel, frame) => {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+          mainWindow.webContents.send(channel, frame);
+        }
+      },
+      onError: (error) => safeConsoleError("[desktop] computer frame tap failed", error),
+    }),
     normalizeOverview: (result) => {
       const image = result.content?.find((part) => part.type === "image" && part.data);
       if (!image?.data) return result;

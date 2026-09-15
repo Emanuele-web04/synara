@@ -52,6 +52,22 @@ do {
         withExtendedLifetime((coordinator, gestureSource, requestListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case let .computerFrames(windowID, ownerPID, socketPath):
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let tap = ComputerFrameTap(
+            emitter: emitter,
+            windowID: windowID,
+            ownerPID: ownerPID,
+            socketPath: socketPath
+        )
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+        tap.start()
+
+        withExtendedLifetime((tap, parentProcessMonitor)) {
+            RunLoop.main.run()
+        }
     case let .permissionGuide(pane, appPath, appName):
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 

@@ -16,9 +16,11 @@ import {
   type CuaReply,
   type CuaToolResult,
   type CuaComputerTask,
+  type CuaPreviewTarget,
   parseCuaComputerTask,
   cuaComputerTaskKey,
 } from "@synara/shared/cuaDriverProtocol";
+import type { ComputerFrameTapHost } from "./computerFrameTap";
 
 interface Generation {
   child: ChildProcess;
@@ -181,6 +183,8 @@ export class CuaDriverHost {
   private permissions: HostPermissions | undefined;
   private readonly pendingPermissionChecks = new Set<() => void>();
   private readonly userStoppedTasks = new Set<string>();
+  private readonly endedFrameTasks = new Set<string>();
+  private frameTapTask: CuaComputerTask | undefined;
   constructor(
     private readonly options: {
       binaryPath: string;
@@ -192,6 +196,7 @@ export class CuaDriverHost {
       /** Bound on each post-handshake startup call; defaults to 5s. */
       startupTimeoutMs?: number;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
+      frameTap?: ComputerFrameTapHost;
     },
   ) {}
 
@@ -269,6 +274,15 @@ export class CuaDriverHost {
     if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
     if (request.method === "end_task") {
       if (!task) throw new Error("Computer task attribution is required.");
+      this.rememberTask(this.endedFrameTasks, task);
+      if (
+        this.frameTapTask?.threadId === task.threadId &&
+        (task.turnId === undefined || task.turnId === this.frameTapTask.turnId)
+      ) {
+        this.rememberTask(this.endedFrameTasks, this.frameTapTask);
+        this.frameTapTask = undefined;
+      }
+      await this.options.frameTap?.endTask(task);
       return { ok: true };
     }
     if (this.closed) throw new Error("Computer host is closed.");
@@ -388,12 +402,35 @@ export class CuaDriverHost {
         log(`refused ${name}: fresh desktop observation still required`);
         return this.desktopPauseReply();
       }
+      if (task && (request.modelObservation === true || CUA_ACTION_TOOLS.has(name)))
+        this.frameTapTask = task;
       const reply = await this.call(
         name,
         request.args,
         connection,
         request.modelObservation === true,
       );
+      // Frame tap updates carry no frames through this queue: they only point
+      // the dedicated helper channel at the task's window target.
+      if (
+        task &&
+        !this.endedFrameTasks.has(cuaComputerTaskKey(task)) &&
+        !this.userStoppedTasks.has(cuaComputerTaskKey(task)) &&
+        epoch === this.epoch &&
+        !connection.destroyed &&
+        reply.ok &&
+        !reply.result?.isError &&
+        (request.modelObservation === true || CUA_ACTION_TOOLS.has(name))
+      ) {
+        const target = this.frameTapTarget(task, request.args);
+        if (target) {
+          try {
+            this.options.frameTap?.update(target);
+          } catch (error) {
+            log(`computer frame tap update failed: ${String(error)}`);
+          }
+        }
+      }
       return reply;
     })();
     this.operations = operation.then(
@@ -821,12 +858,17 @@ export class CuaDriverHost {
     this.desktopEpoch += 1;
     for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
+    const frameTapStopped = this.options.frameTap?.stop();
+    // Same discipline as `stopping` below: the stop caller sees the failure
+    // through the returned promise, never through an unhandled rejection.
+    void frameTapStopped?.catch(() => undefined);
     const stopping = this.stopping.then(async () => {
       if (this.generation) await this.retire(this.generation);
       await this.starting?.catch(() => undefined);
       if (this.generation) await this.retire(this.generation);
       await admitted;
       await this.retiring;
+      await frameTapStopped;
     });
     // Same discipline as `retiring`: the caller sees the failure but the
     // chain must not — one admission-closed stop must not refuse every
@@ -847,6 +889,28 @@ export class CuaDriverHost {
   private rememberTask(set: Set<string>, task: CuaComputerTask): void {
     set.add(cuaComputerTaskKey(task));
     while (set.size > 256) set.delete(set.values().next().value!);
+  }
+
+  /** The native call args carry the agent's window target; task attribution
+   * alone does not say which window the tap should stream. */
+  private frameTapTarget(
+    task: CuaComputerTask,
+    input: unknown,
+  ): CuaPreviewTarget | undefined {
+    if (!input || typeof input !== "object") return undefined;
+    const args = input as Record<string, unknown>;
+    if (
+      typeof args.pid !== "number" ||
+      !Number.isSafeInteger(args.pid) ||
+      args.pid <= 0 ||
+      args.pid > 0x7fffffff ||
+      typeof args.window_id !== "number" ||
+      !Number.isSafeInteger(args.window_id) ||
+      args.window_id <= 0 ||
+      args.window_id > 0xffffffff
+    )
+      return undefined;
+    return { task, pid: args.pid, windowId: args.window_id };
   }
 
   /** Backend shutdown must reject later requests as well as cancel admitted
@@ -894,6 +958,7 @@ export class CuaDriverHost {
     try {
       await this.stop();
     } finally {
+      await this.options.frameTap?.dispose().catch(() => undefined);
       for (const socket of this.connections) socket.destroy();
       await new Promise<void>((resolve) => {
         if (this.server) this.server.close(() => resolve());
