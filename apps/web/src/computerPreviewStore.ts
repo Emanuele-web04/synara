@@ -26,6 +26,12 @@ interface ComputerPreviewStore {
   sessionsByThreadId: Record<string, ComputerPreviewSession | undefined>;
   /** Last observed drive state per thread; its edges arm and end sessions. */
   agentActiveByThreadId: Record<string, boolean | undefined>;
+  /**
+   * Live layout footprint per thread, published by the mounted card: whether
+   * a real frame has landed (so the rail reserves space only for a visible
+   * card) and the fitted card width (so the content inset matches it).
+   */
+  previewLayoutByThreadId: Record<string, ComputerPreviewLayout | undefined>;
   /** `computer.open-pane-requested` arrived for this thread's own lease. */
   requestPreviewSurface: (threadId: ThreadId) => void;
   /** Any thread-state write (push or seed); edges are detected inside. */
@@ -36,8 +42,15 @@ interface ComputerPreviewStore {
   markPreviewLive: (threadId: ThreadId) => void;
   /** The user closed the preview; it stays hidden until the task ends. */
   hidePreviewForTask: (threadId: ThreadId) => void;
+  /** The mounted card's live footprint; identity-stable when unchanged. */
+  notePreviewLayout: (threadId: ThreadId, layout: ComputerPreviewLayout) => void;
   removePreviewSession: (threadId: ThreadId) => void;
   clear: () => void;
+}
+
+export interface ComputerPreviewLayout {
+  readonly hasFrame: boolean;
+  readonly width: number;
 }
 
 function sessionWithPhase(
@@ -73,6 +86,7 @@ function updateSessionPhase(
 export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => ({
   sessionsByThreadId: {},
   agentActiveByThreadId: {},
+  previewLayoutByThreadId: {},
   requestPreviewSurface: (threadId) =>
     set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnSurfaceRequest)),
   noteThreadComputerState: (state) =>
@@ -111,24 +125,45 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
     set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnViewed)),
   hidePreviewForTask: (threadId) =>
     set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnHide)),
+  notePreviewLayout: (threadId, layout) =>
+    set((current) => {
+      const previous = current.previewLayoutByThreadId[threadId];
+      if (previous?.hasFrame === layout.hasFrame && previous?.width === layout.width) {
+        return current;
+      }
+      return {
+        ...current,
+        previewLayoutByThreadId: { ...current.previewLayoutByThreadId, [threadId]: layout },
+      };
+    }),
   removePreviewSession: (threadId) =>
     set((current) => {
       const hasSession = Object.hasOwn(current.sessionsByThreadId, threadId);
       const hasActive = Object.hasOwn(current.agentActiveByThreadId, threadId);
-      if (!hasSession && !hasActive) {
+      const hasLayout = Object.hasOwn(current.previewLayoutByThreadId, threadId);
+      if (!hasSession && !hasActive && !hasLayout) {
         return current;
       }
       const sessionsByThreadId = { ...current.sessionsByThreadId };
       delete sessionsByThreadId[threadId];
       const agentActiveByThreadId = { ...current.agentActiveByThreadId };
       delete agentActiveByThreadId[threadId];
-      return { ...current, sessionsByThreadId, agentActiveByThreadId };
+      const previewLayoutByThreadId = { ...current.previewLayoutByThreadId };
+      delete previewLayoutByThreadId[threadId];
+      return { ...current, sessionsByThreadId, agentActiveByThreadId, previewLayoutByThreadId };
     }),
-  clear: () => set({ sessionsByThreadId: {}, agentActiveByThreadId: {} }),
+  clear: () =>
+    set({ sessionsByThreadId: {}, agentActiveByThreadId: {}, previewLayoutByThreadId: {} }),
 }));
 
 export function selectThreadComputerPreviewSession(
   threadId: ThreadId,
 ): (store: ComputerPreviewStore) => ComputerPreviewSession | undefined {
   return (store) => store.sessionsByThreadId[threadId];
+}
+
+export function selectThreadComputerPreviewLayout(
+  threadId: ThreadId,
+): (store: ComputerPreviewStore) => ComputerPreviewLayout | undefined {
+  return (store) => store.previewLayoutByThreadId[threadId];
 }

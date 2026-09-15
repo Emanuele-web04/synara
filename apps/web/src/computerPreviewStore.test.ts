@@ -156,3 +156,33 @@ describe("computerPreviewStore session details", () => {
     expect(useComputerPreviewStore.getState().agentActiveByThreadId).toEqual({});
   });
 });
+
+describe("notePreviewLayout", () => {
+  it("publishes the card footprint and preserves identity when unchanged", () => {
+    const store = useComputerPreviewStore.getState();
+    store.notePreviewLayout(THREAD_A, { hasFrame: false, width: 448 });
+    const first = useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A];
+    expect(first).toEqual({ hasFrame: false, width: 448 });
+    store.notePreviewLayout(THREAD_A, { hasFrame: false, width: 448 });
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A]).toBe(first);
+    store.notePreviewLayout(THREAD_A, { hasFrame: true, width: 448 });
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A]).toEqual({
+      hasFrame: true,
+      width: 448,
+    });
+  });
+
+  it("drops layout with the session and on clear", () => {
+    const store = useComputerPreviewStore.getState();
+    store.notePreviewLayout(THREAD_A, { hasFrame: true, width: 300 });
+    store.notePreviewLayout(THREAD_B, { hasFrame: true, width: 300 });
+    store.removePreviewSession(THREAD_A);
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A]).toBeUndefined();
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_B]).toEqual({
+      hasFrame: true,
+      width: 300,
+    });
+    store.clear();
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId).toEqual({});
+  });
+});
