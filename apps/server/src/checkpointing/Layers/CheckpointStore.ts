@@ -44,6 +44,10 @@ const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 const CHECKPOINT_CAPTURE_TIMEOUT_MS = 180_000;
 const MAX_CAPTURE_COOLDOWNS = 128;
 
+const isCaptureBudgetGitError = (error: GitCommandError) =>
+  error.detail.endsWith(" timed out.") ||
+  / output exceeded \d+ bytes and was truncated\.$/.test(error.detail);
+
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -52,11 +56,30 @@ const makeCheckpointStore = Effect.gen(function* () {
   const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
   const captureFailureCooldowns = new Map<string, number>();
 
-  // Normalize the cwd so captures for the same repo reached via differently
-  // written paths (trailing slash, relative segments) share one in-flight slot.
-  const captureKey = (input: { readonly cwd: string; readonly checkpointRef: CheckpointRef }) =>
-    `${path.resolve(input.cwd)}\0${input.checkpointRef}`;
-  const captureCooldownKey = (cwd: string) => path.resolve(cwd);
+  // Normalize the cwd so equivalent paths share one in-flight slot within the
+  // same capture class. Advisory deadlines must not own or interrupt an
+  // authoritative capture waiting for the repository mutation lock.
+  const captureKey = (input: {
+    readonly cwd: string;
+    readonly checkpointRef: CheckpointRef;
+    readonly policy?: unknown;
+  }) =>
+    `${path.resolve(input.cwd)}\0${input.checkpointRef}\0${input.policy ? "advisory" : "authoritative"}`;
+
+  const resolveCaptureCooldownKey = (cwd: string) =>
+    git
+      .execute({
+        operation: "CheckpointStore.resolveCaptureRepositoryKey",
+        cwd,
+        args: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      })
+      .pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((commonDir) => fs.realPath(path.resolve(cwd, commonDir))),
+        Effect.catch(() =>
+          fs.realPath(cwd).pipe(Effect.catch(() => Effect.succeed(path.resolve(cwd)))),
+        ),
+      );
 
   const pruneCaptureCooldowns = (now: number) => {
     for (const [key, expiresAt] of captureFailureCooldowns) {
@@ -215,15 +238,15 @@ const makeCheckpointStore = Effect.gen(function* () {
                 })
                 .pipe(
                   Effect.asVoid,
-                  Effect.catch(() =>
-                    Effect.fail(
-                      new CheckpointCaptureBudgetExceededError({
-                        operation,
-                        reason: "unseeded-scan",
-                        timeoutMs: capturePolicy.timeoutMs,
-                        detail: "The unseeded workspace scan exceeded its advisory budget.",
-                      }),
-                    ),
+                  Effect.mapError((error) =>
+                    isCaptureBudgetGitError(error)
+                      ? new CheckpointCaptureBudgetExceededError({
+                          operation,
+                          reason: "unseeded-scan",
+                          timeoutMs: capturePolicy.timeoutMs,
+                          detail: "The unseeded workspace scan exceeded its advisory budget.",
+                        })
+                      : error,
                   ),
                 );
             }
@@ -381,11 +404,12 @@ const makeCheckpointStore = Effect.gen(function* () {
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) => {
     const policy = input.policy;
     const failureCooldownMs = policy?.failureCooldownMs;
-    const cooldownKey = captureCooldownKey(input.cwd);
     const timeoutMs = policy?.timeoutMs ?? CHECKPOINT_CAPTURE_TIMEOUT_MS;
+    let cooldownKey = path.resolve(input.cwd);
 
-    return Effect.gen(function* () {
+    const capture = Effect.gen(function* () {
       if (failureCooldownMs !== undefined && failureCooldownMs > 0) {
+        cooldownKey = yield* resolveCaptureCooldownKey(input.cwd);
         const now = yield* Clock.currentTimeMillis;
         pruneCaptureCooldowns(now);
         const cooldownExpiresAt = captureFailureCooldowns.get(cooldownKey);
@@ -400,7 +424,15 @@ const makeCheckpointStore = Effect.gen(function* () {
         }
       }
 
-      const completed = yield* captureCheckpointShared(input).pipe(Effect.timeoutOption(timeoutMs));
+      yield* captureCheckpointShared(input);
+
+      if (failureCooldownMs !== undefined && failureCooldownMs > 0) {
+        captureFailureCooldowns.delete(cooldownKey);
+      }
+    });
+
+    return Effect.gen(function* () {
+      const completed = yield* capture.pipe(Effect.timeoutOption(timeoutMs));
       if (Option.isNone(completed)) {
         if (policy) {
           return yield* new CheckpointCaptureBudgetExceededError({
@@ -415,8 +447,6 @@ const makeCheckpointStore = Effect.gen(function* () {
           detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
         });
       }
-
-      captureFailureCooldowns.delete(cooldownKey);
     }).pipe(
       Effect.tapError((error) => {
         if (
