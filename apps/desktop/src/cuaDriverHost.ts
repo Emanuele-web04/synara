@@ -541,6 +541,10 @@ export class CuaDriverHost {
             CUA_DRIVER_HOST_BUNDLE_ID: this.options.bundleId,
             CUA_DRIVER_PERMISSION_MODE: "standard",
             CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+            // Upgrade lifecycle belongs to the app, not the managed driver —
+            // the self-update check is an upstream network call plus a stderr
+            // banner on every spawn.
+            CUA_DRIVER_RS_UPDATE_CHECK: "0",
             // Owned by the GUI host, not supplied through public tool arguments.
             // The native driver applies this only after foreground input cleanup.
             SYNARA_CUA_FOREGROUND_OBSERVATION_MS: "100",
