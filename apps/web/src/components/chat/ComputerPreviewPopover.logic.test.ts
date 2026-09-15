@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   changedThreadComputerStates,
   computerPreviewAgentActive,
+  computerPreviewBudgetPx,
+  computerPreviewCardCaps,
   computerPreviewCardOpen,
   computerPreviewFrameSource,
   computerPreviewPhaseOnAgentEdge,
@@ -192,5 +194,53 @@ describe("changedThreadComputerStates", () => {
 
     expect(changedThreadComputerStates(next, previous)).toEqual([updated, added]);
     expect(changedThreadComputerStates(next, next)).toEqual([]);
+  });
+});
+
+describe("computerPreviewCardCaps", () => {
+  it("keeps the default compact footprint glanceable but readable", () => {
+    expect(computerPreviewCardCaps("compact")).toEqual({ minWidthPx: 240, maxWidthPx: 400 });
+  });
+
+  it("restores the wide card for the large footprint", () => {
+    expect(computerPreviewCardCaps("large")).toEqual({ minWidthPx: 240, maxWidthPx: 560 });
+  });
+});
+
+describe("computerPreviewBudgetPx", () => {
+  const compact = { minWidthPx: 240, maxWidthPx: 400 };
+
+  it("caps at the footprint max on wide layouts", () => {
+    expect(
+      computerPreviewBudgetPx({ mainContentWidthPx: 1600, environmentInsetPx: 0, caps: compact }),
+    ).toBe(400);
+  });
+
+  it("shrinks with the content width on narrow windows and zoom-ins", () => {
+    expect(
+      computerPreviewBudgetPx({ mainContentWidthPx: 900, environmentInsetPx: 0, caps: compact }),
+    ).toBe(900 - 520 - 24);
+  });
+
+  it("subtracts the environment sidebar inset before budgeting", () => {
+    const large = { minWidthPx: 240, maxWidthPx: 560 };
+    const without = computerPreviewBudgetPx({
+      mainContentWidthPx: 1100,
+      environmentInsetPx: 0,
+      caps: large,
+    });
+    const withEnv = computerPreviewBudgetPx({
+      mainContentWidthPx: 1100,
+      environmentInsetPx: 200,
+      caps: large,
+    });
+    expect(without).toBe(556);
+    expect(withEnv).toBe(without - 200);
+  });
+
+  it("floors instead of collapsing on tiny layouts", () => {
+    expect(
+      computerPreviewBudgetPx({ mainContentWidthPx: 500, environmentInsetPx: 0, caps: compact }),
+    ).toBe(200);
   });
 });

@@ -24,6 +24,37 @@ import type { ThreadComputerState, ThreadId } from "@synara/contracts";
 
 export type ComputerPreviewPhase = "armed" | "live" | "hidden-for-task" | "ended";
 
+/** In-chat preview footprint. Compact is the default: small and glanceable. */
+export type ComputerPreviewCardSize = "compact" | "large";
+
+export interface ComputerPreviewCardCaps {
+  readonly minWidthPx: number;
+  readonly maxWidthPx: number;
+}
+
+/** Width bounds per footprint, shared by the card fit and the rail budget. */
+export function computerPreviewCardCaps(size: ComputerPreviewCardSize): ComputerPreviewCardCaps {
+  return size === "large"
+    ? { minWidthPx: 240, maxWidthPx: 560 }
+    : { minWidthPx: 240, maxWidthPx: 400 };
+}
+
+/**
+ * Rail gutter budget: how wide the card may grow in this layout. Monotone in
+ * the measured content width, so window resizes, sidebar toggles, split
+ * leaves, and browser zoom (all of which change CSS layout and refire the
+ * ResizeObservers feeding this) refit the card. Floors at 200px so a tiny
+ * window still gets a usable card instead of collapsing it to zero.
+ */
+export function computerPreviewBudgetPx(input: {
+  readonly mainContentWidthPx: number;
+  readonly environmentInsetPx: number;
+  readonly caps: ComputerPreviewCardCaps;
+}): number {
+  const available = input.mainContentWidthPx - input.environmentInsetPx - 520 - 24;
+  return Math.max(200, Math.min(input.caps.maxWidthPx, available));
+}
+
 export interface ComputerPreviewSession {
   readonly threadId: ThreadId;
   readonly phase: ComputerPreviewPhase;
