@@ -362,10 +362,10 @@ export function ComputerSettingsPanel({
           user's own screen is worse than none), but the preview itself is
           wanted: watching the agent's captured view inside the app is how a
           user follows background work in windows they are not looking at. */}
-      <SettingsSection title="Computer pane">
+      <SettingsSection title="Computer preview">
         <SettingsRow
           title="Open automatically"
-          description="Open the Computer pane the first time an agent acts on the desktop in a chat. Closing the pane keeps it closed for the rest of that chat's run."
+          description="Show the live computer preview the first time an agent acts on the desktop in a chat. Closing the preview keeps it hidden for the rest of that chat's run."
           resetAction={
             settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ? (
               <SettingResetButton
@@ -382,7 +382,7 @@ export function ComputerSettingsPanel({
               onCheckedChange={(checked) =>
                 updateSettings({ autoOpenComputerPane: Boolean(checked) })
               }
-              aria-label="Open the Computer pane automatically when an agent drives the desktop"
+              aria-label="Show the computer preview automatically when an agent drives the desktop"
             />
           }
         />

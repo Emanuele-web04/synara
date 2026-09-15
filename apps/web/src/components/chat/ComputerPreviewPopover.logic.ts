@@ -109,6 +109,24 @@ export function computerPreviewStatusLabel(input: {
   return input.lastActionLabel;
 }
 
+/** The frame source currently allowed to draw the preview canvas. */
+export type ComputerPreviewFrameSource = "tap" | "stills" | "none";
+
+/**
+ * Which source draws the canvas while the preview wants frames. The desktop
+ * app's native tap wins whenever it decoded a frame recently ("tap"); the
+ * stills WebSocket covers every gap, including quiet taps and browsers where
+ * the channel does not exist. "none" means the preview should not draw at
+ * all, so both sources stay off and never write the canvas simultaneously.
+ */
+export function computerPreviewFrameSource(input: {
+  readonly streamWanted: boolean;
+  readonly tapActive: boolean;
+}): ComputerPreviewFrameSource {
+  if (!input.streamWanted) return "none";
+  return input.tapActive ? "tap" : "stills";
+}
+
 /**
  * Thread states whose object identity changed between snapshots. The event
  * bridge diffs the store this way so seeded states (which bypass the push

@@ -1,34 +1,47 @@
-# Native Computer Use preview
+# In-app Computer Use preview
 
-The macOS desktop host now starts an AppSnap helper in `--computer-preview` mode after the first successful, task-attributed observation or action on a specific window. It maintains a ScreenCaptureKit stream for that window and shows a floating, nonactivating preview. The existing Computer pane remains available for manual use; macOS does not automatically open that second preview.
+When an agent starts driving the desktop, Synara shows a small live preview inside the owning thread's chat surface instead of opening the dock pane. The earlier floating AppSnap panel (`--computer-preview`) was removed; the preview is now in-app, with a native frame tap as the real-time tier.
 
-## Capture and token budget
+## Surfaces
 
-- `WindowFrameStream.swift` owns the shared ScreenCaptureKit implementation. AppSnap consumes one frame; Computer Use consumes a live stream.
-- Video stays inside the native helper and renders through `AVSampleBufferDisplayLayer`. No video frames cross Electron/server IPC or enter provider context.
-- The preview caps its longest edge at 960 pixels and its rate at 15 fps. It keeps one pending native frame, with bounded capture and presentation queues.
-- Closing the panel hides it for the rest of the task and reduces capture to 1 fps. Stop ends Computer Use for that turn. A new task gets a visible preview.
-- Model screenshots remain fresh, explicit tool requests through Cua. Preview frames are never substituted as evidence that an action succeeded.
-- Ordinary turns start no preview helper, send no preview IPC, and gain no Computer instructions or schemas from this feature.
-- Control follows the Settings switch. Quoted excerpts and ordinary discussion do not activate it.
+- **Preview popover** (`apps/web/src/components/chat/ComputerPreviewPopover.tsx`): a ~300px floating card anchored bottom-right over the owning thread's chat surface. It shows the live frame stream, the agent's latest action label, its cursor as a halo dot, a Stop control (same interrupt as the pane), an expand control, and a close control. It is view-only.
+- **Dock Computer pane**: unchanged. It remains the detailed interactive surface — it opens when the user expands the popover or picks Computer from the dock menu, and it is the intended home for remote/SSH/VM previews later.
+
+The popover and the pane are one surface at two sizes: the popover yields while the thread's dock Computer pane is open, and expanding demotes the popover for the rest of the task.
+
+## Preview session machine
+
+`apps/web/src/computerPreviewStore.ts` keeps a per-thread `ComputerPreviewSession` with phases `armed | live | hidden-for-task | ended`:
+
+- `armed`: `computer.open-pane-requested` arrived (emitted once per desktop lease) or a drive turn began. Sessions arm on the owning thread whether or not it is visible, so background agent work never steals the user's current chat.
+- `live`: the armed session is actually being rendered by the viewed thread's surface. Only live sessions attach a frame stream.
+- `hidden-for-task`: the user closed the card or expanded to the pane. It re-arms on the next lease or drive turn.
+- `ended`: the lease released or the drive turn ended. Sessions also die when their thread state vanishes or the state store resets.
+
+Drive-turn edges come from `controlOwnerThreadId` on `computer.thread-state` snapshots — it stays set across thinking gaps, unlike `agentActive`, which only covers an in-flight call.
+
+## Frame sources
+
+- **Stills (baseline, all clients)**: `StillFramePublisher` captures whole-desktop PNG stills every 2s over `/ws/computer-frames`; `useComputerImageStream` draws them to the popover canvas. This is the only source for browser-hosted clients.
+- **Native frame tap (desktop app)**: the AppSnap helper's `--computer-frames` mode streams JPEG frames of the task's target window over a dedicated unix socket. The host (`apps/desktop/src/computerFrameTap.ts`) spawns one helper per task target after the first task-attributed window call, forwards frames to the renderer on `computerPreview.frame`, and the popover prefers them while they are fresh. Still captures continue underneath as the fallback tier.
+
+The tap captures at ≤960px, 15fps cap, one encode in flight (frames drop, never queue). Frames travel helper → socket → `webContents.send` → canvas. They never enter the driver operation queue, the server, or provider context — screenshots remain explicit tool requests.
 
 ## Ownership and cleanup
 
-The gateway supplies thread and turn identity through an asynchronous scope. It is carried only over authenticated local IPC. Detached callbacks lose that scope when the tool returns.
+One helper per task target (`threadId`, `turnId`, `pid`, `windowId`). The tap stops on `end_task`, host `stop()`/`suspend()`/`dispose()`, helper exit, or parent death (`ParentProcessMonitor`). A helper that dies without being retired poisons only its target — the same task+window never respawns, while a legitimate retarget can. `end_task` clears the task's dead-target memory, so a new task gets a fresh tap. A delayed or failed tap shutdown never delays release of desktop control.
 
-The host validates the window ID and PID. Window changes discard old pending frames; closing the target stops capture rather than switching to an unrelated window. Resize updates capture dimensions without creating screenshot files. Lock, sleep, host retirement and Stop close the preview along with the native lifecycle.
+Helper protocol isolation: frame bytes ride the unix socket; stdout stays NDJSON lifecycle lines (`ready`/`error`). Socket directory is `0700`, socket `0600`, frame length capped at 4 MiB.
 
-Terminal turn/session events end capture even when the task only read the screen and never held an input lease. End events and Stop messages from an older task cannot retire a newer preview. A delayed or failed preview shutdown cannot delay release of desktop control. Helper replacement waits for the previous process to exit; a crash does not start a capture retry loop.
+## Verification, 15 September 2026
 
-The floating Stop button revokes further Computer calls for its turn and stops native input. It does not change macOS permissions or cancel unrelated model work. Permission setup continues to use the existing shared AppSnap flow.
+- Universal native helper builds for arm64 and x86_64; `--computer-frames` argument validation rejects missing or mismatched flags.
+- Independent socket read against a live playing-video window: 12.5fps, 75/75 valid JPEG frames, ~91KB average, no helper leaks after kill.
+- Host lifecycle covered by tests plus bun-harness runs: task-attributed call starts the tap, `end_task` stops it, SIGKILL leaves no respawn, retarget swaps helpers, `dispose` leaves no `synara-frames-*` directories.
+- Web-side coverage: popover phase machine, session store, bridge edge detection, tap source selection and hook decode/drop/cleanup tests, SSR markup, and Playwright interaction tests.
 
-## Verification, 12 September 2026
+## Not yet qualified
 
-- Universal native helper compiled for arm64 and x86_64.
-- Full workspace formatting, lint and seven-package typecheck passed. Lint reported warnings but no errors. Later fixes received scoped formatting, lint and typechecks.
-- Focused regression coverage includes lazy startup, coalescing, helper retirement, stale Stop/error messages, terminal events during observations, read-only task cleanup, failed preview teardown, gateway permissions and invocation detection.
-- The isolated Synara Dev instance ran a real Codex task that opened Calculator and produced `123 × 45 = 5535`. The preview helper started automatically during the task and was absent after completion.
-- A subsequent read-only turn verified the rendered preview in a desktop screenshot: the panel showed Calculator, its expression and result, the task title and the Stop button. The helper also exited after that read-only turn. The explicit `Computer Use: …` prefix was exercised successfully after the invocation fix.
-- One process sample during that task measured about 63 MiB RSS and 3.3% CPU for the preview helper. This is not a sustained benchmark or a comparison with Codex. The task deliberately waited 20 seconds, so its total duration is not an action-latency benchmark.
-
-The implementation does not claim full parity with Codex. Physical Stop-button behavior, every macOS sharing-indicator transition, permission revocation and multi-display behavior still require dedicated native qualification. Provider-independent gateway wiring is covered, but the live provider test used Codex only.
+- Packaged-app end-to-end proof of the full chain (turn → popover → tap video → expand/stop/cleanup) pending on this branch.
+- Multi-display and other-Space windows, permission-revocation mid-task, and sustained helper CPU/RSS under load still need dedicated qualification.
+- The `autoOpenComputerPane` setting now gates the ambient preview; its Settings copy still says "Computer pane".

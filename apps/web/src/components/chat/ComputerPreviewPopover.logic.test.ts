@@ -5,6 +5,7 @@ import {
   changedThreadComputerStates,
   computerPreviewAgentActive,
   computerPreviewCardOpen,
+  computerPreviewFrameSource,
   computerPreviewPhaseOnAgentEdge,
   computerPreviewPhaseOnHide,
   computerPreviewPhaseOnSurfaceRequest,
@@ -151,6 +152,25 @@ describe("computerPreviewStatusLabel", () => {
       "Click",
     );
     expect(computerPreviewStatusLabel({ agentActive: false, lastActionLabel: null })).toBeNull();
+  });
+});
+
+describe("computerPreviewFrameSource", () => {
+  it("prefers the native tap while it keeps producing frames", () => {
+    expect(computerPreviewFrameSource({ streamWanted: true, tapActive: true })).toBe("tap");
+  });
+
+  it("falls back to the stills stream when the tap is quiet or absent", () => {
+    // tapActive false covers both a silent tap and a browser without the
+    // desktop bridge channel at all.
+    expect(computerPreviewFrameSource({ streamWanted: true, tapActive: false })).toBe("stills");
+  });
+
+  it("keeps both sources off when the preview does not want frames", () => {
+    // A live tap for a hidden or ended session must not keep the canvas (or
+    // the stills subscription) alive.
+    expect(computerPreviewFrameSource({ streamWanted: false, tapActive: true })).toBe("none");
+    expect(computerPreviewFrameSource({ streamWanted: false, tapActive: false })).toBe("none");
   });
 });
 

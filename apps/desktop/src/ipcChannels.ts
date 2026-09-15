@@ -40,6 +40,7 @@ export const DESKTOP_IPC_CHANNELS = {
   zoomFactorChanged: "desktop:zoom-factor-changed",
   wsUrl: "desktop:get-ws-url",
   transcribeVoice: "desktop:server-transcribe-voice",
+  computerPreviewFrame: "computerPreview.frame",
   storageMigration: {
     read: "desktop:storage-migration-read",
     acknowledge: "desktop:storage-migration-acknowledge",

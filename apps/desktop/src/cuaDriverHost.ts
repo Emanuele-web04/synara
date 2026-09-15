@@ -893,10 +893,7 @@ export class CuaDriverHost {
 
   /** The native call args carry the agent's window target; task attribution
    * alone does not say which window the tap should stream. */
-  private frameTapTarget(
-    task: CuaComputerTask,
-    input: unknown,
-  ): CuaPreviewTarget | undefined {
+  private frameTapTarget(task: CuaComputerTask, input: unknown): CuaPreviewTarget | undefined {
     if (!input || typeof input !== "object") return undefined;
     const args = input as Record<string, unknown>;
     if (

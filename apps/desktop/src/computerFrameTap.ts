@@ -10,10 +10,11 @@ import {
   type CuaComputerTask,
   type CuaPreviewTarget,
 } from "@synara/shared/cuaDriverProtocol";
+import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { stopNativeHelper } from "./stopNativeHelper";
 
 /** Channel carrying live JPEG frames to the renderer: {windowId, seq, jpeg}. */
-export const COMPUTER_PREVIEW_FRAME_CHANNEL = "computerPreview.frame";
+export const COMPUTER_PREVIEW_FRAME_CHANNEL = DESKTOP_IPC_CHANNELS.computerPreviewFrame;
 
 const FRAME_TAP_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_DEAD_TARGETS = 256;
@@ -293,10 +294,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
     try {
       const message = JSON.parse(line) as { type?: string; code?: string };
       if (message.type === "error") {
-        this.kill(
-          state,
-          new Error(`Computer frame tap: ${message.code ?? "capture failed"}`),
-        );
+        this.kill(state, new Error(`Computer frame tap: ${message.code ?? "capture failed"}`));
       }
     } catch {
       /* Only protocol lines emitted by the owned helper are consumed. */

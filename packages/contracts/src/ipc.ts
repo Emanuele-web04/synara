@@ -633,6 +633,18 @@ export type DesktopSafariAccessInfo =
   | { supported: false }
   | { supported: true; appName: string; appPath: string | null };
 
+/**
+ * One frame of the desktop app's native computer preview tap: a complete JPEG
+ * of the driven window. `seq` is monotonic per host process; the first frame
+ * marks stream start and frames simply stop when the tap ends or dies. Sent
+ * over the desktop bridge only, never through the computer WebSocket path.
+ */
+export interface DesktopComputerPreviewFrame {
+  readonly windowId: number;
+  readonly seq: number;
+  readonly jpeg: Uint8Array;
+}
+
 export interface DesktopBridge {
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
@@ -682,6 +694,14 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCustomTitleBarState>;
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
     relaunch: () => Promise<void>;
+  };
+  /**
+   * Live desktop frames from the native computer frame tap, desktop app only.
+   * Plain browser clients never see this member; their preview keeps drawing
+   * the WebSocket stills stream.
+   */
+  computerPreview?: {
+    onFrame: (listener: (frame: DesktopComputerPreviewFrame) => void) => () => void;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   onQuitConfirmationRequest: (

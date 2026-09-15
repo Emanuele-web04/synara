@@ -37,9 +37,11 @@ import {
   shouldSubscribeToComputerStream,
 } from "../ComputerPanel.logic";
 import { useComputerImageStream } from "../computer/useComputerImageStream";
+import { useComputerPreviewTap } from "../computer/useComputerPreviewTap";
 import { Button } from "../ui/button";
 import {
   computerPreviewCardOpen,
+  computerPreviewFrameSource,
   computerPreviewStatusLabel,
   type ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
@@ -111,15 +113,23 @@ function ComputerPreviewPopoverCard(props: {
     return () => observer.disconnect();
   }, []);
 
-  const streamEnabled = shouldSubscribeToComputerStream({
+  const streamWanted = shouldSubscribeToComputerStream({
     runtimeMode: "live",
     isVisible: open,
     threadState,
   });
+  // The desktop app's native tap is the preferred source while it keeps
+  // delivering frames; the stills stream owns the canvas only while the tap
+  // is quiet or absent, so the two never draw at the same time.
+  const tap = useComputerPreviewTap({ canvasRef, threadId, enabled: streamWanted });
+  const frameSource = computerPreviewFrameSource({
+    streamWanted,
+    tapActive: tap.active,
+  });
   const { status: streamStatus, dimensions } = useComputerImageStream({
     canvasRef,
-    computerId: streamEnabled && threadState ? threadState.computerId : null,
-    enabled: streamEnabled,
+    computerId: streamWanted && threadState ? threadState.computerId : null,
+    enabled: frameSource === "stills",
   });
 
   const screenSize = threadState?.screenSize ?? dimensions ?? undefined;
@@ -227,14 +237,16 @@ function ComputerPreviewPopoverCard(props: {
           tabIndex={-1}
           className="absolute inset-0 h-full w-full object-contain"
         />
-        {streamStatus.kind !== "streaming" ? (
+        {frameSource !== "tap" && streamStatus.kind !== "streaming" ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center">
             <ComputerPreviewStreamStatus status={streamStatus} />
           </div>
         ) : null}
-        {cursorPosition ? (
+        {cursorPosition && frameSource !== "tap" ? (
           // The dot stands in for the pane's ghost cursor at this scale; the
-          // violet halo is the same "this is the agent's" signal.
+          // violet halo is the same "this is the agent's" signal. It maps
+          // desktop coordinates, so it is suppressed while the tap's
+          // window-cropped frames own the canvas.
           <div
             aria-hidden="true"
             className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_3px_rgba(124,58,237,0.9),0_0_7px_rgba(124,58,237,0.65)]"
