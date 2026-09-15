@@ -1,80 +1,54 @@
-import { lookup } from "node:dns/promises";
-import type { OnBeforeRequestListenerDetails, Session, WebContents } from "electron";
-import { NetworkPolicy, type NetworkDecision } from "betterwright";
-
-function deny(reason: string): NetworkDecision {
-  return { allowed: false, reason };
-}
-
-async function checkRequest(policy: NetworkPolicy, url: string): Promise<NetworkDecision> {
-  const decision = policy.check(url);
-  if (!decision.allowed) return decision;
-
-  const parsed = new URL(url);
-  if (!parsed.hostname || parsed.protocol === "data:" || parsed.protocol === "blob:") {
-    return decision;
-  }
-
-  const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
-  for (const address of addresses) {
-    const resolved = policy.checkHost(address.address, parsed.port ? Number(parsed.port) : null);
-    if (!resolved.allowed) {
-      return deny(`resolved address denied: ${resolved.reason ?? "network policy"}`);
-    }
-  }
-  return decision;
-}
+import type { ProxyConfig, Session } from "electron";
 
 export interface BetterwrightNetworkGuardLease {
-  release(): void;
+  release(): Promise<void>;
 }
 
 export class BetterwrightNetworkGuard {
-  private readonly policiesByWebContentsId = new Map<number, NetworkPolicy>();
-  private listening = false;
+  private activeProxy: string | undefined;
+  private releasePromise: Promise<void> | undefined;
 
   constructor(private readonly browserSession: Session) {}
 
-  attach(contents: WebContents, policy: NetworkPolicy): BetterwrightNetworkGuardLease {
-    this.ensureListener();
-    this.policiesByWebContentsId.set(contents.id, policy);
+  async attach(proxyUrl: string): Promise<BetterwrightNetworkGuardLease> {
+    if (this.activeProxy !== undefined) {
+      throw new Error("Browser session is already leased by another automation run.");
+    }
+    this.activeProxy = proxyUrl;
+    try {
+      await this.setProxy({
+        proxyRules: proxyUrl,
+        proxyBypassRules: "<-loopback>",
+      });
+      await this.browserSession.closeAllConnections();
+    } catch (error) {
+      this.activeProxy = undefined;
+      throw error;
+    }
     let released = false;
     return {
-      release: () => {
+      release: async () => {
         if (released) return;
         released = true;
-        this.policiesByWebContentsId.delete(contents.id);
+        this.releasePromise ??= this.releaseProxy(proxyUrl);
+        await this.releasePromise;
       },
     };
   }
 
-  private ensureListener(): void {
-    if (this.listening) return;
-    this.listening = true;
-    this.browserSession.webRequest.onBeforeRequest(
-      { urls: ["<all_urls>"] },
-      (
-        details: OnBeforeRequestListenerDetails,
-        callback: (response: { cancel?: boolean }) => void,
-      ) => {
-        if (
-          typeof details.webContentsId !== "number" ||
-          !this.policiesByWebContentsId.has(details.webContentsId)
-        ) {
-          callback({});
-          return;
-        }
-        const policy = this.policiesByWebContentsId.get(details.webContentsId);
-        if (!policy) {
-          callback({});
-          return;
-        }
-        void checkRequest(policy, details.url).then(
-          (decision) => callback({ cancel: !decision.allowed }),
-          () => callback({ cancel: true }),
-        );
-      },
-    );
+  private async setProxy(config: ProxyConfig): Promise<void> {
+    await this.browserSession.setProxy(config);
+  }
+
+  private async releaseProxy(proxyUrl: string): Promise<void> {
+    if (this.activeProxy !== proxyUrl) return;
+    try {
+      await this.setProxy({ mode: "system" });
+      await this.browserSession.closeAllConnections();
+    } finally {
+      this.activeProxy = undefined;
+      this.releasePromise = undefined;
+    }
   }
 }
 

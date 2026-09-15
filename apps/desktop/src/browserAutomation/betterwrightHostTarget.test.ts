@@ -9,17 +9,7 @@ vi.mock("./betterwrightConnection", () => ({
   openBetterwrightConnection: mocks.openConnection,
 }));
 
-const contents = {
-  getBackgroundThrottling: vi.fn(),
-  setBackgroundThrottling: vi.fn(),
-  isDestroyed: vi.fn(),
-  id: 42,
-  session: {
-    webRequest: {
-      onBeforeRequest: vi.fn(),
-    },
-  },
-} as unknown as WebContents;
+let contents: WebContents;
 
 const fakeConnection = (provider: object) => {
   const close = vi.fn(async (_cancel = true) => {});
@@ -36,6 +26,16 @@ const fakeConnection = (provider: object) => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  contents = {
+    getBackgroundThrottling: vi.fn(),
+    setBackgroundThrottling: vi.fn(),
+    isDestroyed: vi.fn(),
+    id: 42,
+    session: {
+      setProxy: vi.fn(async () => {}),
+      closeAllConnections: vi.fn(async () => {}),
+    },
+  } as unknown as WebContents;
   vi.mocked(contents.getBackgroundThrottling).mockReturnValue(false);
   vi.mocked(contents.isDestroyed).mockReturnValue(false);
 });
@@ -93,6 +93,21 @@ describe("synaraHostTarget", () => {
     expect(conn.recordedClose).toHaveBeenCalledWith(false);
   });
 
+  it("configures the supplied proxy before opening the transport", async () => {
+    const session = contents.session as unknown as {
+      setProxy: ReturnType<typeof vi.fn>;
+      closeAllConnections: ReturnType<typeof vi.fn>;
+    };
+    mocks.openConnection.mockResolvedValue(fakeConnection({}));
+    const target = synaraHostTarget(contents);
+    await target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    expect(session.setProxy).toHaveBeenCalledWith({
+      proxyRules: "socks5://127.0.0.1:9",
+      proxyBypassRules: "<-loopback>",
+    });
+    expect(session.closeAllConnections).toHaveBeenCalledOnce();
+  });
+
   it("refuses to vend a transport for a destroyed tab", async () => {
     vi.mocked(contents.isDestroyed).mockReturnValue(true);
     const target = synaraHostTarget(contents);
@@ -110,6 +125,7 @@ describe("synaraHostTarget", () => {
     mocks.openConnection.mockReturnValue(opening);
     const target = synaraHostTarget(contents);
     const connectPromise = target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    await vi.waitFor(() => expect(mocks.openConnection).toHaveBeenCalledOnce());
     const revoked = target.revokeAll(true);
     const conn = fakeConnection({});
     resolveOpening(conn);

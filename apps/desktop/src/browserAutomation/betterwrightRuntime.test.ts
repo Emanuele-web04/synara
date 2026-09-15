@@ -37,20 +37,20 @@ vi.mock("./betterwrightConnection", () => ({
   openBetterwrightConnection: mocks.openConnection,
 }));
 
-const contents = {
-  getBackgroundThrottling: vi.fn(),
-  setBackgroundThrottling: vi.fn(),
-  isDestroyed: vi.fn(),
-  id: 42,
-  session: {
-    webRequest: {
-      onBeforeRequest: vi.fn(),
-    },
-  },
-} as unknown as WebContents;
+let contents: WebContents;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  contents = {
+    getBackgroundThrottling: vi.fn(),
+    setBackgroundThrottling: vi.fn(),
+    isDestroyed: vi.fn(),
+    id: 42,
+    session: {
+      setProxy: vi.fn(async () => {}),
+      closeAllConnections: vi.fn(async () => {}),
+    },
+  } as unknown as WebContents;
   mocks.browserClose.mockResolvedValue(undefined);
   mocks.connectionClose.mockResolvedValue(undefined);
   mocks.constructedOptions.current = undefined;

@@ -30,6 +30,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
+import { configureElectronNetwork } from "betterwright/electron";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -5221,6 +5222,7 @@ if (hasSingleInstanceLock) {
 }
 
 configureAppIdentity();
+configureElectronNetwork();
 
 const browserEngineFeatures = new Set([
   ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),

@@ -1,5 +1,5 @@
 import type { WebContents } from "electron";
-import { NetworkPolicy, type BetterWrightOptions } from "betterwright";
+import type { BetterWrightOptions } from "betterwright";
 import { openBetterwrightConnection } from "./betterwrightConnection";
 import { getBetterwrightNetworkGuard } from "./betterwrightNetworkGuard";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
@@ -16,9 +16,9 @@ export interface SynaraHostTarget extends HostTarget {
 
 /**
  * Synara's HostTarget adapter. Browser tabs share a persistent Electron
- * session, so the upstream dedicated-session proxy adapter cannot be used.
- * Leased tabs instead receive an equivalent request-level policy guard for
- * navigations, subresources, WebSockets, and DNS-resolved addresses.
+ * session, so the guard proxy is installed on the session for the duration of
+ * each lease. This covers navigations, subresources, WebSockets, and workers;
+ * the proxy resolves and dials the validated address itself.
  */
 export function synaraHostTarget(
   contents: WebContents,
@@ -27,16 +27,12 @@ export function synaraHostTarget(
     cookieImport?: boolean | undefined;
     expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"] | undefined;
     signal?: AbortSignal | undefined;
-    networkPolicy?: NetworkPolicy | undefined;
   } = {},
 ): SynaraHostTarget {
   const connections = new Set<OpenedConnection>();
   const pending = new Set<Promise<OpenedConnection>>();
   const networkGuard = getBetterwrightNetworkGuard(contents.session);
-  const networkGuardLease = networkGuard.attach(
-    contents,
-    options.networkPolicy ?? new NetworkPolicy({ allowLoopback: true }),
-  );
+  let networkGuardLease: Awaited<ReturnType<typeof networkGuard.attach>> | undefined;
   // Bumped synchronously by every revokeAll: lets a connect() that resolves
   // after a revoke refuse to vend its lease deterministically.
   let generation = 0;
@@ -46,6 +42,12 @@ export function synaraHostTarget(
       if (options.signal?.aborted) throw new Error("Browser control was interrupted.");
       if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
       const seen = generation;
+      networkGuardLease ??= await networkGuard.attach(proxyUrl);
+      if (seen !== generation) {
+        await networkGuardLease.release();
+        networkGuardLease = undefined;
+        throw new Error("Browser control was interrupted.");
+      }
       const opening = openBetterwrightConnection(
         contents,
         undefined,
@@ -101,8 +103,9 @@ export function synaraHostTarget(
         );
       }
       return Promise.all([...connections].map((connection) => connection.close(cancel))).then(
-        () => {
-          networkGuardLease.release();
+        async () => {
+          await networkGuardLease?.release();
+          networkGuardLease = undefined;
         },
       );
     },
