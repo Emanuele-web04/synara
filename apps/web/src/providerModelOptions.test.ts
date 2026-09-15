@@ -10,6 +10,7 @@ import {
   buildModelSelection,
   buildNextProviderOptions,
   buildProviderOptionPatch,
+  displayProvenanceWithinProvider,
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -216,6 +217,23 @@ describe("mergeDynamicModelOptions", () => {
     ]);
   });
 
+  it("treats the live Codex catalog as authoritative while preserving custom models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "codex",
+        staticOptions: [
+          { slug: "gpt-5.5", name: "GPT-5.5" },
+          { slug: "gpt-5.4", name: "GPT-5.4" },
+          { slug: "custom/internal-model", name: "custom/internal-model", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
+      }),
+    ).toEqual([
+      { slug: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+      { slug: "custom/internal-model", name: "custom/internal-model", isCustom: true },
+    ]);
+  });
+
   it("treats the live Droid catalog as authoritative and drops invalid custom slugs", () => {
     expect(
       mergeDynamicModelOptions({
@@ -397,6 +415,36 @@ describe("providerModelOptionProvenanceLabel", () => {
   });
 });
 
+describe("displayProvenanceWithinProvider", () => {
+  it("strips a redundant provider-name prefix but keeps the distinguishing remainder", () => {
+    expect(
+      displayProvenanceWithinProvider({ provider: "opencode", provenance: "OpenCode Zen" }),
+    ).toBe("Zen");
+    expect(
+      displayProvenanceWithinProvider({ provider: "opencode", provenance: "OpenCode Go" }),
+    ).toBe("Go");
+    expect(displayProvenanceWithinProvider({ provider: "opencode", provenance: "DeepSeek" })).toBe(
+      "DeepSeek",
+    );
+  });
+
+  it("hides the provenance when nothing distinguishing remains", () => {
+    expect(
+      displayProvenanceWithinProvider({ provider: "opencode", provenance: "OpenCode" }),
+    ).toBeNull();
+    expect(displayProvenanceWithinProvider({ provider: "opencode", provenance: "  " })).toBeNull();
+    expect(
+      displayProvenanceWithinProvider({ provider: "cursor", provenance: "Cursor" }),
+    ).toBeNull();
+  });
+
+  it("keeps coincidental prefix matches whole", () => {
+    expect(
+      displayProvenanceWithinProvider({ provider: "opencode", provenance: "OpenCodex Foo" }),
+    ).toBe("OpenCodex Foo");
+  });
+});
+
 describe("buildProviderOptionPatch", () => {
   it("passes through option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
@@ -436,6 +484,41 @@ describe("groupProviderModelOptions", () => {
 });
 
 describe("groupProviderModelOptionsWithFavorites", () => {
+  const plainOptions = [
+    { slug: "first", name: "First model" },
+    { slug: "second", name: "Second model" },
+  ];
+
+  it("separates favourites from an ungrouped catalog without duplicating models", () => {
+    const groups = groupProviderModelOptionsWithFavorites({
+      options: plainOptions,
+      favoriteSlugs: new Set(["second"]),
+    });
+    expect(
+      groups.map((group) => [group.label, group.options.map((option) => option.slug)]),
+    ).toEqual([
+      ["Favourites", ["second"]],
+      ["Other models", ["first"]],
+    ]);
+  });
+
+  it("does not show empty sections for saved models absent from the current catalog", () => {
+    const groups = groupProviderModelOptionsWithFavorites({
+      options: plainOptions,
+      favoriteSlugs: new Set(["temporarily-unavailable"]),
+    });
+    expect(groups).toEqual(groupProviderModelOptions(plainOptions));
+  });
+
+  it("does not leave an empty other-model section when every model is a favourite", () => {
+    const groups = groupProviderModelOptionsWithFavorites({
+      options: plainOptions,
+      favoriteSlugs: new Set(plainOptions.map((option) => option.slug)),
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("Favourites");
+  });
+
   it("adds a favourites group ahead of the normal provider groups", () => {
     const options = [
       {

@@ -6,10 +6,17 @@ import type { ProviderKind } from "@synara/contracts";
 import { Schema } from "effect";
 
 export const FAVORITE_MODEL_STORAGE_KEYS = {
+  codex: "synara:codex-favourite-models:v1",
+  claudeAgent: "synara:claude-agent-favourite-models:v1",
   cursor: "synara:cursor-favourite-models:v1",
+  grok: "synara:grok-favourite-models:v1",
+  droid: "synara:droid-favourite-models:v1",
   opencode: "synara:opencode-favourite-models:v1",
+  cline: "synara:cline-favourite-models:v1",
+  devin: "synara:devin-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
-} as const;
+  antigravity: "synara:antigravity-favourite-models:v1",
+} as const satisfies Record<ProviderKind, string>;
 
 const LEGACY_KILO_FAVORITE_MODEL_STORAGE_KEY = "synara:kilo-favourite-models:v1";
 
@@ -57,7 +64,7 @@ export function migrateLegacyKiloFavoriteModelSlugs(
 }
 
 export function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return provider === "cursor" || provider === "opencode" || provider === "pi";
+  return Object.hasOwn(FAVORITE_MODEL_STORAGE_KEYS, provider);
 }
 
 // Read favorite slugs for cycle order. Failures (SSR, parse errors) return [].

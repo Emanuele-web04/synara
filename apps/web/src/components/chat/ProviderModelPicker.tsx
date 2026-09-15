@@ -5,7 +5,6 @@
 
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
-import * as Schema from "effect/Schema";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
@@ -27,26 +26,14 @@ import { PickerTriggerButton } from "./PickerTriggerButton";
 import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
-  COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-  COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME,
+  COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  groupProviderModelOptions,
-  groupProviderModelOptionsWithFavorites,
-  shouldUseCollapsibleModelGroups,
-  type ProviderModelOption,
-} from "../../providerModelOptions";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import {
-  FAVORITE_MODEL_STORAGE_KEYS,
-  supportsModelFavorites,
-  type FavoriteModelProvider,
-} from "../../lib/modelFavorites";
+import { type ProviderModelOption } from "../../providerModelOptions";
 import { Skeleton } from "../ui/skeleton";
-import { PlusIcon } from "~/lib/icons";
+import { CheckIcon, ChevronRightIcon, PlusIcon, SearchIcon } from "~/lib/icons";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -117,17 +104,6 @@ function providerIconClassName(
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
-const FavoriteModelSlugs = Schema.Array(Schema.String);
-const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
-
-// Keeps persisted favorite slugs compact and stable while preserving the user's order.
-function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
-  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
-  return normalizedCurrent.includes(slug)
-    ? normalizedCurrent.filter((entry) => entry !== slug)
-    : [...normalizedCurrent, slug];
-}
-
 function stripParameterizedModelSuffix(model: string): string {
   return model.trim().replace(/\[[^\]]*\]$/u, "");
 }
@@ -183,6 +159,12 @@ type ProviderModelMenuItemsProps = {
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   disabled?: boolean;
+  // The combined picker browses within its existing popup instead of stacking
+  // provider/model submenus over the configuration panel.
+  navigation?: {
+    provider: ProviderKind | null;
+    onProviderBrowse: (provider: ProviderKind) => void;
+  };
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
@@ -197,21 +179,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 ) {
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
-  const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.cursor,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
-  const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.opencode,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
-  const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.pi,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const hiddenProviders = props.hiddenProviders;
@@ -230,14 +197,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     hiddenProviderSet,
     protectedProviderSet,
   );
-  const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
-  const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
-  const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
-  const favoriteModelSlugSets = {
-    cursor: cursorFavoriteModelSlugSet,
-    opencode: openCodeFavoriteModelSlugSet,
-    pi: piFavoriteModelSlugSet,
-  };
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -250,32 +209,13 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     props.onProviderModelChange(provider, resolvedModel);
     onAfterSelection?.();
   };
-  const toggleFavoriteModel = (provider: FavoriteModelProvider, slug: string) => {
-    const setFavoriteModelSlugs =
-      provider === "cursor"
-        ? setCursorFavoriteModelSlugs
-        : provider === "pi"
-          ? setPiFavoriteModelSlugs
-          : setOpenCodeFavoriteModelSlugs;
-    setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
-  };
-
   const renderModelRadioGroup = (provider: ProviderKind) => {
-    if (props.loadingModelProviders?.[provider]) {
-      return (
-        <div className="space-y-2 px-2 py-2" aria-label="Loading models">
-          {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-              <Skeleton className="size-3.5 rounded-full" />
-              <Skeleton className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")} />
-            </div>
-          ))}
-        </div>
-      );
-    }
-
     const providerOptions = props.modelOptionsByProvider[provider];
+    const isLoading = props.loadingModelProviders?.[provider] ?? false;
+    const providerLabel =
+      PROVIDER_OPTIONS.find((option) => option.value === provider)?.label ?? provider;
     const shouldShowSearch =
+      !isLoading &&
       (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
@@ -289,94 +229,86 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
-    const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
-    const favoriteModelSlugSet =
-      favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
-    const groupedOptions =
-      favoriteModelSlugSet !== undefined
-        ? groupProviderModelOptionsWithFavorites({
-            options: filteredOptions,
-            favoriteSlugs: favoriteModelSlugSet,
-          })
-        : groupProviderModelOptions(filteredOptions);
 
     const discoveryError = props.discoveryErrorsByProvider?.[provider];
     const discoveryErrorElement = discoveryError ? (
-      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+      <div role="status" className="px-3 py-2 text-xs text-destructive">
+        {discoveryError}
+      </div>
     ) : null;
 
-    const content =
-      groupedOptions.length > 0 ? (
-        <MenuRadioGroup
-          value={activeProvider === provider ? props.model : ""}
-          onValueChange={(value) => handleModelChange(provider, value)}
-        >
-          <ProviderModelOptionGroupList
-            groupedOptions={groupedOptions}
-            provider={provider}
-            activeModel={props.model}
-            isSearching={normalizedModelSearchQuery.length > 0}
-            favoriteProvider={favoriteProvider}
-            favoriteModelSlugSet={favoriteModelSlugSet}
-            onToggleFavorite={toggleFavoriteModel}
-            {...(onAfterSelection ? { onAfterSelection } : {})}
-          />
-        </MenuRadioGroup>
-      ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">
+    const content = isLoading ? (
+      <div className="space-y-2 px-2 py-2" role="status" aria-label="Loading models">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
+            <Skeleton className="size-3.5 rounded-full" />
+            <Skeleton className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")} />
+          </div>
+        ))}
+      </div>
+    ) : filteredOptions.length > 0 ? (
+      <MenuRadioGroup
+        aria-label={`${providerLabel} models`}
+        value={activeProvider === provider ? props.model : ""}
+        onValueChange={(value) => handleModelChange(provider, value)}
+      >
+        <ProviderModelOptionGroupList
+          key={provider}
+          options={filteredOptions}
+          provider={provider}
+          activeModel={props.model}
+          isSearching={normalizedModelSearchQuery.length > 0}
+          {...(onAfterSelection ? { onAfterSelection } : {})}
+        />
+      </MenuRadioGroup>
+    ) : (
+      <div
+        role="status"
+        className="flex flex-col items-center gap-2 px-4 py-6 text-center text-muted-foreground"
+      >
+        <SearchIcon aria-hidden="true" className="size-5 opacity-60" />
+        <span className="text-[length:var(--app-font-size-ui,12px)] text-foreground">
           {provider === "pi" && normalizedModelSearchQuery.length === 0
             ? "No Pi models found"
             : "No matches"}
-        </div>
-      );
-
-    if (!shouldShowSearch) {
-      const needsScrollContainer =
-        filteredOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD ||
-        shouldUseCollapsibleModelGroups(groupedOptions.length, false);
-      if (needsScrollContainer) {
-        return (
-          <>
-            {discoveryErrorElement}
-            <div
-              className={cn(
-                "overflow-y-auto overscroll-contain py-0.5",
-                COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-                COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-              )}
-            >
-              {content}
-            </div>
-          </>
-        );
-      }
-      return (
-        <>
-          {discoveryErrorElement}
-          {content}
-        </>
-      );
-    }
+        </span>
+        {normalizedModelSearchQuery.length > 0 ? (
+          <span className="text-[length:var(--app-font-size-ui-sm,11px)]">
+            Try a different model or provider name.
+          </span>
+        ) : null}
+      </div>
+    );
 
     return (
-      <PickerPanelShell
-        searchPlaceholder="Search models or providers"
-        query={modelSearchQuery}
-        onQueryChange={setModelSearchQuery}
-        stopSearchKeyPropagation
-        autoFocusSearch
-        widthClassName="w-full"
-        bleedParentPadding
-        listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
-      >
-        {discoveryErrorElement}
-        {content}
-      </PickerPanelShell>
+      <>
+        {!shouldShowSearch ? (
+          <div className="shrink-0 px-2 pb-1.5 pt-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
+            Select model
+          </div>
+        ) : null}
+        <PickerPanelShell
+          searchPlaceholder="Search models"
+          query={modelSearchQuery}
+          {...(shouldShowSearch ? { onQueryChange: setModelSearchQuery } : {})}
+          stopSearchKeyPropagation
+          autoFocusSearch
+          widthClassName="w-full"
+          variant="plain"
+          listMaxHeightClassName="max-h-[min(16rem,55dvh)]"
+        >
+          {discoveryErrorElement}
+          {content}
+        </PickerPanelShell>
+      </>
     );
   };
 
   if (props.lockedProvider !== null) {
     return <>{renderModelRadioGroup(props.lockedProvider)}</>;
+  }
+  if (props.navigation?.provider) {
+    return <>{renderModelRadioGroup(props.navigation.provider)}</>;
   }
 
   return (
@@ -402,29 +334,74 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             </MenuItem>
           );
         }
-        return (
-          <MenuSub key={option.value}>
-            <MenuSubTrigger>
-              <OptionIcon
-                aria-hidden="true"
-                className={cn(
-                  "size-3 shrink-0",
-                  providerIconClassName(option.value, "text-muted-foreground/85"),
-                )}
-              />
-              {option.label}
-            </MenuSubTrigger>
-            <ComposerPickerMenuSubPopup
-              fixedWidth
-              className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+        const providerContent = (
+          <>
+            <OptionIcon
+              aria-hidden="true"
+              className={cn(
+                "size-3.5 shrink-0",
+                providerIconClassName(option.value, "text-muted-foreground/85"),
+              )}
+            />
+            <span className="min-w-0 flex-1">{option.label}</span>
+            {activeProvider === option.value ? (
+              <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : null}
+          </>
+        );
+        const navigation = props.navigation;
+        if (navigation) {
+          const browseProvider = () => {
+            setModelSearchQuery("");
+            navigation.onProviderBrowse(option.value);
+          };
+          return (
+            <MenuItem
+              key={option.value}
+              aria-label={option.label}
+              data-browse-provider={option.value}
+              data-current-provider={activeProvider === option.value ? "" : undefined}
+              className="data-current-provider:bg-[var(--color-background-button-secondary)]"
+              closeOnClick={false}
+              onClick={browseProvider}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowRight") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  browseProvider();
+                }
+              }}
             >
+              {providerContent}
+              <ChevronRightIcon aria-hidden="true" className="-me-0.5 shrink-0" />
+            </MenuItem>
+          );
+        }
+        return (
+          <MenuSub
+            key={option.value}
+            onOpenChange={(nextOpen) => {
+              if (nextOpen) setModelSearchQuery("");
+            }}
+          >
+            <MenuSubTrigger
+              aria-label={option.label}
+              data-current-provider={activeProvider === option.value ? "" : undefined}
+              className="data-current-provider:bg-[var(--color-background-button-secondary)]"
+            >
+              {providerContent}
+            </MenuSubTrigger>
+            <ComposerPickerMenuSubPopup className={COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME}>
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
         );
       })}
       {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
-      <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
+      <MenuItem
+        className="text-muted-foreground"
+        onClick={() => appHistory.push("/settings?section=providers")}
+      >
         <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
         <span>Add Providers</span>
       </MenuItem>
@@ -522,6 +499,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
   const triggerButton = (
     <PickerTriggerButton
       disabled={props.disabled ?? false}
+      title={selectedModelLabel}
       compact={props.compact ?? false}
       hideLabel={props.hideLabel ?? false}
       className="text-[var(--color-text-foreground)]"
@@ -573,7 +551,14 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="start" fixedWidth>
+      <ComposerPickerMenuPopup
+        align="start"
+        className={
+          props.lockedProvider !== null
+            ? COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME
+            : COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME
+        }
+      >
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}
