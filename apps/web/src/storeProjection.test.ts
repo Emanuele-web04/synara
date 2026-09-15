@@ -132,6 +132,9 @@ describe("store projection", () => {
           hasPendingApprovals: true,
           hasPendingUserInput: true,
           hasActionableProposedPlan: true,
+          manualTitlePinned: true,
+          titleRefreshMode: "suggested",
+          pendingSuggestedTitle: "Suggested hydrated title",
           updatedAt: "2026-02-27T00:05:00.000Z",
         }),
       ),
@@ -142,12 +145,17 @@ describe("store projection", () => {
       hasPendingApprovals: true,
       hasPendingUserInput: true,
       hasActionableProposedPlan: true,
+      manualTitlePinned: true,
+      titleRefreshMode: "suggested",
+      pendingSuggestedTitle: "Suggested hydrated title",
     });
     expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
       latestUserMessageAt: "2026-02-27T00:03:00.000Z",
       hasPendingApprovals: true,
       hasPendingUserInput: true,
       hasActionableProposedPlan: true,
+      manualTitlePinned: true,
+      titleRefreshMode: "suggested",
     });
   });
 

@@ -22,7 +22,11 @@ export function TitleRefreshModePicker({
   return (
     <div>
       <p className="text-[11px] font-medium text-muted-foreground">Automatic titles</p>
-      <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Automatic titles">
+      <div
+        className="mt-1.5 flex flex-wrap gap-1.5"
+        role="radiogroup"
+        aria-label="Automatic titles"
+      >
         {MODE_OPTIONS.map((option) => (
           <button
             key={option.label}

@@ -1771,6 +1771,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           workspace_root,
           default_model_selection_json,
           scripts_json,
+          title_refresh_mode,
           created_at,
           updated_at,
           deleted_at
@@ -1781,6 +1782,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '/tmp/project-shell',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[]',
+          'suggested',
           '2026-03-03T00:00:00.000Z',
           '2026-03-03T00:00:01.000Z',
           NULL
@@ -1910,6 +1912,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.equal(shellSnapshot.projects[0]?.titleRefreshMode, "suggested");
       assert.deepEqual(shellSnapshot.threads, [
         {
           id: ThreadId.makeUnsafe("thread-shell"),

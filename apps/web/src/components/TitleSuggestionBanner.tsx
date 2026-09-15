@@ -5,7 +5,10 @@
 
 import type { ThreadId } from "@synara/contracts";
 
-import { acceptThreadTitleSuggestion, dismissThreadTitleSuggestion } from "../lib/threadTitleRefresh";
+import {
+  acceptThreadTitleSuggestion,
+  dismissThreadTitleSuggestion,
+} from "../lib/threadTitleRefresh";
 import { cn } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
@@ -21,7 +24,10 @@ export function TitleSuggestionBanner({
 }) {
   return (
     <div
-      className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "flex w-full min-w-0 items-center gap-3 px-4 py-3")}
+      className={cn(
+        COMPOSER_INPUT_SURFACE_CLASS_NAME,
+        "flex w-full min-w-0 items-center gap-3 px-4 py-3",
+      )}
       data-testid="title-suggestion-banner"
       role="status"
     >

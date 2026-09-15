@@ -894,7 +894,10 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(importThread(input), "Failed to import thread"),
         [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
           rpcEffect(
-            providerCommandReactor.regenerateThreadTitle(input),
+            providerCommandReactor.regenerateThreadTitle({
+              threadId: input.threadId,
+              ...(input.triggeredBy === undefined ? {} : { triggeredBy: input.triggeredBy }),
+            }),
             "Failed to regenerate thread title",
           ),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>

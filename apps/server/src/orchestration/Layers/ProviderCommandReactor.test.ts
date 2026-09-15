@@ -1114,8 +1114,13 @@ describe("ProviderCommandReactor", () => {
         cwd: "/tmp/provider-project",
         context: "conversation",
         modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        message: expect.stringContaining("User intent: Fix the backend authentication callback race"),
+        message: expect.stringContaining(
+          "User intent: Fix the backend authentication callback race",
+        ),
       }),
+    );
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).not.toContain(
+      "I found the race",
     );
     expect((await readHarnessThread(harness))?.title).toBe("Backend auth callback");
     expect(harness.interruptTurn).not.toHaveBeenCalled();
@@ -1272,9 +1277,7 @@ describe("ProviderCommandReactor", () => {
         manualTitlePinned: true,
       }),
     );
-    harness.generateThreadTitle.mockReturnValue(
-      Effect.succeed({ title: "Fresh explicit title" }),
-    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Fresh explicit title" }));
 
     const result = await Effect.runPromise(
       harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
@@ -1284,6 +1287,33 @@ describe("ProviderCommandReactor", () => {
     const thread = await readHarnessThread(harness);
     expect(thread?.title).toBe("Fresh explicit title");
     expect(thread?.manualTitlePinned).toBe(false);
+  });
+
+  it("unpins and clears a pending suggestion when explicit refresh keeps the same title", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-unchanged-title-explicit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Existing backend title",
+        manualTitlePinned: true,
+        pendingSuggestedTitle: "Stale suggestion",
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Existing backend title" }),
+    );
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+
+    expect(result).toEqual({ status: "unchanged", title: "Existing backend title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.manualTitlePinned).toBe(false);
+    expect(thread?.pendingSuggestedTitle).toBeNull();
   });
 
   it("stores a pending suggestion instead of renaming in suggested mode", async () => {
@@ -1306,7 +1336,103 @@ describe("ProviderCommandReactor", () => {
     const thread = await readHarnessThread(harness);
     expect(thread?.title).toBe("Thread");
     expect(thread?.pendingSuggestedTitle).toBe("Suggested backend title");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "title.refresh")?.payload,
+    ).toEqual({
+      triggeredBy: "automatic",
+      mode: "suggested",
+      status: "suggested",
+    });
   });
+
+  it("queues an explicit refresh behind automatic generation without sharing its semantics", async () => {
+    const harness = await createHarness({
+      serverSettings: { titleRefresh: { mode: "suggested" } },
+    });
+    await seedRenameConversation(harness);
+    let releaseAutomatic!: () => void;
+    const automaticGate = new Promise<void>((resolve) => {
+      releaseAutomatic = resolve;
+    });
+    harness.generateThreadTitle
+      .mockImplementationOnce(() =>
+        Effect.promise(() => automaticGate).pipe(Effect.as({ title: "Automatic suggestion" })),
+      )
+      .mockReturnValue(Effect.succeed({ title: "Explicit replacement" }));
+
+    const automatic = Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    const explicit = Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+
+    releaseAutomatic();
+    expect(await automatic).toEqual({ status: "suggested", title: "Automatic suggestion" });
+    expect(await explicit).toEqual({ status: "renamed", title: "Explicit replacement" });
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(2);
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Explicit replacement");
+    expect(thread?.pendingSuggestedTitle).toBeNull();
+  });
+
+  it("counts durable user turns toward the first automatic refresh milestone", async () => {
+    const harness = await createHarness({
+      serverSettings: {
+        titleRefresh: {
+          mode: "automatic",
+          minNewUserTurns: 1,
+          minElapsedMillis: 0,
+        },
+      },
+    });
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "First milestone title" }));
+
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "evt-title-refresh-first-milestone",
+      provider: "codex",
+      type: "completed",
+    });
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect((await readHarnessThread(harness))?.title).toBe("First milestone title");
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "does not refresh a title after a %s turn terminal state",
+    async (type) => {
+      const harness = await createHarness({
+        serverSettings: {
+          titleRefresh: {
+            mode: "automatic",
+            minNewUserTurns: 1,
+            minElapsedMillis: 0,
+          },
+        },
+      });
+      await seedRenameConversation(harness);
+      harness.generateThreadTitle.mockReturnValue(
+        Effect.succeed({ title: "Must not be generated" }),
+      );
+
+      await emitHarnessTurnTerminal(harness, {
+        eventId: `evt-title-refresh-${type}`,
+        provider: "codex",
+        type,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.title).toBe("Thread");
+    },
+  );
 
   it("discards a generated title after an explicit A-to-B-to-A rename", async () => {
     const harness = await createHarness();

@@ -60,6 +60,7 @@ describe("dispatchThreadRename", () => {
       threadId: "thread-server",
       title: "Renamed server thread",
       manualTitlePinned: true,
+      pendingSuggestedTitle: null,
     });
     expect(regenerateThreadTitle).not.toHaveBeenCalled();
   });
@@ -100,6 +101,7 @@ describe("dispatchThreadRename", () => {
       type: "thread.meta.update",
       threadId: "thread-draft",
       manualTitlePinned: true,
+      pendingSuggestedTitle: null,
     });
   });
 
