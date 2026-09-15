@@ -59,6 +59,10 @@ export function useComputerImageStream(input: {
   const [status, setStatus] = useState<ComputerImageStreamStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<ComputerImageDimensions | null>(null);
   const generationRef = useRef(0);
+  // True once this stream instance has drawn: only then does the canvas
+  // content belong to this hook and need clearing on disable. An unconditional
+  // clear would wipe a tap-owned canvas on the stills-to-tap handoff.
+  const ownsCanvasRef = useRef(false);
   const [pageVisible, setPageVisible] = useState(
     () => typeof document !== "undefined" && document.visibilityState !== "hidden",
   );
@@ -73,8 +77,11 @@ export function useComputerImageStream(input: {
     if (!enabled || !pageVisible || computerId === null) {
       setStatus({ kind: "idle" });
       setDimensions(null);
-      const canvas = canvasRef.current;
-      canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      if (ownsCanvasRef.current) {
+        ownsCanvasRef.current = false;
+        const canvas = canvasRef.current;
+        canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      }
       return;
     }
     if (!isImageBitmapAvailable()) {
@@ -122,6 +129,7 @@ export function useComputerImageStream(input: {
           previous?.width === width && previous.height === height ? previous : { width, height },
         );
         context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height);
+        ownsCanvasRef.current = true;
         setCurrentStatus({ kind: "streaming" });
       } catch (error) {
         setCurrentStatus({
