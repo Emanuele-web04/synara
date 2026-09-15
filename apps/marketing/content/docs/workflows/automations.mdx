@@ -49,6 +49,12 @@ Before enabling the draft, verify:
 
 Do not accept a generated schedule merely because the natural-language interpretation looks plausible.
 
+## Exact targets and staged drafts
+
+Using targets discovered from `synara_capabilities`, agent-authored standalone and dedicated automations can specify an exact provider, model, and supported options. Synara validates that target against live provider availability and model discovery in the automation project before saving it. When the user explicitly requests creation, the agent can leave the automation disabled (`enabled: false`) for review; inspect its saved model selection before enabling runs.
+
+Heartbeat automations continue an existing task session and inherit its provider selection. An explicit replacement target is rejected for a heartbeat. For updates to a standalone or dedicated automation, omitting the target preserves the saved selection. Once a dedicated automation has started its task, its provider is fixed; supported models and options can still change within that provider. Create another automation to use a different provider. A disabled definition is separate from a pending automation proposal.
+
 ## Choose the environment
 
 | Environment               | Use it when                                                                                 |

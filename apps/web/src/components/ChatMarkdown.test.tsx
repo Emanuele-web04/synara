@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,16 +25,10 @@ function renderWithQueryClient(ui: ReactElement) {
   return renderToStaticMarkup(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
-async function renderMarkdown(
-  text: string,
-  cwd = "C:\\Users\\LENOVO\\synara",
-  markers?: readonly ThreadMarker[],
-) {
+async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\synara") {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-  return renderWithQueryClient(
-    <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
-  );
+  return renderWithQueryClient(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
 async function renderUserMarkdown(text: string) {
@@ -105,6 +98,49 @@ describe("ChatMarkdown", () => {
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });
 
+  it("keeps bracketed display formulas intact without swallowing subsequent prose and tables", async () => {
+    const markup = await renderMarkdown(String.raw`- **Decay gate**:
+
+$$
+\alpha_t
+=
+\exp\left[-\exp(A)\operatorname{softplus}(W_\alpha x_t+b_\alpha)\right],
+$$
+
+正常正文 **仍然加粗**。
+
+$$
+o_t
+=
+W_o\left[\sigma(W_zx_t)\odot\operatorname{RMSNorm}(y_t)\right].
+$$
+
+| Operation | FLOPs |
+|---|---:|
+| Read | $d_kd_v$ |
+
+[route](/src/_chat.$threadId.tsx)`);
+
+    expect(markup.match(/class="katex-display"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toMatch(/<h[12][ >]/);
+    expect(markup).toContain("<strong>仍然加粗</strong>");
+    expect(markup).toContain("<table>");
+    expect(markup).toContain('href="/src/_chat.$threadId.tsx"');
+  });
+
+  it("preserves brackets inside inline math and ordinary prose beside links", async () => {
+    const markup = await renderMarkdown(
+      String.raw`[note] $x[0]+y[1]$ and $\left[f(x)\right]$; [route](/src/$id.tsx). Price $5.`,
+    );
+
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).toContain("[note]");
+    expect(markup).toContain('href="/src/$id.tsx"');
+    expect(markup).toContain("Price $5.");
+  });
+
   it("renders external assistant links with the shared favicon icon slot", async () => {
     const markup = await renderMarkdown(
       "Closest source: [OpenAI benchmark](https://openai.com/research).",
@@ -130,6 +166,61 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("CHATMARKDOWNLITERALDOLLARPLACEHOLDER");
   });
 
+  it.each([
+    ["Use $PATH and [route](/src/$id.tsx).", "Use $PATH and", "/src/$id.tsx"],
+    ["Price $5/month; [plan](/pricing/$tier).", "Price $5/month;", "/pricing/$tier"],
+    [
+      "Use $threadId with [_chat.$threadId.tsx](/src/_chat.$threadId.tsx:42).",
+      "Use $threadId with",
+      "/src/_chat.$threadId.tsx:42",
+    ],
+  ])("keeps literal dollars before Markdown links: %s", async (text, literal, href) => {
+    const markup = await renderMarkdown(text);
+
+    expect(markup).toContain(literal);
+    expect(markup).toContain(`href="${href}"`);
+    expect(markup).not.toContain('class="katex"');
+  });
+
+  it("keeps literal dollars before Markdown images without consuming their URLs", async () => {
+    const markup = await renderMarkdown(
+      "Use $ASSET for ![preview](https://example.com/assets/$variant.png).",
+    );
+
+    expect(markup).toContain("Use $ASSET for");
+    expect(markup).toContain('src="https://example.com/assets/$variant.png"');
+    expect(markup).not.toContain('class="katex"');
+  });
+
+  it("preserves bracketed TeX that also resembles a dollar-free Markdown link", async () => {
+    const markup = await renderMarkdown("Math $[f](x)$ and $2[f](x)$.");
+
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toContain('href="x"');
+  });
+
+  it.each([
+    ["$x[0]+y[", "$x[0]+y[1]$"],
+    ["$$\n\\left[x[0]", "$$\n\\left[x[0]\\right]\n$$"],
+  ])(
+    "renders partial and completed bracketed formulas beside links: %s",
+    async (partial, complete) => {
+      const prefix = "Use $PATH and [route](/src/$id.tsx).\n\n";
+      const partialMarkup = await renderMarkdown(prefix + partial);
+      const completeMarkup = await renderMarkdown(prefix + complete + "\n\n**Still prose.**");
+
+      expect(partialMarkup).not.toContain('class="katex"');
+      expect(completeMarkup.match(/class="katex"/g) ?? []).toHaveLength(1);
+      expect(completeMarkup).toContain("<strong>Still prose.</strong>");
+      for (const markup of [partialMarkup, completeMarkup]) {
+        expect(markup).toContain("Use $PATH and");
+        expect(markup).toContain('href="/src/$id.tsx"');
+        expect(markup).not.toContain("katex-error");
+      }
+    },
+  );
+
   it("does not turn ordinary dollar text or escaped dollars into math", async () => {
     const markup = await renderMarkdown(
       "It costs $5 to $10 per seat. Escape \\$E=mc^2\\$ when you want literal TeX.",
@@ -154,6 +245,31 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("$USD$");
     expect(markup).toContain("$PATH$");
     expect(markup).not.toContain('class="katex"');
+  });
+
+  it("renders numeric coefficients in every table row", async () => {
+    const markup = await renderMarkdown(String.raw`| Operation | FLOPs |
+|---|---:|
+| Decay | $d_kd_v$ |
+| Read | $2d_kd_v$ |
+| Write | $2d_kd_v$ |
+| Output | $2d_kd_v$ |`);
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(4);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toContain("$2d_kd_v$");
+  });
+
+  it("renders numeric expressions while keeping prices and code literal", async () => {
+    const markup = await renderMarkdown(
+      String.raw`Prices $5, $5 to $10, $5-$10 and $29.470. Math $2x$, $2.5x$, $2 + 3 = 5$, $2^{10}$ and $2\pi$.` +
+        " Code `$2d_kd_v$`.",
+    );
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(5);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).toContain("$5 to $10");
+    expect(markup).toContain("$5-$10");
+    expect(markup).toContain("$29.470");
+    expect(markup).toContain("<code>$2d_kd_v$</code>");
   });
 
   it("renders a table whose delimiter row is missing cells", async () => {
@@ -232,104 +348,6 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain('data-chat-find-match="active"');
     expect(markup).toContain(`data-chat-find-start="${String(startOffset)}"`);
     expect(markup).toContain(">error</span>");
-  });
-
-  it("renders exact thread marker ranges without changing markdown structure", async () => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-1"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset: 7,
-      endOffset: 21,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown("Read **important text** today.", undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-1"');
-    expect(markup).toContain("thread-marker-highlight");
-    expect(markup).toContain("<strong>");
-    expect(markup).toContain("important text");
-  });
-
-  it("renders marker ranges resolved from visual text across markdown delimiters", async () => {
-    const text = "**Ho letto tutto il progetto.**\n\n**L'app è bella e curata:** UI dark coerente.";
-    const startOffset = text.indexOf("Ho letto");
-    const endOffset = text.indexOf(":** UI") + 1;
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-markdown-range"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset,
-      selectedText: text.slice(startOffset, endOffset),
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup.match(/data-thread-marker-id="marker-markdown-range"/g) ?? []).toHaveLength(2);
-    expect(markup).toContain("thread-marker-continues-after");
-    expect(markup).toContain("thread-marker-continues-before");
-    expect(markup).toContain("Ho letto tutto il progetto.");
-    expect(markup).toContain("L&#x27;app è bella e curata:");
-  });
-
-  it("keeps marker offsets stable after literal dollar protection", async () => {
-    const text = "Price $5. Highlight this phrase.";
-    const startOffset = text.indexOf("Highlight");
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-dollar"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset: startOffset + "Highlight this phrase".length,
-      selectedText: "Highlight this phrase",
-      style: "underline",
-      color: "blue",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-dollar"');
-    expect(markup).toContain("thread-marker-underline");
-    expect(markup).toContain("Price $5.");
-  });
-
-  it("keeps marker offsets aligned when an escaped dollar precedes the marker", async () => {
-    // `\$` is two raw characters that render as one `$`; the dollar-protection transform must stay
-    // length-preserving or every offset after it shifts and the marker wraps the wrong substring.
-    const text = "Cost is \\$5 here. Highlight this phrase.";
-    const startOffset = text.indexOf("Highlight");
-    const selectedText = "Highlight this phrase";
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-escaped-dollar"),
-      messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset,
-      endOffset: startOffset + selectedText.length,
-      selectedText,
-      style: "underline",
-      color: "blue",
-      label: null,
-      done: false,
-      createdAt: "2026-06-06T00:00:00.000Z",
-      updatedAt: "2026-06-06T00:00:00.000Z",
-    };
-    const markup = await renderMarkdown(text, undefined, [marker]);
-
-    expect(markup).toContain('data-thread-marker-id="marker-escaped-dollar"');
-    expect(markup).toContain(">Highlight this phrase</span>");
-    expect(markup).toContain("Cost is $5 here.");
-    expect(markup).not.toContain('class="katex"');
   });
 
   it("keeps relative inline-code as code until a real file is known", async () => {
@@ -493,4 +511,104 @@ describe("ChatMarkdown user variant", () => {
     expect(markup).toContain("chat-markdown-codeblock");
     expect(markup).toContain("const value = 1;");
   });
+});
+
+it("opens Obsidian aliases relative to the vault and leaves code unchanged", async () => {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const markup = renderWithQueryClient(
+    <ChatMarkdown
+      text={
+        "Read [[03-Resources/papers/Qwen-3.8-Flash-Next.pdf|论文]] and [[My note]]. Code `[[literal|text]]`."
+      }
+      cwd="/vault/02-Areas/Career"
+      wikiLinkRoot="/vault"
+    />,
+  );
+  expect(markup).toContain('href="/vault/03-Resources/papers/Qwen-3.8-Flash-Next.pdf"');
+  expect(markup).toContain("论文");
+  expect(markup).toContain('href="/vault/My%20note.md"');
+  expect(markup).toContain("<code>[[literal|text]]</code>");
+  expect(markup).not.toContain("[[03-Resources");
+});
+
+describe("workspace Wiki links", () => {
+  it.each([
+    ["/vault/root #1", "/vault/root%20%231/My%20%2520%20note.md", "/vault/root #1/My %20 note.md"],
+    [
+      "C:\\Users\\me\\vault",
+      "C:/Users/me/vault/My%20%2520%20note.md",
+      "C:/Users/me/vault/My %20 note.md",
+    ],
+    [
+      "\\\\server\\share\\vault",
+      "//server/share/vault/My%20%2520%20note.md",
+      "//server/share/vault/My %20 note.md",
+    ],
+  ])("opens encoded file paths under %s", async (root, href, target) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown text="[[My %20 note|Read note]]" cwd={root} wikiLinkRoot={root} />,
+    );
+    expect(markup).toContain(`href="${href}"`);
+    expect(markup).toContain(`title="${target}"`);
+    expect(markup).not.toContain('target="_blank"');
+  });
+
+  it.each([
+    "Before [[note|Alias]] after",
+    "Escaped \\* and &amp; Before [[note]] after",
+    "First line\nBefore [[note]] after",
+    "First line\r\nBefore [[note]] after",
+    "> First line\r\n> [[note]] after",
+    "> First line\n> [[note]] after",
+    "- First line\n  [[note]] after",
+    "[[note]] &amp; \\* after",
+    "[[note|after]]",
+    "[[note|Label &amp; after]]",
+    "Cost \\$5 [[note]] after",
+  ])("keeps find source offsets in %s", async (text) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const startOffset = text.indexOf("after");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd="/vault"
+        findQuery="after"
+        findActiveRange={{ startOffset, endOffset: startOffset + 5 }}
+      />,
+    );
+    expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
+    expect(markup).toContain('data-chat-find-match="active"');
+  });
+
+  it("leaves escaped syntax, embeds, and unsupported headings literal", async () => {
+    const markup = await renderMarkdown(
+      "\\[\\[escaped]] ![[embed]] [[note#Heading]] [[#Heading]] `[[code]]`",
+      "/vault",
+    );
+    expect(markup).toContain("[[escaped]]");
+    expect(markup).toContain("![[embed]]");
+    expect(markup).toContain("[[note#Heading]]");
+    expect(markup).not.toContain("href=");
+  });
+});
+
+it.each(["> First line\n> [[note|Read note]] after", "- First line\n  [[note|Read note]] after"])(
+  "opens Wiki links on Markdown continuation lines: %s",
+  async (text) => {
+    const markup = await renderMarkdown(text, "/vault");
+    expect(markup).toContain('href="/vault/note.md"');
+    expect(markup).toContain("Read note");
+  },
+);
+
+it("keeps dollar filenames separate from math and rejects escaped delimiters", async () => {
+  const text = String.raw`Use $PATH: [[notes/$threadId.tsx|Route]]. Formula $2x[0]$; \[\[literal\]\]. [[foo\]] [[note\|alias]]`;
+  const markup = await renderMarkdown(text, "/vault");
+  expect(markup).toContain('href="/vault/notes/$threadId.tsx"');
+  expect(markup.match(/class="katex"/g)).toHaveLength(1);
+  expect(markup).toContain("[[literal]]");
+  expect(markup).not.toContain("foo.md");
+  expect(markup).not.toContain("alias.md");
+  expect(markup.match(/href=/g)).toHaveLength(1);
 });

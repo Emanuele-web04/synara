@@ -6,6 +6,8 @@
     "composer",
     "thread-goals",
     "organize",
+    "workspace-editor",
+    "browser-sessions",
     "ios-simulator",
     "automations",
     "customization"

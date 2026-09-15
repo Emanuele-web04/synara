@@ -139,6 +139,12 @@ export function formatLiveActivityElapsed(
   return elapsedMs === null ? null : formatClockDuration(elapsedMs);
 }
 
+export interface LiveActivityMetaOptions {
+  // Subagent rows (Cursor/Claude `Task`, Codex collab) only hear back from the child
+  // agent when it finishes, so quiet time is the expected state — never idleness.
+  readonly subagent?: boolean;
+}
+
 // Live meta only exists to explain work the row can't state on its own: how long
 // something in flight has been running, or that it ended badly. A tool call that
 // simply succeeded already reads as a finished sentence ("Searched for foo in
@@ -146,6 +152,7 @@ export function formatLiveActivityElapsed(
 export function formatLiveActivityMeta(
   activity: WorkLogLiveActivity,
   nowMs: number,
+  options?: LiveActivityMetaOptions,
 ): string | null {
   if (activity.state === "completed") {
     return null;
@@ -156,8 +163,10 @@ export function formatLiveActivityMeta(
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
 
   if (isLiveActivityInProgress(activity)) {
-    // Detached work stays silent until it settles; its idle time says nothing.
-    if (activity.background) {
+    if (options?.subagent) {
+      parts.push("Subagent working");
+    } else if (activity.background) {
+      // Detached work stays silent until it settles; its idle time says nothing.
       parts.push("Running in background");
     } else if (lastActivityAtMs !== null) {
       const idleMs = Math.max(0, nowMs - lastActivityAtMs);
