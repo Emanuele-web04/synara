@@ -105,6 +105,37 @@ export function providerModelOptionProvenanceLabel(input: {
   return PROVIDER_DISPLAY_NAMES[input.provider];
 }
 
+function escapeRegExpPattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Display form of a provenance label inside its own provider panel. The panel
+ * header already names the provider, so a leading provider-name prefix is
+ * redundant ("OpenCode Zen" becomes "Zen") while the remainder keeps
+ * same-name favourites distinguishable. Returns null when nothing
+ * distinguishing remains.
+ */
+export function displayProvenanceWithinProvider(input: {
+  provider: ProviderKind;
+  provenance: string;
+}): string | null {
+  const trimmed = input.provenance.trim();
+  if (trimmed.length === 0) return null;
+  const displayName = PROVIDER_DISPLAY_NAMES[input.provider];
+  if (trimmed.toLowerCase() === displayName.toLowerCase()) return null;
+  const prefixPattern = new RegExp(
+    `^${escapeRegExpPattern(displayName)}(?=[\\s\\-–—:_·/]|$)`,
+    "iu",
+  );
+  if (!prefixPattern.test(trimmed)) return trimmed;
+  const remainder = trimmed
+    .slice(displayName.length)
+    .replace(/^[\s\-–—:_·/]+/u, "")
+    .trim();
+  return remainder.length > 0 ? remainder : null;
+}
+
 export function formatProviderModelOptionName(input: {
   provider: ProviderKind;
   slug: string;
@@ -379,6 +410,9 @@ export function groupProviderModelOptionsWithFavorites(input: {
   const groupedOptions = groupProviderModelOptions(
     input.options.filter((option) => !input.favoriteSlugs.has(option.slug)),
   );
+  for (const group of groupedOptions) {
+    if (group.label === null) group.label = "Other models";
+  }
 
   return [
     {

@@ -61,7 +61,13 @@ export function resolveRuntimeModelDescriptor(input: {
     return undefined;
   }
 
+<<<<<<< HEAD
   const exactMatch = runtimeModels.find((candidate) => {
+||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
+  return runtimeModels.find((candidate) => {
+=======
+  const exact = runtimeModels.find((candidate) => {
+>>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
     const normalizedResolvedModel =
       normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
@@ -74,6 +80,7 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
+<<<<<<< HEAD
   if (exactMatch || provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
     return exactMatch;
   }
@@ -106,6 +113,41 @@ function withClaudeEffortDefault(
         }
       : descriptor,
   );
+||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
+=======
+  if (exact) {
+    return exact;
+  }
+
+  // Selections outlive catalog reshapes: a stored opencode slug can carry a
+  // stale upstream prefix (or none at all) while the label still resolves.
+  // Fall back to the bare model identifier so traits keep resolving; exact
+  // matches above always win, and effort ladders are consistent per model
+  // identifier across upstreams. Other providers keep strict matching.
+  if (provider !== "opencode") {
+    return undefined;
+  }
+  const modelIdentifier = normalizedModel.includes("/")
+    ? normalizedModel.slice(normalizedModel.lastIndexOf("/") + 1).trim()
+    : normalizedModel.trim();
+  if (!modelIdentifier) {
+    return undefined;
+  }
+  return runtimeModels.find((candidate) => {
+    const candidateIdentifier = (
+      normalizeModelSlug(candidate.slug, provider) ?? candidate.slug
+    ).split("/");
+    const resolvedIdentifier = (
+      normalizeModelSlug(candidate.resolvedModel, provider) ??
+      candidate.resolvedModel ??
+      ""
+    ).split("/");
+    return (
+      candidateIdentifier.at(-1) === modelIdentifier ||
+      (resolvedIdentifier.at(-1) !== "" && resolvedIdentifier.at(-1) === modelIdentifier)
+    );
+  });
+>>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
