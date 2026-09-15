@@ -759,7 +759,12 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       }
     : undefined;
 
+  const includeDependencySources = yield* resolveBooleanEnv(
+    "SYNARA_DESKTOP_DEPENDENCY_SOURCES",
+    yield* Config.string("SYNARA_DESKTOP_DEPENDENCY_SOURCES").pipe(Config.option).asEffect(),
+  );
   const platformBuildConfigInput = {
+    includeDependencySources,
     platform,
     target,
     signed,

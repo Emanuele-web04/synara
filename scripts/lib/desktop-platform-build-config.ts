@@ -3,6 +3,11 @@
 // Layer: Release/build helper
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
+import {
+  desktopDependencyFileExclusions,
+  desktopPlatformFileExclusions,
+} from "./desktop-package-files.ts";
+
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
@@ -33,6 +38,7 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly signed?: boolean;
+  readonly includeDependencySources?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
 }
 
@@ -67,7 +73,12 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+  const files = [
+    "**/*",
+    ...desktopDependencyFileExclusions(input.includeDependencySources),
+    ...desktopPlatformFileExclusions(input.platform),
+  ];
+  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
 
   if (input.platform === "mac") {
     const mac = {
@@ -96,7 +107,13 @@ export function createDesktopPlatformBuildConfig(
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      files: [
+        ...files,
+        MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+        // The physical-device helper is compiled at runtime from the intact
+        // extraFiles copy under Contents/Resources; do not duplicate it in ASAR.
+        `!${MAC_DEVICE_HELPER_STAGE_PATH}/**`,
+      ],
       extraFiles: [
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
