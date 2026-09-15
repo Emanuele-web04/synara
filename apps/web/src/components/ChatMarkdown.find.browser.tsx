@@ -21,7 +21,7 @@ vi.mock("react-markdown", () => {
 
 import ChatMarkdown from "./ChatMarkdown";
 
-function FindQueryHarness() {
+function FindQueryHarness({ directionMode }: { directionMode: "off" | "auto-blocks" }) {
   const [query, setQuery] = useState("error");
   return (
     <div>
@@ -29,6 +29,7 @@ function FindQueryHarness() {
         Change query
       </button>
       <ChatMarkdown
+        directionMode={directionMode}
         text="Error first, then failed."
         cwd={undefined}
         isStreaming={false}
@@ -43,12 +44,15 @@ describe("ChatMarkdown in-thread find", () => {
     reactMarkdownRender.mockClear();
   });
 
-  it("updates find decoration without rendering the markdown parser again", async () => {
-    await render(<FindQueryHarness />);
-    expect(reactMarkdownRender).toHaveBeenCalledTimes(1);
+  it.each(["off", "auto-blocks"] as const)(
+    "updates find without reparsing in %s",
+    async (directionMode) => {
+      await render(<FindQueryHarness directionMode={directionMode} />);
+      expect(reactMarkdownRender).toHaveBeenCalledTimes(1);
 
-    await page.getByRole("button", { name: "Change query" }).click();
+      await page.getByRole("button", { name: "Change query" }).click();
 
-    expect(reactMarkdownRender).toHaveBeenCalledTimes(1);
-  });
+      expect(reactMarkdownRender).toHaveBeenCalledTimes(1);
+    },
+  );
 });
