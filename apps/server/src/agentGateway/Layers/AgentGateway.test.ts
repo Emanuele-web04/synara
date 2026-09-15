@@ -1418,6 +1418,8 @@ describe("AgentGateway", () => {
     { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
     { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
     { value: "team-model", resolvedModel: "claude-fable-5-1" },
+    // #367: custom/proxy Claude slugs inherit the flagship auto-compact ladder.
+    { value: "unknown-model" },
   ]) {
     it.effect(
       `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
@@ -1588,7 +1590,6 @@ describe("AgentGateway", () => {
   for (const model of [
     { value: "claude-haiku-4-5" },
     { value: "claude-opus-4-5" },
-    { value: "unknown-model" },
     { value: "sonnet", resolvedModel: "claude-haiku-4-5" },
   ]) {
     it.effect(
