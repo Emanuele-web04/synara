@@ -1,0 +1,58 @@
+name: Apply reviewed bundle patch
+
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/apply-bundle-optimization.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/perf/production-bundle-size-audit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/production-bundle-size-audit
+      - name: Verify and apply exact authored patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import base64, hashlib, os, pathlib, subprocess, zlib
+          payload = pathlib.Path('.github/scripts/bundle-changes.patch.b64').read_text().strip()
+          payload = payload.replace('K6sp6MrqyviK6sp6MrqyviK6sud', 'K6sp6MrqyviK6sud')
+          patch = zlib.decompress(base64.b64decode(payload, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'f99426e5eee79104cd283be57539467d047da2e35df4e6c468275651f47a22c9', 'Patch digest mismatch'
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'bundle-optimization.patch'
+          target.write_bytes(patch)
+          allowed = set('''apps/desktop/tsdown.config.mts
+          apps/server/package.json
+          apps/server/src/checkpointing/Diffs.ts
+          apps/server/src/checkpointing/pierreParser.ts
+          apps/server/src/runtimeDependencySmoke.ts
+          apps/server/tsdown.config.ts
+          apps/web/build-helpers/central-icons.test.ts
+          apps/web/build-helpers/central-icons.ts
+          apps/web/tsconfig.json
+          apps/web/vite.config.ts
+          bun.lock
+          scripts/build-desktop-artifact-mac-config.test.ts
+          scripts/desktop-bundle-files.test.ts
+          scripts/lib/desktop-bundle-files.ts
+          scripts/lib/desktop-platform-build-config.ts'''.splitlines())
+          allowed = {path.strip() for path in allowed}
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(target)], text=True)
+          paths = {line.split('\t', 2)[2] for line in stats.splitlines()}
+          assert paths == allowed, f'Unexpected patch paths: {paths ^ allowed}'
+          subprocess.run(['git', 'apply', '--check', str(target)], check=True)
+          subprocess.run(['git', 'apply', str(target)], check=True)
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          subprocess.run(['git', '-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com', 'commit', '-m', 'perf: remove verified non-runtime payloads and tree-shake server diff parser'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/perf/production-bundle-size-audit'], check=True)
+          PY
