@@ -12,6 +12,8 @@ export interface DesktopPackageFilesInput {
 
 // These packages publish runtime exports as compiled JS, not their src trees.
 // Do NOT generalize to **/src: other dependencies execute JS/TS from src.
+// Remove only source code, never whole directories: vendored license notices
+// in these trees still need to ship even when their compiled code lives elsewhere.
 export const COMPILED_DEPENDENCY_SOURCE_TREES = [
   "effect",
   "@effect/platform-node",
@@ -56,7 +58,11 @@ export function desktopPackageFiles(input: DesktopPackageFilesInput): string[] {
     );
   if (!dependencySourcemaps) {
     files.push("!node_modules/**/*.map");
-    files.push(...COMPILED_DEPENDENCY_SOURCE_TREES.map((name) => `!node_modules/${name}/src/**`));
+    files.push(
+      ...COMPILED_DEPENDENCY_SOURCE_TREES.map(
+        (name) => `!node_modules/${name}/src/**/*.{ts,tsx,mts,cts}`,
+      ),
+    );
   }
   if (
     input.platform === "linux" &&
