@@ -34,15 +34,22 @@ describe("browser CI partitions", () => {
       if (file.endsWith("/ChatView.browser.tsx")) {
         expect(owners.map(({ project }) => project).sort()).toEqual([
           "chat-follow (chromium)",
+          "chat-projects (chromium)",
           "chat-workflows (chromium)",
         ]);
         for (const name of [
           "ChatView transcript geometry (full app) renders the active thread title",
           "ChatView transcript geometry (full app) restores streaming follow after wheel",
+          "keeps scroll anchor stable",
+          "renders tool activity",
+          "creates a project",
+          "new worktree",
+          "approval already answered",
+          "queued composer request",
           "a newly added case",
-          "a newly added restores streaming follow case",
           "[geometry:linux] a quarantined case",
           "[geometry:linux] restores streaming follow",
+          "[geometry:linux] creates a project",
         ]) {
           const selected = owners.filter(({ pattern }) => pattern?.test(name));
           expect(selected.length, name).toBe(stable[0]!.pattern!.test(name) ? 1 : 0);

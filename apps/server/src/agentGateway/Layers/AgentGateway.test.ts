@@ -10,6 +10,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
   ProviderKind,
+  ProviderModelDescriptor,
   ServerProviderStatus,
   ThreadId as ThreadIdType,
 } from "@synara/contracts";
@@ -153,6 +154,97 @@ function makeThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread 
   };
 }
 
+const listDefaultTestModels: (typeof ProviderDiscoveryService)["Service"]["listModels"] = ({
+  provider,
+}) => {
+  const modelsByProvider: Record<string, ReadonlyArray<ProviderModelDescriptor>> = {
+    codex: [
+      { slug: DEFAULT_MODEL_BY_PROVIDER.codex, name: "GPT-6 Astra" },
+      { slug: "gpt-5.5", name: "GPT-5.5" },
+      {
+        slug: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+      {
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
+    claudeAgent: [
+      {
+        slug: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+      },
+      {
+        slug: "sonnet",
+        name: "Claude Sonnet alias",
+        resolvedModel: "claude-sonnet-5",
+        optionDescriptors: [
+          {
+            id: "autoCompactWindow",
+            label: "Context window",
+            type: "select",
+            options: [
+              { id: "auto", label: "Auto" },
+              { id: "200k", label: "200k" },
+            ],
+          },
+        ],
+      },
+    ],
+    cursor: [{ slug: "auto", name: "Auto" }],
+    antigravity: [
+      {
+        slug: "Gemini 3.5 Flash",
+        name: "Gemini 3.5 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+      {
+        slug: "Gemini 3.8 Flash",
+        name: "Gemini 3.8 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
+    grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
+    droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
+    opencode: [
+      { slug: "openai/gpt-5", name: "OpenAI GPT-5" },
+      {
+        slug: "deepseek/deepseek-flash",
+        name: "DeepSeek V4.1 Flash",
+        optionDescriptors: [
+          {
+            id: "variant",
+            label: "Variant",
+            type: "select",
+            options: [
+              { id: "default", label: "Default" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      },
+    ],
+    pi: [{ slug: "test-pi", name: "Test Pi" }],
+  };
+  return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
+};
+
 interface GatewayHarness {
   readonly dispatched: Array<OrchestrationCommand>;
   readonly automationCreates: Array<AutomationCreateInput>;
@@ -231,6 +323,20 @@ function makeAutomationDefinition(
     updatedAt: NOW,
     archivedAt: null,
     ...overrides,
+  };
+}
+
+function makeFullAutomationUpdate(definition: AutomationDefinition) {
+  return {
+    automationId: definition.id,
+    name: definition.name,
+    prompt: definition.prompt,
+    schedule: definition.schedule,
+    enabled: true,
+    maxIterations: definition.maxIterations,
+    stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
+    notificationPolicy: "all",
+    completionPolicy: { type: "none" },
   };
 }
 
@@ -815,46 +921,7 @@ function makeHarnessLayer(
   } as unknown as (typeof GitManager)["Service"]);
 
   const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
-    listModels:
-      options.listModels ??
-      (({ provider }: { provider: string }) => {
-        const modelsByProvider: Record<string, ReadonlyArray<Record<string, unknown>>> = {
-          codex: [
-            { slug: DEFAULT_MODEL_BY_PROVIDER.codex, name: "GPT-6 Astra" },
-            { slug: "gpt-5.5", name: "GPT-5.5" },
-            {
-              slug: "gpt-5.6-terra",
-              name: "GPT-5.6 Terra",
-              supportedReasoningEfforts: [
-                { value: "low", label: "Low" },
-                { value: "high", label: "High" },
-              ],
-            },
-          ],
-          claudeAgent: [
-            {
-              slug: "claude-sonnet-5",
-              name: "Claude Sonnet 5",
-            },
-          ],
-          cursor: [{ slug: "auto", name: "Auto" }],
-          antigravity: [
-            {
-              slug: "Gemini 3.5 Flash",
-              name: "Gemini 3.5 Flash",
-              supportedReasoningEfforts: [
-                { value: "low", label: "Low" },
-                { value: "high", label: "High" },
-              ],
-            },
-          ],
-          grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
-          droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
-          opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
-          pi: [{ slug: "test-pi", name: "Test Pi" }],
-        };
-        return Effect.succeed({ models: modelsByProvider[provider] ?? [], source: "test" });
-      }),
+    listModels: options.listModels ?? listDefaultTestModels,
   } as unknown as (typeof ProviderDiscoveryService)["Service"]);
 
   const providerKinds: ReadonlyArray<ProviderKind> = [
@@ -1905,6 +1972,16 @@ describe("AgentGateway", () => {
         "notify-versus-silent criteria",
       );
       assert.property(createAutomationProperties, "stopAfterConsecutiveFailures");
+      assert.property(createAutomationProperties, "target");
+      assert.property(createAutomationProperties, "enabled");
+      const createAutomationTarget = createAutomationProperties?.target as
+        | { type?: string; required?: ReadonlyArray<string>; properties?: Record<string, unknown> }
+        | undefined;
+      assert.equal(createAutomationTarget?.type, "object");
+      assert.deepEqual(createAutomationTarget?.required, ["provider", "model"]);
+      assert.property(createAutomationTarget?.properties, "provider");
+      assert.property(createAutomationTarget?.properties, "model");
+      assert.property(createAutomationTarget?.properties, "options");
       const updateAutomationMemory = tools.find(
         (tool) => tool.name === "synara_update_automation_memory",
       );
@@ -1932,6 +2009,7 @@ describe("AgentGateway", () => {
         createAutomationProperties?.prompt?.description,
       );
       assert.property(updateAutomationProperties, "stopAfterConsecutiveFailures");
+      assert.property(updateAutomationProperties, "target");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4681,10 +4759,17 @@ describe("AgentGateway", () => {
       assert.deepEqual(created.schedule, { type: "interval", everySeconds: 300 });
       assert.equal(created.maxIterations, 50);
       assert.equal(created.stopAfterConsecutiveFailures, 3);
+      // Omitting target keeps the legacy behavior: the heartbeat inherits the
+      // continued thread's exact provider session.
+      assert.deepEqual(created.modelSelection, { provider: "codex", model: "gpt-5.5" });
+      assert.isTrue(created.enabled);
       // Local-checkout targets must carry the matching environment + risk
       // acknowledgement so AutomationService policy checks stay enforced.
       assert.equal(created.worktreeMode, "local");
       assert.deepEqual(created.acknowledgedRisks, ["local-checkout"]);
+      const payload = toolResultJson(response.result);
+      assert.isTrue(payload.enabled as boolean);
+      assert.deepEqual(payload.modelSelection, { provider: "codex", model: "gpt-5.5" });
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -5142,6 +5227,307 @@ describe("AgentGateway", () => {
         completionPolicy: { type: "none" },
         acknowledgedRisks: ["local-checkout"],
       });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("persists exact standalone automation targets with provider options", () => {
+    const discoveryCalls: Array<{ provider: string; cwd?: string | undefined }> = [];
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      listModels: (input) => {
+        discoveryCalls.push(input);
+        return listDefaultTestModels(input);
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const targets = [
+        { provider: "codex", model: "gpt-5.6-sol", options: { reasoningEffort: "high" } },
+        { provider: "opencode", model: "deepseek/deepseek-flash", options: { variant: "high" } },
+        { provider: "antigravity", model: "Gemini 3.8 Flash", options: { reasoningEffort: "low" } },
+        // The discovered alias resolves to the concrete model before persistence.
+        { provider: "claudeAgent", model: "sonnet", options: { autoCompactWindow: "200k" } },
+      ] as const;
+
+      for (const [index, target] of targets.entries()) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_create_automation",
+          args: {
+            name: `Exact target ${index}`,
+            prompt: "Run the scheduled work on this exact target.",
+            mode: index % 2 === 0 ? "standalone" : "dedicated",
+            schedule: { type: "interval", everySeconds: 300 },
+            target,
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const expectedModel = target.provider === "claudeAgent" ? "claude-sonnet-5" : target.model;
+        const expectedSelection = {
+          provider: target.provider,
+          model: expectedModel,
+          options: target.options,
+        } as ModelSelection;
+        assert.deepEqual(harness.automationCreates[index]?.modelSelection, expectedSelection);
+        const payload = toolResultJson(response.result);
+        assert.deepEqual(payload.modelSelection, harness.automationCreates[index]?.modelSelection);
+        assert.isTrue(payload.enabled as boolean);
+      }
+      // Resolution ran against the automation project's workspace root, like threads.
+      assert.deepEqual([...new Set(discoveryCalls.map((call) => call.cwd))], ["/tmp/demo"]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("persists updated standalone and dedicated targets and preserves omitted ones", () => {
+    const standalone = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      targetThreadId: null,
+    });
+    const dedicated = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-dedicated"),
+      mode: "dedicated",
+      targetThreadId: null,
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone, dedicated]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const target: ModelSelection = {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "medium" },
+      };
+
+      const targetedStandalone = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: { ...makeFullAutomationUpdate(standalone), target },
+      });
+      assert.isFalse(
+        isToolError(targetedStandalone.result),
+        toolErrorText(targetedStandalone.result),
+      );
+      assert.deepEqual(harness.automationUpdates[0]?.modelSelection, target);
+
+      const targetedDedicated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          ...makeFullAutomationUpdate(dedicated),
+          target: { ...target, options: { reasoningEffort: "low" } },
+        },
+      });
+      assert.isFalse(
+        isToolError(targetedDedicated.result),
+        toolErrorText(targetedDedicated.result),
+      );
+      assert.deepEqual(harness.automationUpdates[1]?.modelSelection, {
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "low" },
+      } as ModelSelection);
+
+      const preserved = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: makeFullAutomationUpdate(standalone),
+      });
+      assert.isFalse(isToolError(preserved.result), toolErrorText(preserved.result));
+      assert.notProperty(harness.automationUpdates[2] as Record<string, unknown>, "modelSelection");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects invalid automation targets before create or update", () => {
+    const standalone = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      targetThreadId: null,
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [standalone], {
+      providerStatuses: [
+        {
+          provider: "claudeAgent",
+          status: "error",
+          available: false,
+          authStatus: "unauthenticated",
+          checkedAt: NOW,
+          message: "Claude is not authenticated.",
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const create = (target: Record<string, unknown>) =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_create_automation",
+          args: {
+            name: "Rejected target",
+            prompt: "This must not be created.",
+            mode: "standalone",
+            schedule: { type: "interval", everySeconds: 300 },
+            target,
+          },
+        });
+
+      const unavailableModel = yield* create({ provider: "codex", model: "gpt-5.6-sol-low" });
+      assert.equal(
+        (toolResultJson(unavailableModel.result).error as { code: string }).code,
+        "model_unavailable",
+      );
+      const unavailableProvider = yield* create({
+        provider: "claudeAgent",
+        model: "claude-sonnet-5",
+      });
+      assert.equal(
+        (toolResultJson(unavailableProvider.result).error as { code: string }).code,
+        "provider_unavailable",
+      );
+      const invalidOption = yield* create({
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { reasoningEffort: "ultra" },
+      });
+      assert.equal(
+        (toolResultJson(invalidOption.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      // Unknown option keys must reach the resolver instead of being silently stripped.
+      const inventedOption = yield* create({
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        options: { inventedOption: "invented-value" },
+      });
+      assert.equal(
+        (toolResultJson(inventedOption.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      assert.deepEqual(harness.automationCreates, []);
+
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          automationId: standalone.id,
+          name: standalone.name,
+          prompt: standalone.prompt,
+          schedule: standalone.schedule,
+          enabled: true,
+          maxIterations: standalone.maxIterations,
+          stopAfterConsecutiveFailures: standalone.stopAfterConsecutiveFailures,
+          notificationPolicy: "all",
+          completionPolicy: { type: "none" },
+          target: {
+            provider: "antigravity",
+            model: "Gemini 3.8 Flash",
+            options: { reasoningEffort: "ultra" },
+          },
+        },
+      });
+      assert.equal(
+        (toolResultJson(updated.result).error as { code: string }).code,
+        "model_option_unavailable",
+      );
+      assert.deepEqual(harness.automationUpdates, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects explicit targets on heartbeat automations", () => {
+    const definition = makeAutomationDefinition();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const created = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Switch session",
+          prompt: "This heartbeat cannot switch its session.",
+          target: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        },
+      });
+      assert.isTrue(isToolError(created.result));
+      assert.include(toolErrorText(created.result), "heartbeat");
+      assert.deepEqual(harness.automationCreates, []);
+
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: {
+          automationId: definition.id,
+          name: definition.name,
+          prompt: definition.prompt,
+          schedule: definition.schedule,
+          enabled: true,
+          maxIterations: definition.maxIterations,
+          stopAfterConsecutiveFailures: definition.stopAfterConsecutiveFailures,
+          notificationPolicy: "all",
+          completionPolicy: { type: "none" },
+          target: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        },
+      });
+      assert.isTrue(isToolError(updated.result));
+      assert.include(toolErrorText(updated.result), "heartbeat");
+      assert.deepEqual(harness.automationUpdates, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("stages explicitly disabled automations without proposal state", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const disabled = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Staged review",
+          prompt: "Review this before enabling it.",
+          mode: "standalone",
+          schedule: { type: "interval", everySeconds: 300 },
+          enabled: false,
+        },
+      });
+      assert.isFalse(isToolError(disabled.result), toolErrorText(disabled.result));
+      const created = harness.automationCreates[0]!;
+      assert.isFalse(created.enabled ?? true);
+      assert.isNull(created.proposalState ?? null);
+      const payload = toolResultJson(disabled.result);
+      assert.isFalse(payload.enabled as boolean);
+      assert.isNull(payload.proposalState);
+      // A plain disabled definition is not a proposal, so no card is surfaced.
+      assert.equal(harness.dispatched.length, 0);
+
+      const conflicting = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: { name: "Conflicting", prompt: "x", suggested: true, enabled: true },
+      });
+      assert.isTrue(isToolError(conflicting.result));
+      assert.include(toolErrorText(conflicting.result), "suggested");
+      assert.equal(harness.automationCreates.length, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lists the stored model selection for each automation", () => {
+    const definition = makeAutomationDefinition({
+      modelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.8 Flash",
+        options: { reasoningEffort: "low" },
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_list_automations",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const automations = toolResultJson(response.result).automations as Array<
+        Record<string, unknown>
+      >;
+      assert.deepEqual(automations[0]?.modelSelection, definition.modelSelection);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

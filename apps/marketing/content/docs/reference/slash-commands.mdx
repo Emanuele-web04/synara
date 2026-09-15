@@ -42,7 +42,7 @@ See [Organize and navigate](/docs/features/organize) for sidebar and conversatio
 
 Read [Thread forks](/docs/workflows/forks) for message-level forks, native provider coverage, and environment ownership.
 
-For a cross-provider side chat, put the provider kind or display name first—for example, `/side codex review the current diff` or `/side Claude Code investigate the failing test`. Synara removes that provider token from the child prompt and accepts it only when the target runtime is available. Without a provider token, `/side` continues on the current provider.
+For a cross-provider side chat, put the provider kind or display name first—for example, `/side codex review the current diff` or `/side Claude Code investigate the failing test`. Synara removes that provider token from the child prompt and accepts it only when the target runtime is available. Without a provider token, `/side` starts from the current provider. Before its first turn, an empty side chat also lets you choose the provider and model from its composer.
 
 ## Persistent goals
 
@@ -53,6 +53,8 @@ For a cross-provider side chat, put the provider kind or display name first—fo
 | `/goal edit`                   | Reopen the current goal in the composer                 |
 | `/goal pause` / `/goal resume` | Pause or resume autonomous pursuit and its timer        |
 | `/goal clear`                  | Remove the active goal without recording an achievement |
+
+Use `/goal -- <objective>` to treat the objective as literal text, including control words such as `clear`. Goal menu and edit prefills use this form automatically. To start an objective with `--`, repeat the separator: `/goal -- -- <text>`.
 
 Goals are deliberate durable task state, not an automatic label for every prompt. See [Thread goals](/docs/features/thread-goals) for continuation priority, achievement, and blocked-goal behavior.
 
