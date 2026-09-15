@@ -688,6 +688,10 @@ export function projectProviderRuntimeActivities(
       // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
+      const isPiInfoNotification =
+        event.provider === "pi" &&
+        raw?.method === "extension/ui/notify" &&
+        asObject(event.payload.detail)?.type === "info";
       const message = truncateDetail(event.payload.message);
       return [
         {
@@ -695,12 +699,14 @@ export function projectProviderRuntimeActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: isBackgroundMove
-            ? "Moved to background"
-            : event.provider === "opencode" &&
-                (nativeType === "session.next.retried" || nativeType === "session.status")
-              ? "OpenCode retrying"
-              : "Runtime warning",
+          summary: isPiInfoNotification
+            ? "Pi extension"
+            : isBackgroundMove
+              ? "Moved to background"
+              : event.provider === "opencode" &&
+                  (nativeType === "session.next.retried" || nativeType === "session.status")
+                ? "OpenCode retrying"
+                : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
@@ -991,7 +997,7 @@ export function projectProviderRuntimeActivities(
     case "item.updated":
     case "item.completed":
     case "item.started": {
-      if (event.type !== "item.started" && event.payload.itemType === "context_compaction") {
+      if (event.payload.itemType === "context_compaction") {
         const failed = event.type === "item.completed" && event.payload.status === "failed";
         return [
           {
@@ -1000,8 +1006,8 @@ export function projectProviderRuntimeActivities(
             tone: failed ? "error" : "info",
             kind: "context-compaction",
             summary:
-              event.type === "item.updated"
-                ? "Compacting conversation..."
+              event.type !== "item.completed"
+                ? "Compacting context"
                 : failed
                   ? "Context compaction failed"
                   : "Context compacted",
@@ -1088,6 +1094,10 @@ export function projectProviderRuntimeActivities(
           summary,
           payload: toActivityPayload({
             state,
+            ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
+            ...(event.payload.tokenAccountingVersion === 1
+              ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
+              : {}),
             ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }

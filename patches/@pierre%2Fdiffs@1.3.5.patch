@@ -1,0 +1,14 @@
+diff --git a/dist/components/File.js b/dist/components/File.js
+index fa9a91568ab6464890d4570465c7bb1b93828555..69558b5f6cdaebd0e2568d54d9e4936b7afe0980 100644
+--- a/dist/components/File.js
++++ b/dist/components/File.js
+@@ -326,6 +326,9 @@ var File = class {
+ 			this.fileRenderer.setLineAnnotations(this.lineAnnotations);
+ 			this.renderAnnotations();
+ 		}
++		// Structural edits shift cached rows; publish them to the DOM just as FileDiff does.
++		this.rerender();
++		this.interactionManager.setSelectionDirty();
+ 	}
+ 	updateRenderCache(dirtyLines, themeType, options) {
+ 		this.fileRenderer.updateRenderCache(dirtyLines, themeType, options?.lineCountChangeInFlight);

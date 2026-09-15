@@ -580,6 +580,7 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
 function appendManagedCodexConfigSection(config: string, section: string): string {
   let overlayConfig = config;
   const managedMcpTableName = normalizeTomlTableHeaderName(SYNARA_MANAGED_MCP_TABLE_HEADER);
+  const managedMcpDescendantPrefix = `${managedMcpTableName!.slice(0, -1)},`;
   const tables: string[] = [];
 
   for (const table of splitTomlTables(section.trim())) {
@@ -588,11 +589,22 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
       tables.push(table);
       continue;
     }
-    if (normalizeTomlTableHeaderName(header) === managedMcpTableName) {
+    const tableName = normalizeTomlTableHeaderName(header);
+    if (tableName?.startsWith(managedMcpDescendantPrefix)) {
+      continue;
+    }
+    if (tableName === managedMcpTableName) {
       // The session-scoped gateway entry is authoritative inside Synara's
       // overlay. The user's source config remains untouched.
       overlayConfig = removeTomlTableNamespace(overlayConfig, SYNARA_MANAGED_MCP_TABLE_HEADER);
-      tables.push(table);
+      // Recover only the fields Synara generates for its HTTP gateway. Saved
+      // stdio fields (including multiline args/env) make Codex reject the config.
+      tables.push(
+        [
+          header,
+          ...table.split("\n").filter((line) => /^\s*(url|bearer_token_env_var)\s*=/.test(line)),
+        ].join("\n"),
+      );
       continue;
     }
     if (!configHasTomlTableHeader(overlayConfig, header)) {

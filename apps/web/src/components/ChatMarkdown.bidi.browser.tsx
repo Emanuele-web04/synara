@@ -5,7 +5,6 @@
 import { render } from "vitest-browser-react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 
 import "../index.css";
 import ChatMarkdown from "./ChatMarkdown";
@@ -25,31 +24,17 @@ describe("ChatMarkdown automatic block direction", () => {
     ["مرحبا **بكم** اليوم", "rtl"],
     ["Welcome **back** today", "ltr"],
   ])("joins real highlight fragments in %s", async (text, direction) => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("bidi-fragments"),
-      messageId: MessageId.makeUnsafe("assistant-bidi"),
-      startOffset: 0,
-      endOffset: text.length,
-      selectedText: text,
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-03-17T19:12:28.000Z",
-      updatedAt: "2026-03-17T19:12:28.000Z",
-    };
     await render(
       <ChatMarkdown
         text={text}
         cwd={undefined}
         directionMode="auto-blocks"
         findQuery={text}
-        markers={[marker]}
       />,
     );
     const root = markdownRoot();
     expect(getComputedStyle(root.querySelector("p")!).direction).toBe(direction);
-    for (const selector of [".chat-find-match", ".thread-marker-highlight"]) {
+    for (const selector of [".chat-find-match"]) {
       const parts = Array.from(root.querySelectorAll(selector));
       expect(parts).toHaveLength(3);
       const first = getComputedStyle(parts[0]!);
@@ -140,22 +125,9 @@ describe("ChatMarkdown automatic block direction", () => {
     expect(onTaskToggle).toHaveBeenCalledWith({ sourceLine: 3, checked: true });
   });
 
-  it("preserves Arabic wiki labels and real find/marker fragments", async () => {
+  it("preserves Arabic wiki labels and real find fragments", async () => {
     const text = "راجع [[My %20 note|مرجع عربي]] ثم **كلام** عربي";
     const startOffset = text.indexOf("مرجع");
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("bidi-alias"),
-      messageId: MessageId.makeUnsafe("assistant-bidi"),
-      startOffset,
-      endOffset: startOffset + "مرجع عربي".length,
-      selectedText: "مرجع عربي",
-      createdAt: "2026-03-17T19:12:28.000Z",
-      color: "yellow",
-      style: "highlight",
-      label: null,
-      done: false,
-      updatedAt: "2026-03-17T19:12:28.000Z",
-    };
     await render(
       <QueryClientProvider client={new QueryClient()}>
         <ChatMarkdown
@@ -164,7 +136,6 @@ describe("ChatMarkdown automatic block direction", () => {
           wikiLinkRoot="/vault"
           directionMode="auto-blocks"
           findQuery="مرجع عربي"
-          markers={[marker]}
         />
       </QueryClientProvider>,
     );
@@ -176,7 +147,6 @@ describe("ChatMarkdown automatic block direction", () => {
     expect(
       label.querySelector("[data-chat-find-start]")?.getAttribute("data-chat-find-start"),
     ).toBe(String(startOffset));
-    expect(label.querySelector("[data-thread-marker-id]")).not.toBeNull();
   });
 
   it("uses each top-level prose block's first strong character", async () => {
