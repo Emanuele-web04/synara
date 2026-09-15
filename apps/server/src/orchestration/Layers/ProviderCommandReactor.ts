@@ -66,6 +66,7 @@ import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -1508,6 +1509,7 @@ const make = Effect.gen(function* () {
   });
 
   interface EditReplayWorkspaceRestorePlan {
+    readonly threadId: ThreadId;
     readonly cwd: string;
     readonly checkpointRef: CheckpointRef;
     readonly targetTurnCount: number;
@@ -1578,6 +1580,7 @@ const make = Effect.gen(function* () {
     }
 
     return {
+      threadId: input.threadId,
       cwd,
       checkpointRef: targetCheckpointRef,
       targetTurnCount,
@@ -1590,19 +1593,70 @@ const make = Effect.gen(function* () {
     if (plan === null) {
       return;
     }
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: plan.cwd,
-      checkpointRef: plan.checkpointRef,
-      fallbackToHead: plan.targetTurnCount === 0,
-    });
-    if (!restored) {
+    // Capture a pre-retry/pre-edit snapshot before mutating the worktree so a
+    // failed restore never silently discards the current tree.
+    const rescueCheckpointRef = checkpointRefForThreadRevertRescue(
+      plan.threadId,
+      crypto.randomUUID(),
+    );
+    const rescueCaptureFailure = yield* checkpointStore
+      .captureCheckpoint({ cwd: plan.cwd, checkpointRef: rescueCheckpointRef })
+      .pipe(
+        Effect.as(null),
+        Effect.catch((error) =>
+          Effect.succeed(
+            `The pre-retry workspace snapshot could not be captured, so the restore was refused: ${error.message}`,
+          ),
+        ),
+      );
+    if (rescueCaptureFailure !== null) {
+      return yield* Effect.fail(new Error(rescueCaptureFailure));
+    }
+
+    const discardRescueCheckpoint = checkpointStore
+      .deleteCheckpointRefs({ cwd: plan.cwd, checkpointRefs: [rescueCheckpointRef] })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("edit-replay rescue ref cleanup failed", {
+            threadId: plan.threadId,
+            cwd: plan.cwd,
+            rescueCheckpointRef,
+            detail: error.message,
+          }),
+        ),
+      );
+
+    const restoreOutcome = yield* checkpointStore
+      .restoreCheckpoint({
+        cwd: plan.cwd,
+        checkpointRef: plan.checkpointRef,
+        fallbackToHead: plan.targetTurnCount === 0,
+      })
+      .pipe(
+        Effect.map((restored) =>
+          restored ? ({ kind: "restored" } as const) : ({ kind: "unavailable" } as const),
+        ),
+        Effect.catch((error) => Effect.succeed({ kind: "failed", detail: error.message } as const)),
+      );
+
+    if (restoreOutcome.kind === "unavailable") {
+      yield* discardRescueCheckpoint;
       return yield* Effect.fail(
         new Error(
           `Filesystem checkpoint for edit replay turn ${plan.targetTurnCount} became unavailable during the rollback.`,
         ),
       );
     }
+    if (restoreOutcome.kind === "failed") {
+      // Keep the rescue snapshot: the worktree may be half-rewritten.
+      return yield* Effect.fail(
+        new Error(
+          `Filesystem restore for edit replay turn ${plan.targetTurnCount} failed (${restoreOutcome.detail}). The pre-retry snapshot is kept at ${rescueCheckpointRef}.`,
+        ),
+      );
+    }
 
+    yield* discardRescueCheckpoint;
     clearWorkspaceIndexCache(plan.cwd);
   });
 

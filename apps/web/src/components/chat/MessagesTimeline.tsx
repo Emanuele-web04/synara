@@ -81,6 +81,11 @@ import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { EditedFileRow } from "./EditedFileRow";
+import {
+  AssistantRetryEffortFooterActions,
+  AssistantRetryEffortMessageText,
+  type AssistantRetryEffortContext,
+} from "./AssistantRetryEffortControls";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
@@ -457,6 +462,8 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
+  /** Optional context for "Retry with different effort" on settled assistant turns. */
+  retryEffortContext?: AssistantRetryEffortContext | null;
   /**
    * The user message the edit affordance may target, resolved by the owner from
    * the raw thread messages (the same list the server-side edit policy
@@ -545,6 +552,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  retryEffortContext: retryEffortContextProp,
   editableUserMessageId,
   activeTurnId,
   isRevertingCheckpoint,
@@ -587,6 +595,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
+  const retryEffortContext = retryEffortContextProp ?? null;
   const findHighlight = findHighlightProp ?? null;
   const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
   const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
@@ -2177,15 +2186,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     data-assistant-message-id={row.message.id}
                     data-chat-find-document-id={row.message.id}
                   >
-                    <ChatMarkdown
-                      text={messageText}
-                      cwd={markdownCwd}
-                      isStreaming={Boolean(row.message.streaming)}
-                      style={chatTypographyStyle}
-                      onImageExpand={onImageExpand}
-                      knownAbsoluteFilePaths={knownAbsoluteFilePaths}
-                      {...threadFindMarkdownProps(findHighlight, row.message.id)}
-                    />
+                    {retryEffortContext && isTerminalAssistantMessage ? (
+                      <AssistantRetryEffortMessageText
+                        context={retryEffortContext}
+                        message={row.message}
+                        liveText={messageText}
+                        turnDiffSummary={turnSummary}
+                        markdownProps={{
+                          text: messageText,
+                          cwd: markdownCwd,
+                          isStreaming: Boolean(row.message.streaming),
+                          style: chatTypographyStyle,
+                          onImageExpand,
+                          knownAbsoluteFilePaths,
+                          ...threadFindMarkdownProps(findHighlight, row.message.id),
+                        }}
+                      />
+                    ) : (
+                      <ChatMarkdown
+                        text={messageText}
+                        cwd={markdownCwd}
+                        isStreaming={Boolean(row.message.streaming)}
+                        style={chatTypographyStyle}
+                        onImageExpand={onImageExpand}
+                        knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                        {...threadFindMarkdownProps(findHighlight, row.message.id)}
+                      />
+                    )}
                   </div>
                 ) : null}
                 {renderWorkDisplay(inlineWorkDisplay, "inline")}
@@ -2400,18 +2427,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
-                  // Turn-end actions read Copy → Fork → Pin → time and stay visible at
-                  // rest: they belong to a settled turn, so hiding them behind hover made
-                  // the whole row feel undiscoverable. The leading button pulls left by
-                  // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
-                  // glyph, not the invisible hit area, aligns with the message text.
+                  goalAchievement !== null ||
+                  (retryEffortContext !== null && isTerminalAssistantMessage)) && (
+                  // Turn-end actions read Copy → Retry effort → Fork → Pin → time and stay
+                  // visible at rest: they belong to a settled turn, so hiding them behind
+                  // hover made the whole row feel undiscoverable. The leading button pulls
+                  // left by its own icon inset — (2em button − 1.125em glyph) / 2 — so the
+                  // first glyph, not the invisible hit area, aligns with the message text.
                   <div
                     className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]"
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
                       <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                    ) : null}
+                    {retryEffortContext !== null && isTerminalAssistantMessage ? (
+                      <AssistantRetryEffortFooterActions
+                        context={retryEffortContext}
+                        message={row.message}
+                        showAssistantCopyButton={row.showAssistantCopyButton}
+                        assistantTurnInProgress={row.assistantTurnInProgress}
+                        turnDiffSummary={turnSummary}
+                      />
                     ) : null}
                     {showForkAction ? (
                       <MessageActionButton

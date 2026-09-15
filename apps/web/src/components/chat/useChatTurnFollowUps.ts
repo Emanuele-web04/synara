@@ -5,6 +5,7 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderKind,
+  type ProviderModelDescriptor,
   type ProviderStartOptions,
 } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
@@ -15,12 +16,17 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { type DraftThreadEnvMode, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
+import {
+  useComposerDraftStore,
+  type DraftThreadEnvMode,
+  type QueuedComposerPlanFollowUp,
+} from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { appendOriginalComposerPromptBlocks } from "../../lib/terminalContext";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 import {
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
@@ -33,6 +39,15 @@ import type { Project } from "../../types";
 import { type Thread } from "../../types";
 import { type QueuedSteerGate } from "../ChatView.logic";
 import { buildWorkflowResumePrompt } from "./WorkflowRunCard.logic";
+import { useRetryEffortVariantStore } from "./retryEffortVariantStore";
+import {
+  buildRetryConfirmCopy,
+  planRetryEffortChange,
+  resolveEffortFromModelSelection,
+  resolvePrecedingUserMessage,
+  resolveRetryWithDifferentEffortAvailability,
+} from "./retryWithDifferentEffort.logic";
+import { getComposerTraitSelection } from "./composerTraits";
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatLocalDispatch } from "./useChatLocalDispatch";
 import { useChatProviderModels } from "./useChatProviderModels";
@@ -71,6 +86,8 @@ interface ChatTurnFollowUpsInput {
   selectedModel: string;
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
   selectedModelSelection: ModelSelection;
+  selectedModelOptions: ProviderOptions | null | undefined;
+  selectedRuntimeModel?: ProviderModelDescriptor | undefined;
   providerOptionsForDispatch: ProviderStartOptions | undefined;
   setOptimisticUserMessages: ReturnType<
     typeof useChatTimelineMessages
@@ -125,6 +142,8 @@ export function useChatTurnFollowUps({
   selectedModel,
   selectedPromptEffort,
   selectedModelSelection,
+  selectedModelOptions,
+  selectedRuntimeModel,
   providerOptionsForDispatch,
   setOptimisticUserMessages,
   armTranscriptAutoFollow,
@@ -601,9 +620,205 @@ export function useChatTurnFollowUps({
     syncServerShellSnapshot,
     selectedModel,
   ]);
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const archiveRetryVariant = useRetryEffortVariantStore((store) => store.archiveVariant);
+
+  const onRetryAssistantWithDifferentEffort = useCallback(
+    async (assistantMessageId: MessageId, nextEffort: string): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+        return false;
+      }
+      if (isSendBusy || isConnecting || sendInFlightRef.current) {
+        setThreadError(activeThread.id, "Wait for the current send to finish before retrying.");
+        return false;
+      }
+
+      const assistantMessage = activeThread.messages.find(
+        (message) => message.id === assistantMessageId && message.role === "assistant",
+      );
+      if (!assistantMessage) {
+        setThreadError(activeThread.id, "Assistant turn not found for effort retry.");
+        return false;
+      }
+
+      const turnDiffSummary =
+        activeThread.turnDiffSummaries.find(
+          (summary) =>
+            summary.assistantMessageId === assistantMessageId ||
+            (assistantMessage.turnId !== null && summary.turnId === assistantMessage.turnId),
+        ) ?? undefined;
+
+      const availability = resolveRetryWithDifferentEffortAvailability({
+        messages: activeThread.messages,
+        assistantMessageId,
+        assistantTurnId: assistantMessage.turnId,
+        showAssistantCopyButton: true,
+        assistantTurnInProgress: false,
+        runtimeMode,
+        modelSelection: selectedModelSelection,
+        modelOptions: selectedModelOptions,
+        ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+        turnDiffSummary,
+        activeTurnId:
+          activeThread.session?.orchestrationStatus === "running"
+            ? (activeThread.session.activeTurnId ?? null)
+            : null,
+        isBusy: false,
+      });
+      if (!availability.enabled) {
+        setThreadError(activeThread.id, availability.detail);
+        return false;
+      }
+
+      const planned = planRetryEffortChange({
+        provider: selectedModelSelection.provider,
+        model: selectedModelSelection.model,
+        modelOptions: selectedModelOptions,
+        prompt: availability.userMessageText,
+        ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+        nextEffort,
+      });
+      if (!planned) {
+        setThreadError(activeThread.id, "That effort level is not supported for the active model.");
+        return false;
+      }
+
+      const currentEffort = resolveEffortFromModelSelection(selectedModelSelection);
+      const currentTrait = getComposerTraitSelection(
+        selectedModelSelection.provider,
+        selectedModelSelection.model,
+        availability.userMessageText,
+        selectedModelOptions,
+        selectedRuntimeModel,
+      );
+      const currentEffortLabel = currentEffort
+        ? (currentTrait.effortLevels.find((level) => level.value === currentEffort)?.label ??
+          currentEffort)
+        : null;
+
+      const confirmed = await api.dialogs.confirm(
+        buildRetryConfirmCopy({
+          changedFileCount: availability.changedFileCount,
+          checkpointTurnCount: availability.checkpointTurnCount,
+          nextEffortLabel: planned.effortLabel,
+          currentEffortLabel,
+        }),
+      );
+      if (!confirmed) {
+        return false;
+      }
+
+      const precedingUser = resolvePrecedingUserMessage({
+        messages: activeThread.messages,
+        assistantMessageId,
+      });
+      if (!precedingUser) {
+        setThreadError(activeThread.id, "Could not find the user prompt for this turn.");
+        return false;
+      }
+
+      archiveRetryVariant({
+        threadId: activeThread.id,
+        userMessageId: precedingUser.messageId,
+        variant: {
+          id: `${assistantMessageId}:${assistantMessage.createdAt}`,
+          assistantMessageId,
+          turnId: assistantMessage.turnId ?? null,
+          text: assistantMessage.text,
+          effort: currentEffort,
+          effortLabel: currentEffortLabel,
+          provider: selectedModelSelection.provider,
+          model: selectedModelSelection.model,
+          createdAt: assistantMessage.createdAt,
+          checkpointTurnCount: availability.checkpointTurnCount,
+          changedFileCount: availability.changedFileCount,
+        },
+      });
+
+      if (planned.effortPlan.kind === "options") {
+        setProviderModelOptions(
+          activeThread.id,
+          selectedModelSelection.provider,
+          buildNextProviderOptions(
+            selectedModelSelection.provider,
+            selectedModelOptions,
+            planned.effortPlan.patch,
+          ),
+          { model: selectedModelSelection.model, persistSticky: true },
+        );
+      }
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      const messageCreatedAt = new Date().toISOString();
+      const outgoingMessageText = formatOutgoingComposerPrompt({
+        provider: selectedProvider,
+        model: selectedModel,
+        effort: nextEffort,
+        text: planned.nextPrompt,
+      });
+
+      try {
+        await persistThreadSettingsForNextTurn({
+          threadId: activeThread.id,
+          createdAt: messageCreatedAt,
+          modelSelection: planned.nextModelSelection,
+          runtimeMode,
+          interactionMode,
+        });
+        await api.orchestration.dispatchCommand({
+          type: "thread.message.edit-and-resend",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId: availability.userMessageId,
+          text: outgoingMessageText,
+          modelSelection: planned.nextModelSelection,
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          assistantDeliveryMode,
+          runtimeMode,
+          interactionMode,
+          createdAt: messageCreatedAt,
+        });
+        return true;
+      } catch (err: unknown) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to retry with a different effort.",
+        );
+        return false;
+      } finally {
+        setIsRevertingCheckpoint(false);
+      }
+    },
+    [
+      activeThread,
+      archiveRetryVariant,
+      assistantDeliveryMode,
+      interactionMode,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      isServerThread,
+      persistThreadSettingsForNextTurn,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModel,
+      selectedModelOptions,
+      selectedModelSelection,
+      selectedProvider,
+      selectedRuntimeModel,
+      sendInFlightRef,
+      setIsRevertingCheckpoint,
+      setProviderModelOptions,
+      setThreadError,
+    ],
+  );
+
   return {
     onSubmitPlanFollowUp,
     onEditUserMessage,
+    onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   };
