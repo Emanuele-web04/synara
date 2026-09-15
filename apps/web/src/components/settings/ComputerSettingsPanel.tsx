@@ -122,6 +122,18 @@ export function ComputerSettingsPanel({
       .then((next) => setAppSnapState(next))
       .catch(() => undefined);
   }, []);
+  const handleAppSnapStateChange = useCallback(
+    (next: DesktopAppSnapState) => {
+      setAppSnapState(next);
+      if (
+        next.accessibilityPermission === "granted" &&
+        next.screenRecordingPermission === "granted"
+      ) {
+        void statusQuery.refetch({ cancelRefetch: false });
+      }
+    },
+    [statusQuery.refetch],
+  );
   useRefreshOnWindowReturn(() => {
     void statusQuery.refetch({ cancelRefetch: false });
     refreshPermissionState();
@@ -132,7 +144,7 @@ export function ComputerSettingsPanel({
   // pane instead of resurrecting the guide on return.
   useAppSnapPermissionGuideBridge({
     permissionKinds: COMPUTER_PERMISSION_KINDS,
-    onStateChange: setAppSnapState,
+    onStateChange: handleAppSnapStateChange,
     onGuidePaneChange: setGuidePane,
   });
 
@@ -141,19 +153,20 @@ export function ComputerSettingsPanel({
     if (!bridge || !active) return;
     let disposed = false;
     const unsubscribe = bridge.onState((state) => {
-      if (!disposed) setAppSnapState(state);
+      if (!disposed) handleAppSnapStateChange(state);
     });
     void bridge
       .getState(COMPUTER_PERMISSION_KINDS)
       .then((next) => {
-        if (!disposed) setAppSnapState(next);
+        if (!disposed) handleAppSnapStateChange(next);
       })
       .catch(() => undefined);
     return () => {
       disposed = true;
       unsubscribe();
     };
-  }, [active]);
+  }, [active, handleAppSnapStateChange]);
+
   /**
    * The grants the OS is withholding, named. The availability message already
    * explains what to do; the row below is the checklist — the thing a user can
