@@ -19,10 +19,7 @@ function normalize(value: string): string {
 
 function redactCredentials(value: string): string {
   return value
-    .replace(
-      /\b(api[_-]?key|secret|bearer|authorization)\b\s*[:=]\s*\S+/gi,
-      "$1: [redacted]",
-    )
+    .replace(/\b(api[_-]?key|secret|bearer|authorization)\b\s*[:=]\s*\S+/gi, "$1: [redacted]")
     .replace(/\b(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b/g, "[redacted]");
 }
 

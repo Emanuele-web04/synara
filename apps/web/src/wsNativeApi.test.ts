@@ -334,6 +334,12 @@ describe("wsNativeApi", () => {
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },
+        titleRefresh: {
+          mode: "off",
+          minNewUserTurns: 5,
+          minElapsedMillis: 10 * 60 * 1_000,
+          maxAttemptsPerWindow: 3,
+        },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

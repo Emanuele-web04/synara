@@ -2692,7 +2692,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               defaultModelSelection: row.defaultModelSelection,
               scripts: row.scripts,
               isPinned: row.isPinned > 0,
-    titleRefreshMode: row.titleRefreshMode ?? null,
+              titleRefreshMode: row.titleRefreshMode ?? null,
               spaceId: row.spaceId,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,

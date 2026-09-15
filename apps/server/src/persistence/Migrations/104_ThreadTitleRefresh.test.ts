@@ -22,7 +22,11 @@ describe("104_ThreadTitleRefresh", () => {
       const afterThreads = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('projection_threads')
       `;
-      for (const column of ["manual_title_pinned", "title_refresh_mode", "pending_suggested_title"]) {
+      for (const column of [
+        "manual_title_pinned",
+        "title_refresh_mode",
+        "pending_suggested_title",
+      ]) {
         assert.isTrue(
           afterThreads.some((entry) => entry.name === column),
           `missing projection_threads.${column}`,

@@ -58,6 +58,12 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
+    titleRefresh: {
+      mode: "off",
+      minNewUserTurns: 5,
+      minElapsedMillis: 10 * 60 * 1_000,
+      maxAttemptsPerWindow: 3,
+    },
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
       codex: { ...provider, binaryPath: "codex", homePath: "" },

@@ -46,7 +46,6 @@ import {
 } from "effect";
 import {
   buildPromptThreadTitleFallback,
-  buildThreadTitleConversationContext,
   isGenericChatThreadTitle,
   isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
@@ -5612,21 +5611,15 @@ const make = Effect.gen(function* () {
   ): number =>
     messages.filter(
       (message) =>
-        message.role === "user" &&
-        message.streaming !== true &&
-        message.text.trim().length > 0,
+        message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
     ).length;
 
-  const appendTitleRefreshAuditActivity = (
-    input: {
-      readonly threadId: ThreadId;
-      readonly triggeredBy: "explicit" | "automatic";
-      readonly mode: "off" | "suggested" | "automatic";
-      readonly status: string;
-      readonly previousTitle: string;
-      readonly candidate: string | null;
-    },
-  ) =>
+  const appendTitleRefreshAuditActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly triggeredBy: "explicit" | "automatic";
+    readonly mode: "off" | "suggested" | "automatic";
+    readonly status: string;
+  }) =>
     orchestrationEngine
       .dispatch({
         type: "thread.activity.append",
@@ -5641,8 +5634,6 @@ const make = Effect.gen(function* () {
             triggeredBy: input.triggeredBy,
             mode: input.mode,
             status: input.status,
-            previousTitle: input.previousTitle,
-            ...(input.candidate !== null ? { candidate: input.candidate } : {}),
           },
           turnId: null,
           createdAt: new Date().toISOString(),
@@ -5671,7 +5662,7 @@ const make = Effect.gen(function* () {
           }
           return processQueueDrainEventSafely(event).pipe(
             Effect.andThen(() =>
-              event.type === "turn.completed"
+              event.type === "turn.completed" && event.payload.state === "completed"
                 ? maybeAutoRefreshThreadTitle(event.threadId).pipe(
                     Effect.catch((cause) =>
                       Effect.logWarning(
@@ -5736,9 +5727,7 @@ const make = Effect.gen(function* () {
       }
       const readModel = yield* orchestrationEngine.getReadModel();
       const settings = yield* serverSettings.getSettings;
-      const project = readModel.projects.find(
-        (candidate) => candidate.id === thread.projectId,
-      );
+      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       const mode = resolveThreadTitleRefreshMode({
         global: settings.titleRefresh.mode,
         ...(project?.titleRefreshMode !== undefined && project.titleRefreshMode !== null
@@ -5754,22 +5743,17 @@ const make = Effect.gen(function* () {
       const userIntents = thread.messages
         .filter(
           (message) =>
-            message.role === "user" &&
-            message.streaming !== true &&
-            message.text.trim().length > 0,
+            message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
         )
         .map((message) => message.text)
         .slice(-5);
       // Bounded redacted input (#1041): current title plus recent user intent.
-      // Falls back to the existing conversation-context builder when no usable
-      // intent remains; tool output and attachments never enter the prompt.
-      const refreshContext = buildThreadTitleRefreshContext({
+      // Tool output, assistant output, hidden prompts, and attachments never enter the prompt.
+      const context = buildThreadTitleRefreshContext({
         currentTitle: expectedTitle,
         recentUserIntents: userIntents,
         compactSummary: null,
       });
-      const context =
-        refreshContext ?? buildThreadTitleConversationContext(thread.messages);
       if (!context) {
         return { status: "no-context", title: null };
       }
@@ -5814,17 +5798,39 @@ const make = Effect.gen(function* () {
         );
         const titleIsCurrent =
           currentTitleSequence === expectedTitleSequence && currentThread?.title === expectedTitle;
-        const unchanged = titleIsCurrent
+        const unchanged: OrchestrationRegenerateThreadTitleResult = titleIsCurrent
           ? { status: "unchanged", title: expectedTitle }
           : { status: "stale", title: null };
+        if (titleIsCurrent && triggeredBy === "explicit") {
+          const updated = yield* orchestrationEngine
+            .dispatch({
+              type: "thread.meta.update",
+              commandId: serverCommandId("thread-title-regenerate-unchanged"),
+              threadId: input.threadId,
+              manualTitlePinned: false,
+              pendingSuggestedTitle: null,
+              expectedTitleSequence,
+            })
+            .pipe(
+              Effect.as(true),
+              Effect.catch((error) => {
+                if (
+                  error._tag === "OrchestrationCommandInvariantError" &&
+                  error.commandType === "thread.meta.update"
+                ) {
+                  return Effect.succeed(false);
+                }
+                return Effect.fail(error);
+              }),
+            );
+          if (!updated) return { status: "stale", title: null };
+        }
         if (triggeredBy === "automatic") {
           yield* appendTitleRefreshAuditActivity({
             threadId: input.threadId,
             triggeredBy,
             mode,
             status: unchanged.status,
-            previousTitle: expectedTitle,
-            candidate: null,
           });
         }
         return unchanged;
@@ -5841,8 +5847,6 @@ const make = Effect.gen(function* () {
           triggeredBy,
           mode,
           status: "stale",
-          previousTitle: expectedTitle,
-          candidate: generated.title,
         });
         return { status: "stale", title: null };
       }
@@ -5875,8 +5879,6 @@ const make = Effect.gen(function* () {
             triggeredBy,
             mode,
             status: "suggested",
-            previousTitle: expectedTitle,
-            candidate: generated.title,
           });
           return { status: "suggested", title: generated.title };
         }
@@ -5905,7 +5907,7 @@ const make = Effect.gen(function* () {
             return Effect.fail(error);
           }),
         );
-      const outcome = updated
+      const outcome: OrchestrationRegenerateThreadTitleResult = updated
         ? { status: "renamed", title: generated.title }
         : { status: "stale", title: null };
       if (triggeredBy === "automatic" || outcome.status === "renamed") {
@@ -5914,26 +5916,43 @@ const make = Effect.gen(function* () {
           triggeredBy,
           mode,
           status: outcome.status,
-          previousTitle: expectedTitle,
-          candidate: generated.title,
         });
       }
       return outcome;
     });
 
-  const pendingTitleGenerations = new Map<
-    ThreadId,
-    Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>
-  >();
+  interface PendingTitleGeneration {
+    readonly triggeredBy: "explicit" | "automatic";
+    readonly result: Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>;
+  }
+
+  const pendingTitleGenerations = new Map<ThreadId, PendingTitleGeneration>();
   const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
     Effect.suspend(() => {
+      const triggeredBy = input.triggeredBy ?? "explicit";
       const pending = pendingTitleGenerations.get(input.threadId);
-      if (pending) return Deferred.await(pending);
+      if (pending) {
+        // Automatic callers can share an explicit refresh. Explicit callers queue behind
+        // automatic work so they never inherit suggested/disabled automatic semantics.
+        if (triggeredBy === "automatic" && pending.triggeredBy === "explicit") {
+          return Deferred.await(pending.result);
+        }
+        if (triggeredBy === pending.triggeredBy) {
+          return Deferred.await(pending.result);
+        }
+        return Deferred.await(pending.result).pipe(
+          Effect.exit,
+          Effect.andThen(regenerateThreadTitle(input)),
+        );
+      }
       const result = Deferred.makeUnsafe<OrchestrationRegenerateThreadTitleResult, unknown>();
-      pendingTitleGenerations.set(input.threadId, result);
+      pendingTitleGenerations.set(input.threadId, { triggeredBy, result });
       return generateConversationTitle(input).pipe(
-        Effect.onExit((exit) => Deferred.done(result, exit)),
-        Effect.ensuring(Effect.sync(() => pendingTitleGenerations.delete(input.threadId))),
+        Effect.onExit((exit) =>
+          Effect.sync(() => pendingTitleGenerations.delete(input.threadId)).pipe(
+            Effect.andThen(Deferred.done(result, exit)),
+          ),
+        ),
       );
     });
 
@@ -5966,7 +5985,8 @@ const make = Effect.gen(function* () {
     const totalUserTurns = countSettledUserTurns(thread.messages);
     const now = Date.now();
     const state = titleRefreshThrottleByThread.get(threadId) ?? {
-      userTurnsSeen: totalUserTurns,
+      // Durable history is progress toward the first milestone, including after restart.
+      userTurnsSeen: 0,
       lastAttemptAt: null,
       windowStartedAt: now,
       attemptsInWindow: 0,

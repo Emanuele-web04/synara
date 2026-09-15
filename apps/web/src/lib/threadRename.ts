@@ -135,6 +135,7 @@ export async function dispatchThreadRename(input: {
         threadId: input.threadId,
         title: trimmed,
         manualTitlePinned: true,
+        pendingSuggestedTitle: null,
       });
     } else {
       // Draft promotion sets the user-authored title at creation; pin it so
@@ -144,6 +145,7 @@ export async function dispatchThreadRename(input: {
         commandId: newCommandId(),
         threadId: input.threadId,
         manualTitlePinned: true,
+        pendingSuggestedTitle: null,
       });
     }
   } else {
@@ -153,6 +155,7 @@ export async function dispatchThreadRename(input: {
       threadId: input.threadId,
       title: trimmed,
       manualTitlePinned: true,
+      pendingSuggestedTitle: null,
     });
   }
 
