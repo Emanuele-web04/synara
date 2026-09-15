@@ -2,8 +2,9 @@ import { ProjectId, type OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import { GitHubCliError } from "../git/Errors";
-import type { GitHubCliShape, GitHubPullRequestDetailData } from "../git/Services/GitHubCli";
+import { GitHostCliError } from "../git/Errors";
+import type { GitHostCliShape, GitHostPullRequestDetailData } from "../git/Services/GitHostCli";
+import { createGitHostCliRouterForTests } from "../git/testing/fakeGitHostCli";
 import { createGitHubCliWithFakeGh } from "../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
 import { makePullRequestOperations } from "./pullRequestOperations";
@@ -23,7 +24,7 @@ const project: OrchestrationProject = {
   deletedAt: null,
 };
 
-const detail: GitHubPullRequestDetailData = {
+const detail: GitHostPullRequestDetailData = {
   number: 42,
   title: "Parallel detail",
   body: "",
@@ -52,13 +53,13 @@ const detail: GitHubPullRequestDetailData = {
   commits: [],
 };
 
-function makeTestOperations(github: GitHubCliShape) {
+function makeTestOperations(github: GitHostCliShape) {
   const pins: ProjectPullRequestPinsShape = {
     listByProjectIds: () => Effect.succeed([]),
     setPinned: () => Effect.void,
   };
   return makePullRequestOperations({
-    github,
+    gitHost: createGitHostCliRouterForTests({ github }),
     pins,
     findProject: () => Effect.succeed(project),
     validateRepository: (repository) => Effect.succeed(repository),
@@ -70,7 +71,7 @@ function makeTestOperations(github: GitHubCliShape) {
         rebase: true,
         deleteBranchOnMerge: false,
       }),
-    withGitHubRead: (effect) => effect,
+    withHostRead: (effect) => effect,
     finalizeMutationCaches: () => Effect.void,
   });
 }
@@ -96,12 +97,14 @@ describe("makePullRequestOperations", () => {
             setPinned: () => Effect.void,
           };
           const operations = makePullRequestOperations({
-            github: {
-              ...base,
-              getPullRequestDetail: () => waitForRelease(detailStarted, detail),
-              getPullRequestReviewComments: () =>
-                waitForRelease(commentsStarted, { comments: [], truncated: false }),
-            },
+            gitHost: createGitHostCliRouterForTests({
+              github: {
+                ...base,
+                getPullRequestDetail: () => waitForRelease(detailStarted, detail),
+                getPullRequestReviewComments: () =>
+                  waitForRelease(commentsStarted, { comments: [], truncated: false }),
+              },
+            }),
             pins,
             findProject: () => Effect.succeed(project),
             validateRepository: (repository) => Effect.succeed(repository),
@@ -113,7 +116,7 @@ describe("makePullRequestOperations", () => {
                 rebase: true,
                 deleteBranchOnMerge: false,
               }),
-            withGitHubRead: (effect) => effect,
+            withHostRead: (effect) => effect,
             finalizeMutationCaches: () => Effect.void,
           });
 
@@ -140,7 +143,8 @@ describe("makePullRequestOperations", () => {
       getPullRequestDetail: () => Effect.succeed(detail),
       getPullRequestStack: () =>
         Effect.fail(
-          new GitHubCliError({
+          new GitHostCliError({
+            host: "github",
             operation: "getPullRequestStack",
             detail: "Stack GraphQL is unavailable.",
           }),
@@ -163,7 +167,8 @@ describe("makePullRequestOperations", () => {
       ...base,
       getPullRequestStack: () =>
         Effect.fail(
-          new GitHubCliError({
+          new GitHostCliError({
+            host: "github",
             operation: "getPullRequestStack",
             detail: "Stack GraphQL is unavailable.",
           }),

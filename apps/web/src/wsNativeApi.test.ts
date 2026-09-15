@@ -835,9 +835,10 @@ describe("wsNativeApi", () => {
     );
   });
 
-  it("forwards cancellable GitHub project provisioning and its progress events", async () => {
+  it("forwards cancellable repository project provisioning and its progress events", async () => {
     const input = {
       operationId: "operation-1",
+      host: "github" as const,
       repository: "openai/codex",
       destinationParent: "/projects",
       directoryName: "codex",
@@ -862,7 +863,7 @@ describe("wsNativeApi", () => {
     const controller = new AbortController();
 
     await expect(
-      api.projects.provisionFromGitHub(input, { signal: controller.signal }),
+      api.projects.provisionFromRepository(input, { signal: controller.signal }),
     ).resolves.toEqual(result);
     emitPush(WS_CHANNELS.projectProvisionProgress, {
       operationId: input.operationId,
@@ -871,7 +872,7 @@ describe("wsNativeApi", () => {
       message: "Cloning openai/codex",
     });
 
-    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromGitHub, input, {
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromRepository, input, {
       timeoutMs: null,
       signal: controller.signal,
     });

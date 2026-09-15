@@ -35,9 +35,9 @@ describe("WebSocket compatibility bootstrap", () => {
     expect(result.serverInstanceId.length).toBeGreaterThan(0);
     expect(result.capabilities).toContain("orchestration.cursor-safe-streams");
     expect(result.capabilities).toContain("orchestration.thread-detail-snapshot");
-    expect(result.capabilities).toContain("projects.github-provisioning");
+    expect(result.capabilities).toContain("projects.repository-provisioning");
     expect(result.capabilities).toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
-    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain("projects.github-provisioning");
+    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain("projects.repository-provisioning");
     expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
   });
 

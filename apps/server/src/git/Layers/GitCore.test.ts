@@ -2410,6 +2410,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
         yield* (yield* GitCore).fetchPullRequestBranch({
           cwd: tmp,
+          host: "github",
           prNumber: 55,
           branch: "feature/pr-fetch",
         });
@@ -2432,8 +2433,9 @@ it.layer(TestLayer)("git integration", (it) => {
         const exit = yield* (yield* GitCore)
           .fetchPullRequestCommit({
             cwd: tmp,
+            host: "github",
             prNumber: 42,
-            expectedRepositoryNameWithOwner: "acme/other",
+            expectedRepository: "acme/other",
           })
           .pipe(Effect.exit);
 

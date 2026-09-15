@@ -1,19 +1,20 @@
 // FILE: PullRequestCommentComposer.tsx
 // Purpose: Inline "Leave a comment" pill at the bottom of the detail panel's Comments section.
-//          Posts an issue comment through the gh-backed comment RPC as the authenticated GitHub
-//          user (hence the GitHub glyph in the leading slot), then invalidates the detail query
-//          so the new comment appears on the next refetch. Enter submits; Shift+Enter breaks a
+//          Posts an issue comment through the host-backed comment RPC as the authenticated
+//          gh/glab user (hence the host glyph in the leading slot), then invalidates the detail
+//          query so the new comment appears on the next refetch. Enter submits; Shift+Enter breaks
 //          line (comments accept markdown). Successful or ambiguous submissions revalidate both
 //          the detail and repository list scopes so comment data and updated ordering converge.
 // Layer: Pull request presentation
 // Exports: PullRequestCommentComposer
 
 import type { PullRequestDetail } from "@synara/contracts";
+import { gitHostDisplayName, gitHostKindForRepository } from "@synara/shared/gitHostRepository";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
-import { ArrowUpIcon, GitHubIcon } from "~/lib/icons";
+import { ArrowUpIcon, gitHostIcon } from "~/lib/icons";
 import { pullRequestCommentMutationOptions } from "~/lib/pullRequestReactQuery";
 import { PR_BODY_TEXT_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
@@ -27,6 +28,9 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
   const submittingRef = useRef(false);
   const trimmed = body.trim();
   const canSubmit = trimmed.length > 0 && !mutation.isPending;
+  const host = gitHostKindForRepository(detail.repository) ?? "github";
+  const hostName = gitHostDisplayName(host);
+  const HostIcon = gitHostIcon(host);
 
   // Promise chain instead of async/try-catch-finally: React Compiler does not
   // yet support try/finally, and it would skip optimizing this whole component.
@@ -48,7 +52,7 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
         toastManager.add({
           type: "error",
           title: "Could not post comment",
-          description: error instanceof Error ? error.message : "GitHub CLI comment failed.",
+          description: error instanceof Error ? error.message : `${hostName} CLI comment failed.`,
         });
       })
       .finally(() => {
@@ -60,9 +64,9 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
     <div className="flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm">
       <span
         className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-secondary)] text-muted-foreground"
-        title="Commenting as your GitHub account"
+        title={`Commenting as your ${hostName} account`}
       >
-        <GitHubIcon className="size-3" />
+        <HostIcon className="size-3" />
       </span>
       <textarea
         rows={Math.min(6, body.split("\n").length)}

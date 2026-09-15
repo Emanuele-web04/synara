@@ -33,7 +33,7 @@ export const WS_NEGOTIATE_QUERY = {
   requiredCapability: "x-synara-required-capability",
 } as const;
 
-export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
+export const WS_REPOSITORY_PROJECT_PROVISIONING_CAPABILITY = "projects.repository-provisioning";
 export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
 
 // Capabilities the current client refuses to run without. Kept separate from
@@ -54,7 +54,7 @@ export const WS_SERVER_CAPABILITIES = [
   ...WS_CLIENT_REQUIRED_CAPABILITIES,
   // Optional feature capability: older servers may omit it without making the
   // rest of a newer client unusable during a staggered rollout.
-  WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
+  WS_REPOSITORY_PROJECT_PROVISIONING_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   // Single-handshake connect: negotiation is available over plain HTTP at
   // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.

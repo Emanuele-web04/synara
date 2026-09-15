@@ -3,12 +3,15 @@ import type { OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { GitHubCliError } from "../../git/Errors";
+import { parseRepositoryReference, repositoryWebUrl } from "@synara/shared/gitHostRepository";
+
+import { GitHostCliError } from "../../git/Errors";
 import type {
-  GitHubCliShape,
-  GitHubPullRequestListBatch,
-  GitHubPullRequestListItem,
-} from "../../git/Services/GitHubCli";
+  GitHostCliShape,
+  GitHostPullRequestListBatch,
+  GitHostPullRequestListItem,
+} from "../../git/Services/GitHostCli";
+import { createGitHostCliRouterForTests } from "../../git/testing/fakeGitHostCli";
 import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli";
 import type { ProjectPullRequestPinsShape } from "../../persistence/Services/ProjectPullRequestPins";
 import {
@@ -34,7 +37,7 @@ function makeProject(id: string, title: string, workspaceRoot: string): Orchestr
   };
 }
 
-function makeItem(number: number, repository = "acme/shared"): GitHubPullRequestListItem {
+function makeItem(number: number, repository = "acme/shared"): GitHostPullRequestListItem {
   return {
     number,
     title: `PR ${number}`,
@@ -57,9 +60,9 @@ function makeItem(number: number, repository = "acme/shared"): GitHubPullRequest
 }
 
 function makeBatch(
-  entries: ReadonlyArray<GitHubPullRequestListItem>,
+  entries: ReadonlyArray<GitHostPullRequestListItem>,
   rawCount = entries.length,
-): GitHubPullRequestListBatch {
+): GitHostPullRequestListBatch {
   return { entries, rawCount };
 }
 
@@ -81,20 +84,33 @@ function makePins(
 
 function makeDependencies(input: {
   projects: OrchestrationProject[];
+  /** Values are canonical references: `owner/repo` (GitHub) or `host/group/project` (GitLab). */
   repositories: ReadonlyMap<ProjectId, string>;
-  github: GitHubCliShape;
+  github: GitHostCliShape;
+  gitlab?: GitHostCliShape;
   pins?: ProjectPullRequestPinsShape;
 }) {
   return {
     homeDir: "/tmp",
-    github: input.github,
+    gitHost: createGitHostCliRouterForTests({
+      github: input.github,
+      ...(input.gitlab ? { gitlab: input.gitlab } : {}),
+    }),
     pins: input.pins ?? makePins(),
     listProjects: () => Effect.succeed(input.projects),
     resolveRepositories: (project: OrchestrationProject) => {
-      const repository = input.repositories.get(project.id);
+      const reference = input.repositories.get(project.id);
+      const identity = reference ? parseRepositoryReference(reference) : null;
       return Effect.succeed({
-        repositories: repository
-          ? [{ nameWithOwner: repository, url: `https://github.com/${repository}` }]
+        repositories: identity
+          ? [
+              {
+                kind: identity.kind,
+                reference: identity.reference,
+                nameWithOwner: identity.path,
+                url: repositoryWebUrl(identity),
+              },
+            ]
           : [],
         authoritative: true,
       });
@@ -108,7 +124,7 @@ describe("PullRequestService", () => {
     const projectB = makeProject("project-list-b", "feature-1", "/tmp/list-b");
     const base = createGitHubCliWithFakeGh().service;
     let listReads = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.sync(() => {
@@ -159,7 +175,7 @@ describe("PullRequestService", () => {
     const base = createGitHubCliWithFakeGh().service;
     let countReads = 0;
     let richListReads = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listReviewRequestedPullRequestNumbers: () =>
         Effect.sync(() => {
@@ -223,7 +239,7 @@ describe("PullRequestService", () => {
     const project = makeProject("project-empty", "Empty", "/tmp/empty");
     const base = createGitHubCliWithFakeGh().service;
     let viewerLookups = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       getViewerLogin: () =>
         Effect.sync(() => {
@@ -257,7 +273,7 @@ describe("PullRequestService", () => {
     const viewerLogins = ["alice", "bob"];
     const listViewers: string[] = [];
     let viewerLookup = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       getViewerLogin: () =>
         Effect.sync(() => viewerLogins[Math.min(viewerLookup++, viewerLogins.length - 1)]!),
@@ -466,7 +482,7 @@ describe("PullRequestService", () => {
     const projectB = makeProject("project-b", "Project B", "/tmp/project-b");
     const base = createGitHubCliWithFakeGh().service;
     let itemLookups = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
@@ -523,7 +539,7 @@ describe("PullRequestService", () => {
     );
     const base = createGitHubCliWithFakeGh().service;
     let itemLookups = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
@@ -563,7 +579,7 @@ describe("PullRequestService", () => {
     const project = makeProject("project-negative", "Negative", "/tmp/project-negative");
     const base = createGitHubCliWithFakeGh().service;
     let notFoundLookups = 0;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
@@ -571,7 +587,8 @@ describe("PullRequestService", () => {
         Effect.suspend(() => {
           notFoundLookups += 1;
           return Effect.fail(
-            new GitHubCliError({
+            new GitHostCliError({
+              host: "github",
               operation: "getPullRequestListItem",
               detail: "GraphQL: Could not resolve to a PullRequest with the number of 99.",
               reason: "other",
@@ -612,13 +629,14 @@ describe("PullRequestService", () => {
       isPinned: boolean;
     }> = [];
     const base = createGitHubCliWithFakeGh().service;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
       getPullRequestListItem: () =>
         Effect.fail(
-          new GitHubCliError({
+          new GitHostCliError({
+            host: "github",
             operation: "getPullRequestListItem",
             detail: "GraphQL: Could not resolve to a PullRequest with the number of 99.",
             reason: "other",
@@ -655,7 +673,7 @@ describe("PullRequestService", () => {
     const base = createGitHubCliWithFakeGh().service;
     let transientLookups = 0;
     const pinWrites: Array<{ isPinned: boolean }> = [];
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
@@ -663,7 +681,8 @@ describe("PullRequestService", () => {
         Effect.suspend(() => {
           transientLookups += 1;
           return Effect.fail(
-            new GitHubCliError({
+            new GitHostCliError({
+              host: "github",
               operation: "getPullRequestListItem",
               detail: "GitHub API rate limit exceeded.",
               reason: "other",
@@ -706,7 +725,7 @@ describe("PullRequestService", () => {
   it("surfaces review-match recovery as incomplete at GitHub's search ceiling", async () => {
     const project = makeProject("project-review-ceiling", "Review ceiling", "/tmp/review-cap");
     const base = createGitHubCliWithFakeGh().service;
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: () =>
         Effect.succeed(makeBatch(Array.from({ length: 51 }, (_, index) => makeItem(index + 1)))),
@@ -743,7 +762,7 @@ describe("PullRequestService", () => {
     const projectB = makeProject("project-action-b", "Action B", "/tmp/action-b");
     const base = createGitHubCliWithFakeGh().service;
     const listCalls = new Map<string, number>();
-    const github: GitHubCliShape = {
+    const github: GitHostCliShape = {
       ...base,
       listRepositoryPullRequests: ({ repository }) =>
         Effect.sync(() => {
@@ -792,7 +811,7 @@ describe("PullRequestService", () => {
         Effect.gen(function* () {
           const actionStarted = yield* Deferred.make<void>();
           const base = createGitHubCliWithFakeGh().service;
-          const github: GitHubCliShape = {
+          const github: GitHostCliShape = {
             ...base,
             listRepositoryPullRequests: () =>
               Effect.sync(() => {
@@ -842,7 +861,7 @@ describe("PullRequestService", () => {
         Effect.gen(function* () {
           const commentStarted = yield* Deferred.make<void>();
           const base = createGitHubCliWithFakeGh().service;
-          const github: GitHubCliShape = {
+          const github: GitHostCliShape = {
             ...base,
             listRepositoryPullRequests: () =>
               Effect.sync(() => {
@@ -888,6 +907,67 @@ describe("PullRequestService", () => {
     expect(listCalls).toBe(2);
     expect(itemLookups).toBe(2);
   });
+
+  it("serves each repository from its own host CLI", async () => {
+    const githubProject = makeProject("project-gh", "GitHub", "/tmp/gh");
+    const gitlabProject = makeProject("project-gl", "GitLab", "/tmp/gl");
+    const base = createGitHubCliWithFakeGh().service;
+    const githubRepositories: string[] = [];
+    const gitlabRepositories: string[] = [];
+    const github: GitHostCliShape = {
+      ...base,
+      getViewerLogin: () => Effect.succeed("gh-viewer"),
+      listRepositoryPullRequests: (input) =>
+        Effect.sync(() => {
+          githubRepositories.push(input.repository);
+          return makeBatch([makeItem(1, "acme/app")]);
+        }),
+    };
+    const gitlab: GitHostCliShape = {
+      ...base,
+      getViewerLogin: () => Effect.succeed("gl-viewer"),
+      listRepositoryPullRequests: (input) =>
+        Effect.sync(() => {
+          gitlabRepositories.push(input.repository);
+          return makeBatch([
+            {
+              ...makeItem(2, "gitlab.com/acme/app"),
+              url: "https://gitlab.com/acme/app/-/merge_requests/2",
+            },
+          ]);
+        }),
+    };
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [githubProject, gitlabProject],
+              repositories: new Map([
+                [githubProject.id, "acme/app"],
+                [gitlabProject.id, "gitlab.com/acme/app"],
+              ]),
+              github,
+              gitlab,
+            }),
+          );
+          return yield* service.list({ state: "open", involvement: "all" });
+        }),
+      ),
+    );
+
+    // Each host CLI only ever sees its own repository, however many involvement queries the
+    // "all" tab fans out per repository.
+    expect([...new Set(githubRepositories)]).toEqual(["acme/app"]);
+    expect([...new Set(gitlabRepositories)]).toEqual(["gitlab.com/acme/app"]);
+    expect(result.entries.map((entry) => entry.repository).toSorted()).toEqual([
+      "acme/app",
+      "gitlab.com/acme/app",
+    ]);
+    // The top-level viewer names the first repository's host account.
+    expect(result.viewer).toBe("gh-viewer");
+  });
 });
 
 describe("isDefinitivePullRequestNotFound", () => {
@@ -900,18 +980,37 @@ describe("isDefinitivePullRequestNotFound", () => {
     ]) {
       expect(
         isDefinitivePullRequestNotFound(
-          new GitHubCliError({ operation: "getPullRequestListItem", detail, reason: "other" }),
+          new GitHostCliError({
+            host: "github",
+            operation: "getPullRequestListItem",
+            detail,
+            reason: "other",
+          }),
         ),
       ).toBe(false);
     }
     expect(
       isDefinitivePullRequestNotFound(
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation: "getPullRequestListItem",
           detail: "Could not resolve to a PullRequest because authentication expired.",
           reason: "not-authenticated",
         }),
       ),
     ).toBe(false);
+  });
+
+  it("trusts the glab layer's precise not-found classification", () => {
+    expect(
+      isDefinitivePullRequestNotFound(
+        new GitHostCliError({
+          host: "gitlab",
+          operation: "getPullRequestListItem",
+          detail: "Merge request not found. Check the MR number or URL and try again.",
+          reason: "not-found",
+        }),
+      ),
+    ).toBe(true);
   });
 });

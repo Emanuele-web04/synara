@@ -2,7 +2,7 @@ import type { OrchestrationProject, PullRequestDetail } from "@synara/contracts"
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { Effect } from "effect";
 
-import type { GitHubCliShape } from "../git/Services/GitHubCli";
+import type { GitHostCliRouterShape } from "../git/Services/GitHostCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
 import { isPullRequestMergeMethodAllowed } from "../pullRequests.logic";
 import type { PullRequestServiceShape } from "./Services/PullRequestService";
@@ -13,7 +13,7 @@ type PullRequestOperations = Pick<
 >;
 
 export function makePullRequestOperations(dependencies: {
-  github: GitHubCliShape;
+  gitHost: GitHostCliRouterShape;
   pins: ProjectPullRequestPinsShape;
   findProject: (
     projectId: Parameters<PullRequestServiceShape["detail"]>[0]["projectId"],
@@ -27,7 +27,7 @@ export function makePullRequestOperations(dependencies: {
     cwd: string,
     repository: string,
   ) => Effect.Effect<PullRequestDetail["mergeCapabilities"], unknown>;
-  withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  withHostRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   finalizeMutationCaches: (
     repository: string,
     number: number,
@@ -37,11 +37,11 @@ export function makePullRequestOperations(dependencies: {
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
-      const [owner = "", repo = ""] = repository.split("/");
+      const { cli, kind } = yield* dependencies.gitHost.forRepository(repository);
       const [detail, mergeCapabilities, reviewCommentsResult, stackResult] = yield* Effect.all(
         [
-          dependencies.withGitHubRead(
-            dependencies.github.getPullRequestDetail({
+          dependencies.withHostRead(
+            cli.getPullRequestDetail({
               cwd: project.workspaceRoot,
               repository,
               number,
@@ -49,12 +49,10 @@ export function makePullRequestOperations(dependencies: {
           ),
           dependencies.loadMergeCapabilities(project.workspaceRoot, repository),
           dependencies
-            .withGitHubRead(
-              dependencies.github.getPullRequestReviewComments({
+            .withHostRead(
+              cli.getPullRequestReviewComments({
                 cwd: project.workspaceRoot,
-                host: "github.com",
-                owner,
-                repo,
+                repository,
                 number,
               }),
             )
@@ -65,8 +63,8 @@ export function makePullRequestOperations(dependencies: {
               ),
             ),
           dependencies
-            .withGitHubRead(
-              dependencies.github.getPullRequestStack({
+            .withHostRead(
+              cli.getPullRequestStack({
                 cwd: project.workspaceRoot,
                 repository,
                 number,
@@ -88,7 +86,9 @@ export function makePullRequestOperations(dependencies: {
             ? {
                 login: comment.author,
                 name: null,
-                avatarUrl: githubAvatarUrlForLogin(comment.author),
+                // GitHub serves a stable avatar URL per login; GitLab has no equivalent, and its
+                // GraphQL avatars already ride the detail payload's own comments.
+                avatarUrl: kind === "github" ? githubAvatarUrlForLogin(comment.author) : null,
                 url: null,
               }
             : null,
@@ -124,8 +124,9 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
-      return yield* dependencies.withGitHubRead(
-        dependencies.github.getPullRequestDiff({
+      const { cli } = yield* dependencies.gitHost.forRepository(repository);
+      return yield* dependencies.withHostRead(
+        cli.getPullRequestDiff({
           cwd: project.workspaceRoot,
           repository,
           number: input.number,
@@ -137,6 +138,7 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const { cli } = yield* dependencies.gitHost.forRepository(repository);
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
         const capabilities = yield* dependencies.loadMergeCapabilities(
@@ -148,15 +150,15 @@ export function makePullRequestOperations(dependencies: {
             new Error(`The repository does not allow the ${mergeMethod} merge method.`),
           );
         }
-        yield* dependencies.withGitHubRead(
-          dependencies.github.getPullRequestStack({
+        yield* dependencies.withHostRead(
+          cli.getPullRequestStack({
             cwd: project.workspaceRoot,
             repository,
             number: input.number,
           }),
         );
       }
-      const result = yield* dependencies.github
+      const result = yield* cli
         .runPullRequestAction({
           cwd: project.workspaceRoot,
           repository,
@@ -184,7 +186,8 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
-      yield* dependencies.github
+      const { cli } = yield* dependencies.gitHost.forRepository(repository);
+      yield* cli
         .commentOnPullRequest({
           cwd: project.workspaceRoot,
           repository,

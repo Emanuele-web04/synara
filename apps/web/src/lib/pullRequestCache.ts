@@ -13,7 +13,7 @@ import {
   pullRequestListProjectPin,
   pullRequestListRepositoryIdentity,
   updatePullRequestListEntryProjectPin,
-} from "@synara/shared/githubRepository";
+} from "@synara/shared/pullRequestList";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { PULL_REQUEST_STATES } from "./pullRequestQueryOptions";

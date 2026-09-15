@@ -123,7 +123,7 @@ function section(
         activeThreadId={threadId}
         // Link-only tests omit a project; status tests exercise the real mutation.
         projectId={options.projectId ?? null}
-        configuredRepositories={[{ nameWithOwner: "example/synara" }]}
+        configuredRepositories={[{ reference: "example/synara" }]}
         onOpenUrl={vi.fn()}
         onClose={onClose}
       />

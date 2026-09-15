@@ -19,7 +19,7 @@ import {
   PullRequestsUnavailableError,
   type DeviceEvent,
   type GitActionProgressEvent,
-  type GitHubProjectProvisionProgressEvent,
+  type ProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -67,9 +67,9 @@ import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
 import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
-import { GitHubCli } from "./git/Services/GitHubCli";
+import { GitHostCli } from "./git/Services/GitHostCli";
 import { GitManager } from "./git/Services/GitManager";
-import { GitHubCliError } from "./git/Errors";
+import { GitHostCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
 import {
@@ -100,7 +100,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
-import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
+import { recoverUnregisteredCheckout } from "./project/projectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
@@ -158,11 +158,8 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
-import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
-import {
-  GitHubProjectProvisioningError,
-  makeGitHubProjectProvisioner,
-} from "./project/githubProjectProvisioning";
+import { resolveRepository, type RepositoryLink } from "./git/repositoryResolution";
+import { ProjectProvisioningError, makeProjectProvisioner } from "./project/projectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -177,6 +174,17 @@ const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 // that truly does not exist still fails, just this much later.
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
+
+// The wire link carries `host` so the client can pick the right icon and copy without
+// re-parsing the reference.
+function toGitRepositoryLink(link: RepositoryLink) {
+  return {
+    host: link.kind,
+    reference: link.reference,
+    nameWithOwner: link.nameWithOwner,
+    url: link.url,
+  };
+}
 
 class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
   "synara/WsRequestAdmissionMiddleware",
@@ -348,7 +356,7 @@ const makeWsRpcHandlersLayer = () =>
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
-      const github = yield* GitHubCli;
+      const gitHost = yield* GitHostCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -377,12 +385,12 @@ const makeWsRpcHandlersLayer = () =>
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
-      const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
+      const projectProvisioner = yield* makeProjectProvisioner({
         homeDir: config.homeDir,
         fileSystem,
         path,
         git,
-        github,
+        gitHost,
       });
       const streamAdmission = yield* makeWsStreamAdmission({
         recordRejection: (incident) =>
@@ -493,16 +501,20 @@ const makeWsRpcHandlersLayer = () =>
           }
         });
 
-      const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
-        error instanceof GitHubCliError &&
-        (error.reason === "not-installed" || error.reason === "not-authenticated");
+      // Only "the CLI is missing/unauthenticated" is a whole-surface failure; every other host
+      // error stays a per-repository error so one broken remote cannot blank the PR view.
+      const unavailableReason = (error: unknown) => {
+        if (!(error instanceof GitHostCliError)) return null;
+        const cli = error.host === "github" ? "gh" : "glab";
+        if (error.reason === "not-installed") return `${cli}-not-installed` as const;
+        if (error.reason === "not-authenticated") return `${cli}-not-authenticated` as const;
+        return null;
+      };
 
       const toPullRequestsRpcError = (cause: unknown, fallbackMessage: string) => {
-        if (isGlobalGitHubCliError(cause)) {
-          return new PullRequestsUnavailableError({
-            reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
-            message: cause.detail,
-          });
+        const reason = unavailableReason(cause);
+        if (reason && cause instanceof GitHostCliError) {
+          return new PullRequestsUnavailableError({ reason, message: cause.detail });
         }
         return toWsRpcError(cause, fallbackMessage);
       };
@@ -832,13 +844,13 @@ const makeWsRpcHandlersLayer = () =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
       const toProjectProvisionRpcError = (cause: unknown) =>
-        cause instanceof GitHubProjectProvisioningError
+        cause instanceof ProjectProvisioningError
           ? new WsRpcError({
               message: cause.message,
               code: cause.code,
               retryable: cause.retryable,
             })
-          : toWsRpcError(cause, "Failed to clone and add the GitHub project");
+          : toWsRpcError(cause, "Failed to clone and add the project");
 
       const findRegisteredProjectId = (workspaceRoot: string) =>
         orchestrationEngine
@@ -1261,11 +1273,11 @@ const makeWsRpcHandlersLayer = () =>
               }),
             ),
           ),
-        [WS_METHODS.projectsProvisionFromGitHub]: (input) =>
+        [WS_METHODS.projectsProvisionFromRepository]: (input) =>
           bufferLiveUiStream(
-            Stream.callback<GitHubProjectProvisionProgressEvent, WsRpcError>((queue) =>
+            Stream.callback<ProjectProvisionProgressEvent, WsRpcError>((queue) =>
               Effect.gen(function* () {
-                const checkout = yield* githubProjectProvisioner.provisionCheckout(input, {
+                const checkout = yield* projectProvisioner.provisionCheckout(input, {
                   publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                 });
                 let registrationCommitted = false;
@@ -1334,7 +1346,7 @@ const makeWsRpcHandlersLayer = () =>
                   } as const;
                 }).pipe(
                   Effect.onError(() =>
-                    recoverUnregisteredGitHubCheckout({
+                    recoverUnregisteredCheckout({
                       checkout,
                       registrationCommitted,
                       moveWorkspaceRoot: (workspaceRoot, recoveryPath) =>
@@ -1415,8 +1427,20 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.shellOpenInEditor]: (input) =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
-        [WS_METHODS.gitGithubRepository]: (input) =>
-          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
+        [WS_METHODS.gitRepository]: (input) =>
+          rpcEffect(
+            gitHost.knownGitLabHosts.pipe(
+              Effect.flatMap((gitlabHosts) =>
+                resolveRepository(git, input.cwd, { gitlabHosts }).pipe(
+                  Effect.map(({ repository, repositories }) => ({
+                    repository: repository ? toGitRepositoryLink(repository) : null,
+                    repositories: repositories.map(toGitRepositoryLink),
+                  })),
+                ),
+              ),
+            ),
+            "Failed to resolve repository",
+          ),
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>

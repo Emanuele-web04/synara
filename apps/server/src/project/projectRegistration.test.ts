@@ -1,10 +1,10 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import type { GitHubProjectCheckoutResult } from "./githubProjectProvisioning";
-import { recoverUnregisteredGitHubCheckout } from "./githubProjectRegistration";
+import type { ProjectCheckoutResult } from "./projectProvisioning";
+import { recoverUnregisteredCheckout } from "./projectRegistration";
 
-function checkout(kind: "created" | "reused"): GitHubProjectCheckoutResult {
+function checkout(kind: "created" | "reused"): ProjectCheckoutResult {
   return {
     operationId: "operation-1",
     repository: "openai/codex",
@@ -14,12 +14,12 @@ function checkout(kind: "created" | "reused"): GitHubProjectCheckoutResult {
   };
 }
 
-describe("recoverUnregisteredGitHubCheckout", () => {
+describe("recoverUnregisteredCheckout", () => {
   it("moves a newly created checkout to recovery storage when registration did not commit", async () => {
     const moves: Array<[string, string]> = [];
 
     await Effect.runPromise(
-      recoverUnregisteredGitHubCheckout({
+      recoverUnregisteredCheckout({
         checkout: checkout("created"),
         registrationCommitted: false,
         moveWorkspaceRoot: (workspaceRoot, recoveryPath) =>
@@ -37,7 +37,7 @@ describe("recoverUnregisteredGitHubCheckout", () => {
     let moved = false;
 
     await Effect.runPromise(
-      recoverUnregisteredGitHubCheckout({
+      recoverUnregisteredCheckout({
         checkout: provisionedCheckout,
         registrationCommitted,
         moveWorkspaceRoot: () => Effect.sync(() => (moved = true)),
