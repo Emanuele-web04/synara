@@ -536,9 +536,10 @@ export interface WorkspaceFilePreviewProps {
    */
   filePath: string | null;
   /**
-   * Initial markdown render mode per file: the dock opens markdown already
-   * parsed, the editor surface stays source-first. The header toggle still
-   * lets the user flip either way.
+   * Initial markdown render mode per file. Editor and dock file panes default
+   * to rendered Preview; omit (or pass false) for source-first surfaces such
+   * as the Explorer pane. The header toggle still lets the user flip either
+   * way, and a per-file session override wins over this default.
    */
   markdownPreviewDefault?: boolean;
   /** Enables guarded editing for complete, supported files inside the workspace. */
