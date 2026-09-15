@@ -118,7 +118,6 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
           conflict={session.state.conflict}
           onReload={session.requestReload}
           onOverwrite={session.overwrite}
-          onDismiss={session.dismissConflict}
         />
       ) : originalTruncated ? (
         <div className="shrink-0 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5 text-[11px] text-muted-foreground">

@@ -109,7 +109,9 @@ Pi sessions can expose:
 - Native steering of a running turn
 - Synara’s terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
 
-Native steering lets Synara queue a follow-up for a supported active Pi session without cancelling the turn first. The runtime still decides when it can incorporate the message.
+A normal message sent during an active Pi turn is queued as a follow-up instead of failing with a streaming error. Explicit steering remains a separate request to incorporate a correction into the active turn; the runtime decides when it can act on it.
+
+Pi automatic retries appear as inline warnings while the task remains active. **End task** also stops retry backoff and queued continuation. Extension status messages stay separate from tool activity.
 
 Pi extensions and packages execute with the permissions of your user account. Review third-party code before enabling it in a repository Synara will operate.
 

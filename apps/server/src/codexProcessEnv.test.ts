@@ -11,6 +11,7 @@ import {
   prioritizeCodexOverlayEntries,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
+import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", async () => {
@@ -91,6 +92,50 @@ describe("disableCodexConfigSections", () => {
 });
 
 describe("buildCodexProcessEnv", () => {
+  it("repairs mixed transports in the saved gateway config during an auth probe", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-source-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-runtime-"));
+    const sourceConfig = [
+      "[mcp_servers.synara]",
+      'command = "external-bridge"',
+      "args = []",
+      "[mcp_servers.user-tool]",
+      'command = "user-tool"',
+      "",
+    ].join("\n");
+    const sourceConfigPath = path.join(sourceHome, "config.toml");
+    writeFileSync(sourceConfigPath, sourceConfig);
+    const input = { env: { SYNARA_HOME: runtimeHome }, homePath: sourceHome };
+    const managedConfig = buildCodexMcpConfigToml("http://127.0.0.1:3773/mcp");
+
+    try {
+      const env = await buildCodexProcessEnv({ ...input, appendConfigToml: managedConfig });
+      const overlayConfigPath = path.join(env.CODEX_HOME!, "config.toml");
+      const cleanConfig = readFileSync(overlayConfigPath, "utf8");
+      // An external MCP registration can leave stdio fields in the saved HTTP block.
+      writeFileSync(
+        overlayConfigPath,
+        cleanConfig
+          .replace(
+            "[mcp_servers.synara]",
+            '[mcp_servers.synara]\ncommand = "external-bridge"\nargs = [\n  "serve",\n]\ncwd = "/tmp"',
+          )
+          .replace(
+            "[shell_environment_policy]",
+            '[mcp_servers.synara.env]\nSTDIO_ONLY = "value"\n\n[shell_environment_policy]',
+          ),
+      );
+
+      await buildCodexProcessEnv(input);
+
+      expect(readFileSync(overlayConfigPath, "utf8")).toBe(cleanConfig);
+      expect(readFileSync(sourceConfigPath, "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("registers the active custom provider env key for diagnostic redaction", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-provider-key-"));
     writeFileSync(

@@ -205,6 +205,43 @@ describe("localImageEffectRouteLayer", () => {
     });
   });
 
+  it("previews and downloads a simulator PNG outside the allowed roots only with its own grant", async () => {
+    // Keep this outside os.tmpdir(): temporary images are already allowlisted.
+    const externalRoot = mkdtempSync(path.join(process.cwd(), ".simulator-preview-"));
+    tempDirs.push(externalRoot);
+    const desktop = path.join(externalRoot, "Desktop");
+    mkdirSync(desktop);
+    const imagePath = path.join(desktop, "simulator-iPhone.png");
+    const otherPath = path.join(desktop, "unrelated.png");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    writeFileSync(imagePath, bytes);
+    writeFileSync(otherPath, bytes);
+    const config = makeServerConfig();
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: imagePath, cwd: config.cwd });
+      expect((await fetch(`${origin}/api/local-image?${params}`)).status).toBe(404);
+      params.set("download", "1");
+      expect((await fetch(`${origin}/api/local-image?${params}`)).status).toBe(404);
+
+      const grant = await createLocalPreviewGrant({ requestedPath: imagePath });
+      params.set("grant", grant.grant);
+      for (const download of [false, true]) {
+        if (download) params.set("download", "1");
+        else params.delete("download");
+        const response = await fetch(`${origin}/api/local-image?${params}`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("image/png");
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+        if (download)
+          expect(response.headers.get("content-disposition")).toContain("simulator-iPhone.png");
+      }
+
+      params.set("path", otherPath);
+      expect((await fetch(`${origin}/api/local-image?${params}`)).status).toBe(404);
+    });
+  });
+
   it("serves an allowlisted workspace PDF and only allows the desktop app origin to read it", async () => {
     const workspace = makeTempDir("synara-effect-pdf-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

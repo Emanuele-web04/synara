@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
@@ -233,7 +234,7 @@ describe("threadHandoff", () => {
       }),
     ).toEqual({
       provider: "codex",
-      model: "gpt-5.5",
+      model: DEFAULT_MODEL_BY_PROVIDER.codex,
     });
   });
 });
