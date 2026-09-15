@@ -13,6 +13,8 @@ import {
   type ClaudeModelSelection,
   type CodexModelOptions,
   type CodexModelSelection,
+  type CopilotModelOptions,
+  type CopilotModelSelection,
   type CursorModelOptions,
   type CursorModelSelection,
   type DroidModelOptions,
@@ -430,6 +432,11 @@ export function buildModelSelection(
   options?: DevinModelOptions | null | undefined,
 ): DevinModelSelection;
 export function buildModelSelection(
+  provider: "copilot",
+  model: string,
+  options?: CopilotModelOptions | null | undefined,
+): CopilotModelSelection;
+export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -511,6 +518,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "copilot":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as CopilotModelOptions,
           }
         : { provider, model };
   }

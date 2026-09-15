@@ -332,6 +332,7 @@ describe("wsNativeApi", () => {
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
+          copilot: { enabled: true, binaryPath: "copilot", customModels: [] },
         },
         skills: { disabled: [] },
       },

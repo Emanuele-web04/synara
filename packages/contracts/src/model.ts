@@ -147,6 +147,11 @@ export const DroidModelOptions = Schema.Struct({
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
+export const CopilotModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type CopilotModelOptions = typeof CopilotModelOptions.Type;
+
 export const DevinModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
@@ -169,6 +174,7 @@ export const ProviderModelOptions = Schema.Struct({
   droid: Schema.optional(DroidModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
+  copilot: Schema.optional(CopilotModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -897,6 +903,20 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
+  // Copilot discovery owns the account-specific live ACP catalog.
+  copilot: [
+    {
+      slug: "default",
+      name: "Copilot default",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   cursor: [
     {
       // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
@@ -1144,6 +1164,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
   opencode: "openai/gpt-5",
+  copilot: "default",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1305,6 +1326,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  copilot: {},
   devin: {
     adaptive: "adaptive",
     auto: "adaptive",
@@ -1361,4 +1383,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
+  copilot: "GitHub Copilot",
 };

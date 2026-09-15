@@ -50,6 +50,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "",
         },
+        copilot: {
+          ...DEFAULT_SERVER_SETTINGS.providers.copilot,
+          binaryPath: "",
+        },
       },
     };
 
@@ -72,6 +76,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
+    expect(providerOptions.copilot).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -94,6 +99,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "/custom/bin/devin",
         },
+        copilot: {
+          ...DEFAULT_SERVER_SETTINGS.providers.copilot,
+          binaryPath: "/custom/bin/copilot",
+        },
       },
     };
 
@@ -109,5 +118,6 @@ describe("providerStartOptionsFromServerSettings", () => {
       experimentalWebSockets: true,
     });
     expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
+    expect(providerOptions.copilot).toEqual({ binaryPath: "/custom/bin/copilot" });
   });
 });
