@@ -2921,6 +2921,44 @@ diffs-container {
   color: inherit;
 }
 
+/* Provider names stay compact; model labels need room for long catalog names.
+   Honor the positioner's available height so search stays reachable near an edge. */
+.provider-picker-menu,
+.provider-model-menu {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 1.75rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.1875rem;
+  min-width: 0;
+  max-width: calc(100vw - 1rem);
+}
+
+.provider-picker-menu {
+  width: 12.5rem;
+}
+
+.provider-model-menu {
+  width: 16rem;
+}
+
+.provider-model-menu > [data-slot="menu-popup-body"] {
+  display: flex;
+  flex-direction: column;
+  max-height: min(20rem, var(--available-height));
+  overflow: hidden;
+}
+
+.provider-model-menu [data-slot="input"]::placeholder {
+  color: var(--muted-foreground);
+}
+
+@media (pointer: coarse) {
+  .provider-picker-menu,
+  .provider-model-menu {
+    --picker-option-min-h: 2.75rem;
+  }
+}
+
 /* Thin scrollbar for long model-provider lists inside picker submenus. */
 .composer-picker-scroll {
   scrollbar-width: thin;
