@@ -23,12 +23,27 @@ const modelOption: Acp.SessionConfigOption = {
     { value: "upstream/Model-B", name: "Model B" },
   ],
 };
+const providerOption: Acp.SessionConfigOption = {
+  id: "provider",
+  category: "model",
+  name: "Provider",
+  type: "select",
+  currentValue: "cline",
+  options: [
+    { value: "cline", name: "Cline Usage-Billing" },
+    { value: "cline-pass", name: "ClinePass" },
+    { value: "openai-codex", name: "OpenAI ChatGPT Subscription" },
+  ],
+};
 const startResult: AcpSessionRuntimeStartResult = {
   sessionId: "cline-session",
   initializeResult: { protocolVersion: 1 },
   modelConfigId: "model",
   sessionSetupMethod: "new",
-  sessionSetupResult: { sessionId: "cline-session", configOptions: [modelOption] },
+  sessionSetupResult: {
+    sessionId: "cline-session",
+    configOptions: [providerOption, modelOption],
+  },
 };
 
 afterEach(() => vi.unstubAllEnvs());
@@ -97,7 +112,7 @@ describe("Cline ACP integration contract", () => {
         awaitLoadReplayReady: Effect.sync(() => {
           calls.push("replay-ready");
         }),
-        getConfigOptions: Effect.succeed([modelOption]),
+        getConfigOptions: Effect.succeed([providerOption, modelOption]),
         setConfigOption: (id: string, value: string | boolean) =>
           Effect.sync(() => {
             calls.push([id, value]);
@@ -137,7 +152,7 @@ describe("Cline ACP integration contract", () => {
         configureClineSession({
           runtime: {
             awaitLoadReplayReady: Effect.void,
-            getConfigOptions: Effect.succeed([modelOption]),
+            getConfigOptions: Effect.succeed([providerOption, modelOption]),
             setConfigOption: setConfig,
             setMode: mode,
           },
