@@ -1,0 +1,68 @@
+name: Lossless production PNG optimization
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-lossless-assets.yml]
+permissions:
+  contents: read
+jobs:
+  optimize:
+    if: github.repository == 'Emanuele-web04/synara' && github.ref == 'refs/heads/perf/production-bundle-size-audit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/production-bundle-size-audit
+      - name: Recompress IDAT only; retain pixels and every metadata chunk
+        run: |
+          python -I - <<'PY'
+          import glob, hashlib, json, pathlib, struct, zlib
+          paths = sorted(set(p for pattern in ['assets/prod/*.png', 'apps/desktop/resources/*.png', 'apps/web/public/app-icons/*.png', 'apps/web/public/synara.png'] for p in glob.glob(pattern)))
+          reports = []
+          for name in paths:
+              path = pathlib.Path(name)
+              original = path.read_bytes()
+              assert original[:8] == b'\x89PNG\r\n\x1a\n', name
+              chunks = []
+              offset = 8
+              while offset < len(original):
+                  length, = struct.unpack('>I', original[offset:offset + 4])
+                  kind = original[offset + 4:offset + 8]
+                  payload = original[offset + 8:offset + 8 + length]
+                  chunk = original[offset:offset + length + 12]
+                  assert len(chunk) == length + 12, name
+                  assert zlib.crc32(kind + payload) == struct.unpack('>I', chunk[-4:])[0], name
+                  chunks.append((kind, payload, chunk))
+                  offset += length + 12
+              indices = [i for i, (kind, _, _) in enumerate(chunks) if kind == b'IDAT']
+              assert indices and indices == list(range(indices[0], indices[-1] + 1)), name
+              old_stream = b''.join(payload for kind, payload, _ in chunks if kind == b'IDAT')
+              pixels = zlib.decompress(old_stream)
+              compressed = zlib.compress(pixels, 9)
+              assert zlib.decompress(compressed) == pixels, name
+              idat = struct.pack('>I', len(compressed)) + b'IDAT' + compressed + struct.pack('>I', zlib.crc32(b'IDAT' + compressed))
+              result = original[:8] + b''.join(idat if i == indices[0] else chunk if kind != b'IDAT' else b'' for i, (kind, _, chunk) in enumerate(chunks))
+              if len(result) + 128 >= len(original):
+                  continue
+              path.write_bytes(result)
+              reports.append({'path': name, 'before': len(original), 'after': len(result), 'saved': len(original) - len(result), 'inflated_pixel_stream_sha256': hashlib.sha256(pixels).hexdigest(), 'metadata_preserved': True})
+          pathlib.Path('/tmp/png-optimization.json').write_text(json.dumps(reports, indent=2) + '\n')
+          print(json.dumps(reports, indent=2))
+          PY
+      - name: Commit only optimized PNG assets to the audit branch
+        run: |
+          git add -- 'assets/prod/*.png' 'apps/desktop/resources/*.png' 'apps/web/public/app-icons/*.png' 'apps/web/public/synara.png'
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: losslessly recompress production PNG assets without changing pixels'
+          git push origin HEAD:refs/heads/perf/production-bundle-size-audit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: png-optimization-proof
+          path: /tmp/png-optimization.json
+          retention-days: 14
