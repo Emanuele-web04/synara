@@ -50,6 +50,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "",
         },
+        acp: {
+          ...DEFAULT_SERVER_SETTINGS.providers.acp,
+          binaryPath: "",
+          args: [],
+        },
       },
     };
 
@@ -72,6 +77,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
+    expect(providerOptions.acp).toEqual({ args: [] });
   });
 
   it("preserves configured launch settings", () => {
@@ -94,6 +100,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "/custom/bin/devin",
         },
+        acp: {
+          ...DEFAULT_SERVER_SETTINGS.providers.acp,
+          binaryPath: "/custom/bin/acp-agent",
+          args: ["--stdio", "--profile", "synara"],
+        },
       },
     };
 
@@ -109,5 +120,9 @@ describe("providerStartOptionsFromServerSettings", () => {
       experimentalWebSockets: true,
     });
     expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
+    expect(providerOptions.acp).toEqual({
+      binaryPath: "/custom/bin/acp-agent",
+      args: ["--stdio", "--profile", "synara"],
+    });
   });
 });

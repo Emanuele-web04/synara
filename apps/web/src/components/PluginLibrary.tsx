@@ -395,6 +395,7 @@ export function PluginLibrary() {
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
+  const acpCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("acp"));
 
   const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
     codex: {
@@ -412,6 +413,10 @@ export function PluginLibrary() {
     devin: {
       plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(devinCapabilitiesQuery.data),
+    },
+    acp: {
+      plugins: supportsPluginDiscovery(acpCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(acpCapabilitiesQuery.data),
     },
     antigravity: {
       plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),

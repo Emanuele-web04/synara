@@ -5,6 +5,7 @@ import { assertFailure } from "@effect/vitest/utils";
 
 import { Effect, Layer, Stream } from "effect";
 
+import { AcpAdapter, AcpAdapterShape } from "../Services/AcpAdapter.ts";
 import { AntigravityAdapter, AntigravityAdapterShape } from "../Services/AntigravityAdapter.ts";
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -18,6 +19,23 @@ import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts"
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
+const fakeAcpAdapter: AcpAdapterShape = {
+  provider: "acp",
+  capabilities: { sessionModelSwitch: "in-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
 
 const fakeCodexAdapter: CodexAdapterShape = {
   provider: "codex",
@@ -190,6 +208,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
+        Layer.succeed(AcpAdapter, fakeAcpAdapter),
       ),
     ),
     NodeServices.layer,
@@ -210,6 +229,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const droid = yield* registry.getByProvider("droid");
       const opencode = yield* registry.getByProvider("opencode");
       const pi = yield* registry.getByProvider("pi");
+      const acp = yield* registry.getByProvider("acp");
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
@@ -219,6 +239,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(droid, fakeDroidAdapter);
       assert.equal(opencode, fakeOpenCodeAdapter);
       assert.equal(pi, fakePiAdapter);
+      assert.equal(acp, fakeAcpAdapter);
 
       const providers = yield* registry.listProviders();
       assert.deepEqual(providers, [
@@ -231,6 +252,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "droid",
         "opencode",
         "pi",
+        "acp",
       ]);
     }),
   );

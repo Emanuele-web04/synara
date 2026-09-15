@@ -162,6 +162,7 @@ const allProvidersDisabledSettings = {
     droid: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
+    acp: { enabled: false },
   },
 } as const;
 
@@ -177,6 +178,7 @@ const allProvidersDisabledServerSettings = {
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
+    acp: { ...DEFAULT_SERVER_SETTINGS.providers.acp, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 
@@ -502,7 +504,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 9);
+      assert.strictEqual(statuses.length, 10);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });

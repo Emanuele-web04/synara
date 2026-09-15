@@ -64,6 +64,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "Anthropic",
     },
   ],
+  acp: [],
   antigravity: [
     {
       slug: "Gemini 3.5 Flash",

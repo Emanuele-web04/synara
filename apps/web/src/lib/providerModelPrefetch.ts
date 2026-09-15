@@ -9,7 +9,7 @@
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { AppSettings } from "../appSettings";
+import { parseAcpArgs, type AppSettings } from "../appSettings";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
 import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
@@ -35,7 +35,8 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
->;
+> &
+  Partial<Pick<AppSettings, "acpBinaryPath" | "acpArgs">>;
 
 /**
  * Providers whose model catalogs are runtime-discovered (not static) and thus
@@ -177,6 +178,14 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "pi",
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
+        cwd,
+        priority,
+      });
+    case "acp":
+      return providerModelsQueryOptions({
+        provider: "acp",
+        binaryPath: settings.acpBinaryPath || null,
+        ...(settings.acpArgs !== undefined ? { args: parseAcpArgs(settings.acpArgs) } : {}),
         cwd,
         priority,
       });

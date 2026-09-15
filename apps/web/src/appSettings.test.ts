@@ -438,6 +438,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "galapagos-alpha",
       ),
@@ -458,6 +459,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "",
       ),
@@ -478,6 +480,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "GPT-5.3 Codex",
       ),
@@ -498,6 +501,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "sonnet",
       ),
@@ -518,6 +522,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          acp: [],
         },
         "custom/selected-model",
       ),
@@ -676,6 +681,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        acpBinaryPath: "",
+        acpArgs: "--acp",
         devinBinaryPath: "/usr/local/bin/devin",
       }),
     ).toEqual({
@@ -717,6 +724,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        acpBinaryPath: "",
+        acpArgs: "--acp",
         devinBinaryPath: "",
       }),
     ).toBeUndefined();
@@ -739,6 +748,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        acpBinaryPath: "cline",
+        acpArgs: "--acp",
       }),
     ).toBeUndefined();
   });
@@ -755,6 +766,7 @@ describe("provider-indexed custom model settings", () => {
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customAcpModels: ["cline/custom-agent"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -768,6 +780,7 @@ describe("provider-indexed custom model settings", () => {
       "droid",
       "opencode",
       "pi",
+      "acp",
     ]);
   });
 
@@ -786,6 +799,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+    expect(getCustomModelsForProvider(settings, "acp")).toEqual(["cline/custom-agent"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -799,6 +813,7 @@ describe("provider-indexed custom model settings", () => {
       customDevinModels: ["adaptive"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
+      customAcpModels: ["default/acp-agent"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -814,6 +829,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "acp")).toEqual(["default/acp-agent"]);
   });
 
   it("patches custom models for codex", () => {
@@ -870,6 +886,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for ACP", () => {
+    expect(patchCustomModels("acp", ["cline/custom-agent"])).toEqual({
+      customAcpModels: ["cline/custom-agent"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -881,6 +903,7 @@ describe("provider-indexed custom model settings", () => {
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      acp: ["cline/custom-agent"],
     });
   });
 
@@ -913,6 +936,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
       true,
     );
+    expect(modelOptionsByProvider.acp.some((option) => option.slug === "cline/custom-agent")).toBe(
+      true,
+    );
   });
 
   it("normalizes and deduplicates custom model options per provider", () => {
@@ -938,6 +964,7 @@ describe("provider-indexed custom model settings", () => {
         "anthropic/custom-pi",
         "anthropic/custom-pi",
       ],
+      customAcpModels: [" cline/custom-agent ", "cline/custom-agent"],
     });
 
     expect(

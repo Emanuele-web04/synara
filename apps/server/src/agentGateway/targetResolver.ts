@@ -227,6 +227,12 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // Generic ACP model ids and config options are runtime-negotiated.
+  // `model` is the primary target field, not a provider option key.
+  acp: {
+    primaryOptionKey: "model",
+    options: {},
+  },
   devin: defineProviderOptionConfig<"devin">({
     primaryOptionKey: "modelVariant",
     options: {
