@@ -1,0 +1,56 @@
+name: Size audit formatting tools
+on:
+  push:
+    branches: [perf/shipped-app-size-20260916]
+    paths: [.github/workflows/shipped-bundle-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Archive only pinned public formatting dependencies
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {createRequire} from 'node:module';
+          import {cpSync,existsSync,mkdirSync,readFileSync,realpathSync} from 'node:fs';
+          import {join,dirname,basename} from 'node:path';
+          const out=join(process.env.RUNNER_TEMP,'audit-tools','node_modules');
+          mkdirSync(out,{recursive:true});
+          const root=createRequire(join(process.cwd(),'package.json'));
+          const resolvers=[root,createRequire(root.resolve('oxfmt')),createRequire(root.resolve('oxlint'))];
+          for(const name of ['oxfmt','tinypool','@oxfmt/binding-linux-x64-gnu','oxlint','@oxlint/binding-linux-x64-gnu']) {
+            let found;
+            for(const req of resolvers) {
+              try {
+                let dir=dirname(realpathSync(req.resolve(name)));
+                while(dir!==dirname(dir)) {
+                  const manifest=join(dir,'package.json');
+                  if(existsSync(manifest)&&JSON.parse(readFileSync(manifest,'utf8')).name===name){found=dir;break;}
+                  dir=dirname(dir);
+                }
+              }catch{}
+              if(found)break;
+            }
+            if(!found)throw new Error(`Cannot resolve ${name}`);
+            cpSync(found,join(out,name),{recursive:true,dereference:true,filter:p=>basename(p)!=='node_modules'});
+          }
+          NODE
+          tar -czf "$RUNNER_TEMP/audit-tools.tar.gz" -C "$RUNNER_TEMP/audit-tools" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-audit-formatting-tools
+          path: ${{ runner.temp }}/audit-tools.tar.gz
+          retention-days: 7
