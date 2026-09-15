@@ -18,6 +18,11 @@ import { useEffect, useRef, useState } from "react";
  */
 export const COMPUTER_PREVIEW_TAP_QUIET_MS = 1_000;
 
+export interface ComputerPreviewTapFrameSize {
+  readonly width: number;
+  readonly height: number;
+}
+
 function isImageBitmapAvailable(): boolean {
   return typeof Blob === "function" && typeof globalThis.createImageBitmap === "function";
 }
@@ -26,9 +31,10 @@ export function useComputerPreviewTap(input: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
   readonly threadId?: ThreadId | undefined;
   readonly enabled: boolean;
-}): { readonly active: boolean } {
+}): { readonly active: boolean; readonly frameSize: ComputerPreviewTapFrameSize | null } {
   const { canvasRef, enabled, threadId } = input;
   const [active, setActive] = useState(false);
+  const [frameSize, setFrameSize] = useState<ComputerPreviewTapFrameSize | null>(null);
   const generationRef = useRef(0);
   const [pageVisible, setPageVisible] = useState(
     () => typeof document !== "undefined" && document.visibilityState !== "hidden",
@@ -42,7 +48,12 @@ export function useComputerPreviewTap(input: {
 
   useEffect(() => {
     const onFrame = window.desktopBridge?.computerPreview?.onFrame;
-    if (!enabled || !pageVisible || typeof onFrame !== "function" || !isImageBitmapAvailable()) {
+    if (
+      !enabled ||
+      !pageVisible ||
+      typeof onFrame !== "function" ||
+      !isImageBitmapAvailable()
+    ) {
       setActive(false);
       return;
     }
@@ -91,6 +102,14 @@ export function useComputerPreviewTap(input: {
         // The canvas element carries object-contain, so drawing at native size
         // leaves letterboxing to CSS exactly like the stills stream.
         context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height);
+        // Live dimensions for the card's aspect: kept through the quiet window
+        // below, since the canvas keeps showing the stale frame by design.
+        // Identity is preserved when nothing changed so a frame does not
+        // re-render the card for no visible difference.
+        const { width, height } = bitmap;
+        setFrameSize((previous) =>
+          previous?.width === width && previous.height === height ? previous : { width, height },
+        );
         noteDecoded();
       } catch {
         // A corrupt JPEG drops like a stale frame; the next seq still draws.
@@ -121,6 +140,7 @@ export function useComputerPreviewTap(input: {
         subscribedCanvas
           ?.getContext("2d")
           ?.clearRect(0, 0, subscribedCanvas.width, subscribedCanvas.height);
+        setFrameSize(null);
       }
     };
     // The tap stream is host-wide rather than per thread; threadId keys the
@@ -128,5 +148,5 @@ export function useComputerPreviewTap(input: {
     // tracking instead of inheriting stale seq state.
   }, [canvasRef, enabled, pageVisible, threadId]);
 
-  return { active };
+  return { active, frameSize };
 }

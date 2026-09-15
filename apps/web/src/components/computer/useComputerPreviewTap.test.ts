@@ -323,4 +323,79 @@ describe("useComputerPreviewTap", () => {
     await flushDecode();
     expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
   });
+
+  it("reports the decoded frame size and tracks size changes", async () => {
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { canvasRef } = createCanvas();
+
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toBeNull();
+    feed(bridge, 1);
+    await flushDecode();
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+      width: 320,
+      height: 200,
+    });
+
+    createImageBitmapMock.mockImplementationOnce(async () => ({
+      width: 640,
+      height: 400,
+      close: vi.fn(),
+    }));
+    feed(bridge, 2);
+    await flushDecode();
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+      width: 640,
+      height: 400,
+    });
+  });
+
+  it("retains the frame size through the quiet window while the stale frame shows", async () => {
+    vi.useFakeTimers();
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+
+    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    feed(bridge, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await flushDecode();
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+      width: 320,
+      height: 200,
+    });
+
+    // Quiet only ends tap activity: the canvas still shows the stale frame,
+    // so its dimensions must stay put instead of snapping the aspect.
+    vi.advanceTimersByTime(COMPUTER_PREVIEW_TAP_QUIET_MS + 1);
+    const quiet = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    expect(quiet.active).toBe(false);
+    expect(quiet.frameSize).toEqual({ width: 320, height: 200 });
+    expect(context.clearRect).not.toHaveBeenCalled();
+  });
+
+  it("clears the frame size where it clears the owned canvas on disable", async () => {
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+
+    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    feed(bridge, 1);
+    await flushDecode();
+    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+      width: 320,
+      height: 200,
+    });
+
+    const disabled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    expect(bridge.unsubscribe).toHaveBeenCalledOnce();
+    expect(context.clearRect).toHaveBeenCalledOnce();
+    // Effects run after the render that triggered them, so read the settled
+    // state one render later, like the canvas-clear test above.
+    const settled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    expect(settled.active).toBe(false);
+    expect(settled.frameSize).toBeNull();
+    expect(disabled.frameSize).toEqual({ width: 320, height: 200 });
+  });
+
 });
