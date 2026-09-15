@@ -85,6 +85,14 @@ executable bytes; the recorded checksum describes the artifact before app signin
 The stock upstream `--archive` path is intentionally rejected because that binary
 does not implement the native cancellation revision required by the host.
 
+When bumping the revision: the daemon stamps `synara_native_revision` from a
+literal in `crates/cua-driver/src/serve.rs`, not from the manifest — a patch
+that carries `nativeRevision: N` while the literal stays at `N-1` produces a
+binary whose metadata handshake fails and whose daemons the host retires
+seconds after spawn. Bump the literal in the same edit that bumps the manifest,
+then confirm the staged binary reports it (`metadata` over a live socket, or
+`strings` on the binary) before packaging.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
