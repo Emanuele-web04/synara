@@ -713,6 +713,33 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("re-surfaces the pane for an evicted owner without waiting for its release", async () => {
+    const backend = new FakeComputerBackend();
+    let nowMs = 0;
+    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const openRequests: string[] = [];
+    manager.onEvent((event) => {
+      if (event.type === "computer.open-pane-requested") openRequests.push(event.threadId);
+    });
+
+    await manager.click("thread-a", { x: 10, y: 10 });
+    expect(openRequests).toEqual(["thread-a"]);
+
+    // thread-a goes silent past idle and thread-b evicts its stale lease.
+    nowMs = 2_000;
+    await manager.click("thread-b", { x: 20, y: 20 });
+    expect(openRequests).toEqual(["thread-a", "thread-b"]);
+
+    // thread-b goes idle too. thread-a drives again and must re-surface:
+    // its release would have returned early on the lease-owner check, so a
+    // flag that only cleared there could never fire again.
+    nowMs = 4_000;
+    await manager.click("thread-a", { x: 30, y: 30 });
+    expect(openRequests).toEqual(["thread-a", "thread-b", "thread-a"]);
+
+    await manager.dispose();
+  });
+
   it("re-asks approval when a thread drives a second app", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });

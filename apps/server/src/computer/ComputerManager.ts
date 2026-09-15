@@ -2275,7 +2275,14 @@ export class ComputerManager {
     }
     // A dead lease's turn stamp is dead with it: an anonymous re-claim must
     // not inherit it, and an evicted owner's entry can never be useful again.
-    if (heldStale) this.authorityTurns.delete(held.threadId);
+    if (heldStale) {
+      this.authorityTurns.delete(held.threadId);
+      // The evicted owner's surfaced surface died with its control period.
+      // Clearing here because its release returns early on the lease-owner
+      // check in releaseDesktopControl, never reaching the reset there.
+      const evicted = this.threads.get(held.threadId);
+      if (evicted) evicted.paneSurfaced = false;
+    }
     const changed = held?.threadId !== owner;
     assertDesktopOperationActive();
     if (changed) {
