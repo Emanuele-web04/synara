@@ -38,23 +38,23 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 - **Pull Requests workspace** — browse, search, review, comment, merge, and pin GitHub PRs across all your projects without leaving the app. → [Pull requests](/docs/workflows/pull-requests)
 - **Stacked pull requests** — see stack position and readiness, navigate the ordered stack, and merge the safe prefix through the selected PR with an explicit confirmation. → [Pull requests](/docs/workflows/pull-requests#work-with-stacked-pull-requests)
 - **Fix button** — groups every unresolved review comment into one numbered prompt, so the agent gets the whole review in a single message. → [Pull requests](/docs/workflows/pull-requests)
-- **Diff review** — a collapsible file tree, jump menu, and one-key toggle (`mod+d`) for reading exactly what changed. → [Organize & navigate](/docs/features/organize)
+- **Diff review** — live refresh, compare with a branch/tag/commit, change navigation, line blame, and in-app editing. → [Workspace editor & diffs](/docs/features/workspace-editor)
 - **Git actions** — commit, push, create branches, and switch safely with stash recovery and conflict checks, all from the workspace. → [Your first task](/docs/getting-started/first-task)
 - **Code review on demand** — `/review` starts a structured review of the current changes. → [Slash commands](/docs/reference/slash-commands)
 
 ## Context and input
 
 - **Inline file comments** — comment on specific lines from a file preview and send them with your next prompt. → [Composer](/docs/features/composer)
-- **AppSnap** — press both Option keys to capture any Mac app window and attach it straight to the current task. → [Composer](/docs/features/composer)
+- **AppSnap** — capture a visible Mac app window with both Option keys or choose a window from the composer + panel. → [Composer](/docs/features/composer)
 - **Attachments that behave** — files, images, folder mentions with a real directory picker, and pasted-text cards that survive edits. → [Composer](/docs/features/composer)
-- **Replies as context** — select part of an assistant response and send it back as structured context in the next prompt. → [Composer](/docs/features/composer)
+- **Replies as context** — send selected assistant text to the current chat, a side chat, or a new task with its own prompt and environment. → [Composer](/docs/features/composer)
 - **Media in the transcript** — generated images render inline with expand and download, and PDFs open in an in-app viewer. → [Composer](/docs/features/composer)
 
 ## Workspace
 
 - **Integrated terminals** — real terminals in the task's working directory: drawer, splits, tabs, and a full-width terminal workspace. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
-- **Browser preview & dev servers** — live browser preview with browser control beside the conversation, and project dev servers managed from the same panel. → [Organize & navigate](/docs/features/organize)
-- **Editor workspace** — a file tree and syntax-highlighted editor next to the chat, plus open-in launchers for VS Code, Cursor, Zed, JetBrains, Xcode, and more. → [Organize & navigate](/docs/features/organize)
+- **Browser preview & dev servers** — shared browser control, embedded popups, saved-login settings and browser session import beside the conversation. → [Browser verification](/docs/workflows/browser-verification)
+- **Editor workspace** — syntax-highlighted editing, autosave, conflict recovery, a numbered fallback, and external-editor launchers. → [Workspace editor & diffs](/docs/features/workspace-editor)
 - **Workspace file and source search** — open files by name with `mod+p` or search matching source lines with `mod+shift+f`, then inspect the result in the task's file pane. → [Organize & navigate](/docs/features/organize#search-files-and-source)
 - **iOS Simulator** — on macOS, share a live simulator with the agent, inject input, inspect accessibility, and capture screenshots or recordings beside the task. → [iOS Simulator](/docs/features/ios-simulator)
 - **Split views** — keep two tasks visible side by side (`mod+\`), even across projects. → [Organize & navigate](/docs/features/organize)
@@ -62,6 +62,8 @@ Synara is built to make agentic development deliberate, parallel, and reviewable
 - **Pins & notes** — pin projects, threads, and messages; keep autosaving notes attached to each task. → [Organize & navigate](/docs/features/organize)
 - **Keyboard-first navigation** — jump to any thread with `mod+1…9`, cycle recent views with `ctrl+tab`, and search everything with `mod+k`. → [Keyboard shortcuts](/docs/reference/keyboard-shortcuts)
 - **Thread export** — `/export` downloads any thread as a ZIP with a readable markdown transcript. → [Slash commands](/docs/reference/slash-commands)
+
+Browser account storage and cookie import have distinct controls and shared-session behavior. See [Browser logins & sessions](/docs/features/browser-sessions) before importing accounts.
 
 ## Personalization and app
 
