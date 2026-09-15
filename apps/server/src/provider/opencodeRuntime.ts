@@ -5,6 +5,7 @@
 
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
 
 import type {
   ChatAttachment,
@@ -51,6 +52,7 @@ import {
   teardownProviderProcessTree,
 } from "./supervisedProcessTeardown.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
+import { parseOpenCodeReasoningOptions } from "./openCodeReasoningOptions.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -74,7 +76,9 @@ export interface OpenCodeCompatibleCliSpec {
 export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   defaultBinaryPath: "opencode",
   displayName: "OpenCode",
-  serverReadyPrefix: "opencode server listening",
+  // OpenCode 2.x dropped the binary name from this line. The parser below also
+  // accepts the 1.x marker so an upgraded Synara can still use older CLIs.
+  serverReadyPrefix: "server listening",
   configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
   dataDirectoryName: "opencode",
   serverAuthUsername: "opencode",
@@ -83,12 +87,16 @@ export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
 export interface OpenCodeServerProcess {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never>;
+  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
+  readonly serverPassword?: string;
 }
 
 export interface OpenCodeServerConnection {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never> | null;
   readonly external: boolean;
+  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
+  readonly serverPassword?: string;
 }
 
 interface PooledOpenCodeServer {
@@ -236,7 +244,11 @@ export interface OpenCodeRuntimeShape {
 
 function parseServerUrlFromOutput(output: string, readyPrefix: string): string | null {
   for (const line of output.split("\n")) {
-    if (!line.startsWith(readyPrefix)) {
+    const isReadyLine =
+      line.startsWith(readyPrefix) ||
+      (readyPrefix === OPENCODE_CLI_SPEC.serverReadyPrefix &&
+        line.startsWith("opencode server listening"));
+    if (!isReadyLine) {
       continue;
     }
     const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
@@ -536,37 +548,48 @@ function parseOpenCodeCliModelJson(
     .map((variant) => variant.trim())
     .filter((variant) => variant.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
-  const supportedReasoningEfforts = Array.from(
-    new Map(
-      Object.entries(variantsObject).flatMap(([variantKey, variant]) => {
-        const variantObject =
-          variant && typeof variant === "object" && !Array.isArray(variant)
-            ? (variant as Record<string, unknown>)
-            : null;
-        if (!variantObject) {
-          return [];
-        }
+  const rawReasoningOptions =
+    object.reasoning_options !== undefined
+      ? object.reasoning_options
+      : object.reasoningOptions !== undefined
+        ? object.reasoningOptions
+        : object.options && typeof object.options === "object" && !Array.isArray(object.options)
+          ? (object.options as Record<string, unknown>).reasoning_options !== undefined
+            ? (object.options as Record<string, unknown>).reasoning_options
+            : (object.options as Record<string, unknown>).reasoningOptions
+          : undefined;
+  const variantReasoningEfforts = Object.entries(variantsObject).flatMap(
+    ([variantKey, variant]) => {
+      const variantObject =
+        variant && typeof variant === "object" && !Array.isArray(variant)
+          ? (variant as Record<string, unknown>)
+          : null;
+      if (!variantObject) {
+        return [];
+      }
 
-        const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
-        if (!reasoningValue) {
-          return [];
-        }
+      const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
+      if (!reasoningValue) {
+        return [];
+      }
 
-        const label = trimToNull(variantObject.label) ?? undefined;
-        const description = trimToNull(variantObject.description) ?? undefined;
-        return [
-          [
-            reasoningValue,
-            {
-              value: reasoningValue,
-              ...(label ? { label } : {}),
-              ...(description ? { description } : {}),
-            },
-          ] as const,
-        ];
-      }),
-    ).values(),
+      const label = trimToNull(variantObject.label) ?? undefined;
+      const description = trimToNull(variantObject.description) ?? undefined;
+      return [
+        {
+          value: reasoningValue,
+          ...(label ? { label } : {}),
+          ...(description ? { description } : {}),
+        },
+      ];
+    },
   );
+  const supportedReasoningEfforts =
+    rawReasoningOptions !== undefined
+      ? parseOpenCodeReasoningOptions(rawReasoningOptions)
+      : Array.from(
+          new Map(variantReasoningEfforts.map((effort) => [effort.value, effort])).values(),
+        );
   const defaultReasoningEffort =
     trimToNull(object.defaultReasoningEffort) ??
     trimToNull(object.default_reasoning_effort) ??
@@ -671,10 +694,15 @@ function toListModelsCommandError(input: {
   });
 }
 
-function supportsVerboseModelsCommandFailure(stdout: string, stderr: string): boolean {
+export function supportsVerboseModelsCommandFailure(stdout: string, stderr: string): boolean {
   const combined = `${stdout}\n${stderr}`.toLowerCase();
   return (
-    combined.includes("unknown argument: verbose") || combined.includes("unknown option: verbose")
+    combined.includes("unknown argument: verbose") ||
+    combined.includes("unknown option: verbose") ||
+    combined.includes("unknown flag: --verbose") ||
+    combined.includes("unknown option: --verbose") ||
+    combined.includes("unrecognized flag: --verbose") ||
+    combined.includes("unrecognized option: --verbose")
   );
 }
 
@@ -898,11 +926,21 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
+        // OpenCode 2.x protects foreground servers with a generated password even when
+        // OPENCODE_SERVER_PASSWORD is not present. Set one ourselves so the SDK can
+        // authenticate deterministically instead of relying on parsing a secret from stdout.
+        const configuredServerPassword = process.env.OPENCODE_SERVER_PASSWORD;
+        const serverPassword =
+          configuredServerPassword && configuredServerPassword.length > 0
+            ? configuredServerPassword
+            : randomBytes(32).toString("base64url");
         const childEnv = buildOpenCodeServerProcessEnv({
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
         });
+        childEnv.OPENCODE_SERVER_USERNAME = cliSpec.serverAuthUsername;
+        childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;
         const child = yield* spawner
           .spawn(
             makeEffectProcessCommand(input.binaryPath, args, {
@@ -1056,6 +1094,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
         return {
           url: readyOption.value,
+          serverPassword,
           exitCode: child.exitCode.pipe(
             Effect.map(Number),
             Effect.orElseSucceed(() => 0),
@@ -1262,6 +1301,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           url: pooledServer.server.url,
           exitCode: pooledServer.server.exitCode,
           external: false,
+          ...(pooledServer.server.serverPassword
+            ? { serverPassword: pooledServer.server.serverPassword }
+            : {}),
         };
       });
     };
