@@ -4,8 +4,28 @@ import {
   isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,
   joinWorkspaceRelativePath,
+  localPathComparisonKey,
+  localPathsEqual,
   workspaceRelativePathOf,
 } from "./path";
+
+describe("localPathComparisonKey", () => {
+  it("normalizes Windows drive and UNC aliases for map keys", () => {
+    expect(localPathComparisonKey("C:\\Repo\\App\\")).toBe("c:/repo/app");
+    expect(localPathComparisonKey("c:/repo/app")).toBe("c:/repo/app");
+    expect(localPathComparisonKey("\\\\Server\\Share\\Repo\\")).toBe("//server/share/repo");
+    expect(localPathsEqual("C:\\Repo\\App\\", "c:/repo/app")).toBe(true);
+  });
+
+  it("keeps POSIX keys case-sensitive", () => {
+    expect(localPathComparisonKey("/Repo/App/")).toBe("/Repo/App");
+    expect(localPathsEqual("/Repo/App", "/repo/app")).toBe(false);
+  });
+
+  it("does not apply absolute Windows casing rules to drive-relative paths", () => {
+    expect(localPathsEqual("C:/", "c:")).toBe(false);
+  });
+});
 
 describe("isWorkspaceRelativePathSafe", () => {
   it("accepts plain workspace-relative paths", () => {
