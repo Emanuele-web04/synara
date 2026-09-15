@@ -52,6 +52,12 @@ Workers never share an element, a panic cannot strand queued results, and
 `CUA_AX_SERIAL_FETCH` restores the inline serial fetch for comparison or
 diagnosis.
 
+Revision 8 adds a second embedded liveness channel. Stdin EOF is the fast
+path, but a leaked duplicate of the lifetime fd can hold the channel open
+past host death; the daemon now also polls `CUA_DRIVER_EMBEDDED_HOST_PID`
+with `kill(pid, 0)` and shuts down when the host is gone, so an orphaned
+serve process cannot outlive its host under the AppKit run loop.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event
