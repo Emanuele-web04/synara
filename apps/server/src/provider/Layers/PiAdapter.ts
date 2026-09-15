@@ -521,6 +521,16 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 }
 
 /**
+ * The names a session actually installs: the fresh catalog plus the Computer
+ * family fallbacks `buildPiAgentGatewayCustomTools` registers for absent
+ * names. Rotation comparisons must use this set — the raw catalog alone makes
+ * the fallbacks look like spurious additions to strip.
+ */
+export function piInstalledGatewayToolNames(freshNames: Iterable<string>): Set<string> {
+  return new Set([...freshNames, ...SYNARA_COMPUTER_TOOL_NAMES]);
+}
+
+/**
  * Project the canonical MCP catalog into Pi's native custom-tool API. Tool
  * schemas and execution both remain owned by the gateway; Pi only adapts the
  * provider boundary.
@@ -1826,10 +1836,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             return;
           }
           const installedNames = new Set(context.gatewayTools.map((tool) => tool.name));
-          const freshNameSet = new Set(freshNames);
+          // The installed set includes Computer fallback stubs for every
+          // family name the catalog omits, so the truthful "did anything
+          // change" comparison is against fresh ∪ family — otherwise every
+          // rotation for an ungranted session reports a catalog change and
+          // deactivates the fallbacks it just rebuilt.
+          const freshNameSet = piInstalledGatewayToolNames(freshNames);
           const sameCatalog =
             installedNames.size === freshNameSet.size &&
-            freshNames.every((name) => installedNames.has(name));
+            [...freshNameSet].every((name) => installedNames.has(name));
           if (sameCatalog) return;
           let rebuilt: ReadonlyArray<ToolDefinition>;
           try {
