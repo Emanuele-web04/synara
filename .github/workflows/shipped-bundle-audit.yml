@@ -1,0 +1,99 @@
+name: Verify shipped bundle reductions
+
+on:
+  push:
+    branches: [perf/shipped-app-size-20260916]
+    paths: [.github/workflows/shipped-bundle-audit.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Retain identical baseline measurement script
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/shipped-size-audit"
+          git show dd15b18bdedc99faeb68b82c7d75d7bca3468445:.github/scripts/measure-bundle-size.mjs > "$RUNNER_TEMP/shipped-size-audit/measure.mjs"
+      - name: Install frozen release build dependencies
+        shell: bash
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/shipped-size-audit/artifacts"
+      - name: Measure candidate
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/shipped-size-audit/measure.mjs" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/shipped-size-audit/candidate" '${{ matrix.platform }}'
+      - name: Verify packaged payload inventory
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {strict as assert} from 'node:assert';
+          import {readFileSync} from 'node:fs';
+          import {join} from 'node:path';
+          const report=JSON.parse(readFileSync(join(process.env.RUNNER_TEMP,'shipped-size-audit/candidate/bundle-size.json'),'utf8'));
+          const files=new Set(report.asar.files.map(file=>file.path));
+          const dependencyMaps=[...files].filter(path=>path.includes('node_modules/') && /\.(js|mjs|cjs|ts|mts|cts|css)\.map$/.test(path));
+          assert.equal(dependencyMaps.length,0,`Unexpected dependency maps: ${dependencyMaps.slice(0,5)}`);
+          assert.ok(files.has('node_modules/effect/dist/Effect.js'));
+          assert.ok(files.has('node_modules/betterwright/dist/src/index.js'));
+          assert.ok([...files].some(path=>path.startsWith(`node_modules/@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`)));
+          for(const path of files) {
+            if(path.includes('/central-icons-') && /\.(gz|br)$/.test(path)) assert.ok(files.has(path.replace(/\.(gz|br)$/,'')),`Orphan sidecar: ${path}`);
+            assert.ok(!path.startsWith('apps/server/dist/client/mockServiceWorker.js'));
+            if(process.platform==='linux') assert.ok(!path.includes('claude-agent-sdk-linux-x64-musl/'));
+          }
+          console.log('Production inventory verified; runtime code, native Claude executable and compressed icon integrity preserved.');
+          NODE
+      - name: Smoke isolated packaged desktop startup and runtime dependencies
+        shell: bash
+        run: |
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/shipped-size-audit/artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shipped-size-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/shipped-size-audit/candidate
+          retention-days: 14
+          if-no-files-found: warn
