@@ -1,4 +1,5 @@
 import {
+  AsyncUserInput,
   ChatAttachment,
   MessageDispatchOrigin,
   NonNegativeInt,
@@ -18,6 +19,7 @@ import {
 export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
+    asyncUserInput: Schema.optional(Schema.NullOr(Schema.fromJsonString(AsyncUserInput))),
     textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
     encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
@@ -51,6 +53,7 @@ export function projectionThreadMessageFromRow(
     role: row.role,
     text: joinMessageTextChunks(row),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
+    ...(row.asyncUserInput != null ? { asyncUserInput: row.asyncUserInput } : {}),
     isStreaming: row.isStreaming === 1,
     source: row.source,
     ...(row.sequence !== null ? { sequence: row.sequence } : {}),
@@ -73,6 +76,7 @@ export function orchestrationMessageFromProjectionRow(
     role: row.role,
     text: joinMessageTextChunks(row),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
+    ...(row.asyncUserInput != null ? { asyncUserInput: row.asyncUserInput } : {}),
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.skills !== null ? { skills: row.skills } : {}),
     ...(row.mentions !== null ? { mentions: row.mentions } : {}),

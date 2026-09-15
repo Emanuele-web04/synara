@@ -945,6 +945,7 @@ export function projectEvent(
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
@@ -995,6 +996,7 @@ export function projectEvent(
           delete entryWithoutTextSegments.textSegments;
           nextMessages[existingIndex] = {
             ...entryWithoutTextSegments,
+            ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
             text: resolvedText,
             ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,

@@ -1019,6 +1019,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             ...(event.payload.skills !== undefined ? { skills: event.payload.skills } : {}),
             ...(event.payload.mentions !== undefined ? { mentions: event.payload.mentions } : {}),
+            ...(event.payload.asyncUserInput !== undefined
+              ? { asyncUserInput: event.payload.asyncUserInput }
+              : {}),
             ...(event.payload.dispatchMode !== undefined
               ? { dispatchMode: event.payload.dispatchMode }
               : {}),

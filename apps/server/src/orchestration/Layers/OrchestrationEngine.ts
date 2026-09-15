@@ -542,6 +542,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
       case "thread.turn.start":
+        if (command.asyncUserInputResponse) {
+          return messageRepository
+            .getByThreadAndMessageId({
+              threadId: command.threadId,
+              messageId: command.asyncUserInputResponse.messageId,
+            })
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestrationCommandInternalError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    detail: `Failed to load the asynchronous question: ${error.message}`,
+                  }),
+              ),
+              Effect.map((message) => {
+                const thread = commandReadModel.threads.find(
+                  (entry) => entry.id === command.threadId,
+                );
+                if (!thread || Option.isNone(message)) return commandReadModel;
+                return overlayThread(commandReadModel, {
+                  ...thread,
+                  messages: [
+                    ...thread.messages.filter((entry) => entry.id !== message.value.messageId),
+                    orchestrationMessageFromStoredMessage(message.value),
+                  ],
+                });
+              }),
+            );
+        }
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
               command,
