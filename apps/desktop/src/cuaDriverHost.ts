@@ -50,6 +50,25 @@ function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
 const log = (message: string) => console.info(`[desktop-cua] ${message}`);
 
 /**
+ * Match names for a launch_app prime: the agent names an app ("Calculator")
+ * or a bundle id ("com.apple.Calculator") while the daemon reports process
+ * names ("Calculator"). Compare lowercased, with the bundle tail as a second
+ * candidate so both spellings resolve without a bundle registry.
+ */
+function launchAppMatchNames(input: unknown): string[] {
+  if (!input || typeof input !== "object") return [];
+  const args = input as Record<string, unknown>;
+  const names: string[] = [];
+  if (typeof args.name === "string" && args.name.length > 0) names.push(args.name.toLowerCase());
+  if (typeof args.bundle_id === "string" && args.bundle_id.length > 0) {
+    names.push(args.bundle_id.toLowerCase());
+    const tail = args.bundle_id.split(".").pop();
+    if (tail) names.push(tail.toLowerCase());
+  }
+  return names;
+}
+
+/**
  * A daemon whose host died by SIGKILL never sees retire() and its own stdin
  * watchdog can leave the process wedged: the tokio runtime exits but the
  * AppKit overlay keeps the process alive, leaking a ghost overlay window and
@@ -429,6 +448,14 @@ export class CuaDriverHost {
           } catch (error) {
             log(`computer frame tap update failed: ${String(error)}`);
           }
+        } else if (name === "launch_app") {
+          // launch_app carries no window (bundle/name only), so the tap would
+          // otherwise sit out the whole cold start until the first
+          // window-attributed call. Resolve the launched app's main window
+          // off the reply path: the agent's launch already returned.
+          void this.primeTapAfterLaunch(task, request.args, connection, epoch).catch(
+            (error: unknown) => log(`computer frame tap launch prime failed: ${String(error)}`),
+          );
         }
       }
       return reply;
@@ -908,6 +935,75 @@ export class CuaDriverHost {
     )
       return undefined;
     return { task, pid: args.pid, windowId: args.window_id };
+  }
+
+  /**
+   * Best-effort tap prime after a successful launch_app: find the launched
+   * app's main on-screen window and point the frame tap at it, so the preview
+   * is live from the cold start instead of the first window-attributed call.
+   * Detached from the agent's reply (which already returned); every guard the
+   * synchronous path checks is re-verified before pointing the tap. Never
+   * throws: failures keep the status quo (the tap starts on the next
+   * attributed call) and log one line.
+   */
+  private async primeTapAfterLaunch(
+    task: CuaComputerTask,
+    input: unknown,
+    connection: Socket,
+    epoch: number,
+  ): Promise<void> {
+    const candidates = launchAppMatchNames(input);
+    if (candidates.length === 0 || !this.options.frameTap) return;
+    const reply = await this.call("list_windows", {}, connection, false);
+    if (
+      epoch !== this.epoch ||
+      this.endedFrameTasks.has(cuaComputerTaskKey(task)) ||
+      this.userStoppedTasks.has(cuaComputerTaskKey(task)) ||
+      !reply.ok ||
+      reply.result?.isError
+    )
+      return;
+    const windows = (reply.result?.structuredContent as { windows?: unknown } | undefined)?.windows;
+    if (!Array.isArray(windows)) return;
+    let best: { pid: number; windowId: number; area: number } | undefined;
+    for (const row of windows) {
+      if (!row || typeof row !== "object") continue;
+      const record = row as Record<string, unknown>;
+      const pid = record.pid;
+      const windowId = record.window_id;
+      const bounds = record.bounds as { width?: unknown; height?: unknown } | undefined;
+      const width = typeof bounds?.width === "number" ? bounds.width : 0;
+      const height = typeof bounds?.height === "number" ? bounds.height : 0;
+      if (
+        typeof pid !== "number" ||
+        !Number.isSafeInteger(pid) ||
+        pid <= 0 ||
+        typeof windowId !== "number" ||
+        !Number.isSafeInteger(windowId) ||
+        windowId <= 0 ||
+        record.is_on_screen !== true ||
+        width <= 0 ||
+        height <= 0
+      )
+        continue;
+      const appName = typeof record.app_name === "string" ? record.app_name.toLowerCase() : "";
+      if (!candidates.some((candidate) => appName === candidate || appName.includes(candidate)))
+        continue;
+      const area = width * height;
+      if (!best || area > best.area) best = { pid, windowId, area };
+    }
+    if (!best) {
+      log("computer frame tap launch prime: no on-screen window matched the launched app");
+      return;
+    }
+    if (
+      epoch !== this.epoch ||
+      this.endedFrameTasks.has(cuaComputerTaskKey(task)) ||
+      this.userStoppedTasks.has(cuaComputerTaskKey(task))
+    )
+      return;
+    log(`computer frame tap launch prime: streaming pid ${best.pid} window ${best.windowId}`);
+    this.options.frameTap.update({ task, pid: best.pid, windowId: best.windowId });
   }
 
   /** Backend shutdown must reject later requests as well as cancel admitted

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile, chmod, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -40,6 +40,13 @@ async function fixture(
     deathFlag?: string;
     checkPermissions?: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
     releaseHeldInput?: () => Promise<void>;
+    frameTap?: {
+      update: (target: unknown) => void;
+      endTask: (task: unknown) => Promise<void>;
+      stop: () => Promise<void>;
+      dispose: () => Promise<void>;
+    };
+    listWindows?: Array<Record<string, unknown>>;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
@@ -87,6 +94,7 @@ net.createServer(s=>{
     else if(r.name==='press_key') { write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply({}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
+    else if(r.name==='list_windows') { write('list-windows'); reply({structuredContent:{windows:options.listWindows||[]}}); }
     else reply({});
   });
   s.on('error',()=>{});
@@ -105,6 +113,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     setup: async () => {},
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
     ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
+    ...(options.frameTap ? { frameTap: options.frameTap } : {}),
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
   });
   const events = async () =>
@@ -809,5 +818,81 @@ describe("task-owned user stop", () => {
       args: { pid: 42, window_id: 10 },
     });
     expect(next.ok).toBe(true);
+  });
+});
+
+describe("frame tap launch prime", () => {
+  const task = { threadId: "thread", turnId: "turn" };
+  const calculator = {
+    pid: 101,
+    window_id: 202,
+    app_name: "Calculator",
+    title: "Calculator",
+    bounds: { x: 0, y: 0, width: 400, height: 600 },
+    is_on_screen: true,
+  };
+  function tapDouble() {
+    const updates: Array<unknown> = [];
+    return {
+      updates,
+      host: {
+        update: (target: unknown) => {
+          updates.push(target);
+        },
+        endTask: async () => {},
+        stop: async () => {},
+        dispose: async () => {},
+      },
+    };
+  }
+  it("points the tap at the launched app's main window", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host, listWindows: [calculator] });
+    const launched = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "launch_app",
+      task,
+      args: { name: "Calculator" },
+    });
+    expect(launched.ok).toBe(true);
+    await vi.waitFor(() => expect(tap.updates).toHaveLength(1));
+    expect(tap.updates[0]).toMatchObject({ pid: 101, windowId: 202 });
+  });
+  it("matches bundle ids by their tail component", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host, listWindows: [calculator] });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "launch_app",
+      task,
+      args: { bundle_id: "com.apple.Calculator" },
+    });
+    await vi.waitFor(() => expect(tap.updates).toHaveLength(1));
+    expect(tap.updates[0]).toMatchObject({ pid: 101, windowId: 202 });
+  });
+  it("stays quiet when no on-screen window matches", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host, listWindows: [calculator] });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "launch_app",
+      task,
+      args: { name: "TextEdit" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(tap.updates).toEqual([]);
+  });
+  it("skips the prime for ended tasks", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host, listWindows: [calculator] });
+    await cuaRequest(f.endpoint, { method: "end_task", task });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "launch_app",
+      task,
+      args: { name: "Calculator" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(tap.updates).toEqual([]);
   });
 });
