@@ -275,7 +275,7 @@ index 99dea98..85a4fec 100644
              Some(self.session_lifecycle.lock().await)
          } else {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index d9e7f39..7313599 100644
+index d9e7f39..8470dac 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -290,7 +290,7 @@ index d9e7f39..7313599 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(8);
++        metadata["synara_native_revision"] = serde_json::json!(9);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
