@@ -14,7 +14,10 @@ import {
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
+  resolveActiveActivityThreadOwner,
+  resolveActivityOrderingStatusGroup,
   resolveActivityStatusGroup,
+  retainActiveActivityThreadInPreview,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
@@ -154,7 +157,88 @@ describe("resolveActivityStatusGroup", () => {
   });
 });
 
+describe("resolveActivityOrderingStatusGroup", () => {
+  it("holds only the exact visited completion while preserving real status semantics", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+    const hold = { threadId: visited.id, completedAt };
+
+    expect(resolveActivityStatusGroup(visited)).toBe("seen");
+    expect(resolveActivityOrderingStatusGroup(visited, hold)).toBe("unseenCompleted");
+    expect(
+      resolveActivityOrderingStatusGroup(
+        {
+          ...visited,
+          latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+          lastVisitedAt: "2026-08-01T10:15:00.000Z",
+        },
+        hold,
+      ),
+    ).toBe("seen");
+    expect(resolveActivityOrderingStatusGroup({ ...visited, hasLiveTailWork: true }, hold)).toBe(
+      "running",
+    );
+  });
+});
+
 describe("buildActivityViewModel", () => {
+  it("keeps a just-read completion ahead of running work until its hold is released", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+    const running = makeThread({ id: "running", hasLiveTailWork: true });
+    const hold = { threadId: visited.id, completedAt };
+
+    const released = buildActivityViewModel({
+      threads: [visited, running],
+      pinnedThreadIdSet: new Set(),
+    });
+    const held = buildActivityViewModel({
+      threads: [visited, running],
+      pinnedThreadIdSet: new Set(),
+      readOrderHold: hold,
+    });
+
+    expect(released.active.map((thread) => thread.id)).toEqual([running.id, visited.id]);
+    expect(held.active.map((thread) => thread.id)).toEqual([visited.id, running.id]);
+    expect(splitPriorityActivityThreads(held.active, hold)).toEqual({
+      priority: [visited, running],
+      seen: [],
+    });
+  });
+
+  it("keeps a held settled completion active until the hold is released", () => {
+    const completedAt = "2026-08-01T09:30:00.000Z";
+    const visited = makeThread({
+      id: "held-settled",
+      latestTurn: completedTurn(completedAt),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      settledAt: "2026-08-01T08:00:00.000Z",
+    });
+    const hold = { threadId: visited.id, completedAt };
+
+    expect(
+      buildActivityViewModel({
+        threads: [visited],
+        pinnedThreadIdSet: new Set(),
+      }).settled.map((thread) => thread.id),
+    ).toEqual([visited.id]);
+    expect(
+      buildActivityViewModel({
+        threads: [visited],
+        pinnedThreadIdSet: new Set(),
+        readOrderHold: hold,
+      }).active.map((thread) => thread.id),
+    ).toEqual([visited.id]);
+  });
+
   it("orders active threads attention → unseen → running → seen, newest first per group", () => {
     const createdAt = "2026-08-01T04:00:00.000Z";
     const seenOld = makeThread({
@@ -722,6 +806,87 @@ describe("collectVisibleActivityThreadIds", () => {
         settled: [],
       }),
     ).toEqual([duplicated.id]);
+  });
+});
+
+describe("active Activity row retention", () => {
+  it("keeps a deep active row in a bounded preview without mutating source order", () => {
+    const threads = Array.from({ length: 23 }, (_, index) => makeThread({ id: `thread-${index}` }));
+    const sourceIds = threads.map((thread) => thread.id);
+    const activeThreadId = threads[22]!.id;
+
+    const preview = retainActiveActivityThreadInPreview(threads, 20, activeThreadId);
+
+    expect(preview.map((thread) => thread.id)).toEqual([...sourceIds.slice(0, 20), activeThreadId]);
+    expect(preview).toHaveLength(21);
+    expect(threads.map((thread) => thread.id)).toEqual(sourceIds);
+  });
+
+  it("does not duplicate an active row already in the preview and ignores missing ids", () => {
+    const threads = Array.from({ length: 3 }, (_, index) => makeThread({ id: `thread-${index}` }));
+
+    expect(retainActiveActivityThreadInPreview(threads, 2, threads[1]!.id)).toEqual(
+      threads.slice(0, 2),
+    );
+    expect(retainActiveActivityThreadInPreview(threads, 2, ThreadId.makeUnsafe("missing"))).toEqual(
+      threads.slice(0, 2),
+    );
+    expect(retainActiveActivityThreadInPreview(threads, 2, null)).toEqual(threads.slice(0, 2));
+  });
+
+  it("resolves the active row's real owner and lets an explicit scope exclude it", () => {
+    const pinned = makeThread({ id: "pinned" });
+    const earlier = makeThread({ id: "earlier" });
+    const project = makeThread({ id: "project" });
+    const settled = makeThread({ id: "settled" });
+    const common = {
+      pinned: [pinned],
+      priority: [],
+      recent: [],
+      today: [],
+      yesterday: [],
+      earlier: [earlier],
+      projectGroups: [
+        { kind: "project" as const, key: "project:one", projectId: PROJECT_ID, threads: [project] },
+      ],
+      settled: [settled],
+    };
+
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: pinned.id,
+      }),
+    ).toEqual({ kind: "pinned" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: earlier.id,
+      }),
+    ).toEqual({ kind: "earlier" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "project",
+        activeThreadId: project.id,
+      }),
+    ).toEqual({ kind: "project", groupKey: "project:one" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: settled.id,
+      }),
+    ).toEqual({ kind: "settled" });
+    expect(
+      resolveActiveActivityThreadOwner({
+        ...common,
+        groupMode: "time",
+        activeThreadId: ThreadId.makeUnsafe("outside-scope"),
+      }),
+    ).toBeNull();
   });
 });
 
