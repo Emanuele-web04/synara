@@ -2064,17 +2064,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("keeps Pi usable when the advisory CLI probe is missing", () =>
+    it.effect("reports Pi unavailable when the CLI is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkPiProviderStatus();
         assert.strictEqual(status.provider, "pi");
-        assert.strictEqual(status.status, "warning");
-        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
         assert.strictEqual(status.authStatus, "unknown");
-        assert.strictEqual(
-          status.message,
-          "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
-        );
+        assert.strictEqual(status.message, "Pi CLI (`pi`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
     );
   });

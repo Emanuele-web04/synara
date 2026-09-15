@@ -1429,9 +1429,22 @@ export const checkPiProviderStatus = (
       DEFAULT_TIMEOUT_MS,
     );
 
-    // Pi itself is SDK-backed in Synara. Keep this CLI probe advisory so health
-    // refreshes do not import the SDK and initialize its native clipboard module.
-    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+    // Pi itself is SDK-backed in Synara. Keep non-missing CLI probe failures
+    // advisory so health refreshes do not import the SDK and initialize its
+    // native clipboard module. A missing CLI reports unavailable like every
+    // other provider, so uninstalled providers stay out of the picker.
+    if (versionProbe.outcome === "missing") {
+      return {
+        provider: PI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Pi CLI (`pi`) is not installed or not on PATH.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "failure") {
       const error = versionProbe.cause;
       return {
         provider: PI_PROVIDER,
@@ -1439,10 +1452,7 @@ export const checkPiProviderStatus = (
         available: true,
         authStatus: "unknown" as const,
         checkedAt,
-        message:
-          versionProbe.outcome === "missing"
-            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
-            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+        message: `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
