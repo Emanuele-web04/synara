@@ -1,0 +1,132 @@
+# Temporary, branch-scoped measurement. Never publishes or uses signing secrets.
+name: Verify reduced production bundles
+on:
+  push:
+    branches: [perf/bundle-size-081dbbc9]
+    paths: [.github/workflows/bundle-size-verify.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    name: Lossless asset verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      source: ${{ steps.commit.outputs.source }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/bundle-size-081dbbc9
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
+      - name: Install audit-only tools
+        run: |
+          bun install --frozen-lockfile --ignore-scripts --filter './' --filter '@synara/scripts'
+          python -m pip install Pillow==11.3.0
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Verify and optimize PNG pixels without altering metadata
+        shell: bash
+        run: |
+          python .github/scripts/optimize-audit-pngs.py | tee "$RUNNER_TEMP/png-evidence.json"
+      - name: Apply repository formatting to changed text only
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync, writeFileSync} from 'node:fs';
+          const file = '.github/scripts/measure-bundle-size.mjs';
+          writeFileSync(file, readFileSync(file, 'utf8').replace('basename, dirname, extname', 'basename, extname'));
+          NODE
+          git diff --name-only --diff-filter=ACM dd88d9272f97e4dda5735281e73ce14de388ad25 -- '*.ts' '*.tsx' '*.json' '*.mjs' '*.yml' '*.md' | xargs -r bunx oxfmt
+      - name: Commit only this audit's changes on its feature branch
+        id: commit
+        shell: bash
+        run: |
+          git add apps/desktop/resources/*.png apps/web/public/app-icons/*.png apps/web/public/synara.png
+          git add apps/web/build-utils apps/web/vite.config.ts apps/web/tsconfig.json
+          git add scripts/desktop-package-files.test.ts scripts/build-desktop-artifact-mac-config.test.ts scripts/lib/desktop-package-files.ts scripts/lib/desktop-platform-build-config.ts
+          git add .github/scripts/measure-bundle-size.mjs .github/workflows/bundle-size-verify.yml
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'build: losslessly compress shipped artwork and normalize formatting'
+            git push origin HEAD:perf/bundle-size-081dbbc9
+          fi
+          echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: png-lossless-evidence
+          path: ${{ runner.temp }}/png-evidence.json
+          retention-days: 14
+  native:
+    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
+      - name: Install frozen release build dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/size-evidence"
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-artifacts" 2>&1 | tee "$RUNNER_TEMP/size-evidence/build.log"
+      - name: Measure with the baseline's byte-counting method
+        shell: bash
+        run: |
+          node .github/scripts/measure-bundle-size.mjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/size-evidence" '${{ matrix.platform }}' > "$RUNNER_TEMP/size-evidence/measurement.log"
+      - name: Verify packaged imports and isolated desktop startup
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4 2>&1 | tee "$RUNNER_TEMP/size-evidence/startup.log"
+      - name: Retain measured source
+        if: runner.os == 'Linux'
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/size-evidence/source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bundle-after-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/size-evidence
+          retention-days: 14
+          if-no-files-found: warn
