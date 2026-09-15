@@ -1,6 +1,5 @@
 import type {
   ComputerEvent,
-  ComputerOpenPaneRequestedEvent,
   ComputerWindow,
   ThreadComputerState,
   ThreadId,
@@ -14,10 +13,6 @@ interface ComputerStateStore {
   threadStatesByThreadId: Record<string, ThreadComputerState | undefined>;
   /** Newest desktop action per thread, so one thread never reads another's. */
   lastActionByThreadId: Record<string, ComputerActionEvent | undefined>;
-  /** Open requests no surface has honored yet, latest per thread. */
-  pendingOpenRequests: Record<string, ComputerOpenPaneRequestedEvent | undefined>;
-  queueOpenRequest: (event: ComputerOpenPaneRequestedEvent) => void;
-  takeOpenRequests: () => ComputerOpenPaneRequestedEvent[];
   upsertThreadState: (state: ThreadComputerState) => void;
   applyWindowsChanged: (windows: readonly ComputerWindow[]) => void;
   recordAction: (action: ComputerActionEvent) => void;
@@ -25,21 +20,9 @@ interface ComputerStateStore {
   clear: () => void;
 }
 
-export const useComputerStateStore = create<ComputerStateStore>()((set, get) => ({
+export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
   threadStatesByThreadId: {},
   lastActionByThreadId: {},
-  pendingOpenRequests: {},
-  queueOpenRequest: (event) =>
-    set((current) => ({
-      pendingOpenRequests: { ...current.pendingOpenRequests, [event.threadId]: event },
-    })),
-  takeOpenRequests: () => {
-    const requests = Object.values(get().pendingOpenRequests).filter(
-      (event) => event !== undefined,
-    );
-    if (requests.length > 0) set({ pendingOpenRequests: {} });
-    return requests;
-  },
   upsertThreadState: (state) =>
     set((current) => {
       const previousState = current.threadStatesByThreadId[state.threadId];
@@ -88,28 +71,23 @@ export const useComputerStateStore = create<ComputerStateStore>()((set, get) => 
     set((current) => {
       const hasState = Object.hasOwn(current.threadStatesByThreadId, threadId);
       const hasAction = Object.hasOwn(current.lastActionByThreadId, threadId);
-      const hasOpenRequest = Object.hasOwn(current.pendingOpenRequests, threadId);
-      if (!hasState && !hasAction && !hasOpenRequest) {
+      if (!hasState && !hasAction) {
         return current;
       }
       const nextThreadStatesByThreadId = { ...current.threadStatesByThreadId };
       delete nextThreadStatesByThreadId[threadId];
       const nextLastActionByThreadId = { ...current.lastActionByThreadId };
       delete nextLastActionByThreadId[threadId];
-      const pendingOpenRequests = { ...current.pendingOpenRequests };
-      delete pendingOpenRequests[threadId];
       return {
         ...current,
         threadStatesByThreadId: nextThreadStatesByThreadId,
         lastActionByThreadId: nextLastActionByThreadId,
-        pendingOpenRequests,
       };
     }),
   clear: () =>
     set({
       threadStatesByThreadId: {},
       lastActionByThreadId: {},
-      pendingOpenRequests: {},
     }),
 }));
 

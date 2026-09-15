@@ -27,7 +27,6 @@ import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktop
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useDevicePaneOpenRequests } from "../../hooks/useDeviceEventBridge";
-import { useComputerPaneOpenRequests } from "../../hooks/useComputerEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
@@ -95,6 +94,7 @@ import {
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
+import { ComputerPreviewPopover } from "./ComputerPreviewPopover";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
@@ -375,6 +375,12 @@ export function SingleChatSurface(props: {
       diffTurnId: turnId,
       diffFilePath: filePath ?? null,
     });
+  };
+  // The popover's expand is a user-initiated pane open, so it hydrates the
+  // dock pane immediately like every other explicit open.
+  const handleExpandComputerPreview = () => {
+    requestImmediateDockHydration("computer");
+    openPane(props.threadId, { kind: "computer" });
   };
 
   // Stable identities: these feed memoized result rows in the search palette,
@@ -745,18 +751,11 @@ export function SingleChatSurface(props: {
           }
         : null,
   });
-  useComputerPaneOpenRequests({
-    onOpenPaneRequested: appSettings.autoOpenComputerPane
-      ? (event) => {
-          routeSingleDockPaneOpenRequest({
-            currentThreadId: props.threadId,
-            requestedThreadId: event.threadId,
-            requestImmediateHydration: () => requestImmediateDockHydration("computer"),
-            openPane: (threadId) => openPane(threadId, { kind: "computer" }),
-          });
-        }
-      : null,
-  });
+  // `computer.open-pane-requested` no longer routes to the dock: the event
+  // bridge arms the owning thread's preview session, and this surface's
+  // ComputerPreviewPopover is what honors it once that thread is on screen.
+  // The dock Computer pane still opens from the popover's expand control or
+  // the dock menu (handleAddDockPane / handleExpandComputerPreview).
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
@@ -1261,6 +1260,14 @@ export function SingleChatSurface(props: {
                 }}
               />
             ) : null}
+            {/* Ambient computer preview for this thread's own session; it
+                renders nothing unless the preview store armed this thread. */}
+            <ComputerPreviewPopover
+              key={props.threadId}
+              threadId={props.threadId}
+              onExpand={handleExpandComputerPreview}
+              dockComputerPaneVisible={dockState.open && activePane?.kind === "computer"}
+            />
           </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock

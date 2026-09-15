@@ -171,35 +171,3 @@ describe("computerStateStore", () => {
     expect(useComputerStateStore.getState().lastActionByThreadId).toEqual({});
   });
 });
-
-const OTHER_THREAD_ID = "thread-2" as ThreadId;
-const openRequest = (threadId: ThreadId = baseState.threadId) =>
-  ({ type: "computer.open-pane-requested", threadId }) as const;
-
-describe("deferred computer pane requests", () => {
-  it("keeps the latest request per thread and consumes each once", () => {
-    const store = useComputerStateStore.getState();
-    store.clear();
-    store.queueOpenRequest(openRequest());
-    store.queueOpenRequest(openRequest(OTHER_THREAD_ID));
-    store.queueOpenRequest(openRequest());
-
-    expect(store.takeOpenRequests()).toEqual([openRequest(), openRequest(OTHER_THREAD_ID)]);
-    expect(store.takeOpenRequests()).toEqual([]);
-  });
-
-  it("removes pending requests with their thread or server state", () => {
-    const store = useComputerStateStore.getState();
-    store.clear();
-    store.queueOpenRequest(openRequest());
-    store.queueOpenRequest(openRequest(OTHER_THREAD_ID));
-    store.removeThreadState(baseState.threadId);
-    expect(
-      useComputerStateStore.getState().pendingOpenRequests[baseState.threadId],
-    ).toBeUndefined();
-    expect(useComputerStateStore.getState().pendingOpenRequests[OTHER_THREAD_ID]).toBeDefined();
-
-    store.clear();
-    expect(store.takeOpenRequests()).toEqual([]);
-  });
-});

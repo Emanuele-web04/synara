@@ -23,6 +23,7 @@ import {
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
+import { ComputerPreviewPopover } from "./ComputerPreviewPopover";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import {
@@ -40,6 +41,7 @@ import {
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
+import { useRightDockStore } from "../../rightDockStore";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
 import {
@@ -481,6 +483,7 @@ function SplitPaneSurface(props: {
   showFloatingBrowser: boolean;
   onCloseFloatingBrowser: () => void;
   onPopFloatingBrowser: () => void;
+  onExpandComputerPreview: () => void;
   onUpdatePanelState: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
@@ -567,6 +570,13 @@ function SplitPaneSurface(props: {
               threadId={props.threadId}
               onClose={props.onCloseFloatingBrowser}
               onPopToSidebar={props.onPopFloatingBrowser}
+            />
+          ) : null}
+          {props.threadId ? (
+            <ComputerPreviewPopover
+              key={props.threadId}
+              threadId={props.threadId}
+              onExpand={props.onExpandComputerPreview}
             />
           ) : null}
         </SidebarInset>
@@ -793,6 +803,22 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
   };
 
+  // Split leaves have no right dock: the pane is seeded on its owning thread
+  // first, then the route drops the split so the single chat surface can show
+  // it — the same per-thread memory the dock relies on elsewhere.
+  const openComputerPaneForThread = (threadId: ThreadId) => {
+    useRightDockStore.getState().openPane(threadId, { kind: "computer" });
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        splitViewId: undefined,
+      }),
+    });
+  };
+
   const maximizeFocusedPane = () => {
     if (!activeSplitView) return;
     const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
@@ -1014,6 +1040,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           if (leaf.threadId) closeFloatingBrowser(leaf.threadId);
         }}
         onPopFloatingBrowser={() => popFloatingBrowser(leaf.id)}
+        onExpandComputerPreview={() => {
+          if (leaf.threadId) openComputerPaneForThread(leaf.threadId);
+        }}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
         onMaximize={maximizeFocusedPane}
         onCloseThreadPane={() => closePaneThread(leaf.id)}

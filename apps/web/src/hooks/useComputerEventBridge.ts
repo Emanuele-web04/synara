@@ -1,17 +1,28 @@
 // FILE: useComputerEventBridge.ts
-// Purpose: Capture computer events globally and deliver deferred pane requests to a chat surface.
+// Purpose: Capture computer events globally and arm the in-chat preview sessions.
 // Layer: Web event bridge hook
-// Exports: useComputerEventBridge, useComputerPaneOpenRequests
-// Depends on: nativeApi computer.onEvent, computerStateStore
+// Exports: useComputerEventBridge
+// Depends on: nativeApi computer.onEvent, computerStateStore, computerPreviewStore
 //
 // Mirrors useDeviceEventBridge: the computer engine lives in apps/server, so the
 // open-pane signal is a WebSocket push and this works in a plain browser tab as
 // well as the desktop app.
+//
+// `computer.open-pane-requested` no longer opens the dock pane: it arms the
+// owning thread's preview session instead. The in-chat popover is the ambient
+// surface; the dock Computer pane still opens from the popover's expand control
+// or the dock menu.
 
-import type { ComputerOpenPaneRequestedEvent } from "@synara/contracts";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect } from "react";
 
+import { computerActionStatusLabel } from "~/components/ComputerPanel.logic";
+import {
+  changedThreadComputerStates,
+  removedThreadComputerStateIds,
+} from "~/components/chat/ComputerPreviewPopover.logic";
+import { ThreadId } from "@synara/contracts";
 import { ensureNativeApi } from "~/nativeApi";
+import { useComputerPreviewStore } from "../computerPreviewStore";
 import { useComputerStateStore } from "../computerStateStore";
 
 /** Mounted once by EventRouter, including while settings or split view is open. */
@@ -23,6 +34,7 @@ export function useComputerEventBridge(): void {
     }
     const unsubscribe = api.computer.onEvent((event) => {
       const store = useComputerStateStore.getState();
+      const preview = useComputerPreviewStore.getState();
       switch (event.type) {
         case "computer.thread-state":
           store.upsertThreadState(event.state);
@@ -30,36 +42,62 @@ export function useComputerEventBridge(): void {
         case "computer.windows-changed":
           store.applyWindowsChanged(event.windows);
           break;
-        case "computer.action":
+        case "computer.action": {
           store.recordAction(event);
+          const threadId = event.threadId;
+          if (threadId) {
+            const label = computerActionStatusLabel(
+              event,
+              store.threadStatesByThreadId[threadId]?.windows,
+            );
+            if (label !== null) {
+              preview.noteThreadActionLabel(threadId, label);
+            }
+          }
           break;
+        }
         case "computer.open-pane-requested":
-          // The server sends this once per thread. Retain it until a surface
-          // can honor it, even if automatic opening is currently off.
-          store.queueOpenRequest(event);
+          // The server sends this once per lease. What honors it is the
+          // preview session on the owning thread, armed whether or not that
+          // chat is on screen.
+          preview.requestPreviewSurface(event.threadId);
           break;
         case "computer.frame":
           break;
       }
     });
-    return unsubscribe;
+    // Thread state also arrives through getThreadState seeds, which never pass
+    // the push handler above. Watching the store itself feeds both paths into
+    // the same edge detection, and a wholesale cache reset (server restart)
+    // ends every session with it.
+    const unsubscribeThreadStates = useComputerStateStore.subscribe((state, previous) => {
+      const nextStates = state.threadStatesByThreadId;
+      if (nextStates === previous.threadStatesByThreadId) {
+        return;
+      }
+      const preview = useComputerPreviewStore.getState();
+      if (Object.keys(nextStates).length === 0) {
+        if (Object.keys(previous.threadStatesByThreadId).length > 0) {
+          preview.clear();
+        }
+        return;
+      }
+      for (const threadState of changedThreadComputerStates(
+        nextStates,
+        previous.threadStatesByThreadId,
+      )) {
+        preview.noteThreadComputerState(threadState);
+      }
+      for (const threadId of removedThreadComputerStateIds(
+        nextStates,
+        previous.threadStatesByThreadId,
+      )) {
+        preview.removePreviewSession(ThreadId.makeUnsafe(threadId));
+      }
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeThreadStates();
+    };
   }, []);
-}
-
-export function useComputerPaneOpenRequests(input: {
-  /** Null while automatic opening is disabled or the surface cannot host a computer pane. */
-  readonly onOpenPaneRequested: ((event: ComputerOpenPaneRequestedEvent) => void) | null;
-}): void {
-  const pendingOpenRequests = useComputerStateStore((store) => store.pendingOpenRequests);
-  const openEnabled = input.onOpenPaneRequested !== null;
-  const deliverPendingRequests = useEffectEvent(() => {
-    const onOpen = input.onOpenPaneRequested;
-    if (!onOpen) return;
-    // Consume before delivery so remounting or closing a pane never replays it.
-    for (const event of useComputerStateStore.getState().takeOpenRequests()) onOpen(event);
-  });
-
-  useEffect(() => {
-    if (openEnabled) deliverPendingRequests();
-  }, [openEnabled, pendingOpenRequests]);
 }
