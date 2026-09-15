@@ -211,12 +211,31 @@ describe("synaraHostTarget", () => {
     mocks.openConnection.mockImplementation(async () => fakeConnection({}));
     const next = synaraHostTarget(contents);
     await next.connect({ proxyUrl: "socks5://127.0.0.1:10" });
-    await expect(original.connect({ proxyUrl: "socks5://127.0.0.1:9" })).rejects.toThrow(
-      "already leased",
-    );
+    const waiting = original.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mocks.openConnection).toHaveBeenCalledTimes(2);
     await next.revokeAll();
+    await waiting;
+    expect(mocks.openConnection).toHaveBeenCalledTimes(3);
     await original.revokeAll();
+  });
+
+  it("revokes a target waiting for another tab without waiting for that tab to finish", async () => {
+    mocks.openConnection.mockImplementation(async () => fakeConnection({}));
+    const first = synaraHostTarget(contents);
+    await first.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const waiting = synaraHostTarget(contents);
+    const connecting = waiting.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    const rejected = expect(connecting).rejects.toThrow("interrupted");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waiting.revokeAll();
+    await rejected;
+    expect(mocks.openConnection).toHaveBeenCalledOnce();
+    expect(contents.session.setProxy).toHaveBeenCalledOnce();
+    await first.revokeAll();
+    const last = synaraHostTarget(contents);
+    await last.connect({ proxyUrl: "socks5://127.0.0.1:11" });
+    await last.revokeAll();
   });
 
   it("checks aborts again after asynchronous setup and restores the proxy", async () => {

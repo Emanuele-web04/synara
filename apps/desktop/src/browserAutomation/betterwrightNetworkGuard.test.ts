@@ -46,12 +46,28 @@ describe("BetterwrightNetworkGuard", () => {
     expect(closeAllConnections).toHaveBeenCalledOnce();
   });
 
-  it("rejects concurrent leases for the same shared session", async () => {
-    const { browserSession } = fixture();
+  it("queues concurrent leases for the same shared session in order", async () => {
+    const { browserSession, setProxy } = fixture();
     const guard = getBetterwrightNetworkGuard(browserSession);
     const first = await guard.attach("socks5://127.0.0.1:4321");
-    await expect(guard.attach("socks5://127.0.0.1:4322")).rejects.toThrow("already leased");
+    const order: string[] = [];
+    const second = guard.attach("socks5://127.0.0.1:4322").then((lease) => {
+      order.push("second");
+      return lease;
+    });
+    const third = guard.attach("socks5://127.0.0.1:4323").then((lease) => {
+      order.push("third");
+      return lease;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(order).toEqual([]);
+    expect(setProxy).toHaveBeenCalledOnce();
     await first.release();
+    const secondLease = await second;
+    expect(order).toEqual(["second"]);
+    await secondLease.release();
+    await (await third).release();
+    expect(order).toEqual(["second", "third"]);
   });
 
   it("can be reused after the first lease is released", async () => {
@@ -114,14 +130,47 @@ describe("BetterwrightNetworkGuard", () => {
     const first = lease.release();
     const second = lease.release();
     expect(second).toBe(first);
-    await expect(guard.attach("socks5://127.0.0.1:4322")).rejects.toThrow("already leased");
+    const queued = guard.attach("socks5://127.0.0.1:4321");
     gate.resolve();
     await Promise.all([first, second]);
-    const next = await guard.attach("socks5://127.0.0.1:4321");
+    const next = await queued;
     const calls = setProxy.mock.calls.length;
     await lease.release();
     expect(setProxy).toHaveBeenCalledTimes(calls);
-    await expect(guard.attach("socks5://127.0.0.1:4322")).rejects.toThrow("already leased");
+    expect(next.closed).toBe(false);
+    await next.release();
+  });
+
+  it("cancels a queued lease without releasing the current owner or blocking later waiters", async () => {
+    const { browserSession, setProxy } = fixture();
+    const guard = getBetterwrightNetworkGuard(browserSession);
+    const first = await guard.attach("socks5://127.0.0.1:4321");
+    const controller = new AbortController();
+    const cancelled = guard.attach("socks5://127.0.0.1:4322", controller.signal);
+    const rejected = expect(cancelled).rejects.toThrow("cancel queued");
+    const last = guard.attach("socks5://127.0.0.1:4323");
+    controller.abort(new Error("cancel queued"));
+    await rejected;
+    expect(first.closed).toBe(false);
+    expect(setProxy).toHaveBeenCalledOnce();
+    await first.release();
+    await (await last).release();
+    expect(setProxy.mock.calls.some(([config]) => config.proxyRules?.endsWith(":4322"))).toBe(
+      false,
+    );
+  });
+
+  it("recovers failed restoration before handing the session to a queued run", async () => {
+    const { browserSession, setProxy } = fixture();
+    const guard = getBetterwrightNetworkGuard(browserSession);
+    const first = await guard.attach("socks5://127.0.0.1:4321");
+    const queued = guard.attach("socks5://127.0.0.1:4322");
+    setProxy.mockRejectedValueOnce(new Error("restore failed"));
+    await expect(first.release()).rejects.toThrow("restore failed");
+    const next = await queued;
+    expect(first.closed).toBe(true);
+    expect(next.closed).toBe(false);
+    expect(setProxy).toHaveBeenNthCalledWith(3, { mode: "system" });
     await next.release();
   });
 });

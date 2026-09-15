@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, type WebContents } from "electron";
 import { BetterWright, NetworkPolicy } from "betterwright";
 import { configureElectronNetwork } from "betterwright/electron";
 import { WebSocketServer } from "ws";
@@ -22,6 +22,65 @@ const deadline = setTimeout(() => {
   console.error("Browser lifecycle smoke timed out.");
   app.exit(1);
 }, 90_000);
+
+async function checkCookieImportMetadata(contents: WebContents) {
+  const hostTarget = synaraHostTarget(contents, { cookieImport: true });
+  const browser = new BetterWright({
+    home: join(home, "cookie-worker"),
+    hostTarget,
+    vault: false,
+    credentialCapture: false,
+    downloadPolicy: "deny",
+    adBlock: false,
+    headless: false,
+    parkBackgroundPages: false,
+    policy: new NetworkPolicy({ allowLoopback: true }),
+  });
+  let includeCookie = true;
+  // Stub only local-profile extraction. The installed client must derive
+  // hostOwnedTarget, dispatch to its real worker, write through CDP, verify
+  // Electron's cookie store, and return metadata through the patched result.
+  Object.defineProperty(browser, "_extractCookieSync", {
+    value: async () => ({
+      cookies: includeCookie
+        ? [
+            {
+              name: "synara_synthetic_import",
+              value: "synthetic-only",
+              domain: "127.0.0.1",
+              path: "/",
+              expires: Math.floor(Date.now() / 1000) + 3600,
+              secure: false,
+              httpOnly: true,
+              sameSite: "Lax",
+            },
+          ]
+        : [],
+      selected: includeCookie ? 1 : 0,
+      skipped: 0,
+      source: { browser: "chrome" },
+      warnings: [],
+    }),
+  });
+  try {
+    const result = await browser.syncCookies({ source: { browser: "chrome" } });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(result.synced, 1);
+    assert.equal(result.target, "host");
+    assert.deepEqual(result.cookieImportDomains, ["127.0.0.1"]);
+    const stored = await contents.session.cookies.get({ name: "synara_synthetic_import" });
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0]?.value, "synthetic-only");
+    includeCookie = false;
+    const empty = await browser.syncCookies({ source: { browser: "chrome" } });
+    assert.ok(empty.ok, JSON.stringify(empty));
+    assert.equal(empty.synced, 0);
+    assert.deepEqual(empty.cookieImportDomains, []);
+  } finally {
+    await hostTarget.revokeAll(false);
+    await browser.close();
+  }
+}
 
 async function smoke() {
   await app.whenReady();
@@ -102,6 +161,28 @@ async function smoke() {
     parkBackgroundPages: false,
     policy: new NetworkPolicy({ allowLoopback: true, blockHosts: [`127.0.0.1:${blockedPort}`] }),
   });
+  const siblingTarget = synaraHostTarget(sibling.webContents);
+  const siblingQueued = Promise.withResolvers<void>();
+  let siblingConnected = false;
+  const siblingBrowser = new BetterWright({
+    home: join(home, "sibling-worker"),
+    hostTarget: {
+      ...siblingTarget,
+      connect: async (options) => {
+        siblingQueued.resolve();
+        const lease = await siblingTarget.connect(options);
+        siblingConnected = true;
+        return lease;
+      },
+    },
+    vault: false,
+    credentialCapture: false,
+    downloadPolicy: "deny",
+    adBlock: false,
+    headless: false,
+    parkBackgroundPages: false,
+    policy: new NetworkPolicy({ allowLoopback: true, blockHosts: [`127.0.0.1:${blockedPort}`] }),
+  });
   try {
     const first = await browser.run("return await page.title()", { automaticUI: false });
     assert.ok(first.ok, JSON.stringify(first));
@@ -157,13 +238,26 @@ async function smoke() {
     );
     await assert.rejects(session.fetch(`${blockedUrl}/after-rotation`, { cache: "no-store" }));
     assert.equal(blockedRequests, 0);
+    const siblingRun = siblingBrowser.run("return await page.title()", { automaticUI: false });
+    await siblingQueued.promise;
+    assert.equal(siblingConnected, false, "Concurrent tab bypassed the session queue");
     await target.revokeAll(false);
     await browser.close();
+    const siblingResult = await siblingRun;
+    assert.ok(siblingResult.ok, JSON.stringify(siblingResult));
+    assert.equal(siblingResult.result, "Lifecycle fixture");
+    assert.equal(siblingConnected, true);
+    await assert.rejects(session.fetch(`${blockedUrl}/queued-run`, { cache: "no-store" }));
+    assert.equal(blockedRequests, 0);
+    await siblingTarget.revokeAll(false);
+    await siblingBrowser.close();
     assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
     assert.equal(
       await (await session.fetch(`${blockedUrl}/restored`, { cache: "no-store" })).text(),
       "blocked fixture",
     );
+    await checkCookieImportMetadata(contents);
+    assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
 
     // Install the real upstream capture sensor into a live Electron isolated
     // world, then verify its script, scoped binding, and disposal.
@@ -196,9 +290,11 @@ async function smoke() {
     }
     assert.equal(contents.debugger.listenerCount("message"), listeners);
     console.log(
-      "PASS: real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, connection draining, worker rotation, proxy restoration, and capture sensor.",
+      "PASS: real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, proxy restoration, cookie import metadata, and capture sensor.",
     );
   } finally {
+    await siblingTarget.revokeAll(true);
+    await siblingBrowser.close();
     await target.revokeAll(true);
     await browser.close();
     window.destroy();

@@ -32,6 +32,10 @@ export function synaraHostTarget(
   const connections = new Set<OpenedConnection>();
   const pending = new Set<Promise<OpenedConnection>>();
   const networkGuard = getBetterwrightNetworkGuard(contents.session);
+  const lifetime = new AbortController();
+  const leaseSignal = options.signal
+    ? AbortSignal.any([options.signal, lifetime.signal])
+    : lifetime.signal;
   let networkGuardLease:
     | { proxyUrl: string; lease: Awaited<ReturnType<typeof networkGuard.attach>> }
     | undefined;
@@ -86,8 +90,14 @@ export function synaraHostTarget(
           }
           assertAvailable();
           if (!networkGuardLease) {
-            networkGuardLease = { proxyUrl, lease: await networkGuard.attach(proxyUrl) };
+            networkGuardLease = {
+              proxyUrl,
+              lease: await networkGuard.attach(proxyUrl, leaseSignal),
+            };
           }
+        }).catch((error) => {
+          assertAvailable();
+          throw error;
         });
         let opening: Promise<OpenedConnection> | undefined;
         try {
@@ -141,6 +151,7 @@ export function synaraHostTarget(
     },
     revokeAll(cancel = true) {
       revoked = true;
+      lifetime.abort(new Error("Browser control was interrupted."));
       // Cancel in-flight leases without waiting for them: a never-settling
       // open must not stall teardown. connect() refuses to vend once its
       // opening settles. No later connect may revive this target.
