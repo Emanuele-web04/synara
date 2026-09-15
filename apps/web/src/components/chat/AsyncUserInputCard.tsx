@@ -1,8 +1,17 @@
-/* oxlint-disable no-array-index-key -- Native questions have no IDs; their positions are immutable within this message. */
-import type { AsyncUserInput, MessageId } from "@synara/contracts";
-import { useId, useRef, useState } from "react";
+import type { AsyncUserInput, MessageId, UserInputQuestion } from "@synara/contracts";
+import { useMemo, useRef, useState } from "react";
+import { CircleQuestionIcon, CheckIcon } from "~/lib/icons";
+import {
+  buildPendingUserInputAnswers,
+  derivePendingUserInputProgress,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
+  type PendingUserInputDraftAnswer,
+} from "../../pendingUserInput";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
+import { UserInputQuestionForm } from "./UserInputQuestionForm";
 
 export function AsyncUserInputCard({
   messageId,
@@ -13,115 +22,169 @@ export function AsyncUserInputCard({
   input: AsyncUserInput;
   onRespond?: ((messageId: MessageId, answers: readonly string[]) => Promise<void>) | undefined;
 }) {
-  const formId = useId();
-  const [answers, setAnswers] = useState(() =>
-    input.questions.map((question) => question.options?.[0] ?? ""),
+  // Native questions have no IDs. Their positions are stable within this message.
+  const questions = useMemo<ReadonlyArray<UserInputQuestion>>(
+    () =>
+      input.questions.map((question, index) => ({
+        id: `question-${index}`,
+        header: "Question",
+        question: question.title,
+        options: (question.options ?? []).map((label) => ({ label, description: label })),
+        multiSelect: false,
+      })),
+    [input.questions],
   );
+  const [answers, setAnswers] = useState<Record<string, PendingUserInputDraftAnswer>>(() =>
+    Object.fromEntries(
+      questions.map((question) => [
+        question.id,
+        {
+          selectedOptionLabels: question.options[0] ? [question.options[0].label] : [],
+        },
+      ]),
+    ),
+  );
+  const [open, setOpen] = useState(false);
+  const [questionIndex, setQuestionIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedAnswers, setSubmittedAnswers] = useState<readonly string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const answered = Boolean(input.response) || submitted;
+  const acceptedAnswers = input.response?.answers ?? submittedAnswers;
+  const answered = acceptedAnswers !== null;
   const disabled = answered || submitting || !onRespond;
+  const progress = derivePendingUserInputProgress(questions, answers, questionIndex);
+  const activeQuestion = progress.activeQuestion;
+
+  const advance = async () => {
+    if (disabled || inFlight.current || !progress.canAdvance) return;
+    if (!progress.isLastQuestion) {
+      setQuestionIndex(progress.questionIndex + 1);
+      return;
+    }
+    const resolved = buildPendingUserInputAnswers(questions, answers);
+    if (!resolved) return;
+    const response = questions.map((question) => {
+      const answer = resolved[question.id]!;
+      return Array.isArray(answer) ? answer.join(", ") : answer;
+    });
+    inFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onRespond!(messageId, response);
+      setSubmittedAnswers(response);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "The answer could not be submitted. Try again.",
+      );
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
+  };
 
   return (
-    <form
-      aria-label="Questions from Codex"
-      className="my-2 space-y-4 rounded-xl border border-border bg-card p-4 text-sm"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (disabled || inFlight.current || answers.some((answer) => !answer.trim())) return;
-        inFlight.current = true;
-        setSubmitting(true);
-        setError(null);
-        try {
-          await onRespond!(
-            messageId,
-            answers.map((answer) => answer.trim()),
-          );
-          setSubmitted(true);
-        } catch (cause) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "The answer could not be submitted. Try again.",
-          );
-        } finally {
-          inFlight.current = false;
-          setSubmitting(false);
-        }
-      }}
-    >
-      <div className="text-xs text-muted-foreground">
-        {answered ? "Answered" : "Reply when ready · Codex can keep working"}
-      </div>
-      {input.questions.map((question, index) => (
-        <fieldset
-          key={`${index}:${question.title}`}
-          disabled={disabled}
-          className="min-w-0 space-y-2"
-        >
-          <legend className="mb-2 font-medium text-foreground">{question.title}</legend>
-          {answered ? (
-            <p className="whitespace-pre-wrap text-muted-foreground">
-              {input.response?.answers[index] ?? answers[index]}
-            </p>
-          ) : (
-            <>
-              {question.options && (
-                <div className="flex flex-wrap gap-2">
-                  {question.options.map((option, optionIndex) => (
+    <Collapsible open={open} onOpenChange={setOpen} className="my-2">
+      <CollapsibleTrigger className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+        <CircleQuestionIcon className="size-3.5" aria-hidden="true" />
+        {questions.length} {questions.length === 1 ? "question" : "questions"}
+        {answered && (
+          <>
+            <CheckIcon className="size-3" aria-hidden="true" />
+            <span>Answered</span>
+          </>
+        )}
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="pt-2">
+          {acceptedAnswers ? (
+            <dl className="space-y-3 rounded-xl border border-border p-3.5 text-sm">
+              {questions.map((question, index) => (
+                <div key={question.id}>
+                  <dt className="font-medium">{question.question}</dt>
+                  <dd className="whitespace-pre-wrap text-muted-foreground">
+                    {acceptedAnswers[index]}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : activeQuestion ? (
+            <form
+              aria-label="Questions from Codex"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void advance();
+              }}
+            >
+              <UserInputQuestionForm
+                questions={questions}
+                answers={answers}
+                questionIndex={questionIndex}
+                submissionVersion={0}
+                isResponding={disabled}
+                autoAdvance={false}
+                keyboardShortcuts="local"
+                onToggleOption={(questionId, label) => {
+                  const draft = togglePendingUserInputOptionSelection(
+                    activeQuestion,
+                    answers[questionId],
+                    label,
+                  );
+                  setAnswers((current) => ({ ...current, [questionId]: draft }));
+                  return draft;
+                }}
+                onAdvance={() => void advance()}
+                onPrevious={() => setQuestionIndex(Math.max(0, questionIndex - 1))}
+              >
+                <div className="mt-3 space-y-2">
+                  <Textarea
+                    aria-label={`Answer: ${activeQuestion.question}`}
+                    value={progress.customAnswer}
+                    disabled={disabled}
+                    rows={2}
+                    placeholder={
+                      activeQuestion.options.length > 0
+                        ? "Or type your own answer…"
+                        : "Type your answer…"
+                    }
+                    onChange={(event) => {
+                      const draft = setPendingUserInputCustomAnswer(
+                        answers[activeQuestion.id],
+                        event.target.value,
+                      );
+                      setAnswers((current) => ({ ...current, [activeQuestion.id]: draft }));
+                    }}
+                  />
+                  {error && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {error}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">Codex can keep working</span>
                     <Button
-                      key={`${optionIndex}:${option}`}
-                      type="button"
-                      variant={answers[index] === option ? "secondary" : "outline"}
+                      type="submit"
                       size="sm"
-                      aria-pressed={answers[index] === option}
-                      className="h-auto max-w-full whitespace-normal text-left"
-                      onClick={() =>
-                        setAnswers((current) =>
-                          current.map((answer, i) => (i === index ? option : answer)),
-                        )
+                      disabled={
+                        disabled ||
+                        !progress.canAdvance ||
+                        (progress.isLastQuestion && !progress.isComplete)
                       }
                     >
-                      {option}
+                      {submitting
+                        ? "Submitting…"
+                        : progress.isLastQuestion
+                          ? "Send answer"
+                          : "Next"}
                     </Button>
-                  ))}
+                  </div>
                 </div>
-              )}
-              <label htmlFor={`${formId}-${index}`} className="sr-only">
-                Answer: {question.title}
-              </label>
-              <Textarea
-                id={`${formId}-${index}`}
-                value={answers[index] ?? ""}
-                rows={2}
-                placeholder="Type your answer…"
-                className="resize-y"
-                onChange={(event) =>
-                  setAnswers((current) =>
-                    current.map((answer, i) => (i === index ? event.target.value : answer)),
-                  )
-                }
-              />
-            </>
-          )}
-        </fieldset>
-      ))}
-      {error && (
-        <p role="alert" className="text-destructive">
-          {error}
-        </p>
-      )}
-      {!answered && (
-        <Button
-          type="submit"
-          size="sm"
-          disabled={disabled || answers.some((answer) => !answer.trim())}
-        >
-          {submitting ? "Submitting…" : "Send answer"}
-        </Button>
-      )}
-    </form>
+              </UserInputQuestionForm>
+            </form>
+          ) : null}
+        </div>
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }

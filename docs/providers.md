@@ -127,9 +127,16 @@ failure checks.
 ## Codex asynchronous questions
 
 On Codex versions and models that expose `request_user_input_async`, Synara shows
-an inline question card with optional suggested answers and an editable text
-answer. A suggested answer is never submitted automatically. The composer remains
-available and the agent can continue working while the question is unanswered.
+a question-mark capsule labeled with the number of questions. Opening it reuses
+the same question form as blocking prompts: numbered choices, previous/next
+navigation, and a separate text answer. Closing the capsule preserves the current
+answer draft. A suggested answer is never submitted automatically. The composer
+remains available and the agent can continue working while the question is unanswered.
+
+The shared form keeps blocking prompts' existing auto-advance behavior. Async
+questions require an explicit submission and scope keyboard shortcuts to the
+opened form, so separate questions and the main composer cannot consume each
+other's input.
 
 Questions and submitted answers are stored with the assistant message. Refreshing
 or restarting Synara restores that state. Concurrent submissions are admitted once

@@ -4,19 +4,22 @@ Captured on macOS with Node 24.13.1, Bun 1.4.2, and codex-cli 0.154.0.
 
 ## Browser fixture
 
-The images and video render the actual `AsyncUserInputCard`, shared controls, and
+The images and video render the actual `AsyncUserInputCard`, shared `UserInputQuestionForm`, and
 Synara CSS in a transcript fixture. They do not claim packaged desktop validation.
 
 - [Before](before.png): the existing plain-text representation of the question.
-- [Pending](pending.png): suggested choices and free-text input while the composer
-  remains editable.
+- [Capsule](capsule.png): a question-mark icon and question count, collapsed initially.
+- [Pending](pending.png): the existing numbered-choice form and navigation, with a
+  separate free-text answer while the composer remains editable.
 - [Answered](answered.png): the submitted answers remain attached to the question;
   the independent composer draft is preserved.
-- [Interaction video](interaction.webm): select a choice, type details, edit the
-  independent composer, and submit.
+- [Interaction video](interaction.webm): open the capsule, select a choice, navigate
+  questions, type details, close and reopen, edit the independent composer, and submit.
 
-Automated browser coverage is in `AsyncUserInputCard.browser.tsx`. The focused
-transcript tests also cover tail anchors and row overlap.
+Automated browser coverage is in `AsyncUserInputCard.browser.tsx` and
+`UserInputQuestionForm.browser.tsx`. These cover saved drafts across disclosure
+toggles, local keyboard shortcuts, and preservation of blocking-prompt behavior.
+The focused transcript tests also cover tail anchors and row overlap.
 
 ## Native app-server smoke
 
