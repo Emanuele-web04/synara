@@ -5165,14 +5165,19 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
-    runningChatsQuitGuard.cancelPending();
+    // A renderer that dies while hosting the quit-confirmation ask can never
+    // answer it — declining would abandon a requested quit and (worse) show
+    // the recovery prompt below, leaving a dead-UI app alive forever. Allow
+    // the pending ask and count it as quitting for the crash policy.
+    const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
+    runningChatsQuitGuard.allowPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
 
     const response = rendererCrashPolicy.respondToCrash({
       reason: details.reason,
-      quitting: isQuitting,
+      quitting: isQuitting || quitAskPending,
       nowMs: Date.now(),
     });
 
