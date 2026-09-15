@@ -1,0 +1,65 @@
+name: Lossless production PNG optimization
+on:
+  push:
+    branches: [perf/bundle-reduction-20260916-a7f3]
+    paths: [.github/workflows/lossless-png-audit-a7f3.yml]
+permissions:
+  contents: read
+jobs:
+  optimize:
+    if: github.repository == 'Emanuele-web04/synara' && github.ref == 'refs/heads/perf/bundle-reduction-20260916-a7f3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Recompress IDAT only; preserve pixel data and every other PNG chunk
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct, zlib
+          paths = ['apps/desktop/resources/app-icon-macos.png', 'apps/desktop/resources/app-icon-linux.png', 'apps/web/public/app-icons/safari.png']
+          def chunks(data):
+              assert data[:8] == b'\x89PNG\r\n\x1a\n'
+              pos, out = 8, []
+              while pos < len(data):
+                  size = struct.unpack_from('>I', data, pos)[0]
+                  raw = data[pos:pos + size + 12]
+                  kind, body = raw[4:8], raw[8:-4]
+                  assert zlib.crc32(kind + body) & 0xffffffff == struct.unpack('>I', raw[-4:])[0]
+                  out.append((kind, body, raw))
+                  pos += size + 12
+              assert pos == len(data)
+              return out
+          for name in paths:
+              path = Path(name)
+              before = path.read_bytes()
+              original = chunks(before)
+              pixels = zlib.decompress(b''.join(body for kind, body, raw in original if kind == b'IDAT'))
+              compressed = zlib.compress(pixels, 9)
+              idat = struct.pack('>I', len(compressed)) + b'IDAT' + compressed + struct.pack('>I', zlib.crc32(b'IDAT' + compressed) & 0xffffffff)
+              after, written = bytearray(before[:8]), False
+              for kind, body, raw in original:
+                  if kind == b'IDAT':
+                      if not written:
+                          after.extend(idat)
+                          written = True
+                  else:
+                      after.extend(raw)
+              optimized = chunks(after)
+              assert zlib.decompress(b''.join(body for kind, body, raw in optimized if kind == b'IDAT')) == pixels
+              assert [raw for kind, body, raw in optimized if kind != b'IDAT'] == [raw for kind, body, raw in original if kind != b'IDAT']
+              if len(after) < len(before):
+                  path.write_bytes(after)
+                  print(f'{name}: {len(before)} -> {len(after)} bytes; saved {len(before) - len(after)}; pixels and metadata identical')
+          PY
+      - name: Commit only verified images to the isolated branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- apps/desktop/resources/app-icon-macos.png apps/desktop/resources/app-icon-linux.png apps/web/public/app-icons/safari.png
+          if ! git diff --cached --quiet; then
+            git commit -m 'perf: losslessly recompress shipped platform and Safari PNGs'
+            git push origin HEAD:refs/heads/perf/bundle-reduction-20260916-a7f3
+          fi
