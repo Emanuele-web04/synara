@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
@@ -77,9 +78,17 @@ interface ChatKeyboardShortcutsInput {
   handleModelPickerOpenChange: (open: boolean) => void;
   scheduleComposerFocus: () => void;
   modelOptionsByProvider: ReturnType<typeof useChatProviderModels>["modelOptionsByProvider"];
+  modelOptionsByProviderInstance: ReturnType<
+    typeof useChatProviderModels
+  >["modelOptionsByProviderInstance"];
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   selectedModel: string;
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
@@ -137,7 +146,9 @@ export function useChatKeyboardShortcuts({
   handleModelPickerOpenChange,
   scheduleComposerFocus,
   modelOptionsByProvider,
+  modelOptionsByProviderInstance,
   selectedProvider,
+  selectedProviderInstanceId,
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
@@ -265,15 +276,18 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         const direction = command === "model.next" ? "next" : "previous";
-        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const providerOptions =
+          modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+          modelOptionsByProvider[selectedProvider] ??
+          [];
         const nextSlug = resolveCycledModelSlug({
           currentModel: selectedModel,
           options: providerOptions,
-          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          favoriteSlugs: readFavoriteModelSlugs(selectedProvider, selectedProviderInstanceId),
           direction,
         });
         if (!nextSlug) return;
-        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug, selectedProviderInstanceId);
         return;
       }
 
@@ -500,8 +514,10 @@ export function useChatKeyboardShortcuts({
     toggleTerminalVisibility,
     activeThread,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     onProviderModelSelect,
     copyThreadIdToClipboard,
   ]);

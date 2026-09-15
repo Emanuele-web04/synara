@@ -5,7 +5,7 @@
 // Layer: Web lib tests
 
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
-import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,7 +19,33 @@ import {
   resolveNewThreadModelPrefetchProvider,
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
-import { providerDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+
+const providerDiscoveryQueryKeys = {
+  ...rawProviderDiscoveryQueryKeys,
+  models: (
+    provider: ProviderKind,
+    binaryPath: string | null,
+    apiEndpoint: string | null,
+    agentDir: string | null,
+    cwd: string | null,
+    homePath: string | null = null,
+    shadowHomePath: string | null = null,
+    accountId: string | null = null,
+    instanceId: ProviderInstanceId = provider,
+  ) =>
+    rawProviderDiscoveryQueryKeys.models(
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      homePath,
+      shadowHomePath,
+      accountId,
+      instanceId,
+    ),
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,6 +73,8 @@ function makeSettings(
 function makeStatus(provider: ProviderKind, available: boolean): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     available,
     status: available ? "ready" : "error",
     authStatus: "authenticated",
@@ -214,6 +242,43 @@ describe("providerModelsPrefetchQueryOptions", () => {
 
     expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
+    );
+  });
+
+  it("uses the selected instance identity and config without inheriting default-driver paths", () => {
+    const settings = makeSettings({
+      cursorBinaryPath: "/bin/default-cursor",
+      cursorApiEndpoint: "https://default.example",
+      providerInstances: {
+        cursor_work: {
+          driver: "cursor",
+          displayName: "Cursor Work",
+          config: {
+            binaryPath: "/bin/work-cursor",
+            apiEndpoint: "https://work.example",
+          },
+        },
+      },
+    });
+
+    expect(
+      providerModelsPrefetchQueryOptions({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        settings,
+      }).queryKey,
+    ).toEqual(
+      providerDiscoveryQueryKeys.models(
+        "cursor",
+        "/bin/work-cursor",
+        "https://work.example",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "cursor_work",
+      ),
     );
   });
 });
@@ -496,7 +561,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       .filter((key) => key[1] === "composer-capabilities");
     expect(capabilityKeys).toHaveLength(NEW_THREAD_MODEL_PREFETCH_PROVIDERS.length);
     expect(capabilityKeys).not.toContainEqual(
-      providerDiscoveryQueryKeys.composerCapabilities("droid"),
+      providerDiscoveryQueryKeys.composerCapabilities("droid", "droid"),
     );
 
     // Droid warms only on explicit intent, capabilities riding along exactly once.
@@ -512,7 +577,9 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
-    expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid"));
+    expect(droidKeys).toContainEqual(
+      providerDiscoveryQueryKeys.composerCapabilities("droid", "droid"),
+    );
     expect(
       droidCalls.find(
         (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",

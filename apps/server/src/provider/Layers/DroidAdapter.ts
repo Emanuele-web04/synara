@@ -397,6 +397,27 @@ function setDroidDiscoveryCacheEntry<T>(cache: Map<string, T>, key: string, valu
   }
 }
 
+function droidDiscoveryCacheKey(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly instanceId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+}): string {
+  const environment = input.environment
+    ? Object.entries(input.environment)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => {
+          let hash = 0x811c9dc5;
+          for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          return [name, (hash >>> 0).toString(36)] as const;
+        })
+    : null;
+  return JSON.stringify([input.instanceId ?? null, input.binaryPath, input.cwd, environment]);
+}
+
 export function makeDroidAdapter(
   droidSettings: DroidAcpRuntimeSettings,
   options?: DroidAdapterLiveOptions,
@@ -448,6 +469,7 @@ export function makeDroidAdapter(
     // Discovery sessions are disposable and never enter the live session directory.
     const makeDroidDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
       readonly cwd: string;
       readonly clientName: string;
     }) =>
@@ -455,6 +477,8 @@ export function makeDroidAdapter(
         droidSettings: {
           ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(droidSettings.environment ? { environment: droidSettings.environment } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
         },
         childProcessSpawner,
         cwd: input.cwd,
@@ -800,6 +824,12 @@ export function makeDroidAdapter(
             ...(providerDroidOptions?.binaryPath !== undefined
               ? { binaryPath: providerDroidOptions.binaryPath }
               : {}),
+            ...(droidSettings.environment !== undefined
+              ? { environment: droidSettings.environment }
+              : {}),
+            ...(providerDroidOptions?.environment !== undefined
+              ? { environment: providerDroidOptions.environment }
+              : {}),
             ...(droidModelSelection?.model ? { model: droidModelSelection.model } : {}),
             ...(droidModelSelection?.options?.reasoningEffort
               ? { reasoningEffort: droidModelSelection.options.reasoningEffort }
@@ -1002,6 +1032,7 @@ export function makeDroidAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -1924,6 +1955,10 @@ export function makeDroidAdapter(
                   ...(input.providerOptions?.droid?.binaryPath
                     ? { binaryPath: input.providerOptions.droid.binaryPath }
                     : {}),
+                  ...(droidSettings.environment ? { environment: droidSettings.environment } : {}),
+                  ...(input.providerOptions?.droid?.environment
+                    ? { environment: input.providerOptions.droid.environment }
+                    : {}),
                 },
                 childProcessSpawner,
                 cwd: sourceCwd,
@@ -2017,13 +2052,19 @@ export function makeDroidAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          const cacheKey = droidDiscoveryCacheKey({
+            binaryPath: input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid",
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
           const runtime = yield* makeDroidDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
             clientName: "Synara Model Discovery",
           });
@@ -2138,13 +2179,19 @@ export function makeDroidAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          const cacheKey = droidDiscoveryCacheKey({
+            binaryPath: input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid",
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
           const runtime = yield* makeDroidDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
             clientName: "Synara Command Discovery",
           });

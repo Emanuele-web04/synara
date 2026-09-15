@@ -10,6 +10,7 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -85,6 +86,7 @@ import {
   shouldApplyThreadsProjection,
   THREAD_PROJECTION_EVENT_TYPES,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -778,6 +780,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // The provider reactor may still reject an instance switch for a
+          // bound thread after this event is projected. Only adopt a selection
+          // routed at another instance on a fresh thread, so a rejected switch
+          // cannot overwrite the thread's working selection.
           const [messages, session] = yield* Effect.all([
             projectionThreadMessageRepository.listByThreadId({
               threadId: event.payload.threadId,
@@ -786,14 +792,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               threadId: event.payload.threadId,
             }),
           ]);
+          const canAdoptFirstTurnSelection = canAdoptFirstTurnProvider({
+            hasLatestTurn: existingRow.value.latestTurnId !== null,
+            hasSession: Option.isSome(session),
+            messages,
+          });
+          const requestedModelSelection = event.payload.modelSelection;
+          const requestedInstanceId =
+            requestedModelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(requestedModelSelection);
+          const canAdoptRequestedInstance =
+            requestedModelSelection === undefined ||
+            (requestedInstanceId !== null &&
+              canProjectTurnModelSelectionForSession(
+                Option.getOrNull(session),
+                requestedInstanceId,
+              ) &&
+              (Option.isSome(session) ||
+                requestedInstanceId ===
+                  resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+                canAdoptFirstTurnSelection));
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
-            requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
-              hasLatestTurn: existingRow.value.latestTurnId !== null,
-              hasSession: Option.isSome(session),
-              messages,
-            }),
+            requestedModelSelection: canAdoptRequestedInstance
+              ? requestedModelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnSelection,
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the
@@ -1228,6 +1253,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
+          const providerInstanceId =
+            Option.getOrNull(thread)?.modelSelection.instanceId ??
+            Option.getOrNull(currentSession)?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            Option.getOrNull(thread)?.modelSelection.provider ??
+            event.payload.modelSelection?.provider;
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
             currentSession: Option.getOrNull(currentSession),
@@ -1236,11 +1267,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              providerInstanceId: turnStartSession.providerInstanceId ?? null,
+            });
           }
           return;
         }
@@ -1250,6 +1285,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
+            providerInstanceId: event.payload.session.providerInstanceId ?? null,
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,

@@ -23,6 +23,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import {
+  aggregateThreadTurnSnapshotRows,
   aggregateThreadTokenRows,
   ProfileStatsArchive,
   ProfileStatsArchiveLive,
@@ -104,7 +105,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         'thread-keep',
         'project-archive',
         'Kept Thread',
-        '{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}',
+        '{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}',
         'full-access', 'default', 'local',
         '2026-06-13T08:00:00.000Z', '2026-06-13T08:00:00.000Z', NULL
       ),
@@ -151,7 +152,7 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
       (
         'event-keep-1', 'thread', 'thread-keep', 1, 'thread.turn-start-requested',
         '2026-06-13T08:05:00.000Z', 'cmd-keep-turn', 'client',
-        '{"threadId":"thread-keep","modelSelection":{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}}',
+        '{"threadId":"thread-keep","modelSelection":{"provider":"opencode","instanceId":"work","model":"anthropic/claude-sonnet-4-6","options":{"effort":"max"}}}',
         '{}'
       ),
       (
@@ -264,6 +265,28 @@ const acknowledgeProviderCommandJournal = (sql: SqlClient.SqlClient) =>
   `;
 
 describe("ProfileStatsArchive", () => {
+  it("snapshots reasoning from canonical model option rows", () => {
+    expect(
+      aggregateThreadTurnSnapshotRows(
+        [
+          {
+            payloadJson:
+              '{"modelSelection":{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
+          },
+        ],
+        null,
+      ),
+    ).toEqual([
+      {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5-codex",
+        reasoning: "high",
+        turnCount: 1,
+      },
+    ]);
+  });
+
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
     isGitRepositoryImpl = () => Effect.succeed(true);
@@ -313,24 +336,28 @@ describe("ProfileStatsArchive", () => {
       {
         createdAt: "2026-06-13T12:02:00.000Z",
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
         tokens: 2000,
       },
       {
         createdAt: "2026-06-13T12:04:00.000Z",
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
         tokens: 500,
       },
       {
         createdAt: "2026-06-13T12:11:00.000Z",
         provider: "pi",
+        instanceId: "pi",
         model: "claude-haiku-4-5",
         tokens: 700,
       },
       {
         createdAt: "2026-06-13T12:12:00.000Z",
         provider: "pi",
+        instanceId: "pi",
         model: "claude-haiku-4-5",
         tokens: 1000,
       },
@@ -445,6 +472,7 @@ describe("ProfileStatsArchive", () => {
       {
         createdAt: "2026-06-13T12:00:00.000Z",
         provider: "pi",
+        instanceId: "pi",
         model: null,
         tokens: 1_500,
       },
@@ -563,6 +591,20 @@ describe("ProfileStatsArchive", () => {
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(statsBefore.providerModels).toContainEqual(
+          expect.objectContaining({
+            provider: "opencode",
+            instanceId: "work",
+            model: "anthropic/claude-sonnet-4-6",
+          }),
+        );
+        expect(tokenStatsBefore.models).toContainEqual(
+          expect.objectContaining({
+            provider: "opencode",
+            instanceId: "work",
+            model: "anthropic/claude-sonnet-4-6",
+          }),
+        );
         // Half-hour offset: the 18:45Z token activity lands on the NEXT local
         // day for +05:30, so this catches any archive-side day re-bucketing drift.
         const statsBeforeIst = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 330 });

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   DEFAULT_SERVER_SETTINGS,
   type OrchestrationCommand,
   type OrchestrationThread,
   ProjectId,
+  type ProviderInstanceId,
   type ProviderSession,
+  type ProviderStartOptions,
   ThreadId,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -12,15 +16,87 @@ import { it, vi } from "@effect/vitest";
 import { Effect, FileSystem, Option, Path } from "effect";
 
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
+import { claudeIsolatedHomePath } from "../provider/claudeEnvironment";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
 import type { ServerSettingsShape } from "../serverSettings";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
-import { makeImportThreadHandler } from "./importThreadRoute";
+import {
+  claudeHistoricalSessionChildEnvironment,
+  claudeHistoricalSessionEnvironment,
+  makeImportThreadHandler,
+  resolveImportedThreadProviderOptionsForSettings,
+} from "./importThreadRoute";
 
 const threadId = ThreadId.makeUnsafe("thread-import");
 const projectId = ProjectId.makeUnsafe("project-import");
 const importedAt = "2026-08-09T12:00:00.000Z";
+
+it("expands instance Claude homes for historical-session imports", () => {
+  const environment = claudeHistoricalSessionEnvironment({
+    claudeAgent: {
+      homePath: "~/claude-work",
+      environment: { CLAUDE_IMPORT_TEST: "1" },
+    },
+  } satisfies ProviderStartOptions);
+
+  assert.equal(environment?.HOME, path.join(homedir(), "claude-work"));
+  assert.equal(environment?.CLAUDE_IMPORT_TEST, "1");
+});
+
+it("expands instance Claude homes against the configured Synara home", () => {
+  const environment = claudeHistoricalSessionEnvironment(
+    {
+      claudeAgent: {
+        homePath: "~/claude-work",
+        environment: { CLAUDE_IMPORT_TEST: "1" },
+      },
+    } satisfies ProviderStartOptions,
+    { homeDir: "/synara/home" },
+  );
+
+  assert.equal(environment?.HOME, path.join("/synara/home", "claude-work"));
+  assert.equal(environment?.CLAUDE_IMPORT_TEST, "1");
+});
+
+it("scopes environment-only Claude imports to the selected provider instance", () => {
+  const isolationRootDir = "/synara/userdata";
+  const providerInstanceId = "claude_work" as ProviderInstanceId;
+  const environment = claudeHistoricalSessionEnvironment(
+    {
+      claudeAgent: {
+        environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+      },
+    } satisfies ProviderStartOptions,
+    {
+      homeDir: "/synara/home",
+      isolationRootDir,
+      providerInstanceId,
+    },
+  );
+
+  assert.equal(environment?.HOME, claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }));
+  assert.equal(environment?.ANTHROPIC_AUTH_TOKEN, "work-token");
+});
+
+it("does not remerge ambient credentials into Claude import child environments", () => {
+  const original = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "ambient-key";
+  try {
+    const environment: NodeJS.ProcessEnv = claudeHistoricalSessionChildEnvironment({
+      HOME: "/tmp/synara-claude-import",
+    });
+
+    assert.deepEqual(environment, { HOME: "/tmp/synara-claude-import" });
+    assert.equal((environment as NodeJS.ProcessEnv)["ANTHROPIC_API_KEY"], undefined);
+  } finally {
+    if (original === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = original;
+    }
+  }
+});
 
 function makeCodexThread(): OrchestrationThread {
   return {
@@ -93,6 +169,7 @@ it.effect("imports Codex history through a provider-owned fork", () =>
       fileSystem,
       path,
       platform: process.platform,
+      serverConfig: { homeDir: "/tmp/synara-home", stateDir: "/tmp/synara-state" },
       orchestrationEngine: {
         dispatch: (command: OrchestrationCommand) =>
           Effect.sync(() => {
@@ -152,6 +229,7 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
       fileSystem,
       path,
       platform: process.platform,
+      serverConfig: { homeDir: "/tmp/synara-home", stateDir: "/tmp/synara-state" },
       orchestrationEngine: {
         dispatch: () => Effect.die("disabled import must not dispatch"),
       } as unknown as OrchestrationEngineShape,
@@ -189,3 +267,122 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
     assert.equal(startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("rejects disabled provider instances before import preflight can materialize options", () => {
+  assert.throws(
+    () =>
+      resolveImportedThreadProviderOptionsForSettings(
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            opencode_disabled: {
+              driver: "opencode",
+              enabled: false,
+              config: {
+                serverUrl: "http://127.0.0.1:4096",
+                serverPassword: "must-not-be-used",
+              },
+            },
+          },
+        },
+        { provider: "opencode", instanceId: "opencode_disabled", model: "opencode/model" },
+      ),
+    /disabled for thread import/,
+  );
+});
+
+it("passes the resolved OpenCode instance into external-thread preflight", async () => {
+  const importThreadId = ThreadId.makeUnsafe("thread-import-opencode");
+  const importProjectId = ProjectId.makeUnsafe("project-import-opencode");
+  const instanceId = "opencode_work" as ProviderInstanceId;
+  const workspaceRoot = "/repo/opencode";
+  const externalReadInputs: Array<Record<string, unknown>> = [];
+  const now = new Date().toISOString();
+  const adapter = {
+    readExternalThread: (input: Record<string, unknown>) => {
+      externalReadInputs.push(input);
+      return Effect.succeed({
+        threadId: importThreadId,
+        turns: [],
+        cwd: workspaceRoot,
+      });
+    },
+    readThread: () => Effect.succeed({ threadId: importThreadId, turns: [], cwd: workspaceRoot }),
+  };
+  const handler = makeImportThreadHandler({
+    fileSystem: {} as never,
+    orchestrationEngine: {
+      dispatch: () => Effect.void,
+    } as never,
+    path: path as never,
+    platform: process.platform,
+    projectionSnapshotQuery: {
+      getThreadDetailById: () =>
+        Effect.succeed(
+          Option.some({
+            id: importThreadId,
+            projectId: importProjectId,
+            title: "Imported thread",
+            modelSelection: {
+              provider: "opencode",
+              instanceId,
+              model: "opencode/test-model",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
+            session: null,
+          } as never),
+        ),
+      getProjectShellById: () =>
+        Effect.succeed(
+          Option.some({
+            id: importProjectId,
+            kind: "git",
+            workspaceRoot,
+          } as never),
+        ),
+    } as never,
+    providerAdapterRegistry: {
+      getByProvider: () => Effect.succeed(adapter as never),
+    } as never,
+    providerService: {
+      startSession: () =>
+        Effect.succeed({
+          provider: "opencode",
+          providerInstanceId: instanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          cwd: workspaceRoot,
+          threadId: importThreadId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+    } as never,
+    serverConfig: { homeDir: "/home/tester", stateDir: "/synara/state" },
+    serverSettings: {
+      getSettings: Effect.succeed({
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: {
+            driver: "opencode",
+            enabled: true,
+            config: {},
+          },
+        },
+      }),
+    } as never,
+  });
+
+  await Effect.runPromise(handler({ threadId: importThreadId, externalId: "external-session" }));
+
+  assert.equal(externalReadInputs.length, 1);
+  assert.equal(externalReadInputs[0]?.externalThreadId, "external-session");
+  assert.equal(externalReadInputs[0]?.providerInstanceId, instanceId);
+  assert.equal(externalReadInputs[0]?.cwd, workspaceRoot);
+});

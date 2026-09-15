@@ -21,9 +21,11 @@ import {
   type GitActionProgressEvent,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
+  type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
+  type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
@@ -31,6 +33,7 @@ import {
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
+  type ServerSettings,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
@@ -53,6 +56,12 @@ import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
+import {
+  mergeProviderStartOptions,
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 import {
   isThreadDetailEventFor,
   THREAD_DETAIL_EVENT_TYPES,
@@ -90,6 +99,7 @@ import {
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -102,7 +112,6 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
-import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
@@ -313,6 +322,47 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
 const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
+
+// Legacy/native callers may pin a text-generation model via the model-only
+// `textGenerationModel` field. Downstream routing prefers a model selection
+// over the raw model, so the global settings selection must only be injected
+// when the caller supplied neither — injecting it alongside an explicit model
+// would silently reroute the request to the globally configured model.
+function resolveTextGenerationRouting(
+  settings: ServerSettings,
+  input: {
+    readonly textGenerationModel?: string | undefined;
+    readonly textGenerationModelSelection?: ModelSelection | undefined;
+    readonly providerOptions?: ProviderStartOptions | undefined;
+  },
+): {
+  readonly model: string;
+  readonly modelSelection: ModelSelection | undefined;
+  readonly providerOptions: ProviderStartOptions | undefined;
+} {
+  const explicitModel = input.textGenerationModel?.trim();
+  if (!input.textGenerationModelSelection && explicitModel) {
+    return {
+      model: explicitModel,
+      modelSelection: undefined,
+      providerOptions: input.providerOptions,
+    };
+  }
+  const modelSelection =
+    input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+  const instance = resolveProviderInstance(settings, {
+    provider: modelSelection.provider,
+    instanceId: resolveModelSelectionInstanceId(modelSelection),
+  });
+  return {
+    model: explicitModel || modelSelection.model,
+    modelSelection,
+    providerOptions: mergeProviderStartOptions(
+      input.providerOptions,
+      instance ? providerStartOptionsFromInstance(instance) : undefined,
+    ),
+  };
+}
 
 const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
   Effect.fail(
@@ -620,6 +670,7 @@ const makeWsRpcHandlersLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+        serverConfig: config,
         serverSettings,
       });
 
@@ -937,7 +988,9 @@ const makeWsRpcHandlersLayer = () =>
                   THREAD_DETAIL_EVENT_TYPES,
                 );
           return rpcEffect(
-            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
+            Stream.runCollect(
+              replay.pipe(Stream.map(sanitizeOrchestrationEventProviderOptions)),
+            ).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
           );
         },
@@ -1077,6 +1130,7 @@ const makeWsRpcHandlersLayer = () =>
                   bufferLiveUiStream(
                     stream.pipe(
                       Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                      Stream.map(sanitizeOrchestrationEventProviderOptions),
                     ),
                     {
                       label: "orchestration.thread-detail",
@@ -1116,6 +1170,7 @@ const makeWsRpcHandlersLayer = () =>
                   )
                   .pipe(
                     Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                    Stream.map(sanitizeOrchestrationEventProviderOptions),
                     Stream.mapError((cause) =>
                       toWsRpcError(cause, "Failed to replay thread events"),
                     ),
@@ -1151,9 +1206,14 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "orchestration.domain-events" },
-            bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
-              label: "orchestration.domain-events",
-            }),
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(
+                Stream.map(sanitizeOrchestrationEventProviderOptions),
+              ),
+              {
+                label: "orchestration.domain-events",
+              },
+            ),
           ),
 
         [WS_METHODS.projectsListDirectories]: (input) =>
@@ -1431,7 +1491,20 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to read working tree diff stats",
           ),
         [WS_METHODS.gitSummarizeDiff]: (input) =>
-          rpcEffect(gitManager.summarizeDiff(input), "Failed to summarize diff"),
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const routing = resolveTextGenerationRouting(settings, input);
+              return yield* gitManager.summarizeDiff({
+                ...input,
+                ...(routing.modelSelection
+                  ? { textGenerationModelSelection: routing.modelSelection }
+                  : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
+              });
+            }),
+            "Failed to summarize diff",
+          ),
         [WS_METHODS.gitPull]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(
@@ -1443,21 +1516,31 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              gitManager
-                .runStackedAction(input, {
-                  actionId: input.actionId,
-                  progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                  },
-                })
-                .pipe(
-                  Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) =>
-                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+              Effect.gen(function* () {
+                const settings = yield* serverSettings.getSettings;
+                const routing = resolveTextGenerationRouting(settings, input);
+                return {
+                  ...input,
+                  ...(routing.modelSelection
+                    ? { textGenerationModelSelection: routing.modelSelection }
+                    : {}),
+                  ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
+                };
+              }).pipe(
+                Effect.flatMap((runInput) =>
+                  gitManager.runStackedAction(runInput, {
+                    actionId: input.actionId,
+                    progressReporter: {
+                      publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                    },
                   }),
                 ),
+                Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                }),
+              ),
             ),
             { label: "git.stacked-action" },
           ),
@@ -1782,37 +1865,69 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
-            getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
-              Effect.flatMap((adapter) =>
-                adapter.prewarmVoice
-                  ? adapter.prewarmVoice(input)
-                  : Effect.fail(
-                      new Error(
-                        `Voice transcription is unavailable for provider '${input.provider}'.`,
-                      ),
-                    ),
-              ),
-            ),
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const instance = resolveProviderInstance(settings, {
+                provider: input.provider,
+                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+              });
+              if (!instance || instance.driver !== input.provider || !instance.enabled) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+                  ),
+                );
+              }
+              const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+              if (!adapter.prewarmVoice) {
+                return yield* Effect.fail(
+                  new Error(`Voice transcription is unavailable for provider '${input.provider}'.`),
+                );
+              }
+              const { providerOptions: _ignoredProviderOptions, ...prewarmInput } = input;
+              void _ignoredProviderOptions;
+              const providerOptions = providerStartOptionsFromInstance(instance);
+              return yield* adapter.prewarmVoice({
+                ...prewarmInput,
+                providerInstanceId: instance.instanceId,
+                ...(providerOptions ? { providerOptions } : {}),
+              });
+            }),
             "Voice transcription prewarm failed",
           ),
         [WS_METHODS.serverTranscribeVoice]: (input) =>
           rpcEffect(
             voiceUploadAdmissionGate.run(
-              getEnabledProviderAdapter(
-                input.provider,
-                serverSettings,
-                providerAdapterRegistry,
-              ).pipe(
-                Effect.flatMap((adapter) =>
-                  adapter.transcribeVoice
-                    ? adapter.transcribeVoice(input)
-                    : Effect.fail(
-                        new Error(
-                          `Voice transcription is unavailable for provider '${input.provider}'.`,
-                        ),
-                      ),
-                ),
-              ),
+              Effect.gen(function* () {
+                const settings = yield* serverSettings.getSettings;
+                const instance = resolveProviderInstance(settings, {
+                  provider: input.provider,
+                  ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+                });
+                if (!instance || instance.driver !== input.provider || !instance.enabled) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+                    ),
+                  );
+                }
+                const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+                if (!adapter.transcribeVoice) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Voice transcription is unavailable for provider '${input.provider}'.`,
+                    ),
+                  );
+                }
+                const { providerOptions: _ignoredProviderOptions, ...transcriptionInput } = input;
+                void _ignoredProviderOptions;
+                const providerOptions = providerStartOptionsFromInstance(instance);
+                return yield* adapter.transcribeVoice({
+                  ...transcriptionInput,
+                  providerInstanceId: instance.instanceId,
+                  ...(providerOptions ? { providerOptions } : {}),
+                });
+              }),
             ),
             "Voice transcription failed",
           ),
@@ -1820,17 +1935,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.gen(function* () {
               const settings = yield* serverSettings.getSettings;
-              const modelSelection =
-                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              const routing = resolveTextGenerationRouting(settings, input);
               return yield* textGeneration.generateThreadRecap({
                 cwd: input.cwd,
                 newMaterial: input.newMaterial,
                 ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
                 ...(input.currentState ? { currentState: input.currentState } : {}),
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-                model: input.textGenerationModel ?? modelSelection.model,
-                modelSelection,
-                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+                model: routing.model,
+                ...(routing.modelSelection ? { modelSelection: routing.modelSelection } : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
               });
             }),
             "Failed to generate thread recap",
@@ -1839,17 +1953,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.gen(function* () {
               const settings = yield* serverSettings.getSettings;
-              const modelSelection =
-                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              const routing = resolveTextGenerationRouting(settings, input);
               return yield* textGeneration.generateAutomationIntent({
                 cwd: input.cwd,
                 message: input.message,
                 ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
                 nowIso: input.nowIso,
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-                model: input.textGenerationModel ?? modelSelection.model,
-                modelSelection,
-                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+                model: routing.model,
+                ...(routing.modelSelection ? { modelSelection: routing.modelSelection } : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
               });
             }),
             "Failed to generate automation intent",

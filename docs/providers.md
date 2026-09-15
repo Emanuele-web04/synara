@@ -97,6 +97,30 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+## Provider profiles and terminal commands
+
+Provider settings can define multiple independently routed instances of any supported provider.
+Each enabled instance receives a stable command in newly opened or restarted Synara terminals, for
+example `claude-work`, `codex-personal`, or `pi-team`. The command is an executable shim on `PATH`,
+not a zsh or bash function, so it behaves consistently from zsh, bash, fish, shell scripts, and
+child processes. Bare commands such as `claude` and `codex` keep their existing meaning.
+
+The generated name comes from the provider and stable instance ID. A portable command override can
+be configured without tying terminal behavior to the editable display label. Profile shims are
+scoped to Synara terminals; Synara does not edit `.zshrc`, `.bashrc`, or other global shell files.
+
+Use **Import directory** in the desktop provider settings to reference an existing provider account
+directory. Import is non-destructive: Synara does not move or copy the selected directory. Known
+provider roots use their native setting (`CODEX_HOME`, Claude's config directory, or Pi's agent
+directory); other providers use the profile-directory mapping shown in settings. Remote browser
+sessions can create the same profile manually because a browser cannot safely pick a directory on
+the server machine.
+
+Sensitive environment values are never serialized into terminal shim files. Directory-backed
+authentication works directly. A profile that depends only on a secret environment credential
+still works for managed Synara runs, but its named terminal command requires that credential to be
+available through a secure runtime mechanism rather than an on-disk shim.
+
 ## Switching providers
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
+  chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -26,6 +28,9 @@ import {
 import {
   buildCodexProcessEnv,
   disableCodexConfigSections,
+  prepareCodexAuthTracking,
+  readCodexPreparedAuthTrackingFingerprint,
+  readCodexSharedContinuationGeneration,
   SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
@@ -54,9 +59,128 @@ import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   acquireAgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
-import { MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION } from "./provider/codexCliVersion.ts";
+import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
+  MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+} from "./provider/codexCliVersion.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+
+function codexAuth(accountId: string, tokenVersion: string): string {
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      account_id: accountId,
+      access_token: `access-${tokenVersion}`,
+      refresh_token: `refresh-${tokenVersion}`,
+    },
+  });
+}
+
+function readFakeCodexMethods(messagesPath: string): string[] {
+  if (!existsSync(messagesPath)) return [];
+  return readFileSync(messagesPath, "utf8").trim().split("\n").filter(Boolean);
+}
+
+async function settle<T>(
+  promise: Promise<T>,
+): Promise<
+  | { readonly status: "fulfilled"; readonly value: T }
+  | { readonly status: "rejected"; readonly reason: unknown }
+> {
+  try {
+    return { status: "fulfilled", value: await promise };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
+function writeAuthMutationFakeCodexExecutable(root: string): string {
+  const binaryPath = path.join(root, "fake-codex.mjs");
+  writeFileSync(
+    binaryPath,
+    `#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex 0.105.0\\n");
+  process.exit(0);
+}
+if (args[0] !== "app-server") process.exit(2);
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (process.env.SYNARA_FAKE_CODEX_MESSAGES_PATH && message.method) {
+    fs.appendFileSync(process.env.SYNARA_FAKE_CODEX_MESSAGES_PATH, message.method + "\\n", "utf8");
+  }
+  if (message.id === undefined) return;
+  if (message.method === "initialize" && process.env.SYNARA_FAKE_CODEX_EXIT_ON_INITIALIZE) {
+    process.exit(Number(process.env.SYNARA_FAKE_CODEX_EXIT_ON_INITIALIZE));
+  }
+  if (
+    message.method === "initialize" &&
+    process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH &&
+    process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT
+  ) {
+    fs.writeFileSync(
+      process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH,
+      process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT,
+      "utf8",
+    );
+  }
+  let result = {};
+  if (message.method === "thread/start") result = { thread: { id: "fake-provider-thread" } };
+  if (message.method === "thread/fork") result = { thread: { id: "fake-forked-thread" } };
+  const respond = () => process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  if (message.method === "initialize" && process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH) {
+    const timer = setInterval(() => {
+      if (!fs.existsSync(process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH)) return;
+      clearInterval(timer);
+      respond();
+    }, 5);
+    return;
+  }
+  respond();
+});
+`,
+    "utf8",
+  );
+  chmodSync(binaryPath, 0o755);
+  return binaryPath;
+}
+
+function makeAuthMutationFixture(prefix: string, accountId: string, nextAccountId: string) {
+  const root = mkdtempSync(path.join(os.tmpdir(), prefix));
+  const sourceHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "project");
+  const runtimeHome = path.join(root, "runtime");
+  const authPath = path.join(sourceHome, "auth.json");
+  const messagesPath = path.join(root, "messages.txt");
+  mkdirSync(sourceHome, { recursive: true });
+  mkdirSync(projectPath, { recursive: true });
+  writeFileSync(path.join(sourceHome, "config.toml"), "", "utf8");
+  writeFileSync(authPath, codexAuth(accountId, "1"), "utf8");
+  const binaryPath = writeAuthMutationFakeCodexExecutable(root);
+  const environment = {
+    HOME: root,
+    SYNARA_HOME: runtimeHome,
+    SYNARA_FAKE_CODEX_MESSAGES_PATH: messagesPath,
+    SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH: authPath,
+    SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT: codexAuth(nextAccountId, "2"),
+  };
+  return {
+    root,
+    sourceHome,
+    projectPath,
+    runtimeHome,
+    authPath,
+    messagesPath,
+    binaryPath,
+    environment,
+  };
+}
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",
   approvalsReviewer: "user",
@@ -128,14 +252,15 @@ describe("Codex Synara harness policy", () => {
         },
       });
       endpointUrl = "http://127.0.0.1:48123/mcp";
-      const env = await (
+      const launch = await (
         manager as unknown as {
           buildSessionProcessEnv: (
-            homePath: string | undefined,
+            options: { homePath: string } | undefined,
             token: string | undefined,
-          ) => Promise<NodeJS.ProcessEnv>;
+          ) => Promise<{ env: NodeJS.ProcessEnv }>;
         }
-      ).buildSessionProcessEnv(homePath, "token");
+      ).buildSessionProcessEnv({ homePath }, "token");
+      const env = launch.env;
       const configPath = path.join(env.CODEX_HOME ?? homePath, "config.toml");
       expect(readFileSync(configPath, "utf8")).toContain('url = "http://127.0.0.1:48123/mcp"');
     } finally {
@@ -480,6 +605,65 @@ function createProcessOutputHarness() {
 }
 
 describe("Codex app-server teardown", () => {
+  it("does not re-enter teardown during synchronous session-closed inspection", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5040;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      killed = false;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: true,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-stop-listener-reentry");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+    const closedEvents: string[] = [];
+    manager.on("event", (event) => {
+      if (event.method !== "session/closed") return;
+      closedEvents.push(event.method);
+      void manager.stopSession(threadId);
+      expect(manager.listSessions()).toEqual([]);
+    });
+
+    await manager.stopSession(threadId);
+
+    expect(closedEvents).toEqual(["session/closed"]);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a live process routable when only the last turn status is error", () => {
     class FakeCodexChild extends EventEmitter {
       readonly pid = 5050;
@@ -802,8 +986,8 @@ describe("codex CLI version gate", () => {
     writeFileSync(
       binaryPath,
       isWindows
-        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.100.0\r\n`
-        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.100.0"\n`,
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.105.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.105.0"\n`,
       { mode: 0o755 },
     );
     const probeCount = () => {
@@ -834,7 +1018,7 @@ describe("codex CLI version gate", () => {
     }
   });
 
-  it("fails closed for Auto when the Codex CLI version cannot be parsed", async () => {
+  it("fails closed when the Codex CLI version cannot be parsed", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-unknown-"));
     const homePath = path.join(dir, "codex-home");
     mkdirSync(homePath, { recursive: true });
@@ -853,8 +1037,9 @@ describe("codex CLI version gate", () => {
     const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
     reset();
     try {
-      // Preserve compatibility with custom development builds for ordinary sessions.
-      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE);
       await expect(
         assertSupportedCodexCliVersion({
           binaryPath,
@@ -862,7 +1047,7 @@ describe("codex CLI version gate", () => {
           homePath,
           minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
         }),
-      ).rejects.toThrow(`Auto mode requires v${MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION} or newer`);
+      ).rejects.toThrow(CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE);
     } finally {
       reset();
       vi.unstubAllEnvs();
@@ -995,6 +1180,7 @@ describe("codex CLI version gate", () => {
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    vi.stubEnv("SYNARA_HOME", path.join(tempDir, "runtime"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -1017,6 +1203,7 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
+          SYNARA_HOME: process.env.SYNARA_HOME,
         },
         homePath: tempDir,
         platform: "darwin",
@@ -1032,6 +1219,7 @@ describe("buildCodexProcessEnv", () => {
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
+      vi.unstubAllEnvs();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1304,6 +1492,89 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(overlayAuthPath, "utf8")).toContain("fresh");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an account-scoped overlay with private files from the Codex shadow home", async () => {
+    const sharedHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shared-"));
+    const shadowHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shadow-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const sharedSessionsDir = path.join(sharedHome, "sessions");
+      mkdirSync(sharedSessionsDir, { recursive: true });
+      writeFileSync(path.join(sharedHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(sharedHome, "auth.json"), '{"source":"shared"}', "utf8");
+      writeFileSync(path.join(sharedHome, "models_cache.json"), '{"models":["shared"]}', "utf8");
+      writeFileSync(path.join(shadowHome, "auth.json"), '{"source":"shadow"}', "utf8");
+      writeFileSync(path.join(shadowHome, "models_cache.json"), '{"models":["shadow"]}', "utf8");
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: sharedHome,
+        shadowHomePath: shadowHome,
+        accountId: "work",
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toContain(path.join("codex-home-overlay", "accounts"));
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(env.CODEX_SQLITE_HOME).toBe(sharedHome);
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        'model = "gpt-5.5"',
+      );
+      expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(sharedSessionsDir);
+      expect(readlinkSync(path.join(codexHome, "auth.json"))).toBe(
+        path.join(shadowHome, "auth.json"),
+      );
+      expect(readlinkSync(path.join(codexHome, "models_cache.json"))).toBe(
+        path.join(shadowHome, "models_cache.json"),
+      );
+      expect(readFileSync(path.join(codexHome, "auth.json"), "utf8")).toContain("shadow");
+    } finally {
+      rmSync(sharedHome, { recursive: true, force: true });
+      rmSync(shadowHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not link shared private auth files into account overlays without a shadow home", async () => {
+    const accountHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-account-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const accountSessionsDir = path.join(accountHome, "sessions");
+      mkdirSync(accountSessionsDir, { recursive: true });
+      writeFileSync(path.join(accountHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(accountHome, "auth.json"), '{"source":"account"}', "utf8");
+      writeFileSync(path.join(accountHome, "models_cache.json"), '{"models":["account"]}', "utf8");
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: accountHome,
+        accountId: "work",
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(codexHome).toContain(path.join("codex-home-overlay", "accounts"));
+      expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(accountSessionsDir);
+      expect(readlinkSync(path.join(codexHome, "auth.json"))).toBe(
+        path.join(accountHome, "auth.json"),
+      );
+      expect(readlinkSync(path.join(codexHome, "models_cache.json"))).toBe(
+        path.join(accountHome, "models_cache.json"),
+      );
+      expect(readFileSync(path.join(codexHome, "auth.json"), "utf8")).toContain("account");
+    } finally {
+      rmSync(accountHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
@@ -1613,6 +1884,34 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("rejects native resume and fork calls without a pinned continuation generation", async () => {
+    const manager = new CodexAppServerManager();
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-unpinned-resume-"));
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-unpinned-resume"),
+          provider: "codex",
+          cwd: root,
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "provider-thread" },
+        }),
+      ).rejects.toThrow(/requires a verified continuation source generation/);
+      await expect(
+        manager.forkThread({
+          sourceThreadId: asThreadId("source-unpinned-fork"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId: asThreadId("target-unpinned-fork"),
+          cwd: root,
+          runtimeMode: "full-access",
+        }),
+      ).rejects.toThrow(/fork requires a verified continuation source generation/);
+    } finally {
+      await manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("emits session/started after any successful thread open", () => {
     const manager = new CodexAppServerManager();
     const methods: string[] = [];
@@ -1668,6 +1967,452 @@ describe("startSession", () => {
     expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the selected account changes while a new session initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-launch-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await expect(
+          manager.startSession({
+            threadId: asThreadId("thread-launch-auth-swap"),
+            provider: "codex",
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: fixture.environment,
+              },
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(manager.listSessions()).toEqual([]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows same-account token rotation while a new session initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-launch-token-rotation-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        const session = await manager.startSession({
+          threadId: asThreadId("thread-launch-token-rotation"),
+          provider: "codex",
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: fixture.environment,
+            },
+          },
+        });
+        expect(session.status).toBe("ready");
+        expect(readFakeCodexMethods(fixture.messagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toHaveLength(1);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not let a superseded start failure stop its replacement session",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-start-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-start-replacement");
+      const firstMessagesPath = path.join(fixture.root, "first-messages.txt");
+      const secondMessagesPath = path.join(fixture.root, "second-messages.txt");
+      const initializeGatePath = path.join(fixture.root, "release-first-initialize");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      try {
+        const firstOutcome = settle(
+          manager.startSession({
+            threadId,
+            provider: "codex",
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.startSession({
+          threadId,
+          provider: "codex",
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement.status).toBe("ready");
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toEqual([replacement]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a synchronous start replacement installed when the old app-server exits during initialize",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-start-exit-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-start-exit-replacement");
+      const replacementMessagesPath = path.join(fixture.root, "replacement-messages.txt");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      const methods: string[] = [];
+      let replacementPromise: ReturnType<typeof manager.startSession> | undefined;
+      const listener = (event: { readonly threadId: ThreadId; readonly method: string }) => {
+        if (event.threadId !== threadId) return;
+        methods.push(event.method);
+        if (event.method !== "session/exited" || replacementPromise) return;
+        replacementPromise = manager.startSession({
+          threadId,
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: replacementMessagesPath,
+              },
+            },
+          },
+        });
+      };
+      manager.on("event", listener);
+
+      try {
+        const first = await settle(
+          manager.startSession({
+            threadId,
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_EXIT_ON_INITIALIZE: "17",
+                },
+              },
+            },
+          }),
+        );
+        expect(first.status).toBe("rejected");
+        expect(replacementPromise).toBeDefined();
+        const replacement = await replacementPromise!;
+
+        expect(replacement.status).toBe("ready");
+        expect(replacement.providerInstanceId).toBe("codex_work");
+        expect(readFakeCodexMethods(replacementMessagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toEqual([replacement]);
+        expect(methods).toContain("session/exited");
+        expect(methods).not.toContain("session/startFailed");
+        expect(methods).not.toContain("session/closed");
+      } finally {
+        manager.off("event", listener);
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed before native fork when the selected account changes during initialization",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-fork-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await buildCodexProcessEnv({
+          env: fixture.environment,
+          homePath: fixture.sourceHome,
+        });
+        const generation = readCodexSharedContinuationGeneration({
+          env: fixture.environment,
+          homePath: fixture.sourceHome,
+        });
+        expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+        await expect(
+          manager.forkThread({
+            sourceThreadId: asThreadId("source-auth-swap"),
+            sourceResumeCursor: { threadId: "provider-source-thread" },
+            threadId: asThreadId("fork-auth-swap"),
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: fixture.environment,
+              },
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(manager.listSessions()).toEqual([]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not let a superseded fork failure stop its replacement session",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-fork-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-fork-replacement");
+      const firstMessagesPath = path.join(fixture.root, "first-messages.txt");
+      const secondMessagesPath = path.join(fixture.root, "second-messages.txt");
+      const initializeGatePath = path.join(fixture.root, "release-first-initialize");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      try {
+        await buildCodexProcessEnv({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        const generation = readCodexSharedContinuationGeneration({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+
+        const firstOutcome = settle(
+          manager.forkThread({
+            sourceThreadId: asThreadId("source-first-fork"),
+            sourceResumeCursor: { threadId: "provider-source-first" },
+            threadId,
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.forkThread({
+          sourceThreadId: asThreadId("source-second-fork"),
+          sourceResumeCursor: { threadId: "provider-source-second" },
+          threadId,
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          expectedCodexContinuationGeneration: generation!,
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement).toEqual({
+          threadId,
+          resumeCursor: { threadId: "fake-forked-thread" },
+        });
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/fork");
+        expect(manager.listSessions()).toEqual([
+          expect.objectContaining({
+            threadId,
+            status: "ready",
+            resumeCursor: { threadId: "fake-forked-thread" },
+          }),
+        ]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a synchronous fork replacement installed when the old app-server exits during initialize",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-fork-exit-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-fork-exit-replacement");
+      const replacementMessagesPath = path.join(fixture.root, "replacement-messages.txt");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      let replacementPromise: ReturnType<typeof manager.forkThread> | undefined;
+      const methods: string[] = [];
+
+      try {
+        await buildCodexProcessEnv({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        const generation = readCodexSharedContinuationGeneration({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+        const replacementInput = {
+          sourceThreadId: asThreadId("source-fork-exit-replacement"),
+          sourceResumeCursor: { threadId: "provider-source-replacement" },
+          threadId,
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access" as const,
+          expectedCodexContinuationGeneration: generation!,
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: replacementMessagesPath,
+              },
+            },
+          },
+        };
+        const listener = (event: { readonly threadId: ThreadId; readonly method: string }) => {
+          if (event.threadId !== threadId) return;
+          methods.push(event.method);
+          if (event.method !== "session/exited" || replacementPromise) return;
+          replacementPromise = manager.forkThread(replacementInput);
+        };
+        manager.on("event", listener);
+        try {
+          const first = await settle(
+            manager.forkThread({
+              sourceThreadId: asThreadId("source-fork-exit-first"),
+              sourceResumeCursor: { threadId: "provider-source-first" },
+              threadId,
+              cwd: fixture.projectPath,
+              runtimeMode: "full-access",
+              expectedCodexContinuationGeneration: generation!,
+              providerOptions: {
+                codex: {
+                  binaryPath: fixture.binaryPath,
+                  homePath: fixture.sourceHome,
+                  environment: {
+                    ...environment,
+                    SYNARA_FAKE_CODEX_EXIT_ON_INITIALIZE: "18",
+                  },
+                },
+              },
+            }),
+          );
+          expect(first.status).toBe("rejected");
+          expect(replacementPromise).toBeDefined();
+          const replacement = await replacementPromise!;
+
+          expect(replacement).toEqual({
+            threadId,
+            resumeCursor: { threadId: "fake-forked-thread" },
+          });
+          expect(readFakeCodexMethods(replacementMessagesPath)).toContain("thread/fork");
+          expect(manager.listSessions()).toEqual([
+            expect.objectContaining({
+              threadId,
+              status: "ready",
+              resumeCursor: { threadId: "fake-forked-thread" },
+            }),
+          ]);
+          expect(methods).toContain("session/exited");
+          expect(methods).not.toContain("session/threadForkFailed");
+          expect(methods).not.toContain("session/closed");
+        } finally {
+          manager.off("event", listener);
+        }
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reports a missing project working directory instead of a missing Codex CLI", () => {
     const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
     expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
@@ -1679,6 +2424,119 @@ describe("startSession", () => {
     expect(formatMissingCodexWorkingDirectoryError(missingCwd)).not.toMatch(
       /not installed|not executable/i,
     );
+  });
+
+  it("inspects session options without invoking lifecycle listing", () => {
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-read-only-inspection");
+    const session = {
+      provider: "codex" as const,
+      status: "ready" as const,
+      threadId,
+      runtimeMode: "full-access" as const,
+      providerInstanceId: "codex_work",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:00.000Z",
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session,
+      codexOptions: { homePath: "/tmp/codex-work", accountId: "work" },
+    });
+
+    expect(manager.inspectSessions()).toEqual([
+      {
+        session,
+        codexOptions: { homePath: "/tmp/codex-work", accountId: "work" },
+      },
+    ]);
+  });
+
+  it("omits stale-auth session homes from read-only inspection", () => {
+    const authHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-inspection-"));
+    const authPath = path.join(authHome, "auth.json");
+    writeFileSync(
+      authPath,
+      '{"auth_mode":"chatgpt","tokens":{"account_id":"workspace-first"}}',
+      "utf8",
+    );
+    const codexOptions = { homePath: authHome, accountId: "work" };
+    const authTracking = prepareCodexAuthTracking(codexOptions);
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-stale-auth-inspection");
+    const session = {
+      provider: "codex" as const,
+      status: "ready" as const,
+      threadId,
+      runtimeMode: "full-access" as const,
+      providerInstanceId: "codex_work",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:00.000Z",
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session,
+      codexOptions,
+      authTracking,
+      authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+    });
+
+    try {
+      writeFileSync(
+        authPath,
+        '{"auth_mode":"chatgpt","tokens":{"account_id":"workspace-second"}}',
+        "utf8",
+      );
+      expect(manager.inspectSessions()).toEqual([]);
+    } finally {
+      rmSync(authHome, { recursive: true, force: true });
+    }
+  });
+
+  it("retains inspected session homes across same-account token rotation", () => {
+    const authHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-rotation-"));
+    const authPath = path.join(authHome, "auth.json");
+    const auth = (accessToken: string) =>
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { account_id: "workspace-stable", access_token: accessToken },
+      });
+    writeFileSync(authPath, auth("access-1"), "utf8");
+    const codexOptions = { homePath: authHome, accountId: "work" };
+    const authTracking = prepareCodexAuthTracking(codexOptions);
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-same-auth-inspection");
+    const session = {
+      provider: "codex" as const,
+      status: "ready" as const,
+      threadId,
+      runtimeMode: "full-access" as const,
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:00.000Z",
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session,
+      codexOptions,
+      authTracking,
+      authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+    });
+
+    try {
+      writeFileSync(authPath, auth("access-2"), "utf8");
+      expect(manager.inspectSessions()).toEqual([{ session, codexOptions }]);
+    } finally {
+      rmSync(authHome, { recursive: true, force: true });
+    }
   });
 
   it("accepts an existing project working directory", () => {
@@ -1757,7 +2615,7 @@ describe("startSession", () => {
       )
       .mockImplementation(() => {
         throw new Error(
-          "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+          "Codex CLI v0.104.0 is too old for Synara. Upgrade to v0.105.0 or newer and restart Synara.",
         );
       });
 
@@ -1769,7 +2627,7 @@ describe("startSession", () => {
           runtimeMode: "full-access",
         }),
       ).rejects.toThrow(
-        "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+        "Codex CLI v0.104.0 is too old for Synara. Upgrade to v0.105.0 or newer and restart Synara.",
       );
       expect(versionCheck).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
@@ -1777,7 +2635,7 @@ describe("startSession", () => {
           method: "session/startFailed",
           kind: "error",
           message:
-            "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+            "Codex CLI v0.104.0 is too old for Synara. Upgrade to v0.105.0 or newer and restart Synara.",
         },
       ]);
     } finally {
@@ -2222,6 +3080,202 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it.runIf(process.platform !== "win32")(
+    "does not launch or cache discovery under auth superseded during version check",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-discovery-key-race-",
+        "workspace-first",
+        "workspace-first",
+      );
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      const authTracking = prepareCodexAuthTracking({
+        env: { ...process.env, ...environment },
+        homePath: fixture.sourceHome,
+      });
+      const firstFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+      const manager = new CodexAppServerManager();
+      const versionCheck = vi
+        .spyOn(
+          manager as unknown as {
+            assertSupportedCodexCliVersion: (input: unknown) => Promise<void>;
+          },
+          "assertSupportedCodexCliVersion",
+        )
+        .mockImplementationOnce(async () => {
+          writeFileSync(fixture.authPath, codexAuth("workspace-second", "2"), "utf8");
+        })
+        .mockResolvedValue(undefined);
+      const input = {
+        cwd: fixture.projectPath,
+        codexOptions: {
+          binaryPath: fixture.binaryPath,
+          homePath: fixture.sourceHome,
+          environment: {
+            ...environment,
+            SYNARA_FAKE_CODEX_MESSAGES_PATH: fixture.messagesPath,
+          },
+        },
+      } as const;
+
+      try {
+        await expect(manager.listModels(input)).rejects.toThrow(
+          /authentication changed before discovery launch/,
+        );
+        const secondFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+        expect(secondFingerprint).not.toBe(firstFingerprint);
+        expect(existsSync(fixture.messagesPath)).toBe(false);
+        const internals = manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+          modelCache: Map<string, unknown>;
+        };
+        expect(internals.discoverySessions.size).toBe(0);
+        expect(internals.modelCache.size).toBe(0);
+
+        const fresh = await manager.listModels(input);
+        const methodsAfterFreshRequest = readFakeCodexMethods(fixture.messagesPath);
+        const cached = await manager.listModels(input);
+        expect(fresh.cached).toBe(false);
+        expect(cached.cached).toBe(true);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(methodsAfterFreshRequest);
+        expect(internals.discoverySessions.size).toBe(1);
+        expect(internals.modelCache.size).toBe(1);
+        expect(
+          JSON.parse([...internals.discoverySessions.keys()][0] ?? "{}") as { auth?: string },
+        ).toEqual(expect.objectContaining({ auth: secondFingerprint }));
+        expect(
+          JSON.parse([...internals.modelCache.keys()][0] ?? "{}") as { auth?: string },
+        ).toEqual(expect.objectContaining({ auth: secondFingerprint }));
+
+        const originalCacheGet = internals.modelCache.get.bind(internals.modelCache);
+        const cacheGet = vi.spyOn(internals.modelCache, "get").mockImplementationOnce((key) => {
+          writeFileSync(fixture.authPath, codexAuth("workspace-third", "3"), "utf8");
+          return originalCacheGet(key);
+        });
+        await expect(manager.listModels(input)).rejects.toThrow(
+          /authentication changed while resolving discovery metadata/,
+        );
+        cacheGet.mockRestore();
+        const thirdFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+
+        expect(thirdFingerprint).not.toBe(secondFingerprint);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(methodsAfterFreshRequest);
+        expect(internals.modelCache.size).toBe(1);
+
+        const thirdAccount = await manager.listModels(input);
+        const cachedFingerprints = new Set(
+          [...internals.modelCache.keys()].map(
+            (key) => (JSON.parse(key) as { auth?: string }).auth,
+          ),
+        );
+        expect(thirdAccount.cached).toBe(false);
+        expect(internals.discoverySessions.size).toBe(1);
+        expect(internals.modelCache.size).toBe(2);
+        expect(cachedFingerprints).toEqual(new Set([secondFingerprint, thirdFingerprint]));
+        expect(versionCheck).toHaveBeenCalledTimes(3);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not reuse an auth-unbound active context for fingerprint-bound discovery", async () => {
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-unbound-discovery");
+    const activeContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId,
+        cwd: "/repo",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+      codexOptions: undefined,
+      authFingerprint: undefined,
+    };
+    const discoveryContext = { session: { ...activeContext.session, threadId: "discovery" } };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, activeContext);
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (
+            cwd: string,
+            codexOptions?: unknown,
+            expectedAuthFingerprint?: string,
+          ) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+
+    const resolved = await (
+      manager as unknown as {
+        resolveContextForDiscovery: (
+          threadId: string | undefined,
+          cwd: string | undefined,
+          codexOptions: undefined,
+          expectedAuthFingerprint: string,
+        ) => Promise<unknown>;
+      }
+    ).resolveContextForDiscovery(undefined, "/repo", undefined, "expected-auth-fingerprint");
+
+    expect(resolved).toBe(discoveryContext);
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo",
+      undefined,
+      "expected-auth-fingerprint",
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the selected account changes while discovery initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-discovery-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await expect(
+          manager.listModels({
+            cwd: fixture.projectPath,
+            codexOptions: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: fixture.environment,
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(
+          (
+            manager as unknown as {
+              discoverySessions: Map<string, unknown>;
+            }
+          ).discoverySessions.size,
+        ).toBe(0);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("restarts the idle grace period after a discovery request settles", async () => {
     vi.useFakeTimers();
     try {
@@ -2375,6 +3429,65 @@ describe("CodexAppServerManager discovery", () => {
     });
   });
 
+  it("passes explicit Codex account options to model discovery context resolution", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    vi.spyOn(
+      manager as unknown as {
+        sendRequest: (...args: unknown[]) => Promise<unknown>;
+      },
+      "sendRequest",
+    ).mockResolvedValue({
+      result: {
+        items: [],
+      },
+    });
+
+    await manager.listModels({
+      codexOptions: {
+        accountId: "default",
+      },
+    });
+
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      { accountId: "default" },
+      expect.any(String),
+    );
+  });
+
   it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
     const manager = new CodexAppServerManager();
     const activeContext = {
@@ -2472,9 +3585,74 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_missing",
     });
 
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo-b");
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo-b",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "skills/list", {
       cwds: ["/repo-b"],
+    });
+  });
+
+  it("does not satisfy default discovery from an account-scoped active session", async () => {
+    const manager = new CodexAppServerManager();
+    const activeContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_active",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        cwd: "/repo",
+      },
+      codexOptions: {
+        accountId: "work",
+        shadowHomePath: "/tmp/work-codex-auth",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+    };
+    const discoveryContext = { discovery: true };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_active", activeContext);
+
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ result: { items: [] } });
+
+    await manager.listModels({ cwd: "/repo" });
+
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
+    expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "model/list", {
+      cursor: null,
+      limit: 50,
+      includeHidden: false,
     });
   });
 
@@ -2517,7 +3695,7 @@ describe("CodexAppServerManager discovery", () => {
         }
       ).resolveContextForDiscovery(),
     ).resolves.toBe(discoveryContext);
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd());
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd(), undefined, undefined);
   });
 
   it("reuses one in-flight discovery startup for concurrent callers", async () => {
@@ -2575,11 +3753,19 @@ describe("CodexAppServerManager discovery", () => {
         getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
       }
     ).getOrCreateDiscoverySession("/repo");
+    const discoveryKey = Array.from(
+      (
+        manager as unknown as {
+          discoverySessionStartups: Map<string, unknown>;
+        }
+      ).discoverySessionStartups.keys(),
+    )[0];
+    expect(discoveryKey).toBeDefined();
     (
       manager as unknown as {
         discoverySessions: Map<string, unknown>;
       }
-    ).discoverySessions.set("/repo", { status: "connecting" });
+    ).discoverySessions.set(discoveryKey!, { status: "connecting" });
     const stopping = manager.stopAll();
     await Promise.resolve();
     expect(stopDiscoverySession).not.toHaveBeenCalled();
@@ -2589,7 +3775,7 @@ describe("CodexAppServerManager discovery", () => {
       { discovery: true },
       undefined,
     ]);
-    expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    expect(stopDiscoverySession).toHaveBeenCalledWith(discoveryKey);
     expect(stopDiscoverySession).toHaveBeenCalledTimes(1);
   });
 
@@ -2689,7 +3875,11 @@ describe("CodexAppServerManager discovery", () => {
     const resolveContextForDiscovery = vi
       .spyOn(
         manager as unknown as {
-          resolveContextForDiscovery: (threadId?: string, cwd?: string) => Promise<unknown>;
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => Promise<unknown>;
         },
         "resolveContextForDiscovery",
       )
@@ -2720,7 +3910,7 @@ describe("CodexAppServerManager discovery", () => {
         refreshToken: false,
       }),
     ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, "/repo");
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, "/repo", undefined);
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "getAuthStatus", {
       includeToken: true,
       refreshToken: false,
@@ -2754,12 +3944,18 @@ describe("CodexAppServerManager discovery", () => {
       collabReceiverParents: new Map(),
     };
 
-    vi.spyOn(
-      manager as unknown as {
-        resolveContextForDiscovery: (threadId?: string) => unknown;
-      },
-      "resolveContextForDiscovery",
-    ).mockReturnValue(context);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
     const sendRequest = vi
       .spyOn(
         manager as unknown as {
@@ -2784,6 +3980,12 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_1",
     });
 
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      "thread_1",
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenNthCalledWith(1, context, "skills/list", {
       cwds: ["/repo"],
     });
@@ -2821,7 +4023,11 @@ describe("CodexAppServerManager discovery", () => {
     const resolveContextForDiscovery = vi
       .spyOn(
         manager as unknown as {
-          resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
         },
         "resolveContextForDiscovery",
       )
@@ -2846,7 +4052,12 @@ describe("CodexAppServerManager discovery", () => {
       source: "codex-app-server",
       cached: false,
     });
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      "thread_1",
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
       cwds: ["/repo"],
       forceRemoteSync: true,
@@ -2872,12 +4083,18 @@ describe("CodexAppServerManager discovery", () => {
       collabReceiverParents: new Map(),
     };
 
-    vi.spyOn(
-      manager as unknown as {
-        resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
-      },
-      "resolveContextForDiscovery",
-    ).mockReturnValue(context);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
     const sendRequest = vi
       .spyOn(
         manager as unknown as {
@@ -2916,6 +4133,12 @@ describe("CodexAppServerManager discovery", () => {
       source: "codex-app-server",
       cached: false,
     });
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
       marketplacePath: "/marketplace.json",
       pluginName: "github",
@@ -3004,6 +4227,15 @@ describe("thread checkpoint control", () => {
     });
 
     try {
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: process.env.SYNARA_HOME },
+        homePath,
+      });
+      const generation = readCodexSharedContinuationGeneration({
+        env: { SYNARA_HOME: process.env.SYNARA_HOME },
+        homePath,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
       const result = await manager.forkThread({
         sourceThreadId: asThreadId("thread_1"),
         sourceResumeCursor: {
@@ -3018,6 +4250,7 @@ describe("thread checkpoint control", () => {
           options: { fastMode: false },
         },
         runtimeMode: "full-access",
+        expectedCodexContinuationGeneration: generation!,
       });
 
       const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");

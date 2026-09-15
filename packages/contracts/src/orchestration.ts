@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
+import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
   AntigravityModelOptions,
   ClaudeModelOptions,
@@ -9,7 +9,9 @@ import {
   GrokModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
+  DEFAULT_MODEL_BY_PROVIDER,
 } from "./model";
+import { ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
@@ -21,6 +23,7 @@ import {
   MessageId,
   NonNegativeInt,
   PositiveInt,
+  ProcessEnvRecord,
   ProjectId,
   SpaceId,
   ProviderItemId,
@@ -108,8 +111,114 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 
+const ProviderInstanceIdForDriver = (_provider: ProviderKind) =>
+  Schema.optional(ProviderInstanceId);
+
+const isProviderKindValue = Schema.is(ProviderKind);
+
+function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefined {
+  if (isProviderKindValue(instanceId)) {
+    return instanceId;
+  }
+
+  const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId.startsWith("claude")) {
+    return "claudeAgent";
+  }
+  if (lowerInstanceId.startsWith("codex")) {
+    return "codex";
+  }
+  if (lowerInstanceId.startsWith("cursor")) {
+    return "cursor";
+  }
+  if (lowerInstanceId.startsWith("antigravity") || lowerInstanceId.startsWith("gemini")) {
+    return "antigravity";
+  }
+  if (lowerInstanceId.startsWith("grok")) {
+    return "grok";
+  }
+  if (lowerInstanceId.startsWith("droid")) {
+    return "droid";
+  }
+  if (lowerInstanceId.startsWith("kilo")) {
+    return "opencode";
+  }
+  if (lowerInstanceId.startsWith("opencode") || lowerInstanceId.startsWith("open_code")) {
+    return "opencode";
+  }
+  if (lowerInstanceId.startsWith("pi")) {
+    return "pi";
+  }
+  if (lowerInstanceId.startsWith("devin")) {
+    return "devin";
+  }
+  return undefined;
+}
+
+function inferProviderFromModel(model: string): ProviderKind {
+  const lowerModel = model.toLowerCase();
+  if (
+    lowerModel.includes("claude") ||
+    lowerModel.includes("sonnet") ||
+    lowerModel.includes("opus") ||
+    lowerModel.includes("haiku")
+  ) {
+    return "claudeAgent";
+  }
+  if (lowerModel.includes("gemini")) {
+    return "antigravity";
+  }
+  if (lowerModel.includes("grok")) {
+    return "grok";
+  }
+  if (lowerModel.includes("devin")) {
+    return "devin";
+  }
+  if (lowerModel.includes("opencode") || lowerModel.includes("open_code")) {
+    return "opencode";
+  }
+  if (lowerModel.includes("kilo")) {
+    return "opencode";
+  }
+  if (lowerModel.includes("cursor")) {
+    return "cursor";
+  }
+  if (lowerModel.startsWith("pi/") || lowerModel.includes("/pi/")) {
+    return "pi";
+  }
+  return "codex";
+}
+
+function inferProviderForModelSelection(input: {
+  readonly provider?: unknown;
+  readonly instanceId?: unknown;
+  readonly model?: unknown;
+}): ProviderKind | undefined {
+  if (isProviderKindValue(input.provider)) {
+    return input.provider;
+  }
+  if (typeof input.provider === "string") {
+    const migrated = LEGACY_PROVIDER_MIGRATIONS[input.provider];
+    if (migrated) {
+      return migrated;
+    }
+  }
+  if (typeof input.instanceId === "string") {
+    const provider = inferProviderFromInstanceId(input.instanceId);
+    if (provider) {
+      return provider;
+    }
+  }
+  return typeof input.model === "string" ? inferProviderFromModel(input.model) : undefined;
+}
+
+function defaultModelForProvider(provider: ProviderKind): string {
+  return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
+}
+
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
+  instanceId: ProviderInstanceIdForDriver("codex"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CodexModelOptions),
 });
@@ -117,6 +226,7 @@ export type CodexModelSelection = typeof CodexModelSelection.Type;
 
 export const ClaudeModelSelection = Schema.Struct({
   provider: Schema.Literal("claudeAgent"),
+  instanceId: ProviderInstanceIdForDriver("claudeAgent"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClaudeModelOptions),
   supportsAutoMode: Schema.optional(Schema.Boolean),
@@ -125,6 +235,7 @@ export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
 export const CursorModelSelection = Schema.Struct({
   provider: Schema.Literal("cursor"),
+  instanceId: ProviderInstanceIdForDriver("cursor"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CursorModelOptions),
 });
@@ -132,6 +243,7 @@ export type CursorModelSelection = typeof CursorModelSelection.Type;
 
 export const AntigravityModelSelection = Schema.Struct({
   provider: Schema.Literal("antigravity"),
+  instanceId: ProviderInstanceIdForDriver("antigravity"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(AntigravityModelOptions),
 });
@@ -139,6 +251,7 @@ export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
 
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
+  instanceId: ProviderInstanceIdForDriver("grok"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(GrokModelOptions),
 });
@@ -146,6 +259,7 @@ export type GrokModelSelection = typeof GrokModelSelection.Type;
 
 export const DroidModelSelection = Schema.Struct({
   provider: Schema.Literal("droid"),
+  instanceId: ProviderInstanceIdForDriver("droid"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DroidModelOptions),
 });
@@ -153,6 +267,7 @@ export type DroidModelSelection = typeof DroidModelSelection.Type;
 
 export const OpenCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("opencode"),
+  instanceId: ProviderInstanceIdForDriver("opencode"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(OpenCodeModelOptions),
 });
@@ -160,6 +275,7 @@ export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
+  instanceId: ProviderInstanceIdForDriver("pi"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(PiModelOptions),
 });
@@ -167,12 +283,13 @@ export type PiModelSelection = typeof PiModelSelection.Type;
 
 export const DevinModelSelection = Schema.Struct({
   provider: Schema.Literal("devin"),
+  instanceId: ProviderInstanceIdForDriver("devin"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DevinModelOptions),
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
 
-export const ModelSelection = Schema.Union([
+const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
@@ -183,49 +300,104 @@ export const ModelSelection = Schema.Union([
   OpenCodeModelSelection,
   PiModelSelection,
 ]);
+
+// Keep persisted inputs loose so malformed or mixed legacy drafts reach the
+// transform; the discriminated target union remains the canonical contract.
+const ModelSelectionSource = Schema.Struct({
+  provider: Schema.optional(Schema.Unknown),
+  instanceId: Schema.optional(Schema.Unknown),
+  model: Schema.Unknown,
+  options: Schema.optional(Schema.Unknown),
+  supportsAutoMode: Schema.optional(Schema.Unknown),
+});
+
+export const ModelSelection = ModelSelectionSource.pipe(
+  Schema.decodeTo(
+    ModelSelectionByProvider,
+    SchemaTransformation.transformOrFail({
+      decode: (raw) => {
+        const provider = inferProviderForModelSelection(raw) ?? "codex";
+        const model =
+          typeof raw.model === "string" && raw.model.trim().length > 0
+            ? raw.model
+            : defaultModelForProvider(provider);
+        const instanceId =
+          typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+            ? raw.instanceId.trim()
+            : provider;
+        const base: Record<string, unknown> = {
+          provider,
+          instanceId,
+          model,
+        };
+        if (raw.options !== undefined) {
+          base.options = raw.options;
+        }
+        if (raw.supportsAutoMode !== undefined) {
+          base.supportsAutoMode = raw.supportsAutoMode;
+        }
+        return Effect.succeed(base as typeof ModelSelectionByProvider.Encoded);
+      },
+      encode: (value) => Effect.succeed(value as typeof ModelSelectionSource.Encoded),
+    }),
+  ),
+);
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ClaudeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),
   maxThinkingTokens: Schema.optional(NonNegativeInt),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const AntigravityProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const CursorProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const GrokProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const DroidProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const DevinProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ProviderStartOptions = Schema.Struct({
@@ -583,6 +755,7 @@ export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),

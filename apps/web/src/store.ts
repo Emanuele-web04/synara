@@ -59,7 +59,6 @@ const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
 export function persistAppStateNow(state: AppState = useStore.getState()): void {
   persistState(state);
 }
-
 export function markThreadVisited(
   state: AppState,
   threadId: ThreadId,

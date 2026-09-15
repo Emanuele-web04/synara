@@ -106,10 +106,10 @@ export function claudeTokenActivityCtes(
       WHERE tokens > 0
     ),
     claude_token_rows AS (
-      SELECT thread_id, created_at, model, tokens
+      SELECT thread_id, turn_id, created_at, model, tokens
       FROM claude_model_token_rows
       UNION ALL
-      SELECT c.thread_id, c.created_at, c.model, CAST(c.main_tokens AS INTEGER) AS tokens
+      SELECT c.thread_id, c.turn_id, c.created_at, c.model, CAST(c.main_tokens AS INTEGER) AS tokens
       FROM claude_completed c
       WHERE c.main_tokens > 0
         AND NOT EXISTS (

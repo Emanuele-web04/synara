@@ -14,6 +14,8 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import { fakeProjectionSnapshotQuery } from "../../orchestration/testing/fakeProjectionSnapshotQuery";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -175,6 +177,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-stale" },
@@ -224,6 +227,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-active" },
@@ -269,6 +273,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-missing-runtime-stop" },
@@ -328,6 +333,15 @@ async function assertIdleReaperPreservesResumeCursor(
   const providerLayer = makeProviderServiceLive({ runtimeIdleStopMs: 0 }).pipe(
     Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
     Layer.provide(directoryLayer),
+    Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(
+      Layer.succeed(ServerSecretStore, {
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+        remove: () => Effect.void,
+      }),
+    ),
   );
   const sharedLayer = Layer.mergeAll(providerLayer, directoryLayer, NodeServices.layer);
   const reaperLayer = makeProviderSessionReaperLive({

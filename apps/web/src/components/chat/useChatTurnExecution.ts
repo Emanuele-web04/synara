@@ -400,6 +400,7 @@ export function useChatTurnExecution({
           selectedModelSelectionForSend.provider === "claudeAgent"
             ? selectedModelSelectionForSend.supportsAutoMode
             : undefined,
+          { instanceId: selectedModelSelectionForSend.instanceId },
         );
 
         if (isLocalDraftThread) {
@@ -573,6 +574,8 @@ export function useChatTurnExecution({
         rememberCustomBinaryPathForDispatch({
           threadId: threadIdForSend,
           provider: selectedModelSelectionForSend.provider,
+          providerInstanceId:
+            selectedModelSelectionForSend.instanceId ?? selectedModelSelectionForSend.provider,
           providerOptions: providerOptionsForDispatchForSend,
         });
         await stagedTurnAttachments.runWithDispatch((turnAttachments) =>

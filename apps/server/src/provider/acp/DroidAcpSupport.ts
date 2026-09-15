@@ -31,6 +31,7 @@ import {
 export interface DroidAcpRuntimeSettings {
   readonly appendSystemPrompt?: string;
   readonly binaryPath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly model?: string;
   readonly reasoningEffort?: DroidModelOptions["reasoningEffort"];
 }
@@ -113,6 +114,10 @@ export function buildDroidAcpSpawnInput(
   droidSettings: DroidAcpRuntimeSettings | null | undefined,
   cwd: string,
 ): AcpSpawnInput {
+  const childEnvironment = {
+    ...process.env,
+    ...(droidSettings?.environment ?? {}),
+  };
   const args = ["exec", "--output-format", "acp"];
   const appendSystemPrompt = droidSettings?.appendSystemPrompt?.trim();
   if (appendSystemPrompt) {
@@ -128,10 +133,10 @@ export function buildDroidAcpSpawnInput(
   }
 
   return {
-    command: resolveDroidCliBinaryPath(droidSettings?.binaryPath),
+    command: resolveDroidCliBinaryPath(droidSettings?.binaryPath, { env: childEnvironment }),
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "droid" }),
+    env: buildProviderChildEnvironment({ provider: "droid", baseEnv: childEnvironment }),
   };
 }
 
@@ -141,10 +146,11 @@ function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): Reado
 
 export const resolveDroidAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
+  environment: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasDroidApiKeyEnv() && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
+    if (hasDroidApiKeyEnv(environment) && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
       return DROID_API_KEY_AUTH_METHOD_ID;
     }
     if (authMethodIds.has(DROID_DEVICE_PAIRING_AUTH_METHOD_ID)) {
@@ -168,7 +174,11 @@ export const makeDroidAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDroidAcpSpawnInput(input.droidSettings, input.cwd),
-        resolveAuthMethodId: resolveDroidAcpAuthMethodId,
+        resolveAuthMethodId: (initializeResult) =>
+          resolveDroidAcpAuthMethodId(initializeResult, {
+            ...process.env,
+            ...(input.droidSettings?.environment ?? {}),
+          }),
         authenticateMeta: { headless: true },
       }).pipe(
         Layer.provide(

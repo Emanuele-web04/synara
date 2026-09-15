@@ -9,6 +9,7 @@ import {
   type OrchestrationThreadPullRequest,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderModelOptions,
@@ -117,6 +118,8 @@ export interface ComposerPromptHistorySavedDraft {
 
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
 
+export type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
+
 export interface QueuedComposerChatTurn {
   id: string;
   kind: "chat";
@@ -189,8 +192,8 @@ export interface ComposerThreadDraftState {
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
-  modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  activeProvider: ProviderKind | null;
+  modelSelectionByProvider: ModelSelectionByProviderInstance;
+  activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
 }
@@ -245,8 +248,8 @@ export interface ComposerDraftStoreState {
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
-  stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  stickyActiveProvider: ProviderKind | null;
+  stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,
@@ -328,6 +331,7 @@ export interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      instanceId?: ProviderInstanceId | null;
       model?: string | null;
       persistSticky?: boolean;
     },
@@ -886,8 +890,7 @@ Object.freeze(EMPTY_PULL_REQUEST_CONTEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
-const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
-  Object.freeze({});
+const EMPTY_MODEL_SELECTION_BY_PROVIDER: ModelSelectionByProviderInstance = Object.freeze({});
 
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",

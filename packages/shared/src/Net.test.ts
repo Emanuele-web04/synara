@@ -3,7 +3,7 @@ import * as Net from "node:net";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { NetError, NetService } from "./Net";
+import { NetError, NetService, resolveAvailablePort } from "./Net";
 
 const closeServer = (server: Net.Server) =>
   Effect.sync(() => {
@@ -69,13 +69,17 @@ it.layer(NetService.layer)("NetService", (it) => {
       ),
     );
 
-    it.effect("findAvailablePort returns preferred when it is free", () =>
+    it.effect("findAvailablePort returns preferred when its reservation succeeds", () =>
       Effect.gen(function* () {
-        const net = yield* NetService;
-        const preferred = yield* net.reserveLoopbackPort();
+        const attempts: number[] = [];
+        const preferred = 41_234;
 
-        const resolved = yield* net.findAvailablePort(preferred);
+        const resolved = yield* resolveAvailablePort(preferred, (port) => {
+          attempts.push(port);
+          return Effect.succeed(port);
+        });
         assert.equal(resolved, preferred);
+        assert.deepEqual(attempts, [preferred]);
       }),
     );
 

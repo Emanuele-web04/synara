@@ -14,6 +14,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  applyPiRuntimeApiKeysFromEnvironment,
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
@@ -21,11 +22,218 @@ import {
   getPiSupportedThinkingOptions,
   buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
+  makePiExtensionModeCoordinator,
   makePiRuntimeEventBase,
+  makePiStoragePaths,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  resolvePiExtensionMode,
+  resolvePiStartInstanceId,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
+
+describe("makePiStoragePaths", () => {
+  it("resolves modelSelection-only account identity before Pi storage setup", () => {
+    expect(
+      resolvePiStartInstanceId({
+        modelSelection: {
+          provider: "pi",
+          instanceId: "pi_work",
+          model: "pi/model",
+        },
+      } as never),
+    ).toBe("pi_work");
+  });
+
+  it("keeps legacy defaults byte-for-byte without an account boundary", () => {
+    expect(
+      makePiStoragePaths({
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({ agentDir: "/sdk/default-agent" });
+  });
+
+  it("uses selected Pi roots and never falls back to the global session directory", () => {
+    expect(
+      makePiStoragePaths({
+        agentDir: "~/configured-agent",
+        environment: {
+          HOME: "/accounts/b",
+          PI_CODING_AGENT_DIR: "/ignored/env-agent",
+          PI_CODING_AGENT_SESSION_DIR: "/accounts/b/selected-sessions",
+        },
+        instanceId: "pi_work",
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({
+      agentDir: "/accounts/b/configured-agent",
+      sessionDir: "/accounts/b/selected-sessions",
+    });
+  });
+
+  it("derives persistent synthetic agent and session roots for nondefault instances", () => {
+    const paths = makePiStoragePaths({
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/home/user",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir.endsWith("/.pi/agent")).toBe(true);
+    expect(paths.sessionDir).toBe(`${paths.agentDir}/sessions`);
+  });
+
+  it("expands configured tilde paths against the synthetic account home", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "~/.custom-pi",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.custom-pi");
+    expect(paths.agentDir).not.toContain("/real/server-home");
+  });
+
+  it("falls back to synthetic storage for relative configured agent dirs", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "relative-agent",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.pi/agent");
+  });
+});
+
+describe("resolvePiExtensionMode", () => {
+  it("preserves default-only extension behavior", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: false });
+  });
+
+  it("forces noExtensions for isolated accounts and coexisting default discovery", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: true });
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: true,
+      }),
+    ).toEqual({ noExtensions: true });
+  });
+
+  it("rejects isolated startup while an extension-enabled default is active", () => {
+    expect(() =>
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: true,
+        hasIsolatedMode: false,
+      }),
+    ).toThrow(/Stop extension-enabled default Pi sessions/);
+  });
+});
+
+describe("Pi extension mode in-flight reservations", () => {
+  const coordinator = () =>
+    makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    }));
+
+  it("rejects concurrent isolated work after extension-enabled discovery reserves first", async () => {
+    const modes = coordinator();
+    let releaseDiscovery!: () => void;
+    const discoveryGate = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const defaultDiscovery = (async () => {
+      const reservation = modes.reserve(false);
+      try {
+        await discoveryGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const [isolatedStart] = await Promise.allSettled([
+      Promise.resolve().then(() => modes.reserve(true)),
+    ]);
+    expect(isolatedStart?.status).toBe("rejected");
+    releaseDiscovery();
+    await defaultDiscovery;
+    expect(modes.reserve(true).noExtensions).toBe(true);
+  });
+
+  it("forces concurrent default work into noExtensions after isolated start reserves first", async () => {
+    const modes = coordinator();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const isolatedStart = (async () => {
+      const reservation = modes.reserve(true);
+      try {
+        await startGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const defaultDiscovery = await Promise.resolve().then(() => modes.reserve(false));
+    expect(defaultDiscovery.noExtensions).toBe(true);
+    defaultDiscovery.release();
+    releaseStart();
+    await isolatedStart;
+    expect(modes.reserve(false).noExtensions).toBe(false);
+  });
+
+  it("allows same-thread default to isolated replacement without exposing the transition", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: true,
+      hasIsolatedMode: false,
+    }));
+    expect(() => modes.reserve(true)).toThrow(/Stop extension-enabled default Pi sessions/);
+    const replacement = modes.reserve(true, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(true);
+    expect(() => modes.reserve(false)).toThrow(/account-mode transition/);
+    replacement.release();
+  });
+
+  it("allows same-thread isolated to default replacement in noExtensions mode", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: true,
+    }));
+    const replacement = modes.reserve(false, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(false);
+    replacement.release();
+  });
+});
 
 describe("Pi native Synara gateway tools", () => {
   it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
@@ -265,6 +473,7 @@ describe("getPiDiscoverableModels", () => {
         agentDir,
         { ModelRuntime },
         AbortSignal.abort(),
+        { OPENAI_API_KEY: "instance-openai-key" },
       );
       const secondRuntime = await createPiModelRuntime(
         agentDir,
@@ -273,6 +482,9 @@ describe("getPiDiscoverableModels", () => {
       );
       const firstRegistry = new ModelRegistry(firstRuntime);
       const secondRegistry = new ModelRegistry(secondRuntime);
+
+      expect(firstRuntime.hasConfiguredAuth("openai")).toBe(true);
+      expect(secondRuntime.hasConfiguredAuth("openai")).toBe(false);
 
       firstRegistry.registerProvider("project-local", {
         baseUrl: "http://127.0.0.1:11434/v1",
@@ -294,6 +506,231 @@ describe("getPiDiscoverableModels", () => {
       expect(firstRegistry.find("project-local", "project-model")).toBeDefined();
       expect(secondRegistry.find("project-local", "project-model")).toBeUndefined();
     } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks ambient API-key fallback for an isolated Pi instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-account-isolation-"));
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "ambient-account-key";
+
+    try {
+      const isolatedRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+      const defaultRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+
+      expect(isolatedRuntime.hasConfiguredAuth("openai")).toBe(false);
+      await expect(isolatedRuntime.getAuth("openai")).resolves.toBeUndefined();
+      expect(defaultRuntime.hasConfiguredAuth("openai")).toBe(true);
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves custom provider config only from the selected Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-custom-config-isolation-"));
+    const previousCustomKey = process.env.CUSTOM_KEY;
+    const previousCustomHeader = process.env.CUSTOM_HEADER;
+    process.env.CUSTOM_KEY = "ambient-account-key";
+    process.env.CUSTOM_HEADER = "ambient-account-header";
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "$CUSTOM_KEY",
+              headers: { "X-Custom": "$CUSTOM_HEADER" },
+              models: [{ id: "custom-model" }],
+            },
+            "custom-command": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const selected = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-key", CUSTOM_HEADER: "selected-account-header" },
+        "pi_work",
+      );
+      const empty = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_empty",
+      );
+      const customModel = selected.getModel("custom", "custom-model");
+      if (!customModel) throw new Error("Expected custom Pi model.");
+
+      await expect(selected.getAuth(customModel)).resolves.toMatchObject({
+        auth: {
+          apiKey: "selected-account-key",
+          headers: { "X-Custom": "selected-account-header" },
+        },
+      });
+      await expect(selected.getAuth("custom-command")).resolves.toMatchObject({
+        auth: { apiKey: "selected-account-key" },
+      });
+      expect(empty.hasConfiguredAuth("custom")).toBe(false);
+      expect(empty.hasConfiguredAuth("custom-command")).toBe(false);
+    } finally {
+      if (previousCustomKey === undefined) delete process.env.CUSTOM_KEY;
+      else process.env.CUSTOM_KEY = previousCustomKey;
+      if (previousCustomHeader === undefined) delete process.env.CUSTOM_HEADER;
+      else process.env.CUSTOM_HEADER = previousCustomHeader;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps identical config commands scoped to each immutable Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-command-isolation-"));
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const accountAEnvironment = { CUSTOM_KEY: "selected-account-a" };
+      const accountA = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        accountAEnvironment,
+        "pi_account_a",
+      );
+      accountAEnvironment.CUSTOM_KEY = "mutated-after-snapshot";
+      const accountB = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-b" },
+        "pi_account_b",
+      );
+
+      await expect(
+        Promise.all([accountA.getAuth("custom"), accountB.getAuth("custom")]),
+      ).resolves.toMatchObject([
+        { auth: { apiKey: "selected-account-a" } },
+        { auth: { apiKey: "selected-account-b" } },
+      ]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["amazon-bedrock", "stored-bedrock", "Amazon Bedrock"],
+    ["azure-openai-responses", "stored-azure", "Azure OpenAI"],
+    ["google-vertex", "gcp-vertex-credentials", "Vertex ADC"],
+  ])("fails closed for isolated %s ambient-chain auth", async (provider, key, message) => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-routing-isolation-"));
+    try {
+      writeFileSync(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify({ [provider]: { type: "api_key", key } }),
+      );
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth(provider)).rejects.toThrow(message);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Cloudflare routing only from the selected instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-cloudflare-isolation-"));
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+          CLOUDFLARE_API_KEY: "key-b",
+        },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("cloudflare-ai-gateway")).resolves.toMatchObject({
+        env: {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+        },
+      });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses ambient OpenAI and Anthropic routing credentials", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-header-isolation-"));
+    const previousOpenAiOrg = process.env.OPENAI_ORG_ID;
+    const previousAnthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.OPENAI_ORG_ID = "ambient-org";
+    process.env.ANTHROPIC_AUTH_TOKEN = "ambient-token";
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { OPENAI_API_KEY: "selected-openai", ANTHROPIC_API_KEY: "selected-anthropic" },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("openai")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ "OpenAI-Organization": "ambient-org" }) },
+      });
+      await expect(runtime.getAuth("anthropic")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ Authorization: "Bearer ambient-token" }) },
+      });
+    } finally {
+      if (previousOpenAiOrg === undefined) delete process.env.OPENAI_ORG_ID;
+      else process.env.OPENAI_ORG_ID = previousOpenAiOrg;
+      if (previousAnthropicToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+      else process.env.ANTHROPIC_AUTH_TOKEN = previousAnthropicToken;
       rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -580,6 +1017,42 @@ describe("getPiSupportedThinkingOptions", () => {
     );
 
     expect(options.map((option) => option.value)).toEqual(["low", "high", "max"]);
+  });
+});
+
+describe("applyPiRuntimeApiKeysFromEnvironment", () => {
+  it("maps Pi provider-instance API keys into runtime auth without mutating process.env", async () => {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "global-openai-key";
+    const runtimeKeys = new Map<string, string>();
+
+    try {
+      await applyPiRuntimeApiKeysFromEnvironment(
+        {
+          async setRuntimeApiKey(provider, apiKey) {
+            runtimeKeys.set(provider, apiKey);
+          },
+        },
+        {
+          OPENAI_API_KEY: "instance-openai-key",
+          ANTHROPIC_API_KEY: "anthropic-api-key",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth-token",
+          OPENCODE_API_KEY: "opencode-key",
+        },
+      );
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(runtimeKeys.get("openai")).toBe("instance-openai-key");
+    expect(runtimeKeys.get("anthropic")).toBe("anthropic-oauth-token");
+    expect(runtimeKeys.get("opencode")).toBe("opencode-key");
+    expect(runtimeKeys.get("opencode-go")).toBe("opencode-key");
+    expect(process.env.OPENAI_API_KEY).toBe(previousOpenAiKey);
   });
 });
 

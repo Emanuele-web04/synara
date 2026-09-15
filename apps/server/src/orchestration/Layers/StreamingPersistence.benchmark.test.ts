@@ -24,7 +24,12 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "./ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+
+const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshotQueryBase.pipe(
+  Layer.provide(ServerSettingsService.layerTest()),
+);
 
 // Opt-in only. Each invocation uses a fresh process and a disposable database.
 it.skipIf(!process.env.SYNARA_STREAMING_BENCHMARK_OUTPUT)(

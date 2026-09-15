@@ -34,6 +34,7 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import { isProviderKind } from "@synara/shared/providerInstances";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import {
   buildSubagentIdentityDirectory,
@@ -224,6 +225,14 @@ function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationTh
     activities: [],
     checkpoints: [],
   };
+}
+
+function readModelSelectionProviderInstanceId(
+  modelSelection:
+    | OrchestrationThread["modelSelection"]
+    | OrchestrationThreadShell["modelSelection"],
+): string | undefined {
+  return "instanceId" in modelSelection ? modelSelection.instanceId : undefined;
 }
 
 /**
@@ -1005,6 +1014,9 @@ const make = Effect.gen(function* () {
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
     provider: ProviderRuntimeEvent["provider"],
   ) {
+    if (!isProviderKind(provider)) {
+      return false;
+    }
     const capabilities = yield* providerService
       .getCapabilities(provider)
       .pipe(Effect.catch(() => Effect.succeed(null)));
@@ -1952,7 +1964,7 @@ const make = Effect.gen(function* () {
               ? identity.model === parentThread.modelSelection.model
                 ? parentThread.modelSelection
                 : {
-                    provider: parentThread.modelSelection.provider,
+                    ...parentThread.modelSelection,
                     model: identity.model,
                   }
               : undefined;
@@ -2287,6 +2299,10 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               status,
               providerName: event.provider,
+              providerInstanceId:
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
@@ -2695,6 +2711,10 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               status: "error",
               providerName: event.provider,
+              providerInstanceId:
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,

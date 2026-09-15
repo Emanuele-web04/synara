@@ -250,6 +250,7 @@ async function requestVoiceTranscriptionUpload(
     sampleRateHz: String(input.sampleRateHz),
     durationMs: String(input.durationMs),
     ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
   });
   const decoded = atob(input.audioBase64);
   const bytes = new Uint8Array(decoded.length);

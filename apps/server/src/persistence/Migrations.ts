@@ -119,6 +119,12 @@ import Migration0100 from "./Migrations/100_MessageTextChunks.ts";
 import Migration0101 from "./Migrations/101_RemoveTranscriptMarkers.ts";
 import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary.ts";
 import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
+import Migration0104 from "./Migrations/104_ProjectionThreadSessionProviderInstance.ts";
+import Migration0105 from "./Migrations/105_ProviderSessionRuntimeInstanceId.ts";
+import Migration0106 from "./Migrations/106_ProfileStatsDeletedProviderInstances.ts";
+import Migration0107 from "./Migrations/107_ClearAutomationDefinitionProviderOptions.ts";
+import Migration0108 from "./Migrations/108_ClearAutomationRunProviderOptions.ts";
+import Migration0109 from "./Migrations/109_ScrubOrchestrationEventProviderOptions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -238,6 +244,12 @@ export const migrationEntries = [
   [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
   // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
+  [104, "ProjectionThreadSessionProviderInstance", Migration0104],
+  [105, "ProviderSessionRuntimeInstanceId", Migration0105],
+  [106, "ProfileStatsDeletedProviderInstances", Migration0106],
+  [107, "ClearAutomationDefinitionProviderOptions", Migration0107],
+  [108, "ClearAutomationRunProviderOptions", Migration0108],
+  [109, "ScrubOrchestrationEventProviderOptions", Migration0109],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

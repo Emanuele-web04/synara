@@ -926,6 +926,139 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it.each([
+    {
+      name: "ambient session then explicit empty discovery",
+      sessionEnvironment: undefined,
+      discoveryEnvironment: {},
+    },
+    {
+      name: "explicit empty session then ambient discovery",
+      sessionEnvironment: {},
+      discoveryEnvironment: undefined,
+    },
+  ])(
+    "does not reuse $name envelopes",
+    async ({ name, sessionEnvironment, discoveryEnvironment }) => {
+      const serverUrl = "http://127.0.0.1:4666";
+      const runtime = createMockOpenCodeRuntime();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const listModels = adapter.listModels;
+          if (!listModels) {
+            throw new Error("Expected OpenCode adapter to support runtime model listing.");
+          }
+
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId(`thread-${name.replaceAll(" ", "-")}`),
+            cwd: "/repo/discovery-environment-boundary",
+            runtimeMode: "full-access",
+            providerOptions: {
+              opencode: {
+                serverUrl,
+                ...(sessionEnvironment !== undefined ? { environment: sessionEnvironment } : {}),
+              },
+            },
+          });
+
+          return yield* listModels({
+            provider: "opencode",
+            cwd: "/repo/discovery-environment-boundary",
+            serverUrl,
+            ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(runtime.connectCalls).toHaveLength(2);
+      expect(runtime.connectCalls.map((call) => call.environment)).toEqual([
+        sessionEnvironment,
+        discoveryEnvironment,
+      ]);
+    },
+  );
+
+  it("passes the resolved nondefault OpenCode instance through external thread reads", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const providerInstanceId = "opencode_work";
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        if (!adapter.readExternalThread) {
+          throw new Error("Expected OpenCode external thread reads.");
+        }
+        return yield* adapter.readExternalThread({
+          externalThreadId: "external-session",
+          cwd: "/repo/external-import",
+          providerInstanceId,
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/external-import",
+      instanceId: providerInstanceId,
+    });
+  });
+
+  it("keeps the stopped OpenCode account on a graceful exit after the thread switches accounts", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-opencode-account-switch");
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_a",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_b",
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        return Array.from(yield* Fiber.join(eventsFiber));
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    const exited = events.find((event) => event.type === "session.exited");
+    const rebound = events.filter((event) => event.type === "session.started").at(-1);
+    expect(exited?.providerInstanceId).toBe("opencode_account_a");
+    expect(rebound?.providerInstanceId).toBe("opencode_account_b");
+  });
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({

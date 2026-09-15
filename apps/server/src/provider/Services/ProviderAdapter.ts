@@ -26,6 +26,7 @@ import type {
   ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
+  ProviderInstanceId,
   ProviderStartReviewInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
@@ -33,6 +34,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
@@ -43,6 +45,13 @@ import type {
 } from "@synara/contracts";
 import type { Effect } from "effect";
 import type { Stream } from "effect";
+
+export function resolveProviderSessionInstanceId(
+  input: Pick<ProviderSessionStartInput, "providerInstanceId" | "modelSelection">,
+): ProviderInstanceId | undefined {
+  return input.providerInstanceId ?? input.modelSelection?.instanceId;
+}
+import type { CodexGeneratedImageHomeCandidate } from "../../codexGeneratedImages.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
 
@@ -95,6 +104,21 @@ export interface ProviderThreadSnapshot {
   readonly cwd?: string | null;
 }
 
+export interface ProviderGeneratedImageHomePathsInput {
+  /** When present, live sessions outside this current settings scope are ignored. */
+  readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
+}
+
+/** Server-internal launch guard; deliberately not part of the public contracts schema. */
+export interface ProviderContinuationLaunchRequirements {
+  readonly expectedCodexContinuationGeneration?: string;
+}
+
+export type ProviderAdapterSessionStartInput = ProviderSessionStartInput &
+  ProviderContinuationLaunchRequirements;
+export type ProviderAdapterForkThreadInput = ProviderForkThreadInput &
+  ProviderContinuationLaunchRequirements;
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -106,7 +130,7 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
@@ -204,6 +228,13 @@ export interface ProviderAdapterShape<TError> {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * List provider home roots that can contain generated image artifacts for live sessions.
+   */
+  readonly listGeneratedImageHomePaths?: (
+    input?: ProviderGeneratedImageHomePathsInput,
+  ) => Effect.Effect<ReadonlyArray<CodexGeneratedImageHomeCandidate>, TError>;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
@@ -219,6 +250,8 @@ export interface ProviderAdapterShape<TError> {
   readonly readExternalThread?: (input: {
     readonly externalThreadId: string;
     readonly cwd?: string;
+    readonly providerInstanceId?: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
@@ -241,7 +274,7 @@ export interface ProviderAdapterShape<TError> {
    * conversation-history-only forking.
    */
   readonly forkThread?: (
-    input: ProviderForkThreadInput,
+    input: ProviderAdapterForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult, TError>;
 
   /**

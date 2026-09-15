@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
 
-import type { ProviderRuntimeEvent } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@synara/contracts";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+  codexConfiguredHomePathsFromSettings,
+  enabledCodexProviderInstanceIdsFromSettings,
+  extractCodexGeneratedImageReference,
   generatedImagePathFromRuntimeEvent,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
@@ -87,12 +90,59 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     );
   });
 
+  it("predicts against the account overlay for account-scoped instance context", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const root = resolveCodexGeneratedImagesRoot({
+      homePath: "/codex-test/.codex",
+      accountId: "codex_2",
+    });
+    assert.ok(
+      root.startsWith(
+        path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_2-"),
+      ),
+      `expected account overlay root, got ${root}`,
+    );
+    assert.ok(root.endsWith(path.join("generated_images")));
+  });
+
+  it("honors a per-instance SYNARA_HOME when predicting the managed overlay", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const root = resolveCodexGeneratedImagesRoot({
+      homePath: "/codex-test/.codex-work",
+      environment: { SYNARA_HOME: "/synara-test/instance-runtime" },
+    });
+    assert.equal(
+      root,
+      path.join("/synara-test/instance-runtime", "codex-home-overlay", "generated_images"),
+    );
+  });
+
   it("returns both source and overlay generated_images roots for the allowlist", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
     assert.deepEqual(resolveCodexGeneratedImagesRoots("/codex-test/.codex"), [
       path.join("/codex-test/.codex", "generated_images"),
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     ]);
+  });
+
+  it("keeps account overlay roots for the full instance context", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+
+    const roots = resolveCodexGeneratedImagesRoots({
+      homePath: "/codex-test/.codex-work",
+      shadowHomePath: "/codex-test/.codex-work-auth",
+      accountId: "codex_work",
+    });
+
+    assert.ok(
+      roots.some(
+        (root) =>
+          root.startsWith(
+            path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_work-"),
+          ) && root.endsWith(path.join("generated_images")),
+      ),
+      `expected account overlay generated_images root, got ${JSON.stringify(roots)}`,
+    );
   });
 
   it("collapses to a single root when overlay equals source", () => {
@@ -105,5 +155,175 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     const roots = resolveCodexGeneratedImagesRoots(homePath);
     assert.ok(roots.length >= 1 && roots.length <= 2, `expected 1-2 roots, got ${roots.length}`);
     assert.ok(roots.includes(path.join(homePath, "generated_images")));
+  });
+});
+
+describe("codexConfiguredHomePathsFromSettings", () => {
+  const previousSynaraHome = process.env.SYNARA_HOME;
+
+  afterEach(() => {
+    if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
+    else process.env.SYNARA_HOME = previousSynaraHome;
+  });
+
+  it("keeps the enabled default Codex home when it has no overrides", () => {
+    const candidates = codexConfiguredHomePathsFromSettings(DEFAULT_SERVER_SETTINGS);
+
+    assert.deepEqual(candidates, [{}]);
+  });
+
+  it("includes the env-scoped write home for instances relocating the overlay root", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_env: {
+          driver: "codex" as const,
+          enabled: true,
+          environment: [{ name: "SYNARA_HOME", value: "/instance-env/runtime", sensitive: false }],
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    const expectedPrefix = path.join(
+      "/instance-env/runtime",
+      "codex-home-overlay",
+      "accounts",
+      "codex_env-",
+    );
+    assert.ok(
+      roots.some((root) => root.startsWith(expectedPrefix)),
+      `expected env-scoped account overlay root, got ${JSON.stringify(roots)}`,
+    );
+  });
+
+  it("preserves configured account context for generated-image roots", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_work: {
+          driver: "codex" as const,
+          enabled: true,
+          config: {
+            homePath: "/codex-test/.codex-work",
+            shadowHomePath: "/codex-test/.codex-work-auth",
+            accountId: "codex_work",
+          },
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+    assert.ok(
+      roots.some(
+        (root) =>
+          root.startsWith(
+            path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_work-"),
+          ) && root.endsWith(path.join("generated_images")),
+      ),
+      `expected configured account overlay generated_images root, got ${JSON.stringify(roots)}`,
+    );
+  });
+
+  it("excludes disabled Codex instance homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_disabled: {
+          driver: "codex" as const,
+          enabled: false,
+          config: {
+            homePath: "/codex-test/.codex-disabled",
+            accountId: "codex_disabled",
+          },
+        },
+        codex_enabled: {
+          driver: "codex" as const,
+          enabled: true,
+          config: {
+            homePath: "/codex-test/.codex-enabled",
+            accountId: "codex_enabled",
+          },
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+    const enabledInstanceIds = enabledCodexProviderInstanceIdsFromSettings(settings);
+
+    assert.ok([...enabledInstanceIds].some((instanceId) => instanceId === "codex_enabled"));
+    assert.ok([...enabledInstanceIds].every((instanceId) => instanceId !== "codex_disabled"));
+    assert.ok(
+      roots.some((root) => root.includes(path.join("accounts", "codex_enabled-"))),
+      `expected enabled account overlay root, got ${JSON.stringify(roots)}`,
+    );
+    assert.ok(
+      roots.every((root) => !root.includes(path.join("accounts", "codex_disabled-"))),
+      `expected disabled account overlay root to be absent, got ${JSON.stringify(roots)}`,
+    );
+  });
+
+  it("excludes disabled default Codex homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled-default/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          enabled: false,
+          homePath: "/codex-test/.codex-disabled-default",
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.every((root) => !root.includes(".codex-disabled-default")),
+      `expected disabled default home to be absent, got ${JSON.stringify(roots)}`,
+    );
+  });
+
+  it("excludes generic-disabled default Codex homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled-generic/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          enabled: true,
+          homePath: "/codex-test/.codex-disabled-generic",
+        },
+      },
+      providerInstances: {
+        codex: {
+          driver: "codex" as const,
+          enabled: false,
+          config: {},
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.every((root) => !root.includes(".codex-disabled-generic")),
+      `expected generic-disabled default home to be absent, got ${JSON.stringify(roots)}`,
+    );
   });
 });

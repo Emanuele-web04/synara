@@ -8,6 +8,8 @@ import {
   AuthRevokePairingLinkInput,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  ProviderInstanceId,
+  ProviderKind,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
   ThreadId,
 } from "@synara/contracts";
@@ -18,6 +20,10 @@ import {
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
+import {
+  providerStartOptionsFromInstance,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -31,9 +37,15 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
+import {
+  codexConfiguredHomePathsFromSettings,
+  type CodexGeneratedImageHomeCandidate,
+  enabledCodexProviderInstanceIdsFromSettings,
+} from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -807,10 +819,47 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
+    // Dedicated per-account Codex homes anchor their own generated-image roots;
+    // resolve them from settings when the service can be read so those images
+    // stay servable. When settings are unavailable, configured roots cannot be
+    // trusted, but auth-fresh live session homes remain eligible.
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    const codexSettingsScope = Option.isSome(settingsService)
+      ? yield* settingsService.value.getSettings.pipe(
+          Effect.map((settings) => ({
+            configuredHomePaths: codexConfiguredHomePathsFromSettings(settings),
+            enabledProviderInstanceIds: enabledCodexProviderInstanceIdsFromSettings(settings),
+          })),
+          Effect.catch(() => Effect.succeed(null)),
+        )
+      : null;
+    const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);
+    const liveCodexHomePaths = Option.isSome(adapterRegistry)
+      ? yield* adapterRegistry.value.getByProvider("codex").pipe(
+          Effect.flatMap((adapter) =>
+            adapter.listGeneratedImageHomePaths
+              ? adapter.listGeneratedImageHomePaths(
+                  codexSettingsScope
+                    ? {
+                        enabledProviderInstanceIds: codexSettingsScope.enabledProviderInstanceIds,
+                      }
+                    : undefined,
+                )
+              : Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([]),
+          ),
+          Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
+        )
+      : [];
+    const codexHomePaths: readonly CodexGeneratedImageHomeCandidate[] = [
+      ...(codexSettingsScope?.configuredHomePaths ?? []),
+      ...liveCodexHomePaths,
+    ];
+
     const previewFile = yield* Effect.promise(() =>
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        codexHomePaths,
         scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),
@@ -972,13 +1021,15 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
 
   if (url.pathname === VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH) {
     const provider = url.searchParams.get("provider")?.trim() ?? "";
+    const providerInstanceId = url.searchParams.get("providerInstanceId")?.trim() || undefined;
     const cwd = url.searchParams.get("cwd")?.trim() ?? "";
     const threadId = url.searchParams.get("threadId")?.trim() || undefined;
     const mimeType = url.searchParams.get("mimeType")?.trim() ?? "";
     const sampleRateHz = Number(url.searchParams.get("sampleRateHz"));
     const durationMs = Number(url.searchParams.get("durationMs"));
     if (
-      !provider ||
+      !Schema.is(ProviderKind)(provider) ||
+      (providerInstanceId !== undefined && !Schema.is(ProviderInstanceId)(providerInstanceId)) ||
       !cwd ||
       !mimeType ||
       !Number.isSafeInteger(sampleRateHz) ||
@@ -1000,15 +1051,31 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
       const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
       const registry = yield* ProviderAdapterRegistry;
       const serverSettings = yield* ServerSettingsService;
-      const adapter = yield* getEnabledProviderAdapter(provider as never, serverSettings, registry);
+      const settings = yield* serverSettings.getSettings;
+      const instance = resolveProviderInstance(settings, {
+        provider,
+        ...(providerInstanceId ? { instanceId: providerInstanceId } : {}),
+      });
+      if (!instance || instance.driver !== provider || !instance.enabled) {
+        return HttpServerResponse.jsonUnsafe(
+          {
+            error: `Voice transcription provider instance '${providerInstanceId ?? provider}' is unavailable.`,
+          },
+          { status: 409, headers: corsHeaders },
+        );
+      }
+      const adapter = yield* getEnabledProviderAdapter(instance.driver, serverSettings, registry);
       if (!adapter.transcribeVoice) {
         return HttpServerResponse.jsonUnsafe(
           { error: `Voice transcription is unavailable for provider '${provider}'.` },
           { status: 400, headers: corsHeaders },
         );
       }
+      const providerOptions = providerStartOptionsFromInstance(instance);
       const result = yield* adapter.transcribeVoice({
-        provider: provider as never,
+        provider: instance.driver,
+        providerInstanceId: instance.instanceId,
+        ...(providerOptions ? { providerOptions } : {}),
         cwd,
         ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
         mimeType,

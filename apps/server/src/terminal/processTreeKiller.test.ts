@@ -78,7 +78,7 @@ describe("processTreeKiller", () => {
     expect(captureAttempts).toBe(2);
   });
 
-  it("validates captured child commands before delayed SIGKILL", () => {
+  it("validates captured child commands and signals the POSIX root directly", () => {
     const signaledPids: Array<{ pid: number; signal: TerminalKillSignal }> = [];
     const treeSignals: Array<{ rootPid: number; signal: TerminalKillSignal }> = [];
     const commandReadCalls: number[][] = [];
@@ -89,6 +89,7 @@ describe("processTreeKiller", () => {
       ],
     };
     const killer = createProcessTreeKiller({
+      platform: "linux",
       readCurrentCommands: (pids) => {
         commandReadCalls.push([...pids]);
         return new Map([
@@ -113,14 +114,18 @@ describe("processTreeKiller", () => {
       onError: () => undefined,
     });
 
-    expect(signaledPids).toEqual([{ pid: 102, signal: "SIGKILL" }]);
+    expect(signaledPids).toEqual([
+      { pid: 102, signal: "SIGKILL" },
+      { pid: 100, signal: "SIGKILL" },
+    ]);
     expect(commandReadCalls).toEqual([[102, 103]]);
-    expect(treeSignals).toEqual([{ rootPid: 100, signal: "SIGKILL" }]);
+    expect(treeSignals).toEqual([]);
   });
 
   it("does not validate captured child commands before initial SIGTERM", () => {
     const signaledPids: number[] = [];
     const killer = createProcessTreeKiller({
+      platform: "linux",
       readCurrentCommands: () => {
         throw new Error("SIGTERM should not read current commands");
       },
@@ -143,7 +148,7 @@ describe("processTreeKiller", () => {
       onError: () => undefined,
     });
 
-    expect(signaledPids).toEqual([103, 102]);
+    expect(signaledPids).toEqual([103, 102, 100]);
   });
 
   it("can skip root tree signaling while still signaling captured children", () => {

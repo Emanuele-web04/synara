@@ -5,7 +5,12 @@
 // Depends on: shared trait resolution + effort-change planning, the trait commit hook,
 //   the shared Slider primitive, and menu submenu primitives for the model list.
 
-import type { ProviderKind, ProviderModelDescriptor, ThreadId } from "@synara/contracts";
+import type {
+  ProviderInstanceId,
+  ProviderKind,
+  ProviderModelDescriptor,
+  ThreadId,
+} from "@synara/contracts";
 import { type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, ResetIcon } from "~/lib/icons";
@@ -26,6 +31,7 @@ import { useComposerTraitCommit } from "./useComposerTraitCommit";
 
 type ComposerEffortSliderCardProps = {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId | null | undefined;
   threadId: ThreadId;
   model: string | null | undefined;
   modelLabel: string;
@@ -60,7 +66,13 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { effortLevels, defaultEffort, effort, fastModeEnabled, ultrathinkPromptControlled } =
     selection;
   const supportsFastMode = supportsComposerFastModeControl(selection);
-  const commitTrait = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTrait = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: props.providerInstanceId,
+    model,
+    modelOptions,
+  });
 
   const ladderIndex = resolveComposerEffortLadderIndex(selection);
   const activeLevel = effortLevels[ladderIndex];

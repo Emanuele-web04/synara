@@ -22,6 +22,7 @@ import {
 } from "~/lib/providerAvailability";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { isProviderKind } from "~/providerOrdering";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import { ONBOARDING_TILE_CLASS_NAME } from "../layout";
 import { classifyProviderSetup, summarizeProviderSetup, type ProviderSetupState } from "../logic";
@@ -52,10 +53,14 @@ function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
   return useMemo(
     () =>
       providers.flatMap((status) => {
+        const provider = status.driver ?? status.provider;
+        if (!isProviderKind(provider) || (status.instanceId ?? status.provider) !== provider) {
+          return [];
+        }
         const normalized = normalizeProviderStatusForLocalConfig({
-          provider: status.provider,
+          provider,
           status,
-          customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
+          customBinaryPath: getCustomBinaryPathForProvider(settings, provider),
         });
         return normalized ? [normalized] : [];
       }),

@@ -6,7 +6,10 @@ import {
   type ParsedCliVersion,
 } from "./cliVersion.ts";
 
-export const MINIMUM_CODEX_CLI_VERSION = "0.37.0";
+// 0.105.0 is the first stable Codex release that honors CODEX_SQLITE_HOME.
+// Account overlays rely on it to keep continuation databases at one source.
+export const MINIMUM_CODEX_CLI_VERSION = "0.105.0";
+export const CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE = `Codex CLI version check succeeded but returned an unrecognized version. Synara requires a verifiable v${MINIMUM_CODEX_CLI_VERSION} or newer installation; upgrade or reinstall Codex and restart Synara.`;
 // `approvalsReviewer: "auto_review"` and its companion messages shipped in rust-v0.124.0.
 export const MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION = "0.124.0";
 

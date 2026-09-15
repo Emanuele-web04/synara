@@ -135,6 +135,7 @@ describe("agent gateway target resolver", () => {
       const codexGuidance = agentGatewayTargetOptionGuidance(codexCatalog);
       assert.deepEqual(codexGuidance.exampleTarget, {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.6-terra",
         options: { reasoningEffort: "low" },
       });

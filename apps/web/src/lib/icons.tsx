@@ -109,6 +109,7 @@ export const HANDOFF_ICON_NAME = "arrow-left-right";
 export const HandoffIcon: LucideIcon = centralIconWrapper(HANDOFF_ICON_NAME);
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+export const UserIcon: LucideIcon = centralIconWrapper("user");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
 /** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */

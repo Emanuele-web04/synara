@@ -128,6 +128,8 @@ function getWindowForTest(): Window & typeof globalThis & { desktopBridge?: unkn
 const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
   {
     provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
     status: "ready",
     available: true,
     authStatus: "authenticated",
@@ -316,8 +318,21 @@ describe("wsNativeApi", () => {
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
-          codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
-          claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
+          codex: {
+            enabled: true,
+            binaryPath: "codex",
+            homePath: "",
+            selectedAccountId: "default",
+            accounts: [],
+            customModels: [],
+          },
+          claudeAgent: {
+            enabled: true,
+            binaryPath: "claude",
+            homePath: "",
+            launchArgs: "",
+            customModels: [],
+          },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
@@ -333,6 +348,7 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        providerInstances: {},
         skills: { disabled: [] },
       },
     } as const;
@@ -1204,6 +1220,7 @@ describe("wsNativeApi", () => {
     const api = createWsNativeApi();
     const result = await api.server.transcribeVoice({
       provider: "codex",
+      providerInstanceId: "codex_work",
       cwd: "/repo",
       audioBase64: "AQID",
       mimeType: "audio/wav",
@@ -1216,6 +1233,7 @@ describe("wsNativeApi", () => {
       expect.stringContaining("/api/voice/transcribe?"),
       expect.objectContaining({ method: "POST", body: Uint8Array.from([1, 2, 3]) }),
     );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("providerInstanceId=codex_work");
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),

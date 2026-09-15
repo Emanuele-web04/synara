@@ -3,12 +3,25 @@
 // Layer: Settings panel
 
 import {
+  DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceConfig,
+  type ProviderInstanceConfigMap,
+  type ProviderInstanceEnvironment,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
   type ServerSettings,
 } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import {
+  normalizeProviderCliAlias,
+  providerCliCommandName,
+} from "@synara/shared/providerCliProfiles";
+import {
+  codexAccountInstanceId,
+  providerImportedDirectoryConfig,
+} from "@synara/shared/providerInstances";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -27,12 +40,39 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import type { AppSettings, AppSettingsBinding } from "~/appSettings";
+import {
+  getCodexAccountOptions,
+  getManageableProviderInstances,
+  getProviderInstanceOptions,
+  mergeProviderInstanceConfigPatch,
+  normalizeCodexAccounts,
+  removeManageableProviderInstance,
+  type AppSettings,
+  type AppSettingsBinding,
+  type CodexAccountSettings,
+} from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { CentralIcon } from "~/lib/central-icons";
-import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
+import {
+  CopyIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  FolderOpenIcon,
+  Loader2Icon,
+  PlusIcon,
+  XIcon,
+} from "~/lib/icons";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -41,7 +81,7 @@ import {
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { sameProviderOrder } from "~/providerOrdering";
+import { isProviderKind, sameProviderOrder } from "~/providerOrdering";
 import {
   getVisibleProviderUpdateStatuses,
   isProviderLatestVersionKnowable,
@@ -51,6 +91,7 @@ import {
   shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "~/providerUpdates";
+import { providerStatusInstanceKey } from "~/lib/providerAvailability";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   SETTINGS_INSET_LIST_CLASS_NAME,
@@ -63,15 +104,22 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { SelectItem } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ProviderIcon } from "../ProviderIcon";
 import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
-import { SettingResetButton, useSettingsRestoreSignal } from "./SettingControls";
+import { ProviderInstanceEnvironmentEditor } from "./ProviderInstanceEnvironmentEditor";
+import {
+  SettingResetButton,
+  SettingsSelectControl,
+  useSettingsRestoreSignal,
+} from "./SettingControls";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type ProviderInstallTextKey =
   | "claudeBinaryPath"
+  | "claudeHomePath"
   | "codexBinaryPath"
   | "codexHomePath"
   | "cursorBinaryPath"
@@ -172,6 +220,13 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
             Leave blank to use <code>claude</code> from your PATH.
           </>
         ),
+      },
+      {
+        kind: "text",
+        settingsKey: "claudeHomePath",
+        label: "Claude HOME path",
+        placeholder: "Claude HOME",
+        description: "Optional HOME directory for this Claude account.",
       },
     ],
   },
@@ -378,7 +433,26 @@ function isProviderInstallConfigDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
-  return config.fields.some((field) => isProviderInstallFieldDirty(field, settings, defaults));
+  return (
+    config.fields.some((field) => isProviderInstallFieldDirty(field, settings, defaults)) ||
+    JSON.stringify(
+      Object.fromEntries(
+        Object.entries(settings.providerInstances).filter(
+          ([, instance]) => instance.driver === config.provider,
+        ),
+      ),
+    ) !==
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(defaults.providerInstances).filter(
+            ([, instance]) => instance.driver === config.provider,
+          ),
+        ),
+      ) ||
+    (config.provider === "codex" &&
+      (settings.selectedCodexAccountId !== defaults.selectedCodexAccountId ||
+        JSON.stringify(settings.codexAccounts) !== JSON.stringify(defaults.codexAccounts)))
+  );
 }
 
 export function isProviderInstallSettingsDirty(
@@ -400,7 +474,13 @@ function createProviderInstallDisclosureState(
         field.kind === "password"
           ? settings[field.configuredKey]
           : Boolean(settings[field.settingsKey]),
-      ),
+      ) ||
+        Object.values(settings.providerInstances).some(
+          (instance) => instance.driver === config.provider,
+        ) ||
+        (config.provider === "codex" &&
+          (settings.codexAccounts.length > 0 ||
+            settings.selectedCodexAccountId !== DEFAULT_CODEX_ACCOUNT_ID)),
     ]),
   ) as Record<ProviderKind, boolean>;
 }
@@ -412,11 +492,17 @@ function createClosedProviderInstallDisclosureState(): Record<ProviderKind, bool
 }
 
 export function createProviderInstallResetPatch(defaults: AppSettings): Partial<AppSettings> {
-  return Object.fromEntries(
+  const fieldPatch = Object.fromEntries(
     PROVIDER_INSTALL_SETTINGS.flatMap((config) =>
       config.fields.map((field) => [field.settingsKey, defaults[field.settingsKey]]),
     ),
   ) as Partial<AppSettings>;
+  return {
+    ...fieldPatch,
+    codexAccounts: defaults.codexAccounts,
+    selectedCodexAccountId: defaults.selectedCodexAccountId,
+    providerInstances: defaults.providerInstances,
+  };
 }
 
 function setProviderListMembership(
@@ -556,11 +642,42 @@ function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined
   return state.output?.trim() || state.message || "The provider update did not complete.";
 }
 
+function providerStatusDisplayName(status: ServerProviderStatus): string {
+  if (status.displayName?.trim()) return status.displayName;
+  const driver = status.driver ?? status.provider;
+  return isProviderKind(driver) ? PROVIDER_DISPLAY_NAMES[driver] : driver;
+}
+
+function providerInstanceStatusSummary(status: ServerProviderStatus | undefined): {
+  readonly dotClassName: string;
+  readonly label: string;
+} {
+  if (!status) {
+    return { dotClassName: "bg-muted-foreground/40", label: "Not checked yet" };
+  }
+  if (status.authStatus === "unauthenticated") {
+    return { dotClassName: "bg-amber-500", label: "Sign in required" };
+  }
+  if (status.authStatus === "authenticated") {
+    return {
+      dotClassName: status.status === "ready" ? "bg-emerald-500" : "bg-amber-500",
+      label: status.authLabel?.trim() || "Authenticated",
+    };
+  }
+  if (status.status === "error" || !status.available) {
+    return { dotClassName: "bg-red-500", label: status.message?.trim() || "Unavailable" };
+  }
+  return {
+    dotClassName: "bg-muted-foreground/40",
+    label: status.message?.trim() || "Status unknown",
+  };
+}
+
 function ProviderUpdateAction(props: {
   providerStatus: ServerProviderStatus;
   active: boolean;
   disabled: boolean;
-  onUpdate: (provider: ProviderKind) => void;
+  onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
 }) {
   const advisory = props.providerStatus.versionAdvisory;
   return (
@@ -572,7 +689,9 @@ function ProviderUpdateAction(props: {
       title={advisory?.updateCommand ? `Run ${advisory.updateCommand}` : undefined}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
-        props.onUpdate(props.providerStatus.provider);
+        const driver = props.providerStatus.driver ?? props.providerStatus.provider;
+        if (!isProviderKind(driver)) return;
+        props.onUpdate(driver, providerStatusInstanceKey(props.providerStatus));
       }}
     >
       {props.active ? (
@@ -643,17 +762,675 @@ function ProviderInstallFieldControl(props: {
   );
 }
 
+function CodexAccountsControl(props: {
+  settings: AppSettings;
+  updateSettings: (patch: Partial<AppSettings>) => void;
+}) {
+  const accounts = props.settings.codexAccounts;
+  const accountOptions = getCodexAccountOptions(props.settings);
+  const selectedAccountLabel =
+    accountOptions.find((account) => account.id === props.settings.selectedCodexAccountId)?.label ??
+    "Default";
+
+  const addAccount = () => {
+    const existingIds = new Set(accounts.map((account) => account.id));
+    let index = accounts.length + 1;
+    let id = `account${index}`;
+    while (existingIds.has(id)) {
+      index += 1;
+      id = `account${index}`;
+    }
+    const nextAccount: CodexAccountSettings = {
+      id,
+      label: `Account ${index}`,
+      homePath: props.settings.codexHomePath,
+      shadowHomePath: "",
+    };
+    props.updateSettings({
+      codexAccounts: [...accounts, nextAccount],
+      selectedCodexAccountId: id,
+    });
+  };
+
+  const updateAccount = (accountId: string, patch: Partial<Omit<CodexAccountSettings, "id">>) => {
+    props.updateSettings({
+      codexAccounts: normalizeCodexAccounts(
+        accounts.map((account) => (account.id === accountId ? { ...account, ...patch } : account)),
+      ),
+    });
+  };
+
+  const removeAccount = (accountId: string) => {
+    props.updateSettings(
+      removeManageableProviderInstance(props.settings, codexAccountInstanceId(accountId)),
+    );
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="block text-xs font-medium text-foreground">Codex account</span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            Select the account used for new Codex turns.
+          </span>
+        </div>
+        <Button type="button" size="xs" variant="outline" onClick={addAccount}>
+          <PlusIcon className="size-3.5" />
+          Add
+        </Button>
+      </div>
+
+      <SettingsSelectControl
+        value={props.settings.selectedCodexAccountId}
+        onValueChange={(selectedCodexAccountId) => props.updateSettings({ selectedCodexAccountId })}
+        ariaLabel="Codex account"
+        triggerClassName="w-full"
+        valueContent={<span className="truncate">{selectedAccountLabel}</span>}
+      >
+        {accountOptions.map((account) => (
+          <SelectItem hideIndicator key={account.id} value={account.id}>
+            <span className="truncate">{account.label}</span>
+          </SelectItem>
+        ))}
+      </SettingsSelectControl>
+
+      {accounts.length > 0 ? (
+        <div className="space-y-2">
+          {accounts.map((account) => (
+            <div
+              key={account.id}
+              className={cn(
+                SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+                SETTINGS_INSET_RADIUS_CLASS_NAME,
+                "px-3 py-3",
+              )}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground">
+                    {account.label || account.id}
+                  </div>
+                  <div className="truncate text-[11px] text-muted-foreground">{account.id}</div>
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => removeAccount(account.id)}
+                >
+                  <XIcon className="size-3.5" />
+                  Remove
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="block text-xs font-medium text-foreground">Label</span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-label`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.label}
+                    onCommit={(label) => updateAccount(account.id, { label })}
+                    placeholder="Work"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-medium text-foreground">
+                    Shared CODEX_HOME
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.homePath}
+                    onCommit={(homePath) => updateAccount(account.id, { homePath })}
+                    placeholder={props.settings.codexHomePath || "~/.codex"}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-medium text-foreground">
+                    Shadow auth home
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-shadow-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.shadowHomePath}
+                    onCommit={(shadowHomePath) => updateAccount(account.id, { shadowHomePath })}
+                    placeholder="~/.codex_work"
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function providerInstanceConfigKey(field: ProviderInstallField): string {
+  switch (field.settingsKey) {
+    case "codexHomePath":
+    case "claudeHomePath":
+      return "homePath";
+    case "cursorApiEndpoint":
+      return "apiEndpoint";
+    case "openCodeServerUrl":
+      return "serverUrl";
+    case "openCodeServerPassword":
+      return "serverPassword";
+    case "openCodeExperimentalWebSockets":
+      return "experimentalWebSockets";
+    case "piAgentDir":
+      return "agentDir";
+    default:
+      return "binaryPath";
+  }
+}
+
+function providerInstanceLaunchConfig(
+  config: ProviderInstallSettings,
+  settings: AppSettings,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const field of config.fields) {
+    const key = providerInstanceConfigKey(field);
+    const value = settings[field.settingsKey];
+    if (typeof value === "boolean") {
+      if (value) result[key] = true;
+      continue;
+    }
+    if (value.trim()) result[key] = value;
+  }
+  if (config.provider === "codex") {
+    delete result.homePath;
+  }
+  return result;
+}
+
+function ProviderInstancesControl(props: {
+  config: ProviderInstallSettings;
+  providerStatusByInstance: ReadonlyMap<string, ServerProviderStatus>;
+  settings: AppSettings;
+  updateSettings: (patch: Partial<AppSettings>) => void;
+}) {
+  const provider = props.config.provider;
+  const instances = getManageableProviderInstances(props.settings, provider);
+  const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
+  const terminalCommandCounts = getProviderInstanceOptions(props.settings).reduce(
+    (counts, option) => {
+      const config = props.settings.providerInstances[String(option.instanceId)]?.config;
+      const command = providerCliCommandName({
+        provider: option.provider,
+        instanceId: option.instanceId,
+        config:
+          config && typeof config === "object" && !Array.isArray(config)
+            ? (config as Record<string, unknown>)
+            : undefined,
+      });
+      counts.set(command, (counts.get(command) ?? 0) + 1);
+      return counts;
+    },
+    new Map<string, number>(),
+  );
+
+  const nextInstanceIdentity = () => {
+    const prefix = provider === "claudeAgent" ? "claude" : provider;
+    const existingIds = new Set(
+      getProviderInstanceOptions(props.settings).map((option) => String(option.instanceId)),
+    );
+    let index = 2;
+    let instanceId = `${prefix}_${index}`;
+    while (existingIds.has(instanceId)) {
+      index += 1;
+      instanceId = `${prefix}_${index}`;
+    }
+    return { index, instanceId };
+  };
+
+  const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
+    props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
+  };
+  const addInstance = () => {
+    const next = { ...props.settings.providerInstances } as Record<string, ProviderInstanceConfig>;
+    // Derived instances share this namespace with explicit entries. Reusing a
+    // derived id would mutate that account instead of creating a new profile.
+    const { index, instanceId } = nextInstanceIdentity();
+    next[instanceId] = {
+      driver: provider,
+      displayName: `${providerLabel} ${index}`,
+      enabled: provider !== "codex",
+      config: providerInstanceLaunchConfig(props.config, props.settings),
+    };
+    updateInstances(next);
+  };
+  const importInstance = async () => {
+    const selectedDirectory = await ensureNativeApi().dialogs.pickFolder();
+    if (!selectedDirectory) return;
+    const { instanceId } = nextInstanceIdentity();
+    const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
+    const config = {
+      ...providerInstanceLaunchConfig(props.config, props.settings),
+      ...providerImportedDirectoryConfig(provider, selectedDirectory),
+    };
+    updateInstances({
+      ...props.settings.providerInstances,
+      [instanceId]: {
+        driver: provider,
+        displayName: directoryName || `${providerLabel} imported`,
+        enabled: true,
+        config,
+      },
+    });
+    toastManager.add({
+      type: "success",
+      title: `${providerLabel} profile imported`,
+      description: "Synara references the selected directory; no files were moved or copied.",
+    });
+  };
+  const updateInstance = (
+    instanceId: string,
+    patch: {
+      readonly displayName?: string | undefined;
+      readonly enabled?: boolean | undefined;
+      readonly environment?: ProviderInstanceEnvironment | undefined;
+      readonly config?: Record<string, unknown> | undefined;
+    },
+  ) => {
+    const existing: ProviderInstanceConfig | null =
+      props.settings.providerInstances[instanceId] ??
+      (() => {
+        const derived = getProviderInstanceOptions(props.settings).find(
+          (instance) => instance.instanceId === instanceId,
+        );
+        return derived ? ({ driver: derived.driver } as ProviderInstanceConfig) : null;
+      })();
+    if (!existing) return;
+    const {
+      displayName: existingDisplayName,
+      environment: existingEnvironment,
+      ...existingRest
+    } = existing;
+    const displayName =
+      patch.displayName !== undefined ? patch.displayName.trim() : existingDisplayName;
+    const environment = patch.environment !== undefined ? patch.environment : existingEnvironment;
+    updateInstances({
+      ...props.settings.providerInstances,
+      [instanceId]: {
+        ...existingRest,
+        ...(displayName ? { displayName } : {}),
+        ...(environment && environment.length > 0 ? { environment } : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.config
+          ? { config: mergeProviderInstanceConfigPatch(existing.config, patch.config) }
+          : {}),
+      },
+    });
+  };
+  const readConfigString = (config: unknown, key: string): string => {
+    if (!config || typeof config !== "object" || Array.isArray(config)) return "";
+    const value = (config as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : "";
+  };
+  const readConfigBoolean = (config: unknown, key: string): boolean => {
+    if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+    return (config as Record<string, unknown>)[key] === true;
+  };
+  const instanceSectionLabel =
+    provider === "codex"
+      ? "Codex accounts"
+      : provider === "claudeAgent"
+        ? "Claude accounts"
+        : "Provider profiles";
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="block text-xs font-medium text-foreground">{instanceSectionLabel}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {provider === "codex"
+              ? "Add a separately routed Codex instance with its own home or shadow auth home."
+              : provider === "claudeAgent"
+                ? "Add a separate Claude account with its own config directory and optional " +
+                  "credential directory."
+                : provider === "opencode"
+                  ? "Add launch profiles for separate external servers or local runtime settings."
+                  : provider === "pi"
+                    ? "Add Pi launch profiles with separate agent directories or environments."
+                    : "Add launch profiles with provider-specific paths and isolated environments."}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={importInstance}
+            disabled={typeof window === "undefined" || !window.desktopBridge}
+            title={
+              typeof window === "undefined" || !window.desktopBridge
+                ? "Directory import is available in the Synara desktop app."
+                : "Reference an existing provider directory without moving it."
+            }
+          >
+            <FolderOpenIcon className="size-3.5" />
+            Import directory
+          </Button>
+          <Button type="button" size="xs" variant="outline" onClick={addInstance}>
+            <PlusIcon className="size-3.5" />
+            Add
+          </Button>
+        </div>
+      </div>
+
+      {instances.map(({ instanceId, instance }) => {
+        const cliCommand = providerCliCommandName({
+          provider,
+          instanceId,
+          config:
+            instance.config &&
+            typeof instance.config === "object" &&
+            !Array.isArray(instance.config)
+              ? (instance.config as Record<string, unknown>)
+              : undefined,
+        });
+        const cliAlias = readConfigString(instance.config, "cliAlias");
+        const cliAliasInvalid =
+          cliAlias.length > 0 && normalizeProviderCliAlias(cliAlias) === undefined;
+        const cliCommandConflicts = (terminalCommandCounts.get(cliCommand) ?? 0) > 1;
+        const instanceStatus = providerInstanceStatusSummary(
+          props.providerStatusByInstance.get(instanceId),
+        );
+        return (
+          <div
+            key={instanceId}
+            className={cn(
+              SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+              SETTINGS_INSET_RADIUS_CLASS_NAME,
+              "px-3 py-3",
+            )}
+          >
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-medium text-foreground">
+                  {instance.displayName || instanceId}
+                </div>
+                <div className="truncate text-[11px] text-muted-foreground">{instanceId}</div>
+                {instance.enabled !== false ? (
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span
+                      className={cn("size-1.5 shrink-0 rounded-full", instanceStatus.dotClassName)}
+                    />
+                    <span className="truncate">{instanceStatus.label}</span>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Switch
+                  checked={instance.enabled !== false}
+                  onCheckedChange={(enabled) => updateInstance(instanceId, { enabled })}
+                  aria-label={`Enable ${instance.displayName || instanceId}`}
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => {
+                    props.updateSettings(
+                      removeManageableProviderInstance(props.settings, instanceId),
+                    );
+                  }}
+                >
+                  <XIcon className="size-3.5" />
+                  Remove
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="block text-xs font-medium text-foreground">Label</span>
+                <DebouncedSettingTextInput
+                  id={`provider-instance-${instanceId}-label`}
+                  size="sm"
+                  variant="soft"
+                  className="mt-1"
+                  value={instance.displayName ?? ""}
+                  onCommit={(displayName) => updateInstance(instanceId, { displayName })}
+                  placeholder="Work"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs font-medium text-foreground">Terminal command</span>
+                <div className="mt-1 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-xs">
+                    {cliCommand}
+                  </code>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`Copy ${cliCommand}`}
+                    onClick={() => void copyTextToClipboard(cliCommand)}
+                  >
+                    <CopyIcon className="size-3.5" />
+                  </Button>
+                </div>
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="block text-xs font-medium text-foreground">Command override</span>
+                <DebouncedSettingTextInput
+                  id={`provider-instance-${instanceId}-cli-alias`}
+                  size="sm"
+                  variant="soft"
+                  className="mt-1"
+                  value={cliAlias}
+                  onCommit={(cliAlias) => updateInstance(instanceId, { config: { cliAlias } })}
+                  placeholder={cliCommand}
+                  spellCheck={false}
+                />
+                <span
+                  className={cn(
+                    "mt-1 block text-xs",
+                    cliAliasInvalid || cliCommandConflicts
+                      ? "text-destructive"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {cliAliasInvalid
+                    ? "Use 1–64 letters, numbers, dashes, or underscores; bare provider commands are reserved."
+                    : cliCommandConflicts
+                      ? "This command is already assigned to another profile. Choose a unique override."
+                      : "Available in Synara terminals for zsh, bash, fish, and scripts."}
+                </span>
+              </label>
+              {props.config.fields.map((field) => {
+                const configKey = providerInstanceConfigKey(field);
+                if (field.kind === "boolean") {
+                  return (
+                    <label
+                      key={field.settingsKey}
+                      className="flex items-center justify-between gap-3 sm:col-span-2"
+                    >
+                      <span className="text-xs font-medium text-foreground">{field.label}</span>
+                      <Switch
+                        checked={readConfigBoolean(instance.config, configKey)}
+                        onCheckedChange={(checked) =>
+                          updateInstance(instanceId, { config: { [configKey]: checked } })
+                        }
+                        aria-label={`${field.label} for ${instance.displayName || instanceId}`}
+                      />
+                    </label>
+                  );
+                }
+                const redacted =
+                  field.kind === "password" &&
+                  instance.config !== null &&
+                  typeof instance.config === "object" &&
+                  !Array.isArray(instance.config) &&
+                  (instance.config as Record<string, unknown>)[`${configKey}Redacted`] === true;
+                const inputId = `provider-instance-${instanceId}-${configKey}`;
+                return (
+                  <div className="block" key={field.settingsKey}>
+                    <label htmlFor={inputId} className="block text-xs font-medium text-foreground">
+                      {field.label}
+                    </label>
+                    <div className="mt-1 flex items-center gap-2">
+                      <DebouncedSettingTextInput
+                        id={inputId}
+                        size="sm"
+                        variant="soft"
+                        className="flex-1"
+                        type={field.kind === "password" ? "password" : "text"}
+                        value={redacted ? "" : readConfigString(instance.config, configKey)}
+                        onCommit={(value) => {
+                          if (redacted && value.length === 0) return;
+                          updateInstance(instanceId, { config: { [configKey]: value } });
+                        }}
+                        placeholder={
+                          redacted ? "Secret saved — type to replace" : field.placeholder
+                        }
+                        spellCheck={false}
+                      />
+                      {redacted ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          onClick={() =>
+                            updateInstance(instanceId, { config: { [configKey]: "" } })
+                          }
+                          aria-label={`Clear saved ${field.label.toLowerCase()} for ${
+                            instance.displayName || instanceId
+                          }`}
+                        >
+                          Clear
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+              {provider === "codex" ? (
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-medium text-foreground">
+                    Shadow auth home
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-shadow-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "shadowHomePath")}
+                    onCommit={(shadowHomePath) =>
+                      updateInstance(instanceId, { config: { shadowHomePath } })
+                    }
+                    placeholder="~/.codex_work"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
+              {provider === "claudeAgent" ? (
+                <>
+                  <label className="block">
+                    <span className="block text-xs font-medium text-foreground">
+                      Claude config directory
+                    </span>
+                    <DebouncedSettingTextInput
+                      id={`provider-instance-${instanceId}-config-dir`}
+                      size="sm"
+                      variant="soft"
+                      className="mt-1"
+                      value={readConfigString(instance.config, "configDir")}
+                      onCommit={(configDir) =>
+                        updateInstance(instanceId, { config: { configDir } })
+                      }
+                      placeholder="~/.claude-work"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-medium text-foreground">
+                      Claude credential directory
+                    </span>
+                    <DebouncedSettingTextInput
+                      id={`provider-instance-${instanceId}-secure-storage-dir`}
+                      size="sm"
+                      variant="soft"
+                      className="mt-1"
+                      value={readConfigString(instance.config, "secureStorageDir")}
+                      onCommit={(secureStorageDir) =>
+                        updateInstance(instanceId, { config: { secureStorageDir } })
+                      }
+                      placeholder="Optional shared credential directory"
+                      spellCheck={false}
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Advanced Claude CLI compatibility setting. Leave blank unless your setup
+                      already uses a separate secure-storage directory.
+                    </span>
+                  </label>
+                </>
+              ) : null}
+              {provider !== "codex" && provider !== "claudeAgent" && provider !== "pi" ? (
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-medium text-foreground">
+                    Profile directory
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-profile-dir`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "profileDir")}
+                    onCommit={(profileDir) =>
+                      updateInstance(instanceId, { config: { profileDir } })
+                    }
+                    placeholder="Provider account directory"
+                    spellCheck={false}
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Used as this profile's provider config root without changing your shell files.
+                  </span>
+                </label>
+              ) : null}
+              <ProviderInstanceEnvironmentEditor
+                instanceId={instanceId}
+                environment={instance.environment}
+                onChange={(environment) => updateInstance(instanceId, { environment })}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProviderToolRow(props: {
   config: ProviderInstallSettings;
   open: boolean;
   settings: AppSettings;
   defaults: AppSettings;
   hiddenProviderSet: ReadonlySet<ProviderKind>;
-  serverSettings: Pick<ServerSettings, "providers" | "enableProviderUpdateChecks"> | null;
+  serverSettings: Pick<
+    ServerSettings,
+    "providers" | "providerInstances" | "enableProviderUpdateChecks"
+  > | null;
   providerStatus: ServerProviderStatus | undefined;
-  updatingProviders: ReadonlySet<ProviderKind>;
+  providerStatusByInstance: ReadonlyMap<string, ServerProviderStatus>;
+  updatingProviders: ReadonlySet<ProviderInstanceId>;
   onOpenChange: (open: boolean) => void;
-  onUpdate: (provider: ProviderKind) => void;
+  onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
   const title = PROVIDER_DISPLAY_NAMES[props.config.provider];
@@ -680,7 +1457,11 @@ function ProviderToolRow(props: {
     : null;
   const updateActive = Boolean(
     (props.providerStatus && isProviderUpdateActive(props.providerStatus)) ||
-    props.updatingProviders.has(props.config.provider),
+    props.updatingProviders.has(
+      props.providerStatus
+        ? providerStatusInstanceKey(props.providerStatus)
+        : props.config.provider,
+    ),
   );
   const showUpdateButton = props.providerStatus
     ? shouldPromptProviderUpdate(props.providerStatus) &&
@@ -770,6 +1551,18 @@ function ProviderToolRow(props: {
                   updateSettings={props.updateSettings}
                 />
               ))}
+              {props.config.provider === "codex" ? (
+                <CodexAccountsControl
+                  settings={props.settings}
+                  updateSettings={props.updateSettings}
+                />
+              ) : null}
+              <ProviderInstancesControl
+                config={props.config}
+                providerStatusByInstance={props.providerStatusByInstance}
+                settings={props.settings}
+                updateSettings={props.updateSettings}
+              />
             </div>
           </div>
         </CollapsiblePanel>
@@ -780,6 +1573,7 @@ function ProviderToolRow(props: {
 
 export type ProvidersSettingsPanelProps = AppSettingsBinding & {
   readonly active: boolean;
+  readonly providerTarget?: ProviderKind | null;
   readonly resetEpoch: number;
   readonly updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
 };
@@ -790,6 +1584,7 @@ export function ProvidersSettingsPanel({
   updateSettings,
   updateSettingsAndWait,
   active,
+  providerTarget = null,
   resetEpoch,
 }: ProvidersSettingsPanelProps) {
   const queryClient = useQueryClient();
@@ -798,9 +1593,12 @@ export function ProvidersSettingsPanel({
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
-    () => createProviderInstallDisclosureState(settings),
+    () => ({
+      ...createProviderInstallDisclosureState(settings),
+      ...(providerTarget ? { [providerTarget]: true } : {}),
+    }),
   );
-  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderKind>>(
+  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderInstanceId>>(
     () => new Set(),
   );
   const providerEnablementMutationInFlightRef = useRef(false);
@@ -832,7 +1630,22 @@ export function ProvidersSettingsPanel({
   );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const providerStatusByProvider = useMemo(
-    () => new Map(localProviderStatuses.map((status) => [status.provider, status])),
+    () =>
+      new Map<ProviderKind, ServerProviderStatus>(
+        localProviderStatuses.flatMap((status) => {
+          const driver = status.driver ?? status.provider;
+          return isProviderKind(driver) && providerStatusInstanceKey(status) === driver
+            ? [[driver, status] as const]
+            : [];
+        }),
+      ),
+    [localProviderStatuses],
+  );
+  const providerStatusByInstance = useMemo(
+    () =>
+      new Map<string, ServerProviderStatus>(
+        localProviderStatuses.map((status) => [providerStatusInstanceKey(status), status]),
+      ),
     [localProviderStatuses],
   );
   const availableProviderCount = orderedProviderVisibilityOptions.filter(
@@ -889,6 +1702,11 @@ export function ProvidersSettingsPanel({
     setOpenInstallProviders(createClosedProviderInstallDisclosureState());
   });
 
+  useEffect(() => {
+    if (!active || !providerTarget) return;
+    setOpenInstallProviders((current) => ({ ...current, [providerTarget]: true }));
+  }, [active, providerTarget]);
+
   const handleProviderOrderDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
@@ -902,21 +1720,29 @@ export function ProvidersSettingsPanel({
   );
 
   const runProviderUpdate = useCallback(
-    async (provider: ProviderKind) => {
-      if (updatingProviders.has(provider)) return;
-      setUpdatingProviders((current) => new Set(current).add(provider));
+    async (provider: ProviderKind, instanceId?: ProviderInstanceId) => {
+      const targetId = instanceId ?? provider;
+      if (updatingProviders.has(targetId)) return;
+      setUpdatingProviders((current) => new Set(current).add(targetId));
       await withProviderUpdateTimeout({
         provider,
-        request: ensureNativeApi().server.updateProvider({ provider }),
+        request: ensureNativeApi().server.updateProvider({
+          provider,
+          ...(instanceId ? { instanceId } : {}),
+        }),
       })
         .then((result) => {
-          const refreshedProvider = result.providers.find((status) => status.provider === provider);
+          const refreshedProvider = result.providers.find(
+            (status) =>
+              (status.driver ?? status.provider) === provider &&
+              providerStatusInstanceKey(status) === targetId,
+          );
           const failureMessage = providerUpdateFailureMessage(refreshedProvider);
           if (failureMessage) {
             const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
             toastManager.add({
               type: "error",
-              title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+              title: `Could not update ${refreshedProvider ? providerStatusDisplayName(refreshedProvider) : PROVIDER_DISPLAY_NAMES[provider]}`,
               description: manualCommand
                 ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
                 : failureMessage,
@@ -926,7 +1752,7 @@ export function ProvidersSettingsPanel({
           }
           toastManager.add({
             type: "success",
-            title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
+            title: `${refreshedProvider ? providerStatusDisplayName(refreshedProvider) : PROVIDER_DISPLAY_NAMES[provider]} update finished`,
             description: "New sessions will use the refreshed provider.",
           });
         })
@@ -943,7 +1769,7 @@ export function ProvidersSettingsPanel({
             .catch(() => undefined);
           setUpdatingProviders((current) => {
             const next = new Set(current);
-            next.delete(provider);
+            next.delete(targetId);
             return next;
           });
         });
@@ -1127,14 +1953,14 @@ export function ProvidersSettingsPanel({
                 )}
               >
                 {outdatedProviderStatuses.map((providerStatus) => {
+                  const instanceId = providerStatusInstanceKey(providerStatus);
                   const updateActive =
-                    isProviderUpdateActive(providerStatus) ||
-                    updatingProviders.has(providerStatus.provider);
+                    isProviderUpdateActive(providerStatus) || updatingProviders.has(instanceId);
                   const updateLabel = providerUpdateStatusLabel(providerStatus);
                   return (
                     <SettingsListRow
-                      key={providerStatus.provider}
-                      title={PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
+                      key={instanceId}
+                      title={providerStatusDisplayName(providerStatus)}
                       description={updateLabel || undefined}
                       actions={
                         providerStatus.versionAdvisory?.canUpdate ? (
@@ -1157,7 +1983,7 @@ export function ProvidersSettingsPanel({
         </SettingsSection>
       </div>
 
-      <div>
+      <div id={SETTINGS_TARGETS.providerInstalls}>
         <SettingsSection title="Provider tools">
           <SettingsRow
             title="Installed CLIs"
@@ -1193,6 +2019,7 @@ export function ProvidersSettingsPanel({
                     hiddenProviderSet={hiddenProviderSet}
                     serverSettings={providerUpdateServerSettings}
                     providerStatus={providerStatusByProvider.get(config.provider)}
+                    providerStatusByInstance={providerStatusByInstance}
                     updatingProviders={updatingProviders}
                     onOpenChange={(open) =>
                       setOpenInstallProviders((existing) => ({

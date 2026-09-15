@@ -9,6 +9,7 @@ import {
   defaultProcessTreeKiller,
   inspectProcessTree,
   isProcessRunning,
+  signalProcessTree,
   type CapturedProcess,
   type CapturedProcessTree,
   type CapturedProcessTreeInspection,
@@ -133,6 +134,87 @@ export function teardownEffectProcessTree(
   return teardownProcessTree({
     rootPid: Number(process.pid),
     rootExited: Effect.runPromise(Effect.exit(process.exitCode)),
+  });
+}
+
+/**
+ * Force-stops an Effect child that owns its POSIX process group. Captured
+ * descendants are killed first so a waiting shell can reap them before the
+ * root/group is forced, then the captured identities are verified as gone.
+ */
+export async function forceTeardownEffectProcessTree(
+  process: EffectProcessExitHandle,
+  forceExitMs = DEFAULT_FORCE_EXIT_MS,
+): Promise<void> {
+  const rootPid = Number(process.pid);
+  const rootExitedPromise = Effect.runPromise(Effect.exit(process.exitCode));
+  if (globalThis.process.platform === "win32") {
+    await teardownProviderProcessTree({
+      rootPid,
+      rootExited: rootExitedPromise,
+      termGraceMs: 1,
+      forceExitMs,
+    });
+    return;
+  }
+
+  const tree = await captureProcessTree(rootPid);
+  const signalErrors: Error[] = [];
+  signalProcessTree({
+    rootPid,
+    signal: "SIGKILL",
+    tree,
+    includeRootTree: false,
+    onError: (error) => signalErrors.push(error),
+  });
+
+  let rootExited = false;
+  void rootExitedPromise.then(() => {
+    rootExited = true;
+  });
+
+  // A shell blocked in `wait` can now reap its killed child and exit itself.
+  const reapDeadline = Date.now() + Math.min(100, forceExitMs);
+  while (!rootExited && Date.now() < reapDeadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, DEFAULT_POLL_MS));
+  }
+
+  if (!rootExited) {
+    try {
+      globalThis.process.kill(-rootPid, "SIGKILL");
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") {
+        signalErrors.push(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+      try {
+        globalThis.process.kill(rootPid, "SIGKILL");
+      } catch (fallbackCause) {
+        if ((fallbackCause as NodeJS.ErrnoException).code !== "ESRCH") {
+          signalErrors.push(
+            fallbackCause instanceof Error ? fallbackCause : new Error(String(fallbackCause)),
+          );
+        }
+      }
+    }
+  }
+
+  const deadline = Date.now() + forceExitMs;
+  let remainingDescendants: ReadonlyArray<CapturedProcess> | null =
+    tree.captureComplete === false ? null : tree.descendants;
+  do {
+    await Promise.resolve();
+    const inspection = await inspectProcessTree(tree);
+    remainingDescendants = inspection.verified ? inspection.survivors : null;
+    if (rootExited && remainingDescendants?.length === 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, DEFAULT_POLL_MS));
+  } while (Date.now() < deadline);
+
+  throw new ProviderProcessExitUnprovenError({
+    rootPid,
+    rootExited,
+    remainingDescendantPids: remainingDescendants?.map((descendant) => descendant.pid) ?? null,
+    captureComplete: tree.captureComplete !== false,
   });
 }
 

@@ -4,8 +4,9 @@
 // Exports: provider discovery schemas and inferred types used by the WS/native API.
 
 import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderOptionDescriptor } from "./model";
+import { ProviderInstanceId } from "./providerInstance";
 
 const ProviderDiscoveryKind = Schema.Literals([
   "codex",
@@ -63,14 +64,21 @@ export type ProviderComposerCapabilities = typeof ProviderComposerCapabilities.T
 
 export const ProviderGetComposerCapabilitiesInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
 });
 export type ProviderGetComposerCapabilitiesInput = typeof ProviderGetComposerCapabilitiesInput.Type;
 
 export const ProviderListSkillsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsInput = typeof ProviderListSkillsInput.Type;
@@ -103,12 +111,18 @@ export type ProviderNativeCommandDescriptor = typeof ProviderNativeCommandDescri
 
 export const ProviderListCommandsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(TrimmedNonEmptyString),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListCommandsInput = typeof ProviderListCommandsInput.Type;
@@ -197,8 +211,14 @@ export type ProviderPluginAppSummary = typeof ProviderPluginAppSummary.Type;
 
 export const ProviderListPluginsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
   threadId: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceRemoteSync: Schema.optional(Schema.Boolean),
   forceReload: Schema.optional(Schema.Boolean),
 });
@@ -216,10 +236,16 @@ export type ProviderListPluginsResult = typeof ProviderListPluginsResult.Type;
 
 export const ProviderReadPluginInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   marketplacePath: TrimmedNonEmptyString,
   pluginName: TrimmedNonEmptyString,
   cwd: Schema.optional(TrimmedNonEmptyString),
   threadId: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 
@@ -243,9 +269,17 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
+  environment: Schema.optional(ProcessEnvRecord),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
@@ -309,7 +343,13 @@ export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 
 export const ProviderListAgentsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
+  environment: Schema.optional(ProcessEnvRecord),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;

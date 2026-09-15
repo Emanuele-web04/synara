@@ -262,6 +262,7 @@ describe("buildKanbanBoard", () => {
           [localId]: {
             prompt: "  Fix the flaky reconnect test  ",
             hasAttachments: false,
+            providerInstanceId: "claudeAgent",
             provider: "claudeAgent",
           },
         },
@@ -294,6 +295,7 @@ describe("buildKanbanBoard", () => {
           [threadId]: {
             prompt: "Follow up on the review notes",
             hasAttachments: false,
+            providerInstanceId: "cursor",
             provider: "cursor",
           },
         },
@@ -349,7 +351,12 @@ describe("buildKanbanBoard", () => {
           },
         ],
         composerDraftByThreadId: {
-          "thread-orphan": { prompt: "orphan", hasAttachments: false, provider: null },
+          "thread-orphan": {
+            prompt: "orphan",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
       }),
     );
@@ -388,7 +395,12 @@ describe("buildKanbanBoard", () => {
           },
         ],
         composerDraftByThreadId: {
-          [threadId]: { prompt: "", hasAttachments: true, provider: "cursor" },
+          [threadId]: {
+            prompt: "",
+            hasAttachments: true,
+            providerInstanceId: "cursor",
+            provider: "cursor",
+          },
         },
       }),
     );
@@ -427,9 +439,19 @@ describe("buildKanbanBoard", () => {
           },
         ],
         composerDraftByThreadId: {
-          [first]: { prompt: "a", hasAttachments: false, provider: null },
-          [second]: { prompt: "b", hasAttachments: false, provider: null },
-          [newest]: { prompt: "c", hasAttachments: false, provider: null },
+          [first]: { prompt: "a", hasAttachments: false, providerInstanceId: null, provider: null },
+          [second]: {
+            prompt: "b",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
+          [newest]: {
+            prompt: "c",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
         draftOrderByProjectId: {
           "project-1": [kanbanDraftCardId(first), kanbanDraftCardId(second)],
@@ -452,6 +474,7 @@ describe("buildKanbanBoard optimistic dispatch", () => {
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Fix the flaky reconnect test",
     provider: "cursor",
+    providerInstanceId: "cursor",
     baselineTurnId: null,
     droppedAtMs: Date.parse("2026-03-09T12:00:00.000Z"),
     ...overrides,
@@ -482,7 +505,12 @@ describe("buildKanbanBoard optimistic dispatch", () => {
       makeBoardInput({
         threads: [makeSidebarThreadSummary({ id: threadId, latestTurn: makeLatestTurn() })],
         composerDraftByThreadId: {
-          [threadId]: { prompt: "Follow up", hasAttachments: false, provider: null },
+          [threadId]: {
+            prompt: "Follow up",
+            hasAttachments: false,
+            providerInstanceId: null,
+            provider: null,
+          },
         },
         optimisticDispatchByThreadId: {
           [threadId]: makeOptimisticEntry({ baselineTurnId: "turn-1" }),
@@ -742,6 +770,7 @@ describe("resolveOptimisticDispatchOutcome", () => {
 const makeComposerSnapshot = (prompt: string) => ({
   prompt,
   hasAttachments: false,
+  providerInstanceId: null,
   provider: null,
 });
 
@@ -767,11 +796,13 @@ describe("buildKanbanComposerDraftSnapshot", () => {
       assistantSelections: [],
       fileComments: [],
       activeProvider: null,
+      modelSelectionByProvider: {},
     });
 
     expect(snapshot).toEqual({
       prompt: "",
       hasAttachments: false,
+      providerInstanceId: null,
       provider: null,
     });
   });
@@ -795,6 +826,7 @@ describe("buildKanbanComposerDraftSnapshot", () => {
       assistantSelections: [],
       fileComments: [],
       activeProvider: null,
+      modelSelectionByProvider: {},
     });
 
     expect(snapshot?.hasAttachments).toBe(true);
@@ -851,6 +883,7 @@ describe("orderDraftCards", () => {
     column: "draft",
     title: cardId,
     provider: null,
+    providerInstanceId: null,
     isTerminal: false,
     branch: null,
     envMode: null,
@@ -898,6 +931,7 @@ describe("resolveDraftDropAction", () => {
     column: "draft",
     title: "Draft",
     provider: null,
+    providerInstanceId: null,
     isTerminal: false,
     branch: null,
     envMode: null,
@@ -948,6 +982,7 @@ describe("flattenProjectBoardForOverview", () => {
     column,
     title: cardId,
     provider: null,
+    providerInstanceId: null,
     isTerminal: false,
     branch: null,
     envMode: null,

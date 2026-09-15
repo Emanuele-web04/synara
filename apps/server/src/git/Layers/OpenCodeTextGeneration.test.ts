@@ -7,7 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { beforeEach, expect } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
 import {
@@ -19,7 +19,17 @@ import { OpenCodeTextGeneration } from "../Services/TextGeneration.ts";
 import {
   makeOpenCodeTextGenerationServiceLive,
   OpenCodeTextGenerationServiceLive,
+  openCodeTextGenerationEnvironmentFingerprint,
 } from "./OpenCodeTextGeneration.ts";
+
+test("text-generation environment fingerprints preserve presence and resist old hash collisions", () => {
+  expect(openCodeTextGenerationEnvironmentFingerprint(undefined)).not.toBe(
+    openCodeTextGenerationEnvironmentFingerprint({}),
+  );
+  expect(openCodeTextGenerationEnvironmentFingerprint({ OPENAI_API_KEY: "a02hh7njhk5" })).not.toBe(
+    openCodeTextGenerationEnvironmentFingerprint({ OPENAI_API_KEY: "p7fe9wsknu9" }),
+  );
+});
 
 const runtimeMock = {
   state: {
@@ -491,6 +501,49 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
 it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
   "OpenCodeTextGenerationServiceLive with configured server URL",
   (it) => {
+    it.effect("does not lend the default server password to a custom instance", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* OpenCodeTextGeneration;
+
+        yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/opencode-work",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: {
+            provider: "opencode",
+            instanceId: "opencode_work",
+            model: "openai/gpt-5",
+          },
+          providerOptions: {
+            opencode: { serverUrl: "http://127.0.0.1:9999" },
+          },
+        });
+        yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/opencode-work-explicit",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: {
+            provider: "opencode",
+            instanceId: "opencode_work",
+            model: "openai/gpt-5",
+          },
+          providerOptions: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:9999",
+              serverPassword: "work-password",
+            },
+          },
+        });
+
+        expect(runtimeMock.state.authHeaders).toEqual([
+          null,
+          `Basic ${btoa("opencode:work-password")}`,
+        ]);
+      }),
+    );
+
     it.effect("reuses a configured OpenCode server URL without spawning or applying idle TTL", () =>
       Effect.gen(function* () {
         const textGeneration = yield* OpenCodeTextGeneration;

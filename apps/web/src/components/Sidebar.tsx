@@ -104,6 +104,8 @@ import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
+  getProviderInstanceOptions,
+  type ProviderInstanceOption,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -146,10 +148,12 @@ import {
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
+import { providerComposerCapabilitiesQueryOptions } from "../lib/providerDiscoveryReactQuery";
 import {
-  providerComposerCapabilitiesQueryOptions,
-  supportsThreadImport,
-} from "../lib/providerDiscoveryReactQuery";
+  buildThreadImportCandidates,
+  filterThreadImportTargetsByCapabilities,
+  type ThreadImportTarget,
+} from "../lib/threadImport";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetIdWithFallback,
@@ -227,11 +231,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
-import {
-  SidebarSearchPalette,
-  type ImportProviderKind,
-  type SidebarSearchPaletteMode,
-} from "./SidebarSearchPalette";
+import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -362,8 +362,9 @@ import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffBadgeLabel,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -1456,6 +1457,10 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
+  const sidebarProviderInstances = useMemo(
+    () => getProviderInstanceOptions(appSettings),
+    [appSettings],
+  );
   // Projects is always available; Studio and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -2731,7 +2736,7 @@ export default function Sidebar() {
   ]);
 
   const handleImportThread = useCallback(
-    async (provider: ImportProviderKind, externalId: string) => {
+    async (target: ThreadImportTarget, externalId: string) => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("The app server is unavailable.");
@@ -2748,18 +2753,21 @@ export default function Sidebar() {
         throw new Error("The target project could not be resolved.");
       }
 
+      const { provider, instanceId } = target;
       const providerDefaultModel = getDefaultModel(provider);
       const modelSelection =
-        activeProject.defaultModelSelection?.provider === provider
+        activeProject.defaultModelSelection?.provider === provider &&
+        activeProject.defaultModelSelection.instanceId === instanceId
           ? activeProject.defaultModelSelection
           : providerDefaultModel
             ? {
                 provider,
+                instanceId,
                 model: providerDefaultModel,
               }
             : null;
       if (!modelSelection) {
-        throw new Error("Select a Pi model before importing a Pi thread.");
+        throw new Error(`Select a ${PROVIDER_DISPLAY_NAMES[provider]} model before importing.`);
       }
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -2770,9 +2778,11 @@ export default function Sidebar() {
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
           : provider === "cursor"
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-            : provider === "opencode"
-              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+            : provider === "droid"
+              ? `Imported Droid session${suffix ? ` ${suffix}` : ""}`
+              : provider === "opencode"
+                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -2909,9 +2919,9 @@ export default function Sidebar() {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
+    async (thread: Thread, target: ThreadHandoffTarget) => {
       try {
-        await createThreadHandoff(thread, targetProvider);
+        await createThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -2963,15 +2973,19 @@ export default function Sidebar() {
       });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders({
+        ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
+            sourceProviderInstanceId:
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            providerInstances: getProviderInstanceOptions(appSettings),
           })
         : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+      const handoffTargetById = new Map(
+        handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
+      );
+      const handoffItems = handoffTargets.map((target, index) => ({
+        id: `handoff:${target.instanceId}`,
+        label: `Handoff to ${target.label}`,
         icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         separatorBefore: index === 0,
       }));
@@ -3059,9 +3073,9 @@ export default function Sidebar() {
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
+        const target = handoffTargetById.get(clicked);
+        if (target) {
+          await handoffThread(thread, target);
         }
         return;
       }
@@ -3178,6 +3192,7 @@ export default function Sidebar() {
       await confirmAndDeleteThread(threadId);
     },
     [
+      appSettings,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       copyPathToClipboard,
@@ -6937,6 +6952,7 @@ export default function Sidebar() {
             });
           }}
           onOpenProject={handleOpenProjectFromSearch}
+          providerInstances={sidebarProviderInstances}
           onImportThread={handleImportThread}
           onOpenThread={(threadId) => {
             activateThreadFromSidebarIntent(ThreadId.makeUnsafe(threadId));
@@ -6963,23 +6979,29 @@ function SidebarSearchPaletteController(props: {
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
-  onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  providerInstances: readonly ProviderInstanceOption[];
+  onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   // Search keeps automation-run threads as an intent-driven escape hatch, while
   // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const importCandidates = useMemo(
+    () => buildThreadImportCandidates(props.providerInstances),
+    [props.providerInstances],
+  );
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
-      providerComposerCapabilitiesQueryOptions(provider),
+    queries: importCandidates.map((target) =>
+      providerComposerCapabilitiesQueryOptions(target.provider, target.instanceId),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
-  const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "opencode"] as const
-  ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
+  const importTargets = filterThreadImportTargetsByCapabilities(
+    importCandidates,
+    importProviderCapabilityQueries.map((query) => query.data),
+  );
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
     const searchProjectById = new Map(
@@ -7028,7 +7050,7 @@ function SidebarSearchPaletteController(props: {
       onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
-      importProviders={importProviders}
+      importTargets={importTargets}
       onImportThread={props.onImportThread}
       onOpenThread={props.onOpenThread}
     />

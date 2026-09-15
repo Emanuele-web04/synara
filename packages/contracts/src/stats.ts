@@ -9,6 +9,7 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
+import { ProviderInstanceId } from "./providerInstance";
 
 // ── Input ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export type ProfileHeatmapCell = typeof ProfileHeatmapCell.Type;
 
 export const ProfileProviderUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   turnCount: NonNegativeInt,
   percent: Schema.Number,
@@ -48,6 +50,7 @@ export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
 // so switching models mid-thread keeps each model's share accurate.
 export const ProfileTokenModelUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   tokens: NonNegativeInt,
   percent: Schema.Number,

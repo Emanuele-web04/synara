@@ -10,11 +10,18 @@ import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
+  type ProviderInstanceId,
+  type ServerSettings,
   type ThreadId,
 } from "@synara/contracts";
 import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@synara/shared/localPreviewFiles";
+import {
+  deriveProviderInstances,
+  providerStartOptionsFromInstance,
+} from "@synara/shared/providerInstances";
 
 import {
+  type CodexHomePathsInput,
   resolveActiveCodexHomeWritePath,
   resolveCodexHomeAllowlistCandidates,
 } from "./codexHomePaths.ts";
@@ -67,28 +74,131 @@ export function isCodexGeneratedImageItemType(raw: unknown): boolean {
 export const isSupportedLocalImagePath = isSupportedLocalImagePathShared;
 
 /**
+ * Instance launch context that decides which Codex home a session writes
+ * under: account-scoped and shadow-home instances write beneath their own
+ * account overlay, not the default one.
+ */
+export interface CodexGeneratedImageHomeContext {
+  readonly homePath?: string | undefined;
+  readonly shadowHomePath?: string | undefined;
+  readonly accountId?: string | undefined;
+  /**
+   * Per-instance launch environment. Its `SYNARA_HOME` selects the managed
+   * overlay for that child independently of the server process environment.
+   */
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+}
+
+export type CodexGeneratedImageHomeCandidate = string | CodexGeneratedImageHomeContext;
+
+const CODEX_HOME_CONTEXT_ENV_KEYS = ["CODEX_HOME", "SYNARA_HOME"] as const;
+
+function codexHomePathsInputFromContext(
+  codexHome?: CodexGeneratedImageHomeCandidate,
+): CodexHomePathsInput {
+  const context: CodexGeneratedImageHomeContext =
+    typeof codexHome === "string" ? { homePath: codexHome } : (codexHome ?? {});
+  return {
+    ...(context.homePath?.trim() ? { homePath: context.homePath } : {}),
+    ...(context.shadowHomePath?.trim() ? { shadowHomePath: context.shadowHomePath } : {}),
+    ...(context.accountId?.trim() ? { accountId: context.accountId } : {}),
+    // The child runs with the instance environment layered over the server's,
+    // so the write-home decision must see the same merged view.
+    ...(context.environment ? { env: { ...process.env, ...context.environment } } : {}),
+  };
+}
+
+function codexHomeCandidateKey(candidate: CodexGeneratedImageHomeCandidate): string {
+  if (typeof candidate === "string") {
+    return `path:${candidate.trim()}`;
+  }
+  const envKey = CODEX_HOME_CONTEXT_ENV_KEYS.map(
+    (key) => `${key}=${candidate.environment?.[key] ?? ""}`,
+  ).join("\0");
+  return JSON.stringify([
+    candidate.homePath?.trim() ?? "",
+    candidate.shadowHomePath?.trim() ?? "",
+    candidate.accountId?.trim() ?? "",
+    envKey,
+  ]);
+}
+
+/**
  * Resolves the home directory the codex app-server child process actually
  * writes images under for the current process env. Synara uses its isolated
  * Codex overlay, not the user's source `~/.codex` directory.
  */
-export function resolveCodexHomePath(homePath?: string): string {
-  return resolveActiveCodexHomeWritePath(homePath?.trim() ? { homePath } : {});
+export function resolveCodexHomePath(codexHome?: string | CodexGeneratedImageHomeContext): string {
+  return resolveActiveCodexHomeWritePath(codexHomePathsInputFromContext(codexHome));
 }
 
 /** The single generated-images directory we predict against (overlay-aware). */
-export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
-  return path.join(resolveCodexHomePath(homePath), "generated_images");
+export function resolveCodexGeneratedImagesRoot(
+  codexHome?: string | CodexGeneratedImageHomeContext,
+): string {
+  return path.join(resolveCodexHomePath(codexHome), "generated_images");
+}
+
+/**
+ * Every Codex home configured in settings (default override plus per-instance
+ * dedicated homes). Dedicated homes anchor their own overlay roots, so the
+ * local-image route must enumerate them to allowlist those accounts' images.
+ */
+export function codexConfiguredHomePathsFromSettings(
+  settings: ServerSettings,
+): readonly CodexGeneratedImageHomeCandidate[] {
+  const candidates = new Map<string, CodexGeneratedImageHomeCandidate>();
+  const addCandidate = (candidate: CodexGeneratedImageHomeCandidate | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    if (typeof candidate === "string" && !candidate.trim()) {
+      return;
+    }
+    candidates.set(codexHomeCandidateKey(candidate), candidate);
+  };
+
+  for (const instance of deriveProviderInstances(settings)) {
+    if (instance.driver !== "codex" || !instance.enabled) {
+      continue;
+    }
+    // Keep the full account/shadow/environment context. Collapsing this to a
+    // plain home path loses the instance-specific overlay root.
+    const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
+    // An enabled default instance with no overrides still needs an explicit
+    // empty context. Once the HTTP route receives a configured allowlist it no
+    // longer falls back to ambient CODEX_HOME on its own.
+    addCandidate(codexOptions ?? {});
+  }
+  return [...candidates.values()];
+}
+
+export function enabledCodexProviderInstanceIdsFromSettings(
+  settings: ServerSettings,
+): ReadonlySet<ProviderInstanceId> {
+  return new Set(
+    deriveProviderInstances(settings)
+      .filter((instance) => instance.driver === "codex" && instance.enabled)
+      .map((instance) => instance.instanceId),
+  );
 }
 
 /**
  * All generated-images directories the local-image route should treat as
- * legitimate. Includes both the source `~/.codex/generated_images` and the
- * overlay `<SYNARA_HOME>/codex-home-overlay/generated_images` so we serve
- * images regardless of which home Codex wrote them under.
+ * legitimate for one configured home or account context.
  */
-export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
-  const homes = resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {});
-  return homes.map((home) => path.join(home, "generated_images"));
+export function resolveCodexGeneratedImagesRoots(
+  homePath?: CodexGeneratedImageHomeCandidate,
+): readonly string[] {
+  return resolveCodexGeneratedImageHomes(homePath).map((home) =>
+    path.join(home, "generated_images"),
+  );
+}
+
+export function resolveCodexGeneratedImageHomes(
+  homePath?: CodexGeneratedImageHomeCandidate,
+): readonly string[] {
+  return resolveCodexHomeAllowlistCandidates(codexHomePathsInputFromContext(homePath));
 }
 
 export function firstStringValue(
@@ -118,21 +228,21 @@ export function extractCodexGeneratedImageCallId(
 export function predictedCodexGeneratedImagePath(input: {
   readonly item: Record<string, unknown>;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): string | undefined {
   const threadId = normalizeNonEmptyString(input.threadId);
   const callId = extractCodexGeneratedImageCallId(input.item);
   if (!threadId || !callId) {
     return undefined;
   }
-  return path.join(resolveCodexGeneratedImagesRoot(input.codexHomePath), threadId, `${callId}.png`);
+  return path.join(resolveCodexGeneratedImagesRoot(input.codexHome), threadId, `${callId}.png`);
 }
 
 // Mirrors Remodex relay behavior: keep metadata, drop bulky inline image data.
 export function annotateCodexGeneratedImagePayload(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): unknown {
   const item = asObject(input.value);
   if (!item || !isCodexGeneratedImageItemType(item.type ?? item.kind)) {
@@ -147,7 +257,7 @@ export function annotateCodexGeneratedImagePayload(input: {
     predictedCodexGeneratedImagePath({
       item,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
 
   if (generatedPath && !existingPath) {
@@ -167,7 +277,7 @@ export function annotateCodexGeneratedImagePayload(input: {
 export function sanitizeNestedCodexGeneratedImagePayloads(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): unknown {
   const annotated = annotateCodexGeneratedImagePayload(input);
   const record = asObject(annotated);
@@ -187,7 +297,7 @@ export function sanitizeNestedCodexGeneratedImagePayloads(input: {
     const sanitized = sanitizeNestedCodexGeneratedImagePayloads({
       value: nested,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
     if (sanitized !== nested) {
       overrides[key] = sanitized;
@@ -206,7 +316,7 @@ const NESTED_PAYLOAD_KEYS = ["item", "payload", "data", "event"] as const;
 export function extractCodexGeneratedImageReference(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): CodexGeneratedImageReference | undefined {
   const item = asObject(input.value);
   if (!item || !isCodexGeneratedImageItemType(item.type ?? item.kind)) {
@@ -217,7 +327,7 @@ export function extractCodexGeneratedImageReference(input: {
     predictedCodexGeneratedImagePath({
       item,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
   if (!imagePath || !isSupportedLocalImagePath(imagePath)) {
     return undefined;

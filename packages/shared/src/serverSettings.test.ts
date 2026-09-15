@@ -18,6 +18,7 @@ describe("providerStartOptionsFromServerSettings", () => {
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
           binaryPath: "",
+          homePath: "",
         },
         cursor: {
           ...DEFAULT_SERVER_SETTINGS.providers.cursor,
@@ -84,6 +85,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
         },
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          binaryPath: "/custom/bin/claude",
+          homePath: "/custom/claude-home",
+        },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
           binaryPath: "/custom/bin/opencode",
@@ -103,11 +109,45 @@ describe("providerStartOptionsFromServerSettings", () => {
       binaryPath: "/custom/bin/codex",
       homePath: "/custom/codex-home",
     });
+    expect(providerOptions.claudeAgent).toEqual({
+      binaryPath: "/custom/bin/claude",
+      homePath: "/custom/claude-home",
+    });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",
       serverUrl: "http://127.0.0.1:4096",
       experimentalWebSockets: true,
     });
     expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
+  });
+
+  it("uses the selected Codex account while preserving the shared provider binary", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          binaryPath: "/custom/bin/codex",
+          homePath: "/shared/codex-home",
+          accounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/accounts/work",
+            },
+          ],
+          selectedAccountId: "work",
+        },
+      },
+    };
+
+    expect(providerStartOptionsFromServerSettings(settings).codex).toEqual({
+      binaryPath: "/custom/bin/codex",
+      homePath: "/shared/codex-home",
+      shadowHomePath: "/accounts/work",
+      accountId: "work",
+    });
   });
 });

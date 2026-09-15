@@ -6,6 +6,7 @@
 import {
   type OpenCodeModelOptions,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
@@ -288,6 +289,7 @@ export interface TraitsMenuContentProps {
   // itself and only needs the remaining trait sections (thinking, context, agent).
   excludeEffort?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   onSelectionComplete?: () => void;
 }
 
@@ -302,6 +304,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   includeFastMode: includeFastModeProp,
   excludeEffort: excludeEffortProp,
   modelOptions,
+  selectedProviderInstanceId,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
   const excludeEffort = excludeEffortProp ?? false;
@@ -343,7 +346,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const hasPriorFastModeSection =
     thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
 
-  const commitTraitOptions = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTraitOptions = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: selectedProviderInstanceId,
+    model,
+    modelOptions,
+  });
   // Commit a trait change and close the menu. Every section funnels here; the
   // fast-mode header toggle passes `keepMenuOpen` so its state flip stays visible.
   const commitTrait = useCallback(
@@ -489,6 +498,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   onPromptChange,
   includeFastMode: includeFastModeProp,
   modelOptions,
+  selectedProviderInstanceId,
   open,
   onOpenChange,
   onSelectionCommitted,
@@ -676,6 +686,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
           modelOptions={modelOptions}
+          selectedProviderInstanceId={selectedProviderInstanceId}
           onSelectionComplete={handleSelectionComplete}
         />
       </ComposerPickerMenuPopup>

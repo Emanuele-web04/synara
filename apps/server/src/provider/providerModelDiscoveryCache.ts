@@ -38,10 +38,40 @@ export const PROVIDER_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64;
 
 export interface ProviderModelDiscoveryCacheKey {
   readonly provider: ProviderListModelsInput["provider"];
+  readonly instanceId: string | null;
   readonly binaryPath: string | null;
+  readonly homePath: string | null;
+  readonly shadowHomePath: string | null;
+  readonly accountId: string | null;
   readonly apiEndpoint: string | null;
   readonly agentDir: string | null;
+  readonly serverUrl: string | null;
+  readonly serverPasswordKey: string | null;
+  readonly experimentalWebSockets: boolean;
+  readonly environmentKey: string | null;
   readonly cwd: string | null;
+}
+
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): string | null {
+  if (!environment || Object.keys(environment).length === 0) {
+    return null;
+  }
+  return JSON.stringify(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
 }
 
 export interface ProviderModelDiscoveryCache<E> {
@@ -77,15 +107,37 @@ export function providerModelDiscoveryCacheKey(
 ): ProviderModelDiscoveryCacheKey {
   return {
     provider: input.provider,
+    instanceId: input.instanceId ?? null,
     binaryPath: input.binaryPath ?? null,
+    homePath: input.homePath ?? null,
+    shadowHomePath: input.shadowHomePath ?? null,
+    accountId: input.accountId ?? null,
     apiEndpoint: input.apiEndpoint ?? null,
     agentDir: input.agentDir ?? null,
+    serverUrl: input.serverUrl ?? null,
+    serverPasswordKey: input.serverPassword ? hashCacheComponent(input.serverPassword) : null,
+    experimentalWebSockets: input.experimentalWebSockets === true,
+    environmentKey: environmentFingerprint(input.environment),
     cwd: input.cwd ?? null,
   };
 }
 
 const serializeKey = (key: ProviderModelDiscoveryCacheKey): string =>
-  JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
+  JSON.stringify([
+    key.provider,
+    key.instanceId,
+    key.binaryPath,
+    key.homePath,
+    key.shadowHomePath,
+    key.accountId,
+    key.apiEndpoint,
+    key.agentDir,
+    key.serverUrl,
+    key.serverPasswordKey,
+    key.experimentalWebSockets,
+    key.environmentKey,
+    key.cwd,
+  ]);
 
 /**
  * Only a non-empty, error-free catalog is worth remembering as "good". Static

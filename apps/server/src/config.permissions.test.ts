@@ -90,6 +90,8 @@ describe.skipIf(process.platform === "win32")("private server state permissions"
           filePath: providerCachePath,
           provider: {
             provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",

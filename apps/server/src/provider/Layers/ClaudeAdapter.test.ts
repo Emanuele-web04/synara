@@ -31,10 +31,12 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
+import { claudeIsolatedHomePath } from "../claudeEnvironment.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
+  claudeHomeEnvironment,
   makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
@@ -688,6 +690,126 @@ describe("Claude Synara harness policy", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("passes provider instance environment to temporary command discovery", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      if (!adapter.listCommands) {
+        assert.fail("Expected ClaudeAdapter to expose command discovery");
+      }
+      yield* adapter.listCommands({
+        provider: "claudeAgent",
+        cwd: "/tmp/claude-work",
+        homePath: "/tmp/claude-home-work",
+        environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, "work-token");
+      assert.equal(createInput?.options.env?.HOME, "/tmp/claude-home-work");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps command discovery caches and homes isolated by provider instance id", () => {
+    const harness = makeMultiQueryHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      if (!adapter.listCommands) {
+        assert.fail("Expected ClaudeAdapter to expose command discovery");
+      }
+      const sharedInput = {
+        provider: "claudeAgent" as const,
+        cwd: "/tmp/claude-work",
+        environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
+      };
+      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
+      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
+
+      assert.equal(harness.createInputs.length, 2);
+      assert.equal(
+        harness.createInputs[0]?.options.env?.HOME,
+        claudeIsolatedHomePath({
+          isolationRootDir: "/tmp/userdata",
+          providerInstanceId: "claude_work_a",
+        }),
+      );
+      assert.equal(
+        harness.createInputs[1]?.options.env?.HOME,
+        claudeIsolatedHomePath({
+          isolationRootDir: "/tmp/userdata",
+          providerInstanceId: "claude_work_b",
+        }),
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("starts an environment-only runtime in its Synara-scoped home", () => {
+    const harness = makeHarness();
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env.CLAUDE_CONFIG_DIR;
+        process.env.CLAUDE_CONFIG_DIR = "/tmp/default-claude-config";
+        return previous;
+      }),
+      () =>
+        Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            provider: "claudeAgent",
+            providerInstanceId: "claude_work",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-sonnet-4-5",
+            },
+            providerOptions: {
+              claudeAgent: {
+                environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+              },
+            },
+            runtimeMode: "full-access",
+          });
+
+          const queryEnv = harness.getLastCreateQueryInput()?.options.env;
+          assert.equal(
+            queryEnv?.HOME,
+            claudeIsolatedHomePath({
+              isolationRootDir: "/tmp/userdata",
+              providerInstanceId: "claude_work",
+            }),
+          );
+          assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          assert.equal(queryEnv?.ANTHROPIC_AUTH_TOKEN, "work-token");
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+          else process.env.CLAUDE_CONFIG_DIR = previous;
+        }),
+    ).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it("sets Windows profile variables for configured Claude homes", () => {
+    assert.deepEqual(claudeHomeEnvironment("C:\\Users\\work\\.claude-work", "win32"), {
+      HOME: "C:\\Users\\work\\.claude-work",
+      USERPROFILE: "C:\\Users\\work\\.claude-work",
+      APPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Local",
+      HOMEDRIVE: "C:",
+      HOMEPATH: "\\Users\\work\\.claude-work",
+    });
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -8640,6 +8762,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-8",
         },
       });
@@ -8648,6 +8771,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "hello",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-8",
         },
         attachments: [],
@@ -8706,6 +8830,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5-1[1m]",
         },
       });
@@ -8766,6 +8891,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
       });
@@ -8775,6 +8901,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "hello",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
         attachments: [],
@@ -8822,6 +8949,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "continue",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
         attachments: [],
@@ -8848,6 +8976,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8877,6 +9006,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8895,6 +9025,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "continue after resume",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8915,7 +9046,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        modelSelection: {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
       });
       const firstQuery = harness.queries[0];
       assert.ok(firstQuery);
@@ -8927,6 +9062,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           runtimeMode: "full-access",
           modelSelection: {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-opus-4-8",
             options: { effort: "max" },
           },
@@ -9853,6 +9989,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5-1",
         },
       });
@@ -11693,6 +11830,47 @@ describe("ClaudeAdapterLive forkThread", () => {
       Effect.provide(layer),
     );
   });
+
+  it.effect(
+    "falls back for stopped account-scoped sessions instead of using the default store",
+    () => {
+      let forkCalls = 0;
+      const layer = makeForkLayer(async () => {
+        forkCalls += 1;
+        return { sessionId: "unexpected" };
+      });
+
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const result = yield* adapter.forkThread!({
+          sourceThreadId: THREAD_ID,
+          threadId: RESUME_THREAD_ID,
+          runtimeMode: "full-access",
+          modelSelection: {
+            provider: "claudeAgent",
+            instanceId: "work",
+            model: "claude-opus-4-8",
+          },
+          providerOptions: {
+            claudeAgent: { homePath: "/tmp/claude-work" },
+          },
+          sourceResumeCursor: {
+            threadId: String(THREAD_ID),
+            resume: SOURCE_SESSION_ID,
+          },
+        }).pipe(Effect.result);
+
+        assert.equal(forkCalls, 0);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure" && result.failure instanceof ProviderAdapterValidationError) {
+          assert.include(result.failure.issue, "default SDK store");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    },
+  );
 
   it.effect("maps a native fork failure to a session/fork request error", () => {
     const layer = makeForkLayer(async () => {

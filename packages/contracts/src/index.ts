@@ -17,6 +17,7 @@ export * from "./ipc";
 export * from "./terminal";
 export * from "./provider";
 export * from "./providerDiscovery";
+export * from "./providerInstance";
 export * from "./providerRuntime";
 export * from "./model";
 export * from "./agentMentions";

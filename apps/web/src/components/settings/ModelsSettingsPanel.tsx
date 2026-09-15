@@ -19,7 +19,7 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
-  getGitTextGenerationModelOptions,
+  getProviderInstanceOptions,
   isGitTextGenerationSettingsDirty,
   patchCustomModels,
 } from "~/appSettings";
@@ -98,8 +98,11 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const { textGenerationModel, textGenerationProvider } = settings;
+  const { textGenerationModel, textGenerationProvider, textGenerationProviderInstanceId } =
+    settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
+  const currentGitTextGenerationInstanceId =
+    textGenerationProviderInstanceId ?? currentGitTextGenerationProvider;
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
@@ -110,31 +113,57 @@ export function ModelsSettingsPanel({
     activeProjectCwd: null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
-    selectedProvider: currentGitTextGenerationProvider,
-    discoveryEnabled: active,
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider: gitWritingModelHintByProvider,
-    prefetchProviders: GIT_TEXT_GENERATION_PROVIDERS,
-  });
-  const gitTextGenerationModelOptions = useMemo(() => {
-    const discoveredOptionsByProvider = {} as Record<
-      GitTextGenerationProvider,
-      (typeof gitWritingCatalogOptionsByProvider)[GitTextGenerationProvider]
-    >;
-    for (const provider of GIT_TEXT_GENERATION_PROVIDERS) {
-      discoveredOptionsByProvider[provider] = gitWritingCatalogOptionsByProvider[provider];
-    }
-    return getGitTextGenerationModelOptions(settings, discoveredOptionsByProvider);
-  }, [gitWritingCatalogOptionsByProvider, settings]);
-  const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
+  const { modelOptionsByProviderInstance: gitWritingCatalogOptionsByInstance } =
+    useProviderModelCatalog({
+      selectedProvider: currentGitTextGenerationProvider,
+      selectedProviderInstanceId: currentGitTextGenerationInstanceId,
+      discoveryEnabled: active,
+      cwd: providerModelDiscoveryCwd,
+      modelHintByProvider: gitWritingModelHintByProvider,
+      prefetchProviders: GIT_TEXT_GENERATION_PROVIDERS,
+    });
+  const providerInstanceOptions = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const gitTextGenerationPickerOptions = useMemo(
+    () =>
+      providerInstanceOptions.flatMap((instance) =>
+        (instance.enabled || instance.instanceId === currentGitTextGenerationInstanceId) &&
+        GIT_TEXT_GENERATION_PROVIDERS.includes(instance.provider as GitTextGenerationProvider)
+          ? (gitWritingCatalogOptionsByInstance[instance.instanceId] ?? []).map((option) => ({
+              key: `${instance.instanceId}:${instance.provider}:${option.slug}`,
+              value: `${instance.instanceId}:${instance.provider}:${option.slug}`,
+              instance,
+              option: { ...option, provider: instance.provider },
+            }))
+          : [],
+      ),
+    [
+      currentGitTextGenerationInstanceId,
+      gitWritingCatalogOptionsByInstance,
+      providerInstanceOptions,
+    ],
+  );
+  const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
+  const selectedGitTextGenerationPickerOption = gitTextGenerationPickerOptions.find(
+    (entry) => entry.value === currentGitTextGenerationValue,
+  );
+  const selectedGitTextGenerationModelName =
+    selectedGitTextGenerationPickerOption?.option.name ??
+    gitWritingCatalogOptionsByInstance[currentGitTextGenerationInstanceId]?.find(
+      (option) => option.slug === currentGitTextGenerationModel,
+    )?.name ??
+    currentGitTextGenerationModel;
+  const selectedGitTextGenerationInstanceLabel =
+    selectedGitTextGenerationPickerOption?.instance.label ??
+    providerInstanceOptions.find(
+      (option) => option.instanceId === currentGitTextGenerationInstanceId,
+    )?.label;
   const selectedGitTextGenerationModelLabel =
-    gitTextGenerationModelOptions.find(
-      (option) =>
-        option.provider === currentGitTextGenerationProvider &&
-        option.slug === currentGitTextGenerationModel,
-    )?.name ?? currentGitTextGenerationModel;
+    selectedGitTextGenerationInstanceLabel &&
+    selectedGitTextGenerationInstanceLabel !==
+      PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
+      ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
+      : selectedGitTextGenerationModelName;
   const selectedCustomModelProviderSettings = CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.find(
     (config) => config.provider === selectedCustomModelProvider,
   )!;
@@ -245,6 +274,7 @@ export function ModelsSettingsPanel({
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
+                    textGenerationProviderInstanceId: defaults.textGenerationProviderInstanceId,
                     textGenerationModel: defaults.textGenerationModel,
                   })
                 }
@@ -256,12 +286,12 @@ export function ModelsSettingsPanel({
               value={currentGitTextGenerationValue}
               onValueChange={(value) => {
                 if (!value) return;
-                const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex) as ProviderKind;
-                const model = value.slice(separatorIndex + 1);
-                if (!provider || !model) return;
+                const [instanceId, provider, ...modelParts] = value.split(":");
+                const model = modelParts.join(":");
+                if (!instanceId || !provider || !model) return;
                 updateSettings({
-                  textGenerationProvider: provider,
+                  textGenerationProvider: provider as ProviderKind,
+                  textGenerationProviderInstanceId: instanceId,
                   textGenerationModel: model,
                 });
               }}
@@ -269,13 +299,9 @@ export function ModelsSettingsPanel({
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
-              {gitTextGenerationModelOptions.map((option) => (
-                <SelectItem
-                  hideIndicator
-                  key={`${option.provider}:${option.slug}`}
-                  value={`${option.provider}:${option.slug}`}
-                >
-                  {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
+              {gitTextGenerationPickerOptions.map(({ instance, key, option, value }) => (
+                <SelectItem hideIndicator key={key} value={value}>
+                  {instance.label} / {option.name}
                 </SelectItem>
               ))}
             </SettingsSelectControl>

@@ -1153,13 +1153,14 @@ export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
 /**
  * Providers with a dedicated Git text-generation backend. Keep the Settings
- * picker in sync with this list — do not add chat-only agents (Claude, Grok,
+ * picker in sync with this list — do not add chat-only agents (Grok,
  * Antigravity, Pi, Devin). Those CLIs have no one-shot git-writing path, and
  * driving them as coding agents for commit/PR text can run with write access
  * or violate provider terms.
  */
 export const GIT_TEXT_GENERATION_PROVIDERS = [
   "codex",
+  "claudeAgent",
   "cursor",
   "opencode",
   "droid",

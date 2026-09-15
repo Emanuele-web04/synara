@@ -232,7 +232,12 @@ function AutomationDetailView() {
   const streamedMemory =
     (data.memories ?? []).find((candidate) => candidate.automationId === automationId) ?? null;
   const memory = streamedMemory ?? memoryQuery.data ?? null;
-  const providerOptionsForDispatch = getProviderStartOptions(settings);
+  const providerOptionsForDispatch = getProviderStartOptions(
+    settings,
+    definition
+      ? (definition.modelSelection.instanceId ?? definition.modelSelection.provider)
+      : undefined,
+  );
 
   if (!definition) {
     return (
@@ -339,7 +344,10 @@ function AutomationDetailView() {
     const providerOptions = providerOptionsForAutomationModelSelection(
       definition,
       nextModelSelection,
-      providerOptionsForDispatch,
+      getProviderStartOptions(
+        settings,
+        nextModelSelection.instanceId ?? nextModelSelection.provider,
+      ),
     );
     patch({
       modelSelection: nextModelSelection,

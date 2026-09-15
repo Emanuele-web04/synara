@@ -9,12 +9,14 @@ import {
   type OrchestrationThreadActivity,
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
   type ServerSettingsView,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
+import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
@@ -29,6 +31,12 @@ const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "context-compaction",
   "context-window.updated",
 ]);
+
+export interface ThreadHandoffTarget {
+  readonly provider: ProviderKind;
+  readonly instanceId: ProviderInstanceId;
+  readonly label: string;
+}
 
 function isImportableThreadMessage(
   message: Thread["messages"][number],
@@ -71,6 +79,38 @@ export function resolveAvailableHandoffTargetProviders(input: {
       targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
     }),
   );
+}
+
+export function resolveAvailableHandoffTargets(input: {
+  readonly sourceProvider: ProviderKind;
+  readonly sourceProviderInstanceId?: ProviderInstanceId | null | undefined;
+  readonly providerInstances: ReadonlyArray<ProviderInstanceOption>;
+}): ReadonlyArray<ThreadHandoffTarget> {
+  const sourceInstanceId = input.sourceProviderInstanceId ?? input.sourceProvider;
+  const providerRank = new Map(DEFAULT_PROVIDER_ORDER.map((provider, index) => [provider, index]));
+  return input.providerInstances
+    .filter((instance) => instance.enabled)
+    .filter(
+      (instance) =>
+        instance.provider !== input.sourceProvider || instance.instanceId !== sourceInstanceId,
+    )
+    .toSorted((left, right) => {
+      const providerDelta =
+        (providerRank.get(left.provider) ?? DEFAULT_PROVIDER_ORDER.length) -
+        (providerRank.get(right.provider) ?? DEFAULT_PROVIDER_ORDER.length);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    })
+    .map((instance) => ({
+      provider: instance.provider,
+      instanceId: instance.instanceId,
+      label: instance.label,
+    }));
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
@@ -206,28 +246,35 @@ export function canCreateThreadHandoff(input: {
 export function resolveThreadHandoffModelSelection(input: {
   readonly sourceThread: Pick<Thread, "modelSelection">;
   readonly targetProvider: ProviderKind;
+  readonly targetProviderInstanceId?: ProviderInstanceId | null | undefined;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
-  readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+  readonly stickyModelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
 }): ModelSelection {
+  const targetInstanceId = input.targetProviderInstanceId ?? input.targetProvider;
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
   ): selection is ModelSelection => {
     return Boolean(selection && selection.provider === input.targetProvider);
   };
 
-  const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];
+  const stickySelection = input.stickyModelSelectionByProvider[targetInstanceId];
+  const withTargetInstance = (selection: ModelSelection): ModelSelection => ({
+    ...selection,
+    ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
+  });
+
   if (isCompatibleSelection(stickySelection)) {
-    return stickySelection;
+    return withTargetInstance(stickySelection);
   }
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
-    return input.projectDefaultModelSelection;
+    return withTargetInstance(input.projectDefaultModelSelection);
   }
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {
     throw new Error("Select a Pi model before handing off to Pi.");
   }
-  return {
+  return withTargetInstance({
     provider: input.targetProvider,
     model: defaultModel,
-  };
+  });
 }

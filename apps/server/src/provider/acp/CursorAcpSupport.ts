@@ -31,6 +31,10 @@ import {
 export interface CursorAcpRuntimeCursorSettings {
   readonly apiEndpoint?: string;
   readonly binaryPath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }
 
 export const CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES = {
@@ -99,11 +103,25 @@ export function buildCursorAcpSpawnInput(
     command: command.command,
     args: command.args,
     cwd,
-    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
+    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user
+    // turns. The ACP runtime applies the account boundary before this overlay.
     env: buildProviderChildEnvironment({
       provider: "cursor",
-      overrides: CURSOR_AGENT_BROWSERLESS_ENV,
+      baseEnv: CURSOR_AGENT_BROWSERLESS_ENV,
     }),
+    providerEnvironment: {
+      driver: "cursor",
+      ...(cursorSettings?.instanceId !== undefined
+        ? { instanceId: cursorSettings.instanceId }
+        : {}),
+      ...(cursorSettings?.environment !== undefined
+        ? { environment: cursorSettings.environment }
+        : {}),
+      ...(cursorSettings?.homeDir !== undefined ? { homeDir: cursorSettings.homeDir } : {}),
+      ...(cursorSettings?.isolationRootDir !== undefined
+        ? { isolationRootDir: cursorSettings.isolationRootDir }
+        : {}),
+    },
   };
 }
 

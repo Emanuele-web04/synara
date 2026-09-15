@@ -112,6 +112,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
+            providerInstanceId: "codex" as const,
             status: bindingStatus,
             runtimePayload: { activeTurnId: null },
           },

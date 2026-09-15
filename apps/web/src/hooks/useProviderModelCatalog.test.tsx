@@ -16,6 +16,7 @@ import { useProviderModelCatalog } from "./useProviderModelCatalog";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
+  useQueries: vi.fn(),
   useQuery: vi.fn(),
   useEffect: vi.fn(),
 }));
@@ -27,7 +28,7 @@ vi.mock("react", async (importOriginal) => {
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useQuery: mocks.useQuery };
+  return { ...actual, useQueries: mocks.useQueries, useQuery: mocks.useQuery };
 });
 
 vi.mock("../appSettings", async (importOriginal) => {
@@ -60,10 +61,14 @@ const EMPTY_QUERY: QueryResultLike = {
   isPlaceholderData: false,
 };
 const modelQueries = new Map<ProviderKind, QueryResultLike>();
+const instanceModelQueries = new Map<string, QueryResultLike>();
 const agentQueries = new Map<ProviderKind, QueryResultLike>();
+let lastInstanceQueryResults: QueryResultLike[] = [];
 const MODEL_HINTS = { cursor: "composer-2" } as const;
 const SETTINGS = {
   antigravityBinaryPath: "",
+  codexAccounts: [],
+  codexHomePath: "",
   cursorApiEndpoint: "",
   cursorBinaryPath: "",
   customAntigravityModels: [],
@@ -80,6 +85,8 @@ const SETTINGS = {
   openCodeBinaryPath: "",
   piAgentDir: "",
   piBinaryPath: "",
+  providerInstances: {},
+  selectedCodexAccountId: "",
 };
 
 function readCatalogRenders(
@@ -121,7 +128,9 @@ function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
 beforeEach(() => {
   mocks.useEffect.mockClear();
   modelQueries.clear();
+  instanceModelQueries.clear();
   agentQueries.clear();
+  lastInstanceQueryResults = [];
   mocks.useAppSettings
     .mockReset()
     .mockReturnValue({ settings: SETTINGS, serverSettings: DEFAULT_SERVER_SETTINGS });
@@ -135,6 +144,24 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected provider catalog query: ${String(resource)}`);
   });
+  mocks.useQueries
+    .mockReset()
+    .mockImplementation(({ queries }: { readonly queries: ReadonlyArray<QueryOptionsLike> }) => {
+      const next = queries.map((query) => {
+        const instanceId = query.queryKey[3];
+        return query.enabled === false || typeof instanceId !== "string"
+          ? EMPTY_QUERY
+          : (instanceModelQueries.get(instanceId) ?? EMPTY_QUERY);
+      });
+      if (
+        next.length === lastInstanceQueryResults.length &&
+        next.every((result, index) => result === lastInstanceQueryResults[index])
+      ) {
+        return lastInstanceQueryResults;
+      }
+      lastInstanceQueryResults = next;
+      return next;
+    });
 });
 
 describe("useProviderModelCatalog", () => {
@@ -173,6 +200,51 @@ describe("useProviderModelCatalog", () => {
     expect(second?.loadingModelProviders).toBe(first?.loadingModelProviders);
     expect(second?.runtimeModelsByProvider).toBe(first?.runtimeModelsByProvider);
     expect(second?.selectedRuntimeAgents).toBe(first?.selectedRuntimeAgents);
+  });
+
+  it("keeps runtime and custom model catalogs separate for same-provider instances", () => {
+    const customInstanceId = "cursor-work";
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        providerInstances: {
+          [customInstanceId]: {
+            driver: "cursor",
+            displayName: "Cursor Work",
+            config: {
+              binaryPath: "/opt/cursor-work",
+              customModels: ["work-custom"],
+            },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    instanceModelQueries.set(customInstanceId, {
+      data: {
+        models: [{ slug: "composer-work", name: "Composer Work" }],
+        source: "cursor.cli",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "cursor",
+      selectedProviderInstanceId: customInstanceId,
+      discoveryEnabled: false,
+    }).at(-1);
+
+    expect(
+      catalog?.modelOptionsByProviderInstance[customInstanceId]?.map((model) => model.slug),
+    ).toEqual(["composer-work", "work-custom"]);
+    expect(
+      catalog?.modelOptionsByProviderInstance.cursor?.some(
+        (model) => model.slug === "composer-work" || model.slug === "work-custom",
+      ),
+    ).toBe(false);
   });
 
   it("discovers core agents only when selected unless eager-core is requested", () => {
