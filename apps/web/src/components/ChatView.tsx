@@ -328,6 +328,17 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import { AmbientRailSlot } from "./chat/AmbientRailSlot";
+import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
+import {
+  computerPreviewBudgetPx,
+  computerPreviewCardCaps,
+} from "./chat/ComputerPreviewPopover.logic";
+import {
+  selectThreadComputerPreviewLayout,
+  selectThreadComputerPreviewSession,
+  useComputerPreviewStore,
+} from "../computerPreviewStore";
 import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { createThreadFindHighlightStore, type ThreadFindMatch } from "./chat/threadFind.logic";
@@ -481,6 +492,15 @@ interface ChatViewProps {
   } | null;
   onChangeThreadInSplitPane?: () => void;
   onCloseThreadPane?: () => void;
+  /**
+   * Enables the ambient computer preview rail for this chat: when provided,
+   * a live computer session renders below the Environment card and the chat
+   * reserves gutter space for it so it never covers the transcript. Absent
+   * in editor-rail and dock-sidechat views, which keep no preview.
+   */
+  onExpandComputerPreview?: () => void;
+  /** The right dock already shows this thread's Computer pane: yield. */
+  dockComputerPaneVisible?: boolean | undefined;
 }
 
 // Builds an ephemeral transcript bubble for the conversational automation-setup
@@ -506,6 +526,8 @@ export default function ChatView({
   viewModeAction: viewModeActionProp,
   onChangeThreadInSplitPane,
   onCloseThreadPane,
+  onExpandComputerPreview,
+  dockComputerPaneVisible,
 }: ChatViewProps) {
   // Prop defaults are resolved here instead of in the destructuring pattern: an
   // AssignmentPattern in the parameter list makes React Compiler bail out (silently —
@@ -4935,6 +4957,49 @@ export default function ChatView({
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+
+  // Ambient preview rail: the live card sits below the Environment card and
+  // the chat frees its gutter, so it never covers the transcript. Space is
+  // reserved only for a card that actually has content (live phase + a landed
+  // frame), at its fitted width — never for an armed or waiting session.
+  const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
+  const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
+  const [mainContentWidth, setMainContentWidth] = useState(1600);
+  useEffect(() => {
+    const element = mainContentRef.current;
+    if (!element) return;
+    const update = () => {
+      const width = element.clientWidth;
+      setMainContentWidth((previous) => (previous === width ? previous : width));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const environmentInsetPx = environmentAppliesContentInset
+    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+    : 0;
+  const previewCaps = computerPreviewCardCaps(
+    settings.computerPreviewSize === "large" ? "large" : "compact",
+  );
+  const previewBudgetPx = computerPreviewBudgetPx({
+    mainContentWidthPx: mainContentWidth,
+    environmentInsetPx: environmentInsetPx,
+    caps: previewCaps,
+  });
+  const previewReservesInset =
+    environmentOverlayVariant === "docked" &&
+    settings.autoOpenComputerPane &&
+    !dockComputerPaneVisible &&
+    previewSession?.phase === "live" &&
+    previewLayout?.hasFrame === true;
+  const previewInsetPx = previewReservesInset
+    ? Math.min(previewLayout?.width ?? previewBudgetPx, previewBudgetPx) + 24
+    : 0;
+  const contentInsetRightPx =
+    environmentInsetPx + previewInsetPx > 0 ? environmentInsetPx + previewInsetPx : undefined;
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
@@ -5660,7 +5725,7 @@ export default function ChatView({
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div ref={mainContentRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
@@ -5825,11 +5890,7 @@ export default function ChatView({
                     onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
-                    contentInsetRightPx={
-                      environmentAppliesContentInset
-                        ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
-                        : undefined
-                    }
+                    contentInsetRightPx={contentInsetRightPx}
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
@@ -5848,12 +5909,8 @@ export default function ChatView({
                       CHAT_COLUMN_GUTTER_CLASS_NAME,
                     )}
                     // Match the transcript's right inset so the composer stays aligned with chat
-                    // content (and clear of the docked Environment overlay).
-                    style={
-                      environmentAppliesContentInset
-                        ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
-                        : undefined
-                    }
+                    // content (and clear of the docked Environment overlay and preview rail).
+                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
@@ -5929,6 +5986,20 @@ export default function ChatView({
               {...environmentPanelProps}
               open={environmentPanelVisible}
               variant={environmentOverlayVariant}
+              railBottom={
+                onExpandComputerPreview && previewSession ? (
+                  <AmbientRailSlot envOpen={environmentPanelVisible}>
+                    <ComputerPreviewPopover
+                      key={threadId}
+                      threadId={threadId}
+                      onExpand={onExpandComputerPreview}
+                      dockComputerPaneVisible={dockComputerPaneVisible}
+                      maxWidthPx={previewBudgetPx}
+                      size={settings.computerPreviewSize === "large" ? "large" : "compact"}
+                    />
+                  </AmbientRailSlot>
+                ) : undefined
+              }
             />
           ) : null}
         </div>

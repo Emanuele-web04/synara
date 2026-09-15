@@ -19,6 +19,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
@@ -76,7 +77,7 @@ import {
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col items-end gap-3 overflow-y-auto p-3";
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -128,6 +129,12 @@ export interface EnvironmentPanelProps {
     readonly status: "idle" | "pending" | "error";
     readonly updatedAt: string | null;
   } | null;
+  /**
+   * Rail content rendered below the env card inside the overlay wrapper
+   * (the ambient computer preview). The wrapper is a flex column, so this
+   * stacks under the card; see AmbientRailSlot for the closed-state slide.
+   */
+  railBottom?: ReactNode;
   /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
   /** Live text of pinned messages still present in the transcript (for labels/availability). */
@@ -239,6 +246,7 @@ export function EnvironmentPanel({
   onOpenEditorView: onOpenEditorViewProp,
   onClose,
   onRegisterCommitAndPushTrigger,
+  railBottom,
 }: EnvironmentPanelProps) {
   const githubRepository = githubRepositoryProp ?? null;
   const githubRepositories = githubRepositoriesProp ?? [];
@@ -521,6 +529,7 @@ export function EnvironmentPanel({
       >
         <div className="min-h-0 overflow-y-auto">{content}</div>
       </div>
+      {railBottom}
     </div>
   );
 }

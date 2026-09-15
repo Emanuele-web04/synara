@@ -23,7 +23,6 @@ import {
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
-import { ComputerPreviewPopover } from "./ComputerPreviewPopover";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import {
@@ -549,6 +548,7 @@ function SplitPaneSurface(props: {
               onToggleBrowser={props.onToggleBrowser}
               onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
+              onExpandComputerPreview={props.onExpandComputerPreview}
               onMaximize={props.onMaximize}
               onChangeThread={props.onChooseThread}
               onCloseThreadPane={props.onCloseThreadPane}
@@ -570,13 +570,6 @@ function SplitPaneSurface(props: {
               threadId={props.threadId}
               onClose={props.onCloseFloatingBrowser}
               onPopToSidebar={props.onPopFloatingBrowser}
-            />
-          ) : null}
-          {props.threadId ? (
-            <ComputerPreviewPopover
-              key={props.threadId}
-              threadId={props.threadId}
-              onExpand={props.onExpandComputerPreview}
             />
           ) : null}
         </SidebarInset>

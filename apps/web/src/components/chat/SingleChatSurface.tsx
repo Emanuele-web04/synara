@@ -94,7 +94,6 @@ import {
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
-import { ComputerPreviewPopover } from "./ComputerPreviewPopover";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
@@ -752,9 +751,9 @@ export function SingleChatSurface(props: {
         : null,
   });
   // `computer.open-pane-requested` no longer routes to the dock: the event
-  // bridge arms the owning thread's preview session, and this surface's
-  // ComputerPreviewPopover is what honors it once that thread is on screen.
-  // The dock Computer pane still opens from the popover's expand control or
+  // bridge arms the owning thread's preview session, and the ChatView rail
+  // honors it once that thread is on screen.
+  // The dock Computer pane still opens from the preview's expand control or
   // the dock menu (handleAddDockPane / handleExpandComputerPreview).
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
@@ -1242,6 +1241,8 @@ export function SingleChatSurface(props: {
               onOpenTurnDiff={handleOpenTurnDiff}
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
+              onExpandComputerPreview={handleExpandComputerPreview}
+              dockComputerPaneVisible={dockState.open && activePane?.kind === "computer"}
               viewModeAction={{
                 label: "Editor view",
                 active: false,
@@ -1260,14 +1261,6 @@ export function SingleChatSurface(props: {
                 }}
               />
             ) : null}
-            {/* Ambient computer preview for this thread's own session; it
-                renders nothing unless the preview store armed this thread. */}
-            <ComputerPreviewPopover
-              key={props.threadId}
-              threadId={props.threadId}
-              onExpand={handleExpandComputerPreview}
-              dockComputerPaneVisible={dockState.open && activePane?.kind === "computer"}
-            />
           </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock
