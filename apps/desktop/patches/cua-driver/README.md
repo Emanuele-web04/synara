@@ -44,6 +44,14 @@ dispatch semantics are unchanged: the detector's wildcard suppression and
 result hints still cover the window in which action side-effects typically
 appear.
 
+Revision 7 overlaps the per-element accessibility IPC of a sibling array:
+a bounded worker pool fetches each child's attribute batch while tree
+assembly, ordering, budget accounting, and truncation flags stay on the
+walk thread in the exact serial sequence, so rendered output is unchanged.
+Workers never share an element, a panic cannot strand queued results, and
+`CUA_AX_SERIAL_FETCH` restores the inline serial fetch for comparison or
+diagnosis.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event
