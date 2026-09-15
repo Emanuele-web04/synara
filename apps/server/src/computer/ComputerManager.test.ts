@@ -2561,3 +2561,100 @@ describe("ComputerManager foregroundWithRestore", () => {
     }
   });
 });
+
+describe("ComputerManager withForegroundRestore", () => {
+  const terminalFirst: readonly ComputerWindow[] = [
+    {
+      id: "fake-terminal",
+      title: "Terminal",
+      appName: "org.kde.konsole",
+      bounds: { x: 40, y: 40, width: 960, height: 720 },
+      focused: true,
+      minimized: false,
+      visible: true,
+    },
+    {
+      id: "fake-calculator",
+      title: "Calculator",
+      appName: "org.kde.kcalc",
+      bounds: { x: 1050, y: 120, width: 420, height: 620 },
+      focused: false,
+      minimized: false,
+      visible: true,
+    },
+  ];
+  const calculatorFirst: readonly ComputerWindow[] = [terminalFirst[1]!, terminalFirst[0]!];
+
+  function scriptedListing(
+    backend: FakeComputerBackend,
+    listing: { current: readonly ComputerWindow[] },
+  ): void {
+    backend.listWindows = async () => listing.current;
+  }
+
+  it("puts the user's window back after a foreground call moves focus", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const listing = { current: terminalFirst };
+    scriptedListing(backend, listing);
+    try {
+      const result = await manager.withForegroundRestore("thread-1", async () => {
+        // The foreground call raises its target past the user's window.
+        listing.current = calculatorFirst;
+        return "typed";
+      });
+      expect(result).toBe("typed");
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
+      expect(backend.callsFor("focusWindow").map((call) => call.args[0])).toEqual([
+        "fake-terminal",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("skips the raise when the foreground call never moved focus", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const listing = { current: terminalFirst };
+    scriptedListing(backend, listing);
+    try {
+      await manager.withForegroundRestore("thread-1", async () => "typed");
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("still restores when the wrapped call fails, then reports the failure", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const listing = { current: terminalFirst };
+    scriptedListing(backend, listing);
+    try {
+      await expect(
+        manager.withForegroundRestore("thread-1", async () => {
+          listing.current = calculatorFirst;
+          throw new Error("input blew up");
+        }),
+      ).rejects.toThrow("input blew up");
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("restores nothing when no frontmost window was observable", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const listing = { current: [] as readonly ComputerWindow[] };
+    scriptedListing(backend, listing);
+    try {
+      await manager.withForegroundRestore("thread-1", async () => "typed");
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});

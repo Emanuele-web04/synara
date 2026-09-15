@@ -1455,6 +1455,67 @@ export class ComputerManager {
   }
 
   /**
+   * Run `action` (already approved for foreground delivery) and put the
+   * desktop back the way it was. Every foreground call is a focus excursion
+   * from the human's point of view — not just computer_activate_window: a
+   * foreground type or click that leaves the agent's target raised has stolen
+   * the user's window for the rest of the session. The restore is covered by
+   * the same approval as the call it wraps and never prompts a second time.
+   *
+   * The frontmost window is recorded from the existing topmost-first listing,
+   * and the raise is skipped when nothing changed (a foreground call whose
+   * target was already frontmost costs two listings and nothing else).
+   * Best-effort like the activate path: a missed restore never fails the call
+   * that already succeeded — it warns, and the caller's own action event
+   * still reports the foreground delivery.
+   */
+  async withForegroundRestore<T>(
+    threadId: string | undefined,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    return this.withDesktopControl(threadId, async () => {
+      const before = await this.readWindows();
+      const previousId =
+        before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+      let outcome:
+        | { readonly ok: true; readonly value: T }
+        | { readonly ok: false; readonly error: unknown };
+      try {
+        outcome = { ok: true, value: await action() };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
+      if (previousId !== null) {
+        const raise = this.backend.raiseWindow?.bind(this.backend);
+        if (raise && this.backendCapabilities.raise) {
+          let frontmost: string | null | undefined;
+          try {
+            const after = await this.readWindows();
+            frontmost =
+              after.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+          } catch {
+            frontmost = undefined;
+          }
+          if (frontmost !== undefined && frontmost !== null && frontmost !== previousId) {
+            try {
+              assertDesktopOperationActive();
+              await raise(previousId);
+              await this.backend.focusWindow?.(previousId);
+            } catch (error) {
+              console.warn("[computer] foreground call left focus unrestored", {
+                restoredWindowId: previousId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+        }
+      }
+      if (!outcome.ok) throw outcome.error;
+      return outcome.value;
+    });
+  }
+
+  /**
    * The computer.action event for a foreground excursion: emitAction's payload
    * plus which window was put back and whether that succeeded. Kept separate
    * from emitAction so the existing action path is untouched; the two new

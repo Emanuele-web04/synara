@@ -1076,16 +1076,26 @@ export function makeAgentGatewayComputerTools(
                       signal: abortSignal,
                     });
                     abortSignal.throwIfAborted();
-                    return withDesktopDeliveryMode(
-                      args.delivery_mode === "foreground" || name === "computer_activate_window"
-                        ? "foreground"
-                        : "background",
-                      () =>
-                        manager.cursorActivity.during(
-                          context.callerThreadId,
-                          cursorToolActivity(name),
-                          invoke,
-                        ),
+                    const foreground =
+                      args.delivery_mode === "foreground" || name === "computer_activate_window";
+                    return withDesktopDeliveryMode(foreground ? "foreground" : "background", () =>
+                      // computer_activate_window already restores via
+                      // foregroundWithRestore; every other foreground call gets
+                      // the same excursion treatment, so a foreground type or
+                      // click cannot strand the user's window behind the target.
+                      foreground && name !== "computer_activate_window"
+                        ? manager.withForegroundRestore(context.callerThreadId, () =>
+                            manager.cursorActivity.during(
+                              context.callerThreadId,
+                              cursorToolActivity(name),
+                              invoke,
+                            ),
+                          )
+                        : manager.cursorActivity.during(
+                            context.callerThreadId,
+                            cursorToolActivity(name),
+                            invoke,
+                          ),
                     );
                   },
                   abortSignal,
@@ -1204,7 +1214,7 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             enum: ["background", "foreground"],
             description:
-              "Defaults to background. Foreground may bring the exact target window forward within the active Computer task's consent. Never use it to replay an uncertain action.",
+              "Defaults to background. Foreground may bring the exact target window forward within the active Computer task's consent, and the previously frontmost window is put back afterwards. Never use it to replay an uncertain action.",
           },
         },
       },
