@@ -1,0 +1,47 @@
+name: Inspect bundle dependencies
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-dependency-inspect.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Collect runtime entrypoints and formatter
+        run: |
+          mkdir -p "$RUNNER_TEMP/dependency-audit"
+          node --input-type=module <<'NODE'
+          import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const out = join(process.env.RUNNER_TEMP, 'dependency-audit');
+          for (const name of ['@anthropic-ai/claude-agent-sdk', 'node-pty', 'oxfmt', '@oxfmt/binding-linux-x64-gnu']) {
+            const from = join('node_modules', name);
+            if (existsSync(from)) cpSync(from, join(out, name), { recursive: true, dereference: true });
+          }
+          const manifests = {};
+          for (const name of ['effect', '@effect/platform-node', '@effect/platform-node-shared', '@effect/sql-sqlite-bun', 'openai', '@anthropic-ai/sdk', '@earendil-works/pi-ai', 'zod', '@google/genai', 'typebox', '@pierre/diffs', 'web-streams-polyfill']) {
+            manifests[name] = JSON.parse(readFileSync(join('node_modules', name, 'package.json'), 'utf8'));
+          }
+          writeFileSync(join(out, 'manifests.json'), JSON.stringify(manifests, null, 2));
+          NODE
+          tar -czf "$RUNNER_TEMP/dependency-audit.tar.gz" -C "$RUNNER_TEMP/dependency-audit" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-dependency-entrypoints
+          path: ${{ runner.temp }}/dependency-audit.tar.gz
+          retention-days: 3
