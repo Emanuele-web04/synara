@@ -1,5 +1,7 @@
 import type { ProviderKind } from "@synara/contracts";
 
+import { computerToolInstructions } from "./computerGuidance.ts";
+
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
@@ -9,6 +11,7 @@ export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HAR
 export interface SynaraHarnessCapabilities {
   readonly gatewayControlAvailable: boolean;
   readonly automationAuthoring?: "tool-descriptions";
+  readonly enableComputerControl?: boolean | undefined;
 }
 
 /**
@@ -58,7 +61,16 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
     "For known local files in user-facing Markdown, use readable labels and absolute file URLs, such as [config.ts](file:///absolute/path/config.ts). Relative links are only for the session working directory; otherwise use plain text and never invent a path.",
     'Synara collapses progress and tools under "Worked for...". Final responses must restate every needed scope, plan, decision, result, caveat, instruction, or question. Never request approval using "this", "the above", or another referent available only in collapsed content.',
     "When a structured user-input tool is available for a genuine decision, prefer it and include all decision context in its question or card.",
+    // Standing discoverability affordance, unconditional on the Computer flag:
+    // a session without Computer tools must still route desktop-app work to
+    // the Settings switch instead of faking it with another surface. One
+    // line, kept out of the Computer-gated guidance below so it costs nothing
+    // extra once control is on.
+    "To operate real macOS/Windows apps (open, click, type, scroll), use computer_* tools only when this session lists them; otherwise tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.",
     ...controlPolicy,
+    ...(capabilities.gatewayControlAvailable && capabilities.enableComputerControl === true
+      ? [computerToolInstructions()]
+      : []),
   ].join("\n");
 }
 
@@ -68,6 +80,7 @@ export const SYNARA_GATEWAY_HARNESS_POLICY = renderSynaraHarnessPolicy({
 
 export interface SynaraHarnessPolicyDeliveryState {
   harnessPolicyDelivered?: boolean | undefined;
+  enableComputerControl?: boolean | undefined;
 }
 
 const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
@@ -119,6 +132,7 @@ export function takeSynaraHarnessPolicyForProviderSession(
 ): string | null {
   return takeSynaraHarnessPolicyForSession(state, {
     gatewayControlAvailable: providerHasSynaraGatewayControl(input),
+    enableComputerControl: state.enableComputerControl === true,
   });
 }
 

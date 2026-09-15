@@ -22,7 +22,7 @@ import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { LatestProposedPlanState } from "../../session-logic";
 import type { useStore } from "../../store";
 import type { Project, Thread } from "../../types";
-import type { QueuedSteerGate } from "../ChatView.logic";
+import type { QueuedSteerGate, TurnDispatchSettings } from "../ChatView.logic";
 import type { useChatAutomationCreation } from "./useChatAutomationCreation";
 import type { useChatAutomationSetup } from "./useChatAutomationSetup";
 import type { useChatComposerDraft } from "./useChatComposerDraft";
@@ -249,6 +249,14 @@ export interface ChatTurnSubmissionInput {
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
   selectedModelSelection: ModelSelection;
   providerOptionsForDispatch: ProviderStartOptions | undefined;
+  turnDispatchSettings: TurnDispatchSettings;
+  computerControlChangeSequence: RefObject<number>;
+  setComposerDraftComputerControlMode: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControlMode"];
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   pendingAutomationConversationRef: ReturnType<
     typeof useChatAutomationSetup
   >["pendingAutomationConversationRef"];

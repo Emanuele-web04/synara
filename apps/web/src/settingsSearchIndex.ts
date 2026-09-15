@@ -21,7 +21,32 @@ export interface SettingsSearchEntry {
   title: string;
   keywords: string;
   target?: string | null;
+  /**
+   * Whether this row exists on the machine the user is actually looking at.
+   * Omitted means "always". A search result for a row the panel does not render
+   * is a dead end: it scrolls to an anchor that is not there, and it tells the
+   * user Synara has a setting it does not.
+   */
+  applies?: (context: SettingsSearchContext) => boolean;
 }
+
+/**
+ * What the index needs to know about this server to decide which rows exist.
+ * Deliberately a handful of booleans rather than the status objects themselves —
+ * the index answers "does this row render", not "what does it say".
+ */
+export interface SettingsSearchContext {
+  /**
+   * The desktop backend drives the screen the user is already looking at, so
+   * Synara never opens a Computer pane on an agent's behalf and the setting that
+   * would control it does nothing. True only once the status is known.
+   */
+  readonly computerBackendIsVisibleDesktop: boolean;
+}
+
+const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {
+  computerBackendIsVisibleDesktop: false,
+};
 
 /** DOM id a result deep-links to, or null for panel-level entries with no anchored row. */
 export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | null {
@@ -274,6 +299,36 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
+  // ── Computer use ──────────────────────────────────────────────────────────────
+  {
+    id: "computer:status",
+    section: "computer",
+    title: "Desktop backend",
+    keywords:
+      "Whether agents can see and control this computer's desktop right now. beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    // The status row's title is dynamic (Ready / Reconnecting / Unavailable), so
+    // link to the section rather than an anchored row.
+    target: null,
+  },
+  {
+    id: "computer:open-automatically",
+    section: "computer",
+    title: "Open automatically",
+    keywords:
+      "Open the Computer pane the first time an agent acts on the desktop in a chat. auto open dock computer use",
+    // The pane auto-open row shows on every backend now: on the visible
+    // desktop the pane renders stills only, and watching the agent's captured
+    // view inside the app is the point of the preview.
+    applies: () => true,
+  },
+  {
+    id: "computer:how-agents-use-the-desktop",
+    section: "computer",
+    title: "Computer control",
+    keywords:
+      "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
+  },
+
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
     id: "behavior:follow-up-behavior",
@@ -468,12 +523,17 @@ export function settingsSectionLabel(section: SettingsSectionId): string {
 export function rankSettingsSearchEntries(
   query: string,
   limit: number,
+  context: SettingsSearchContext | undefined = DEFAULT_SETTINGS_SEARCH_CONTEXT,
 ): readonly SettingsSearchEntry[] {
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     return [];
   }
-  const ranked = rankProviderDiscoveryItems(SETTINGS_SEARCH_ENTRIES, trimmed, (entry) => [
+  const resolvedContext = context ?? DEFAULT_SETTINGS_SEARCH_CONTEXT;
+  const available = SETTINGS_SEARCH_ENTRIES.filter(
+    (entry) => entry.applies?.(resolvedContext) ?? true,
+  );
+  const ranked = rankProviderDiscoveryItems(available, trimmed, (entry) => [
     { value: entry.title },
     { value: entry.keywords, weight: 200 },
     { value: settingsSectionLabel(entry.section), weight: 400 },

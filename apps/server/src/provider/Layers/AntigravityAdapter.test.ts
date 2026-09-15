@@ -223,6 +223,7 @@ describe("Antigravity CLI integration helpers", () => {
     const liveTokens = new Set<string>();
     const bootstrapOwners = new Map<string, string>();
     const revokedTokens: string[] = [];
+    const leasedCapabilities: Array<readonly string[]> = [];
     const spawnedEnvironments: NodeJS.ProcessEnv[] = [];
     let tokenSequence = 0;
     let bootstrapSequence = 0;
@@ -261,10 +262,13 @@ describe("Antigravity CLI integration helpers", () => {
           if (owner === token) bootstrapOwners.delete(bootstrap);
         }
       },
-      connectionForThread: () => ({
-        url: "http://127.0.0.1:3773/mcp",
-        bearerToken: issueSessionToken(),
-      }),
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities ?? []);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: issueSessionToken(),
+        };
+      },
       stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
     };
     let processSequence = 0;
@@ -302,6 +306,10 @@ describe("Antigravity CLI integration helpers", () => {
             threadId,
             runtimeMode: "full-access",
             cwd: root,
+            // Antigravity leases per turn, so the session-start capability facts
+            // have to survive in the session context or every turn silently
+            // loses the computer tools.
+            enableComputerControl: true,
             providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
           });
           const waitUntilReady = Effect.gen(function* () {
@@ -328,6 +336,7 @@ describe("Antigravity CLI integration helpers", () => {
           expect(credentials.exchangeStdioBootstrapToken(bootstrapB!)).toBe("turn-session-2");
           yield* waitUntilReady;
           expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2"]);
+          expect(leasedCapabilities).toEqual([["computer:control"], ["computer:control"]]);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
@@ -1324,6 +1333,73 @@ describe("Antigravity CLI integration helpers", () => {
         timeoutMs: 50,
       }),
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
+  });
+
+  it("reports expected versus minted gateway capabilities when the turn bootstrap is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-bootstrap-detail-"));
+    const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
+    let tokenSequence = 0;
+    const credentials: AgentGatewayCredentialsShape = {
+      mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+      setListeningPort: () => undefined,
+      issueSessionToken: () => `turn-session-${String(++tokenSequence)}`,
+      verifySessionToken: () => null,
+      verifySession: () => null,
+      issueStdioBootstrapToken: () => null,
+      exchangeStdioBootstrapToken: () => null,
+      bindWriteAuthority: () => null,
+      verifyWriteAuthority: () => false,
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
+      revokeSessionToken: () => undefined,
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${String(tokenSequence)}`,
+        };
+      },
+      stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+    };
+    try {
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-bootstrap-detail");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            enableComputerControl: true,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          return yield* Effect.flip(
+            adapter.sendTurn({ threadId, input: "turn A", attachments: [] }),
+          );
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-bootstrap-detail-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+      expect(leasedCapabilities).toEqual([["computer:control"]]);
+      expect(error).toMatchObject({ _tag: "ProviderAdapterRequestError", method: "turn/prepare" });
+      const detail = (error as unknown as { detail: string }).detail;
+      expect(detail).toContain("expected gateway capabilities");
+      expect(detail).toContain("computer:control");
+      expect(detail).toContain("minted");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   // #465: an active Stop hook must not emit a non-standard decision that can

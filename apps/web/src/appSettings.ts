@@ -103,6 +103,9 @@ export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_a
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
+export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
+export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
@@ -347,6 +350,20 @@ export const AppSettingsSchema = Schema.Struct({
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
+  // Open the Computer pane automatically when an agent starts driving the desktop.
+  autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
+  // In-chat computer preview footprint. Compact is the default: a small
+  // glanceable card that reserves a narrow gutter. Large restores the
+  // previous wide card for users who want the detail inline.
+  computerPreviewSize: ComputerPreviewSize.pipe(withDefaults(() => DEFAULT_COMPUTER_PREVIEW_SIZE)),
+  // Computer control is off by default. When on, the agent may use the desktop
+  // in any chat. Approval gates and Stop still apply.
+  computerControlEnabled: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Deprecated rename bridge. Normalization migrates this value and then omits the key.
+  allowComputerControlInNewChats: Schema.optionalKey(Schema.Boolean),
+  // One-shot composer hint that suggests Medium effort for faster desktop actions.
+  // Set when the user applies or dismisses it, so the hint never asks twice.
+  dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),
@@ -603,6 +620,7 @@ function normalizeProviderBinaryPathOverride(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   const {
     enableAppshots: legacyEnableAppshots,
+    allowComputerControlInNewChats: legacyAllowComputerControlInNewChats,
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
     ...currentSettings
@@ -610,6 +628,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
+    computerControlEnabled:
+      settings.computerControlEnabled || legacyAllowComputerControlInNewChats === true,
     // Password fields are accepted only as write-only update patches. Never retain
     // reusable provider credentials in browser state or localStorage.
     openCodeServerPassword: "",

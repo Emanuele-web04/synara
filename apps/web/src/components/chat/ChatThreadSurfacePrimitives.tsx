@@ -20,6 +20,7 @@ import { scheduleDeferredChatMount } from "./deferredChatMount";
 const DiffPanel = lazy(() => import("../DiffPanel"));
 export const LazyBrowserPanel = lazy(() => import("../BrowserPanel"));
 export const LazyDevicePanel = lazy(() => import("../DevicePanel"));
+export const LazyComputerPanel = lazy(() => import("../ComputerPanel"));
 
 export const noopChatSurfaceAction = () => {};
 
@@ -129,6 +130,8 @@ export function DeferredChatView(props: {
   onChangeThread?: () => void;
   onCloseThreadPane?: () => void;
   onMounted?: () => void;
+  onExpandComputerPreview?: () => void;
+  dockComputerPaneVisible?: boolean;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
   const mountKey = `${props.paneScopeId}:${props.threadId}`;
@@ -181,6 +184,10 @@ export function DeferredChatView(props: {
       {...(props.viewModeAction !== undefined ? { viewModeAction: props.viewModeAction } : {})}
       {...(props.onChangeThread ? { onChangeThreadInSplitPane: props.onChangeThread } : {})}
       {...(props.onCloseThreadPane ? { onCloseThreadPane: props.onCloseThreadPane } : {})}
+      {...(props.onExpandComputerPreview
+        ? { onExpandComputerPreview: props.onExpandComputerPreview }
+        : {})}
+      dockComputerPaneVisible={props.dockComputerPaneVisible}
     />
   );
 }

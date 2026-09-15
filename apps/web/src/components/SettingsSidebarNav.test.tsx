@@ -40,6 +40,30 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
   });
 
+  it("hides the Computer pane auto-open row on a backend that never opens one", () => {
+    // `ComputerManager.surfacePaneForAgent` returns early on a visible desktop,
+    // so the setting controls nothing there and the panel hides it. A search
+    // result for a row the panel does not draw scrolls to an anchor that is not
+    // there, and tells the user Synara has a setting it does not.
+    const offered = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: false,
+    });
+    expect(offered.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
+
+    const hidden = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: true,
+    });
+    expect(hidden.some((entry) => entry.id === "computer:open-automatically")).toBe(false);
+  });
+
+  it("indexes the Computer control switch with its guardrails", () => {
+    const entry = SETTINGS_SEARCH_ENTRIES.find(
+      (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
+    );
+    expect(entry?.title).toBe("Computer control");
+    expect(entry?.keywords).toContain("Approval gates and Stop still apply");
+  });
+
   it("includes the activity toasts notification row", () => {
     const results = rankSettingsSearchEntries("toasts", 12);
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);

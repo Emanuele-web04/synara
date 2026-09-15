@@ -89,6 +89,7 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
+  LazyComputerPanel,
   LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
@@ -107,13 +108,15 @@ import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
-import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
+import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
 import {
   selectFloatingBrowserRequested,
   useFloatingBrowserRequestStore,
 } from "./floatingBrowserRequestStore";
-import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
-import { pullRequestDetailInputFromPane } from "../pullRequest/pullRequestDetail.logic";
+import {
+  pullRequestDetailInputFromPane,
+  pullRequestPaneTabLabel,
+} from "../pullRequest/pullRequestDetail.logic";
 import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneStateIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
@@ -371,6 +374,12 @@ export function SingleChatSurface(props: {
       diffTurnId: turnId,
       diffFilePath: filePath ?? null,
     });
+  };
+  // The popover's expand is a user-initiated pane open, so it hydrates the
+  // dock pane immediately like every other explicit open.
+  const handleExpandComputerPreview = () => {
+    requestImmediateDockHydration("computer");
+    openPane(props.threadId, { kind: "computer" });
   };
 
   // Stable identities: these feed memoized result rows in the search palette,
@@ -719,12 +728,11 @@ export function SingleChatSurface(props: {
       toggleSingletonPane(props.threadId, { kind: "browser" });
     },
     onOpen: (requestedThreadId) => {
-      routeSingleBrowserPanelOpenRequest({
+      routeSingleDockPaneOpenRequest({
         currentThreadId: props.threadId,
         requestedThreadId,
-        requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
-        showFloatingBrowser: requestFloatingBrowser,
-        rememberFloatingBrowser: requestFloatingBrowser,
+        requestImmediateHydration: () => requestImmediateDockHydration("browser"),
+        openPane: requestFloatingBrowser,
       });
     },
   });
@@ -733,15 +741,20 @@ export function SingleChatSurface(props: {
     onOpenPaneRequested:
       hasDeviceSupport && appSettings.autoOpenDevicePane
         ? (event) => {
-            routeSingleDevicePaneOpenRequest({
+            routeSingleDockPaneOpenRequest({
               currentThreadId: props.threadId,
               requestedThreadId: event.threadId,
-              requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
-              openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+              requestImmediateHydration: () => requestImmediateDockHydration("device"),
+              openPane: (threadId) => openPane(threadId, { kind: "device" }),
             });
           }
         : null,
   });
+  // `computer.open-pane-requested` no longer routes to the dock: the event
+  // bridge arms the owning thread's preview session, and the ChatView rail
+  // honors it once that thread is on screen.
+  // The dock Computer pane still opens from the preview's expand control or
+  // the dock menu (handleAddDockPane / handleExpandComputerPreview).
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
@@ -913,6 +926,19 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
             <LazyDevicePanel
+              mode="sidebar"
+              threadId={props.threadId}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              isVisible={context.isVisible}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          </Suspense>
+        );
+      case "computer":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading computer...</PanelStateMessage>}>
+            <LazyComputerPanel
               mode="sidebar"
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}
@@ -1211,10 +1237,12 @@ export function SingleChatSurface(props: {
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
-              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
+              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
+              onExpandComputerPreview={handleExpandComputerPreview}
+              dockComputerPaneVisible={dockState.open && activePane?.kind === "computer"}
               viewModeAction={{
                 label: "Editor view",
                 active: false,
@@ -1262,9 +1290,7 @@ export function SingleChatSurface(props: {
             });
           }}
           onCollapse={() => setDockOpen(props.threadId, false)}
-          onOpenChange={(open) => {
-            setDockOpen(props.threadId, open);
-          }}
+          onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
           renderPane={renderDockPane}
         />

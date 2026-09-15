@@ -1,0 +1,8 @@
+{
+  "version": "0.24.0",
+  "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+  "sha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+  "nativeRevision": 9,
+  "patchSha256": "cca306c5e80fbe49b77e81570f40fe86e7502992743986f33704138904270eb8",
+  "rustVersion": "1.97.1"
+}

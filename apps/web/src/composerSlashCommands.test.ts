@@ -24,7 +24,35 @@ import {
 } from "./composerSlashCommands";
 
 describe("composerSlashCommands", () => {
+  it.each([
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "devin",
+    "opencode",
+    "pi",
+    "antigravity",
+  ] as const)(
+    "does not offer a Computer slash invocation for %s, even with a native name collision",
+    (provider) => {
+      const commands = getAvailableComposerSlashCommands({
+        provider,
+        supportsFastSlashCommand: false,
+        canOfferCompactCommand: false,
+        canOfferReviewCommand: false,
+        canOfferForkCommand: false,
+        canOfferSideCommand: false,
+        canOfferExportCommand: false,
+        providerNativeCommandNames: ["computer-use"],
+      });
+      expect(commands.filter((command) => (command as string) === "computer-use")).toHaveLength(0);
+      expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
+    },
+  );
   it("recognizes built-in slash commands", () => {
+    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
@@ -55,6 +83,7 @@ describe("composerSlashCommands", () => {
   });
 
   it("parses slash invocations with optional arguments", () => {
+    expect(parseComposerSlashInvocation("/computer-use open Notes")).toBeNull();
     expect(parseComposerSlashInvocation("/review current diff")).toEqual({
       command: "review",
       args: "current diff",

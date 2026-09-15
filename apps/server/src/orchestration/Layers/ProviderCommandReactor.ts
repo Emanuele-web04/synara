@@ -1,3 +1,7 @@
+import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
+import { computerActivationMetadata } from "../../computer/computerActivation.ts";
+import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
+import { ComputerService } from "../../computer/Services/ComputerService";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -693,6 +697,8 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const computerService = yield* Effect.serviceOption(ComputerService);
+  const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const checkpointStore = yield* CheckpointStore;
@@ -758,6 +764,7 @@ const make = Effect.gen(function* () {
   // projected thread metadata so an option changed mid-turn is still compared
   // against the old subprocess configuration before the next turn starts.
   const threadSessionModelSelections = new Map<string, ModelSelection>();
+  const threadSessionComputerControl = new Map<string, boolean>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -1414,6 +1421,7 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       threadProviderOptions.delete(threadId);
       threadSessionModelSelections.delete(threadId);
+      threadSessionComputerControl.delete(threadId);
       const editResendPrefix = `${threadId}:`;
       for (const key of editResendTurnStartKeys) {
         if (key.startsWith(editResendPrefix)) {
@@ -1612,6 +1620,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
+      readonly enableComputerControl?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
     },
@@ -1697,6 +1706,9 @@ const make = Effect.gen(function* () {
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
+      ...(options?.enableComputerControl !== undefined
+        ? { enableComputerControl: options.enableComputerControl }
+        : {}),
       runtimeMode: desiredRuntimeMode,
     };
 
@@ -1783,12 +1795,27 @@ const make = Effect.gen(function* () {
               currentProvider === "grok" ||
               currentProvider === "devin") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
+      const requestedComputerControl = options?.enableComputerControl;
+      // A missing cache entry means the session was started by a dispatch that
+      // carried no computer-control flag, which provisions the default (off), so
+      // compare against `false` rather than treating every explicit request as a
+      // change — the web client sends the flag on every turn, and an unconditional
+      // restart here would tear down each legacy-started session on its first
+      // web turn.
+      const previousComputerControl =
+        Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(threadId, reusableSession.provider)
+          : (threadSessionComputerControl.get(threadId) ?? false);
+      const computerControlChanged =
+        requestedComputerControl !== undefined &&
+        requestedComputerControl !== previousComputerControl;
 
       if (
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !computerControlChanged
       ) {
         return {
           activeSessionBeforeEnsure,
@@ -1796,9 +1823,44 @@ const make = Effect.gen(function* () {
           nativeResumeSucceeded: false,
           nativeResumeFailed: false,
           nativeSessionRestarted: false,
+          computerControlRestartDeferred: false,
+          forkComputerControl: undefined,
         };
       }
 
+      // P1 activation stickiness: a computer-control-only change never restarts
+      // under a live turn. Tearing the session down mid-turn would corrupt the
+      // owner (retargeted input, lost tool catalog negotiation); the change
+      // waits for the terminal turn or session tombstone instead, and the
+      // queued turn behind it dispatches only after that boundary. The caller
+      // keeps the previously provisioned flag cached so the next turn still
+      // observes the change and restarts between turns. Liveness comes from
+      // the runtime, never the projection: terminal-driven drains dispatch
+      // the queued turn before the projector clears the session row, so a
+      // projected running turn here is stale, not live.
+      if (
+        computerControlChanged &&
+        !runtimeModeChanged &&
+        !providerChanged &&
+        !shouldRestartForModelChange &&
+        !shouldRestartForModelSelectionChange &&
+        (yield* hasLiveProviderTurn(threadId))
+      ) {
+        return {
+          activeSessionBeforeEnsure,
+          activeSession: reusableSession,
+          nativeResumeSucceeded: false,
+          nativeResumeFailed: false,
+          nativeSessionRestarted: false,
+          computerControlRestartDeferred: true,
+          forkComputerControl: undefined,
+        };
+      }
+
+      // A computer-control-only restart keeps the resume cursor: provisioning is
+      // re-derived from the start input on every session start, so the new flag
+      // takes effect on resume and dropping history would lose fidelity for
+      // nothing.
       const resumeCursor =
         providerChanged || shouldRestartForModelChange || runtimeModeChanged
           ? undefined
@@ -1815,6 +1877,7 @@ const make = Effect.gen(function* () {
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        computerControlChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedOutcome = yield* startProviderSessionWithOutcome(resumeCursor);
@@ -1828,6 +1891,9 @@ const make = Effect.gen(function* () {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
       threadSessionModelSelections.set(threadId, desiredModelSelection);
+      if (options?.enableComputerControl !== undefined) {
+        threadSessionComputerControl.set(threadId, options.enableComputerControl);
+      }
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -1844,14 +1910,34 @@ const make = Effect.gen(function* () {
         nativeResumeFailed:
           restartedOutcome.nativeResumeAttempted && !restartedOutcome.nativeResumeSucceeded,
         nativeSessionRestarted: true,
+        computerControlRestartDeferred: false,
+        forkComputerControl: undefined,
       };
     }
 
     let bootstrapTranscriptIfResumeFails = false;
     if (providerService.forkThread && thread.forkSourceThreadId) {
+      // P1 activation stickiness: forks mint fresh control state. The child
+      // starts at generation 0 with chat intent if and only if the parent's
+      // chat intent is live; the fork command itself carries no computer
+      // options, so deriving from options would always resolve to off and
+      // silently drop an active computer task at the fork boundary.
+      const parentCanContinueChatControl =
+        Option.isSome(computerService) &&
+        computerService.value.manager.canContinueChatControl(thread.forkSourceThreadId);
+      const forkComputerControl = Option.isSome(computerService)
+        ? yield* Effect.promise(() =>
+            computerService.value.manager.admitControl(
+              threadId,
+              parentCanContinueChatControl ? "chat" : "off",
+              0,
+            ),
+          )
+        : (options?.enableComputerControl ?? false);
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
         sourceThreadId: thread.forkSourceThreadId,
+        enableComputerControl: forkComputerControl,
       });
       if (forked) {
         if (
@@ -1864,6 +1950,7 @@ const make = Effect.gen(function* () {
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
+        threadSessionComputerControl.set(threadId, forkComputerControl);
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -1885,6 +1972,8 @@ const make = Effect.gen(function* () {
           nativeResumeSucceeded: false,
           nativeResumeFailed: false,
           nativeSessionRestarted: false,
+          computerControlRestartDeferred: false,
+          forkComputerControl,
         };
       }
       // An existing fork also returns null: wait for its native resume result
@@ -1962,6 +2051,9 @@ const make = Effect.gen(function* () {
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
+    if (options?.enableComputerControl !== undefined) {
+      threadSessionComputerControl.set(threadId, options.enableComputerControl);
+    }
     yield* bindSessionToThread(startedSession);
     if (!retainContextBootstrapSuppression) {
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
@@ -1972,6 +2064,8 @@ const make = Effect.gen(function* () {
       nativeResumeSucceeded: startOutcome.nativeResumeSucceeded,
       nativeResumeFailed: startOutcome.nativeResumeFailed,
       nativeSessionRestarted: true,
+      computerControlRestartDeferred: false,
+      forkComputerControl: undefined,
     };
   });
 
@@ -1979,12 +2073,16 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly messageId: string;
     readonly messageText: string;
+    readonly dispatchOrigin?: "user" | "automation" | "agent";
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
     readonly reviewTarget?: ProviderReviewTarget;
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
+    readonly enableComputerControl?: boolean;
+    readonly computerControlMode?: "off" | "request" | "chat";
+    readonly computerControlGeneration?: number;
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
@@ -2059,7 +2157,11 @@ const make = Effect.gen(function* () {
         goal: activeThreadGoal(thread),
         text: normalizeSkillMentionTextForProvider({
           provider: steerProvider,
-          messageText: steerMessageWithSkills,
+          messageText: appendAppSnapPromptContext(
+            steerMessageWithSkills,
+            input.attachments,
+            PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
+          ),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
         }),
       });
@@ -2095,6 +2197,42 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const activation = computerActivationMetadata(input);
+    // The Settings switch is the only consent. A dispatch-path switch-off is
+    // the composer's resolved default on every ordinary turn (the composer
+    // sends the switch on each turn and carries no other intent signal), so it
+    // is indistinguishable from an explicit switch-off on the wire and must
+    // never clear durable intent: admitControl("off") would wipe chatGeneration
+    // via recordChatIntent(false). Ordinary switch-off turns inherit the live
+    // chat intent instead; only explicit offs clear, through Stop
+    // (interruptProviderTurn) and the revoke/disable paths, never here. A
+    // switch-on turn admits durable chat intent when the generation gate
+    // allows it; a stale generation stays off for that turn.
+    const switchOn = input.enableComputerControl === true;
+    const generation = activation.computerControlGeneration;
+    const enableComputerControl = Option.isNone(computerService)
+      ? activation.enableComputerControl
+      : input.turnKind === "goal-continuation"
+        ? computerService.value.manager.canContinueChatControl(input.threadId)
+        : input.dispatchMode === "steer" && !switchOn
+          ? false // A switch-off steer does not change the live turn's intent.
+          : switchOn
+            ? yield* Effect.promise(() =>
+                computerService.value.manager.admitControl(
+                  input.threadId,
+                  "chat",
+                  generation,
+                  false,
+                ),
+              )
+            : computerService.value.manager.canContinueChatControl(input.threadId);
+    yield* Effect.logDebug("provider command reactor computer inputs", {
+      threadId: input.threadId,
+      switchOn,
+      mode: activation.computerControlMode,
+      generation,
+      enableComputerControl,
+    });
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const selectedProvider =
@@ -2111,9 +2249,12 @@ const make = Effect.gen(function* () {
       nativeResumeSucceeded,
       nativeResumeFailed,
       nativeSessionRestarted,
+      computerControlRestartDeferred,
+      forkComputerControl,
     } = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+      ...(input.dispatchMode === "steer" ? {} : { enableComputerControl }),
       ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       ...(registerPriorTranscriptBootstrapOnFreshStart
         ? { registerPriorTranscriptBootstrapOnFreshStart: true }
@@ -2124,6 +2265,15 @@ const make = Effect.gen(function* () {
     }
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
+    }
+    if (input.dispatchMode !== "steer" && computerControlRestartDeferred !== true) {
+      // A fork provisions the parent-derived flag, not this turn's resolved
+      // value; a deferred control-only restart provisions nothing yet. In both
+      // cases the resolved value must not overwrite the authoritative cache.
+      threadSessionComputerControl.set(
+        input.threadId,
+        forkComputerControl ?? enableComputerControl,
+      );
     }
     // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
     // mentioned-thread context is appended after the assembled provider input
@@ -2338,7 +2488,11 @@ const make = Effect.gen(function* () {
           goal: activeThreadGoal(thread),
           text: normalizeSkillMentionTextForProvider({
             provider: selectedProvider as ProviderKind,
-            messageText: withSkills,
+            messageText: appendAppSnapPromptContext(
+              withSkills,
+              input.attachments,
+              PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
+            ),
             ...(input.skills !== undefined ? { skills: input.skills } : {}),
           }),
         }),
@@ -2490,6 +2644,7 @@ const make = Effect.gen(function* () {
       const ensureSessionForStaleRetry = ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        enableComputerControl,
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       });
       const replayWithTranscriptBootstrap = (
@@ -3043,10 +3198,29 @@ const make = Effect.gen(function* () {
       // still projected as running), so recheck live state and dispatch a
       // settled "steer" as a normal queued turn — the native steer path
       // would skip the turn-start checkpoint.
+      const activation = computerActivationMetadata(event.payload);
+      const requiresComputerProfile =
+        hasLiveTurn &&
+        event.payload.dispatchMode === "steer" &&
+        activation.enableComputerControl &&
+        (Option.isNone(computerService) ||
+          computerService.value.manager.canActivateControl(
+            event.payload.threadId,
+            activation.computerControlGeneration,
+          )) &&
+        !(Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(
+              event.payload.threadId,
+              providerName as ProviderKind,
+            )
+          : (threadSessionComputerControl.get(event.payload.threadId) ?? false));
+      // Installing a new catalog requires a turn boundary; a live steer cannot
+      // gain tools merely because the composer consumed its activation chip.
       const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
-        hasLiveTurn;
+        hasLiveTurn &&
+        !requiresComputerProfile;
       if (event.payload.dispatchMode === "steer") {
         // The decider records its projected decision on the message immediately,
         // then this runtime check corrects either race direction before delivery:
@@ -3151,6 +3325,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         messageId: message.id,
         messageText: message.text,
+        dispatchOrigin: event.payload.dispatchOrigin ?? "user",
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
         ...(message.skills !== undefined ? { skills: message.skills } : {}),
         ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
@@ -3160,6 +3335,7 @@ const make = Effect.gen(function* () {
         ...(event.payload.providerOptions !== undefined
           ? { providerOptions: event.payload.providerOptions }
           : {}),
+        ...computerActivationMetadata(event.payload),
         ...(event.payload.runtimeMode !== undefined
           ? { runtimeMode: event.payload.runtimeMode }
           : {}),
@@ -3306,6 +3482,7 @@ const make = Effect.gen(function* () {
           ...(nextQueuedTurn.providerOptions !== undefined
             ? { providerOptions: nextQueuedTurn.providerOptions }
             : {}),
+          ...computerActivationMetadata(nextQueuedTurn),
           ...(nextQueuedTurn.reviewTarget !== undefined
             ? { reviewTarget: nextQueuedTurn.reviewTarget }
             : {}),
@@ -3716,6 +3893,31 @@ const make = Effect.gen(function* () {
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
     if (!thread) {
       return;
+    }
+
+    // P1 activation stickiness: Stop is an explicit off. A crowded inbox of
+    // queued and steered turns must not resurrect computer control after the
+    // user halted it, so clear the durable chat intent up front. Best-effort:
+    // a consent-store failure must not fail the stop itself (that would leave
+    // the turn running with the button looking dead); it is logged and the
+    // interrupt proceeds. The generation is irrelevant for "off": admission is
+    // unconditionally disabled and the intent unconditionally cleared.
+    if (Option.isSome(computerService)) {
+      yield* Effect.promise(() =>
+        computerService.value.manager.admitControl(input.threadId, "off", 0),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning(
+                "provider command reactor could not clear computer intent on stop",
+                {
+                  threadId: input.threadId,
+                  cause: Cause.pretty(cause),
+                },
+              ).pipe(Effect.asVoid),
+        ),
+      );
     }
 
     const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>
@@ -4265,6 +4467,7 @@ const make = Effect.gen(function* () {
       ...(payload.providerOptions !== undefined
         ? { providerOptions: payload.providerOptions }
         : {}),
+      ...computerActivationMetadata(payload),
       ...(payload.assistantDeliveryMode !== undefined
         ? { assistantDeliveryMode: payload.assistantDeliveryMode }
         : {}),
@@ -4647,6 +4850,10 @@ const make = Effect.gen(function* () {
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         case "thread.deleted":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
+            );
           // Cancel any queued/promoting turns for the deleted thread BEFORE
           // clearing runtime caches so a concurrent drain cannot resurrect them
           // (see cancelThread). Best-effort: the event stays unclaimed either way.
@@ -4657,6 +4864,10 @@ const make = Effect.gen(function* () {
           yield* clearThreadRuntimeCaches(event.payload.threadId);
           return;
         case "thread.archived":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
+            );
           // Archive cleanup shares this durable, sequence-ordered provider
           // source with later turn-start intents. An immediate unarchive/send
           // therefore cannot race an older archive stop against the new turn.
@@ -4665,6 +4876,12 @@ const make = Effect.gen(function* () {
             // Legacy thread.archived events may omit archivedAt; fall back like the projector.
             createdAt: event.payload.archivedAt ?? event.payload.updatedAt ?? event.occurredAt,
           });
+          return;
+        case "thread.unarchived":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRestored(event.payload.threadId),
+            );
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
