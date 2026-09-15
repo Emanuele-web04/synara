@@ -11,6 +11,14 @@ vi.mock("./betterwrightConnection", () => ({
 
 let contents: WebContents;
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const fakeConnection = (provider: object) => {
   const close = vi.fn(async (_cancel = true) => {});
   let closing: Promise<void> | undefined;
@@ -102,10 +110,128 @@ describe("synaraHostTarget", () => {
     const target = synaraHostTarget(contents);
     await target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
     expect(session.setProxy).toHaveBeenCalledWith({
+      mode: "fixed_servers",
       proxyRules: "socks5://127.0.0.1:9",
       proxyBypassRules: "<-loopback>",
     });
     expect(session.closeAllConnections).toHaveBeenCalledOnce();
+  });
+
+  it("rotates the proxy only after the old transport and session drain", async () => {
+    const first = fakeConnection({});
+    const gate = deferred<void>();
+    first.recordedClose.mockReturnValueOnce(gate.promise);
+    mocks.openConnection.mockResolvedValueOnce(first).mockResolvedValueOnce(fakeConnection({}));
+    const target = synaraHostTarget(contents);
+    await target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const rotating = target.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    await vi.waitFor(() => expect(first.recordedClose).toHaveBeenCalledWith(false));
+    expect(mocks.openConnection).toHaveBeenCalledTimes(1);
+    expect(contents.session.setProxy).toHaveBeenCalledTimes(1);
+    gate.resolve();
+    await rotating;
+    expect(contents.session.setProxy).toHaveBeenNthCalledWith(2, { mode: "system" });
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({
+      mode: "fixed_servers",
+      proxyRules: "socks5://127.0.0.1:10",
+      proxyBypassRules: "<-loopback>",
+    });
+    expect(contents.session.closeAllConnections).toHaveBeenCalledTimes(3);
+    await target.revokeAll();
+  });
+
+  it("serializes concurrent connects without losing the session lease", async () => {
+    mocks.openConnection.mockImplementation(async () => fakeConnection({}));
+    const target = synaraHostTarget(contents);
+    await Promise.all([
+      target.connect({ proxyUrl: "socks5://127.0.0.1:9" }),
+      target.connect({ proxyUrl: "socks5://127.0.0.1:10" }),
+    ]);
+    await target.revokeAll();
+    const next = synaraHostTarget(contents);
+    await next.connect({ proxyUrl: "socks5://127.0.0.1:11" });
+    await next.revokeAll();
+  });
+
+  it("revokes during proxy setup before opening a transport", async () => {
+    const gate = deferred<void>();
+    vi.mocked(contents.session.setProxy).mockReturnValueOnce(gate.promise);
+    const target = synaraHostTarget(contents);
+    const connecting = target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const interrupted = expect(connecting).rejects.toThrow("interrupted");
+    await vi.waitFor(() => expect(contents.session.setProxy).toHaveBeenCalledOnce());
+    const revoked = target.revokeAll();
+    gate.resolve();
+    await interrupted;
+    await revoked;
+    expect(mocks.openConnection).not.toHaveBeenCalled();
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({ mode: "system" });
+    await expect(target.connect({ proxyUrl: "socks5://127.0.0.1:10" })).rejects.toThrow(
+      "interrupted",
+    );
+  });
+
+  it("does not wait for a stalled open during revocation or vend its late result", async () => {
+    const gate = deferred<ReturnType<typeof fakeConnection>>();
+    mocks.openConnection.mockReturnValueOnce(gate.promise);
+    const target = synaraHostTarget(contents);
+    const connecting = target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const interrupted = expect(connecting).rejects.toThrow("interrupted");
+    await vi.waitFor(() => expect(mocks.openConnection).toHaveBeenCalledOnce());
+    await target.revokeAll();
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({ mode: "system" });
+    const connection = fakeConnection({});
+    gate.resolve(connection);
+    await interrupted;
+    expect(connection.recordedClose).toHaveBeenCalledWith(true);
+  });
+
+  it("releases the proxy when opening the transport fails", async () => {
+    mocks.openConnection.mockRejectedValueOnce(new Error("open failed"));
+    const target = synaraHostTarget(contents);
+    await expect(target.connect({ proxyUrl: "socks5://127.0.0.1:9" })).rejects.toThrow(
+      "open failed",
+    );
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({ mode: "system" });
+    mocks.openConnection.mockResolvedValueOnce(fakeConnection({}));
+    const next = synaraHostTarget(contents);
+    await next.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    await next.revokeAll();
+  });
+
+  it("does not reuse a stale lease after another target recovers failed cleanup", async () => {
+    mocks.openConnection.mockRejectedValueOnce(new Error("open failed"));
+    vi.mocked(contents.session.closeAllConnections)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("restore failed"));
+    const original = synaraHostTarget(contents);
+    await expect(original.connect({ proxyUrl: "socks5://127.0.0.1:9" })).rejects.toThrow(
+      "restore failed",
+    );
+    mocks.openConnection.mockImplementation(async () => fakeConnection({}));
+    const next = synaraHostTarget(contents);
+    await next.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    await expect(original.connect({ proxyUrl: "socks5://127.0.0.1:9" })).rejects.toThrow(
+      "already leased",
+    );
+    expect(mocks.openConnection).toHaveBeenCalledTimes(2);
+    await next.revokeAll();
+    await original.revokeAll();
+  });
+
+  it("checks aborts again after asynchronous setup and restores the proxy", async () => {
+    const controller = new AbortController();
+    const gate = deferred<void>();
+    vi.mocked(contents.session.setProxy).mockReturnValueOnce(gate.promise);
+    const target = synaraHostTarget(contents, { signal: controller.signal });
+    const connecting = target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const interrupted = expect(connecting).rejects.toThrow("interrupted");
+    await vi.waitFor(() => expect(contents.session.setProxy).toHaveBeenCalledOnce());
+    controller.abort();
+    gate.resolve();
+    await interrupted;
+    expect(mocks.openConnection).not.toHaveBeenCalled();
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({ mode: "system" });
   });
 
   it("refuses to vend a transport for a destroyed tab", async () => {

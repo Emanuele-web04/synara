@@ -28,12 +28,6 @@ export interface CaptureContextShim {
 }
 
 type CaptureInstallationContext = Parameters<typeof installVaultCapture>[0];
-type CaptureInstallationMethods = Pick<
-  CaptureInstallationContext,
-  "pages" | "on" | "off" | "newCDPSession"
->;
-type CaptureShimMethods = Pick<CaptureContextShim, keyof CaptureInstallationMethods>;
-type CaptureShimContract = CaptureShimMethods;
 
 class NativeCapturePage extends EventEmitter implements CapturePageShim {
   readonly id = randomUUID();
@@ -98,7 +92,10 @@ export class BrowserVaultCapture {
           this.capture = undefined;
           return;
         }
-        const context: CaptureShimContract = this.context();
+        // The public API requires a full Playwright context. Our narrower
+        // Electron adapter is exercised against the actual upstream sensor in
+        // browserVaultCapture.runtime.test.ts and the Electron smoke test.
+        const context = this.context();
         this.capture = installVaultCapture(context as unknown as CaptureInstallationContext, {
           sessionForPage: (page) => page as unknown as NativeCapturePage,
           vaultCallAtOrigin: async (session, origin, action, payload) => {

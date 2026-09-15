@@ -76,8 +76,11 @@ export class BrowserCookieImport {
       let close: Promise<void> | undefined;
       const stop = (cancel = false) => {
         interrupt.abort();
-        close ??= Promise.all([hostTarget.revokeAll(cancel), browser?.close()]).then(
-          () => undefined,
+        close ??= Promise.allSettled([hostTarget.revokeAll(cancel), browser?.close()]).then(
+          (results) => {
+            const failure = results.find((result) => result.status === "rejected");
+            if (failure?.status === "rejected") throw failure.reason;
+          },
         );
         void close.catch(() => {});
       };
@@ -95,6 +98,7 @@ export class BrowserCookieImport {
       const timeout = setTimeout(() => stop(true), 60_000);
       try {
         await assertTarget();
+        interrupt.signal.throwIfAborted();
         browser = new BetterWright({
           home: this.home,
           hostTarget,
@@ -112,6 +116,7 @@ export class BrowserCookieImport {
           windowsAppBound: "disabled",
           timeoutMs: 30_000,
         });
+        interrupt.signal.throwIfAborted();
         if (!result.ok) {
           const stages = [
             "acquisition",

@@ -13,7 +13,8 @@
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "smoke-test": "node scripts/smoke-test.mjs"
+    "smoke-test": "node scripts/smoke-test.mjs",
+    "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs"
   },
   "dependencies": {
     "betterwright": "2.7.3",

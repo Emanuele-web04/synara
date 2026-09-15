@@ -32,54 +32,102 @@ export function synaraHostTarget(
   const connections = new Set<OpenedConnection>();
   const pending = new Set<Promise<OpenedConnection>>();
   const networkGuard = getBetterwrightNetworkGuard(contents.session);
-  let networkGuardLease: Awaited<ReturnType<typeof networkGuard.attach>> | undefined;
-  // Bumped synchronously by every revokeAll: lets a connect() that resolves
-  // after a revoke refuse to vend its lease deterministically.
-  let generation = 0;
+  let networkGuardLease:
+    | { proxyUrl: string; lease: Awaited<ReturnType<typeof networkGuard.attach>> }
+    | undefined;
+  let revoked = false;
+  let connecting = Promise.resolve();
+  let changingProxy = Promise.resolve();
+
+  const assertAvailable = () => {
+    if (revoked || options.signal?.aborted) throw new Error("Browser control was interrupted.");
+    if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
+  };
+  const changeProxy = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = changingProxy.then(operation);
+    changingProxy = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+  const releaseProxy = async () => {
+    await networkGuardLease?.lease.release();
+    networkGuardLease = undefined;
+  };
+  const closeConnection = async (connection: OpenedConnection, cancel: boolean) => {
+    await connection.close(cancel);
+    connections.delete(connection);
+  };
+  const drainConnections = async (cancel: boolean) => {
+    const results = await Promise.allSettled(
+      [...connections].map((connection) => closeConnection(connection, cancel)),
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  };
+
   return {
-    async connect({ proxyUrl }) {
-      if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
-      if (options.signal?.aborted) throw new Error("Browser control was interrupted.");
-      if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
-      const seen = generation;
-      networkGuardLease ??= await networkGuard.attach(proxyUrl);
-      if (seen !== generation) {
-        await networkGuardLease.release();
-        networkGuardLease = undefined;
-        throw new Error("Browser control was interrupted.");
-      }
-      const opening = openBetterwrightConnection(
-        contents,
-        undefined,
-        options.uploadFiles ?? [],
-        options.cookieImport ?? false,
-        options.expectAgentInput,
-      );
-      pending.add(opening);
-      try {
-        const connection = await opening;
-        // A revokeAll that raced this lease already cancelled the transport;
-        // never vend a dead lease — the client replaces closed workers.
-        if (connection.closed || seen !== generation) {
-          await connection.close(true).catch(() => {});
-          throw new Error("Browser control was interrupted.");
+    connect({ proxyUrl }) {
+      // Serializing connects prevents parallel opens from overwriting lease
+      // ownership. Revocation uses the separate proxy queue so a stalled CDP
+      // open cannot prevent teardown.
+      const result = connecting.then(async () => {
+        if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
+        assertAvailable();
+        await changeProxy(async () => {
+          assertAvailable();
+          if (
+            networkGuardLease &&
+            (networkGuardLease.lease.closed || networkGuardLease.proxyUrl !== proxyUrl)
+          ) {
+            await drainConnections(false);
+            await releaseProxy();
+          }
+          assertAvailable();
+          if (!networkGuardLease) {
+            networkGuardLease = { proxyUrl, lease: await networkGuard.attach(proxyUrl) };
+          }
+        });
+        let opening: Promise<OpenedConnection> | undefined;
+        try {
+          assertAvailable();
+          opening = openBetterwrightConnection(
+            contents,
+            undefined,
+            options.uploadFiles ?? [],
+            options.cookieImport ?? false,
+            options.expectAgentInput,
+          );
+          pending.add(opening);
+          const connection = await opening;
+          if (connection.closed || revoked || options.signal?.aborted || contents.isDestroyed()) {
+            await connection.close(true);
+            throw new Error("Browser control was interrupted.");
+          }
+          connections.add(connection);
+          return {
+            provider: connection.provider,
+            get closed() {
+              return connection.closed;
+            },
+            close: () => closeConnection(connection, false),
+          };
+        } catch (error) {
+          // An unsuccessful open must not strand the shared session's proxy.
+          await changeProxy(async () => {
+            if (connections.size === 0) await releaseProxy();
+          });
+          throw error;
+        } finally {
+          if (opening) pending.delete(opening);
         }
-        connections.add(connection);
-        return {
-          provider: connection.provider,
-          get closed() {
-            return connection.closed;
-          },
-          // Graceful drain: the worker behind a rotated lease may still be
-          // finishing a successful op. Abort paths cancel via revokeAll(true).
-          close: async () => {
-            connections.delete(connection);
-            await connection.close(false);
-          },
-        };
-      } finally {
-        pending.delete(opening);
-      }
+      });
+      connecting = result.then(
+        () => {},
+        () => {},
+      );
+      return result;
     },
     async run(operation) {
       if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
@@ -92,22 +140,22 @@ export function synaraHostTarget(
       }
     },
     revokeAll(cancel = true) {
-      generation += 1;
+      revoked = true;
       // Cancel in-flight leases without waiting for them: a never-settling
       // open must not stall teardown. connect() refuses to vend once its
-      // opening settles (see generation check above).
+      // opening settles. No later connect may revive this target.
       for (const opening of pending) {
         void opening.then(
           (connection) => connection.close(true).catch(() => {}),
           () => {},
         );
       }
-      return Promise.all([...connections].map((connection) => connection.close(cancel))).then(
-        async () => {
-          await networkGuardLease?.release();
-          networkGuardLease = undefined;
-        },
-      );
+      const draining = drainConnections(cancel);
+      void draining.catch(() => {});
+      return changeProxy(async () => {
+        await draining;
+        await releaseProxy();
+      });
     },
   };
 }

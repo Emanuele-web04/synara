@@ -1,54 +1,80 @@
-import type { ProxyConfig, Session } from "electron";
+import type { Session } from "electron";
 
 export interface BetterwrightNetworkGuardLease {
+  readonly closed: boolean;
   release(): Promise<void>;
 }
 
+interface ProxyOwnership {
+  failed: boolean;
+  restoring?: Promise<void> | undefined;
+}
+
 export class BetterwrightNetworkGuard {
-  private activeProxy: string | undefined;
-  private releasePromise: Promise<void> | undefined;
+  private owner: ProxyOwnership | undefined;
 
   constructor(private readonly browserSession: Session) {}
 
   async attach(proxyUrl: string): Promise<BetterwrightNetworkGuardLease> {
-    if (this.activeProxy !== undefined) {
+    if (this.owner?.failed && !this.owner.restoring) {
+      // A failed setup has no lease to release. Recover the session before
+      // admitting another run; failed recovery must keep ownership reserved.
+      await this.restore(this.owner);
+      return this.attach(proxyUrl);
+    }
+    if (this.owner !== undefined) {
       throw new Error("Browser session is already leased by another automation run.");
     }
-    this.activeProxy = proxyUrl;
+    const owner: ProxyOwnership = { failed: false };
+    this.owner = owner;
     try {
-      await this.setProxy({
+      await this.browserSession.setProxy({
+        mode: "fixed_servers",
         proxyRules: proxyUrl,
         proxyBypassRules: "<-loopback>",
       });
       await this.browserSession.closeAllConnections();
     } catch (error) {
-      this.activeProxy = undefined;
+      // Even a rejected setProxy may have partially changed Chromium state.
+      // Do not expose a free session until both rollback and draining succeed.
+      try {
+        await this.restore(owner);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Browser proxy setup and recovery failed.",
+        );
+      }
       throw error;
     }
-    let released = false;
+    const guard = this;
     return {
-      release: async () => {
-        if (released) return;
-        released = true;
-        this.releasePromise ??= this.releaseProxy(proxyUrl);
-        await this.releasePromise;
+      get closed() {
+        return guard.owner !== owner || owner.failed || owner.restoring !== undefined;
       },
+      release: () => this.restore(owner),
     };
   }
 
-  private async setProxy(config: ProxyConfig): Promise<void> {
-    await this.browserSession.setProxy(config);
-  }
-
-  private async releaseProxy(proxyUrl: string): Promise<void> {
-    if (this.activeProxy !== proxyUrl) return;
-    try {
-      await this.setProxy({ mode: "system" });
-      await this.browserSession.closeAllConnections();
-    } finally {
-      this.activeProxy = undefined;
-      this.releasePromise = undefined;
-    }
+  private restore(owner: ProxyOwnership): Promise<void> {
+    // Identity, rather than the URL, makes stale releases harmless even when
+    // a later worker reuses the same proxy port.
+    if (this.owner !== owner) return Promise.resolve();
+    owner.restoring ??= (async () => {
+      try {
+        // Synara's dedicated browser session otherwise uses the system proxy;
+        // all temporary proxy configuration is owned by this guard.
+        await this.browserSession.setProxy({ mode: "system" });
+        await this.browserSession.closeAllConnections();
+        this.owner = undefined;
+      } catch (error) {
+        owner.failed = true;
+        throw error;
+      } finally {
+        owner.restoring = undefined;
+      }
+    })();
+    return owner.restoring;
   }
 }
 

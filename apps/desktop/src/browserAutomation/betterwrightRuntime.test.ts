@@ -78,6 +78,29 @@ const run = () =>
   });
 
 describe("Betterwright runtime errors", () => {
+  it("waits for worker shutdown even when proxy restoration fails", async () => {
+    let finish!: () => void;
+    mocks.run.mockResolvedValue({ ok: true, result: null });
+    mocks.browserClose.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    vi.mocked(contents.session.setProxy)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("restore failed"));
+    let settled = false;
+    const running = run().finally(() => {
+      settled = true;
+    });
+    const failed = expect(running).rejects.toThrow("restore failed");
+    await vi.waitFor(() => expect(mocks.browserClose).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(contents.session.setProxy).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    finish();
+    await failed;
+  });
   it.each([true, false])(
     "restores the original throttling policy (%s) after the worker drains",
     async (throttled) => {

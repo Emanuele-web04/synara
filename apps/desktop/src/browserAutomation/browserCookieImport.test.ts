@@ -223,6 +223,18 @@ describe("human-only cookie import", () => {
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
   });
 
+  it("does not report a successful sync that raced same-origin navigation", async () => {
+    const { importer, contents } = fixture();
+    const result = { ok: true, synced: 1, cookieImportDomains: ["example.test"] };
+    mocks.sync.mockImplementation(async () => {
+      contents.emit("did-start-navigation", {}, "https://example.test/next", false, true);
+      return result;
+    });
+    await expect(importer.import(input)).rejects.toThrow();
+    expect(contents.session.cookies.flushStore).not.toHaveBeenCalled();
+    expect(mocks.closeConnection).toHaveBeenCalledWith(true);
+  });
+
   it("holds human control until agents drain and import cleanup finishes", async () => {
     const { importer, manager, waitForAgents, releaseHumanOperation } = fixture();
     let drain!: () => void;

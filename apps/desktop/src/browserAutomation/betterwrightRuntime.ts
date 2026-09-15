@@ -65,8 +65,11 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
   const stop = (cancel: boolean): Promise<void> => {
     // Revoke synchronously before requesting worker shutdown. Neither completion
     // nor cancellation releases the host's tab lock until both have drained.
-    stopping ??= Promise.all([hostTarget.revokeAll(cancel), browser?.close()]).then(
-      () => undefined,
+    stopping ??= Promise.allSettled([hostTarget.revokeAll(cancel), browser?.close()]).then(
+      (results) => {
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+      },
     );
     return stopping;
   };

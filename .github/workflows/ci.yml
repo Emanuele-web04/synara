@@ -235,6 +235,9 @@ jobs:
       - name: Build desktop pipeline
         run: bun run build:desktop
 
+      - name: Verify live Electron browser lifecycle
+        run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
+
       - name: Verify preload bundle output
         run: |
           test -f apps/desktop/dist-electron/preload.js
