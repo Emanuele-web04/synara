@@ -6,13 +6,18 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { ProjectId } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { EditorWorkspaceView } from "./EditorWorkspaceView";
 import { WorkspaceSearchSidebar } from "./chat/workspaceExplorer";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { SidebarProvider } from "./ui/sidebar";
+
+function renderToStaticMarkup(node: ReactNode) {
+  return renderMarkup(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
+}
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "dark" }),
