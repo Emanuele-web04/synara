@@ -1091,6 +1091,34 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("does not stamp a released turn onto a later turnId-less claim", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    await manager.getThreadState("thread-a");
+    await manager.getThreadState("thread-b");
+
+    await manager.withAgentActivity(
+      "thread-a",
+      () => manager.click("thread-a", { x: 10, y: 10 }),
+      undefined,
+      "turn-1",
+    );
+    await manager.releaseDesktopControl("thread-a", "turn-1");
+
+    // The turn ended and released; a turnId-less caller claims anonymously —
+    // inheriting turn-1's stamp would refuse the real turn's own release.
+    await manager.withAgentActivity("thread-a", () => manager.click("thread-a", { x: 11, y: 11 }));
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: true,
+    });
+    await manager.releaseDesktopControl("thread-a", "turn-2");
+    await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
+      controlledByOtherThread: false,
+    });
+
+    await manager.dispose();
+  });
+
   it("reacquires the lease for a new turn after the previous operation drains", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });

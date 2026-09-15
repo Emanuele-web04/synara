@@ -1,5 +1,6 @@
 import { ComputerControlState } from "./ComputerControlState.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
+import { currentComputerTask } from "./computerTaskContext.ts";
 import { CursorActivity } from "./cursorActivity.ts";
 import { waitForWindow } from "./waitForWindow.ts";
 import {
@@ -2263,9 +2264,16 @@ export class ComputerManager {
       await this.backend.clearFocusWindow?.();
       assertDesktopOperationActive();
     }
+    // Stamp the claiming caller's own turn when it carries one; the map only
+    // fills the gap for turnId-less callers sharing the owning turn's window.
+    const claimingTask = currentComputerTask();
+    const stampedTurnId =
+      (claimingTask && agentThreadId(claimingTask.threadId) === owner
+        ? claimingTask.turnId
+        : undefined) ?? this.authorityTurns.get(owner);
     this.lease = {
       threadId: owner,
-      ...(this.authorityTurns.has(owner) ? { turnId: this.authorityTurns.get(owner)! } : {}),
+      ...(stampedTurnId ? { turnId: stampedTurnId } : {}),
       lastActivityMs: now,
       ...(!changed && held?.releaseRequested
         ? {
@@ -2355,6 +2363,10 @@ export class ComputerManager {
         if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
         await this.backend.clearFocusWindow?.();
         this.lease = null;
+        // The released turn is no longer this thread's authority: a later
+        // turnId-less caller must claim anonymously, not inherit a stale
+        // stamp a duplicate release could still match.
+        this.authorityTurns.delete(owner);
         const runtime = this.threads.get(owner);
         if (runtime) runtime.paneSurfaced = false;
         await this.announceDrivingAgent(null);
