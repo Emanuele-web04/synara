@@ -235,6 +235,15 @@ describe("human-only cookie import", () => {
     expect(mocks.closeConnection).toHaveBeenCalledWith(true);
   });
 
+  it("does not report success when navigation interrupts durable cookie persistence", async () => {
+    const { importer, contents } = fixture();
+    contents.session.cookies.flushStore.mockImplementation(async () => {
+      contents.emit("did-start-navigation", {}, "https://example.test/next", false, true);
+    });
+    await expect(importer.import(input)).rejects.toThrow();
+    expect(mocks.closeConnection).toHaveBeenCalledWith(true);
+  });
+
   it("holds human control until agents drain and import cleanup finishes", async () => {
     const { importer, manager, waitForAgents, releaseHumanOperation } = fixture();
     let drain!: () => void;

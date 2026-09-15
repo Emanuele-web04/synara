@@ -153,6 +153,7 @@ export class BrowserCookieImport {
           };
         }
         await assertTarget();
+        interrupt.signal.throwIfAborted();
         await runtime.webContents.session.cookies.flushStore();
         try {
           if (!Array.isArray(result.cookieImportDomains))
@@ -170,6 +171,7 @@ export class BrowserCookieImport {
                   : "linux",
           };
         }
+        interrupt.signal.throwIfAborted();
         return {
           ok: true,
           imported: result.synced,
