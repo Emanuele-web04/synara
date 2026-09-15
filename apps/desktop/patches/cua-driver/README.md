@@ -58,6 +58,12 @@ past host death; the daemon now also polls `CUA_DRIVER_EMBEDDED_HOST_PID`
 with `kill(pid, 0)` and shuts down when the host is gone, so an orphaned
 serve process cannot outlive its host under the AppKit run loop.
 
+Revision 9 guarantees the serve thread's exit(0) actually runs: a panic
+unwinding the cua-serve thread previously left the main thread parked in
+the AppKit run loop forever — an immortal orphan with a dead serve loop,
+a live socket, and a ghost overlay. `catch_unwind` around `run_serve_cmd`
+keeps the panic text on stderr while exit(0) still terminates the process.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event

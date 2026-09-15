@@ -148,6 +148,25 @@ index 2625ee2..5c51fc3 100644
      #[test]
      fn history_reads_are_distinct_explicit_history_capabilities() {
          for (tool, capability) in [
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+index 7ce3e7c..14fe7b3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+@@ -652,7 +652,13 @@ fn main() {
+             let serve_handle = std::thread::Builder::new()
+                 .name("cua-serve".into())
+                 .spawn(move || {
+-                    serve::run_serve_cmd(driver, &sp, Some(&pid_path));
++                    // A panic unwinding this thread leaves the main thread
++                    // parked in the AppKit run loop forever — an immortal
++                    // orphan with a dead serve loop. Catch it so exit(0)
++                    // always runs; the panic text still reaches stderr.
++                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                        serve::run_serve_cmd(driver, &sp, Some(&pid_path));
++                    }));
+                     std::process::exit(0);
+                 })
+                 .expect("spawn serve thread");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 index 99dea98..85a4fec 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
