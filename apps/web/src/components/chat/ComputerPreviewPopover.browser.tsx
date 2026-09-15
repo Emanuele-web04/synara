@@ -94,13 +94,14 @@ it("routes expand to the dock pane path and keeps the session live", async () =>
   await screen.unmount();
 });
 
-it("wires Stop to the desktop control interrupt", async () => {
+it("leaves stopping to the composer: no stop control on the card", async () => {
   fixture.agentActive = true;
   useComputerPreviewStore.getState().requestPreviewSurface(threadId);
   const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={vi.fn()} />);
   await expect.poll(() => session()?.phase).toBe("live");
 
-  await screen.getByRole("button", { name: "Stop the agent controlling", exact: false }).click();
-  expect(fixture.stop).toHaveBeenCalledTimes(1);
+  await expect
+    .element(screen.getByRole("button", { name: "Stop the agent controlling", exact: false }))
+    .not.toBeInTheDocument();
   await screen.unmount();
 });
