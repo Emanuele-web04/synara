@@ -59,6 +59,10 @@ export function createDesktopPackageFilePatterns(
     patterns.push(
       // Only JavaScript/TypeScript/CSS source maps, not arbitrary .map data.
       "!**/node_modules/**/*.{js,mjs,cjs,ts,mts,cts,css}.map",
+      // electron-builder already omits .d.ts; include the ESM/CJS declaration
+      // variants and incremental compiler caches, none of which execute.
+      "!**/node_modules/**/*.d.{mts,cts}",
+      "!**/node_modules/**/*.tsbuildinfo",
       ...COMPILED_SOURCE_PACKAGES.map((name) => `!**/node_modules/${name}/src/**`),
       "!**/node_modules/node-pty/src/**",
       "!**/node_modules/node-pty/lib/*.test.js",

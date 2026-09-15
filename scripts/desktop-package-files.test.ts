@@ -27,6 +27,9 @@ describe("desktop package file policy", () => {
       "node_modules/@pierre/diffs/dist/index.js.map",
       "node_modules/effect/dist/index.d.ts.map",
       "node_modules/node-pty/lib/unixTerminal.test.js",
+      "node_modules/openai/index.d.mts",
+      "node_modules/zod/index.d.cts",
+      "node_modules/gaxios/build/tsconfig.tsbuildinfo",
     ])
       assert.equal(ships(path), false, path);
 
@@ -37,6 +40,8 @@ describe("desktop package file policy", () => {
       "node_modules/zod/index.cjs",
       "node_modules/betterwright/dist/src/index.js",
       "node_modules/some-extension/src/index.ts",
+      "node_modules/some-extension/src/index.mts",
+      "node_modules/some-extension/src/index.cts",
       "node_modules/some-package/data/characters.map",
       "node_modules/@earendil-works/pi-coding-agent/docs/extensions.md",
       "node_modules/@shikijs/langs/dist/italian.mjs",
@@ -60,6 +65,8 @@ describe("desktop package file policy", () => {
           ships("node_modules/effect/dist/Effect.js.map", "win", { [key]: value }),
           true,
         );
+        assert.equal(ships("node_modules/openai/index.d.mts", "mac", { [key]: value }), true);
+        assert.equal(ships("node_modules/zod/index.d.cts", "mac", { [key]: value }), true);
       }
       assert.equal(ships("node_modules/effect/src/Effect.ts", "linux", { [key]: "false" }), false);
     }
