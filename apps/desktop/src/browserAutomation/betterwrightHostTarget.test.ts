@@ -13,6 +13,12 @@ const contents = {
   getBackgroundThrottling: vi.fn(),
   setBackgroundThrottling: vi.fn(),
   isDestroyed: vi.fn(),
+  id: 42,
+  session: {
+    webRequest: {
+      onBeforeRequest: vi.fn(),
+    },
+  },
 } as unknown as WebContents;
 
 const fakeConnection = (provider: object) => {

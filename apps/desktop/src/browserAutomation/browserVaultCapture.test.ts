@@ -52,6 +52,7 @@ describe("native credential capture lifecycle", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
     await vi.waitFor(() => expect(mocks.install).toHaveBeenCalledTimes(1));
+    expect(mocks.install.mock.calls[0]![1]).toMatchObject({ promptTtlMs: 120_000 });
     f.update({ protection: { configured: true, locked: true, osProtected: false } });
     await vi.waitFor(() => expect(mocks.dispose).toHaveBeenCalledTimes(1));
     await f.capture.dispose();

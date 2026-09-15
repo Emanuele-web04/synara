@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
-import type { BetterWrightOptions } from "betterwright";
+import { NetworkPolicy, type BetterWrightOptions } from "betterwright";
 import { openBetterwrightConnection } from "./betterwrightConnection";
+import { getBetterwrightNetworkGuard } from "./betterwrightNetworkGuard";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 
 type HostTarget = NonNullable<BetterWrightOptions["hostTarget"]>;
@@ -14,15 +15,10 @@ export interface SynaraHostTarget extends HostTarget {
 }
 
 /**
- * Synara's HostTarget adapter. Browser tabs share BROWSER_SESSION_PARTITION, so
- * upstream's createElectronHostTarget cannot lease them (it requires a dedicated
- * session for its guard proxy). Each connect() vends a fresh capability
- * transport, matching the per-worker lifecycle the client drives.
- *
- * Security note: the client's `proxyUrl` SOCKS guard is accepted for API
- * compatibility but has no effect here — tab traffic stays on the shared
- * session and bypasses the worker proxy. Only the loopback capability
- * transport itself is access-controlled (single-use bearer per lease).
+ * Synara's HostTarget adapter. Browser tabs share a persistent Electron
+ * session, so the upstream dedicated-session proxy adapter cannot be used.
+ * Leased tabs instead receive an equivalent request-level policy guard for
+ * navigations, subresources, WebSockets, and DNS-resolved addresses.
  */
 export function synaraHostTarget(
   contents: WebContents,
@@ -31,15 +27,22 @@ export function synaraHostTarget(
     cookieImport?: boolean | undefined;
     expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"] | undefined;
     signal?: AbortSignal | undefined;
+    networkPolicy?: NetworkPolicy | undefined;
   } = {},
 ): SynaraHostTarget {
   const connections = new Set<OpenedConnection>();
   const pending = new Set<Promise<OpenedConnection>>();
+  const networkGuard = getBetterwrightNetworkGuard(contents.session);
+  const networkGuardLease = networkGuard.attach(
+    contents,
+    options.networkPolicy ?? new NetworkPolicy({ allowLoopback: true }),
+  );
   // Bumped synchronously by every revokeAll: lets a connect() that resolves
   // after a revoke refuse to vend its lease deterministically.
   let generation = 0;
   return {
-    async connect() {
+    async connect({ proxyUrl }) {
+      if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
       if (options.signal?.aborted) throw new Error("Browser control was interrupted.");
       if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
       const seen = generation;
@@ -98,7 +101,9 @@ export function synaraHostTarget(
         );
       }
       return Promise.all([...connections].map((connection) => connection.close(cancel))).then(
-        () => undefined,
+        () => {
+          networkGuardLease.release();
+        },
       );
     },
   };

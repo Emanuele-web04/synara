@@ -74,9 +74,9 @@ export class BrowserCookieImport {
       });
       let browser: BetterWright | undefined;
       let close: Promise<void> | undefined;
-      const stop = () => {
+      const stop = (cancel = false) => {
         interrupt.abort();
-        close ??= Promise.all([hostTarget.revokeAll(false), browser?.close()]).then(
+        close ??= Promise.all([hostTarget.revokeAll(cancel), browser?.close()]).then(
           () => undefined,
         );
         void close.catch(() => {});
@@ -87,11 +87,12 @@ export class BrowserCookieImport {
         _inPlace: boolean,
         isMainFrame: boolean,
       ) => {
-        if (isMainFrame) stop();
+        if (isMainFrame) stop(true);
       };
       runtime.webContents.on("did-start-navigation", navigation);
-      runtime.webContents.once("destroyed", stop);
-      const timeout = setTimeout(stop, 60_000);
+      const destroyed = () => stop(true);
+      runtime.webContents.once("destroyed", destroyed);
+      const timeout = setTimeout(() => stop(true), 60_000);
       try {
         await assertTarget();
         browser = new BetterWright({
@@ -173,7 +174,7 @@ export class BrowserCookieImport {
       } finally {
         clearTimeout(timeout);
         runtime.webContents.removeListener("did-start-navigation", navigation);
-        runtime.webContents.removeListener("destroyed", stop);
+        runtime.webContents.removeListener("destroyed", destroyed);
         stop();
         await close;
         await browser?.close();

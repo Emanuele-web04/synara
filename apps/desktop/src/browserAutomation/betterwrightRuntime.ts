@@ -54,6 +54,7 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
     uploadFiles: options.uploadFiles,
     expectAgentInput: options.expectAgentInput,
     signal: options.signal,
+    networkPolicy: new NetworkPolicy({ allowLoopback: true }),
   });
   let onAbortRace: (() => void) | undefined;
   const aborting = new Promise<never>((_, reject) => {

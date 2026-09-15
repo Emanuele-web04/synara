@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { installVaultCapture } from "betterwright/capture";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
-import { BrowserVault } from "./browserVault";
+import { BROWSER_VAULT_PROMPT_TTL_MS, BrowserVault } from "./browserVault";
 
 /**
  * Structural stand-ins for the Playwright surface the capture sensor calls:
@@ -26,6 +26,14 @@ export interface CaptureContextShim {
     detach(): Promise<void>;
   }>;
 }
+
+type CaptureInstallationContext = Parameters<typeof installVaultCapture>[0];
+type CaptureInstallationMethods = Pick<
+  CaptureInstallationContext,
+  "pages" | "on" | "off" | "newCDPSession"
+>;
+type CaptureShimMethods = Pick<CaptureContextShim, keyof CaptureInstallationMethods>;
+type CaptureShimContract = CaptureShimMethods;
 
 class NativeCapturePage extends EventEmitter implements CapturePageShim {
   readonly id = randomUUID();
@@ -90,43 +98,42 @@ export class BrowserVaultCapture {
           this.capture = undefined;
           return;
         }
-        this.capture = installVaultCapture(
-          this.context() as unknown as Parameters<typeof installVaultCapture>[0],
-          {
-            sessionForPage: (page) => page as unknown as NativeCapturePage,
-            vaultCallAtOrigin: async (session, origin, action, payload) => {
-              if (!(session instanceof NativeCapturePage) || session.isClosed())
-                throw new Error("Browser page is unavailable.");
-              if (action === "list") {
-                const snapshot = await this.vault.snapshot();
-                return { credentials: snapshot.logins.filter((login) => login.origin === origin) };
-              }
-              if (action !== "save") throw new Error("Unsupported capture operation.");
-              const { username, password, label } = payload;
-              if (
-                typeof username !== "string" ||
-                typeof password !== "string" ||
-                typeof label !== "string"
-              )
-                throw new Error("Invalid captured login.");
-              await this.vault.saveCaptured(
-                origin,
-                { username, password, label, deferToPending: true },
-                Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user",
-              );
-              return {};
-            },
-            trackSecret: (secret) => this.vault.trackSecret(secret),
-            isHeaded: () => true,
-            lastModelActivity: () => Number.NaN,
-            shouldCapture: (input) => this.vault.shouldOfferSave(input),
-            requestSave: ({ origin, username, mode }) =>
-              this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
-            matchMode: "exact-origin",
-            onError: () => this.vault.reportCaptureFailure(),
-            onReady: () => this.vault.reportCaptureReady(),
+        const context: CaptureShimContract = this.context();
+        this.capture = installVaultCapture(context as unknown as CaptureInstallationContext, {
+          sessionForPage: (page) => page as unknown as NativeCapturePage,
+          vaultCallAtOrigin: async (session, origin, action, payload) => {
+            if (!(session instanceof NativeCapturePage) || session.isClosed())
+              throw new Error("Browser page is unavailable.");
+            if (action === "list") {
+              const snapshot = await this.vault.snapshot();
+              return { credentials: snapshot.logins.filter((login) => login.origin === origin) };
+            }
+            if (action !== "save") throw new Error("Unsupported capture operation.");
+            const { username, password, label } = payload;
+            if (
+              typeof username !== "string" ||
+              typeof password !== "string" ||
+              typeof label !== "string"
+            )
+              throw new Error("Invalid captured login.");
+            await this.vault.saveCaptured(
+              origin,
+              { username, password, label, deferToPending: true },
+              Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user",
+            );
+            return {};
           },
-        );
+          trackSecret: (secret) => this.vault.trackSecret(secret),
+          isHeaded: () => true,
+          lastModelActivity: () => Number.NaN,
+          promptTtlMs: BROWSER_VAULT_PROMPT_TTL_MS,
+          shouldCapture: (input) => this.vault.shouldOfferSave(input),
+          requestSave: ({ origin, username, mode }) =>
+            this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
+          matchMode: "exact-origin",
+          onError: () => this.vault.reportCaptureFailure(),
+          onReady: () => this.vault.reportCaptureReady(),
+        });
       })
       .catch(() => this.vault.reportCaptureFailure());
   }

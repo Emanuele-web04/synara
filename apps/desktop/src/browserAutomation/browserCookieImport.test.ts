@@ -85,7 +85,10 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
   const contents = Object.assign(new EventEmitter(), {
     getURL: (): string => input.origin,
     isDestroyed: (): boolean => false,
-    session: { cookies: { flushStore: vi.fn(async () => {}) } },
+    session: {
+      cookies: { flushStore: vi.fn(async () => {}) },
+      webRequest: { onBeforeRequest: vi.fn() },
+    },
   });
   const releaseHumanOperation = vi.fn();
   const waitForAgents = vi.fn(async () => {});
@@ -213,6 +216,7 @@ describe("human-only cookie import", () => {
     });
     await expect(importer.import(input)).rejects.toThrow();
     expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
+    expect(mocks.closeConnection).toHaveBeenCalledWith(true);
     expect(mocks.closeBrowser).toHaveBeenCalledTimes(1);
     expect(contents.listenerCount("destroyed")).toBe(0);
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
