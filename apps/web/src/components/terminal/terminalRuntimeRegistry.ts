@@ -5,6 +5,7 @@
 
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
+import { registerTerminalRuntimeCleanup } from "../../lib/terminalStateCleanup";
 
 import {
   attachRuntimeToContainer,
@@ -80,8 +81,16 @@ class TerminalRuntimeRegistry {
   }
 
   disposeThread(threadId: string): void {
-    for (const runtimeKey of [...this.entries.keys()]) {
-      if (runtimeKey.startsWith(`${threadId}::`)) {
+    for (const [runtimeKey, entry] of this.entries) {
+      if (entry.threadId === threadId) {
+        this.dispose(runtimeKey);
+      }
+    }
+  }
+
+  disposeOrphanedThreads(activeThreadIds: ReadonlySet<string>): void {
+    for (const [runtimeKey, entry] of this.entries) {
+      if (!activeThreadIds.has(entry.threadId)) {
         this.dispose(runtimeKey);
       }
     }
@@ -93,3 +102,6 @@ class TerminalRuntimeRegistry {
 }
 
 export const terminalRuntimeRegistry = new TerminalRuntimeRegistry();
+registerTerminalRuntimeCleanup((activeThreadIds) =>
+  terminalRuntimeRegistry.disposeOrphanedThreads(activeThreadIds),
+);

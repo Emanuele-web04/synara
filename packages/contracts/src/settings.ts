@@ -1,7 +1,12 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, ThreadEnvironmentMode, ThreadTitleRefreshMode } from "./orchestration";
+import {
+  ModelSelection,
+  ProviderKind,
+  ThreadEnvironmentMode,
+  ThreadTitleRefreshMode,
+} from "./orchestration";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -85,9 +90,7 @@ const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(2
 export const ThreadTitleRefreshSettings = Schema.Struct({
   mode: ThreadTitleRefreshMode.pipe(Schema.withDecodingDefault(() => "off" as const)),
   minNewUserTurns: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 5)),
-  minElapsedMillis: NonNegativeInt.pipe(
-    Schema.withDecodingDefault(() => 10 * 60 * 1_000),
-  ),
+  minElapsedMillis: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 10 * 60 * 1_000)),
   maxAttemptsPerWindow: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 3)),
 });
 export type ThreadTitleRefreshSettings = typeof ThreadTitleRefreshSettings.Type;

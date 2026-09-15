@@ -13,6 +13,7 @@ import { isSupportedLocalPreviewFilePath } from "@synara/shared/localPreviewFile
 import {
   isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,
+  localPathsEqual,
   workspaceRelativePathOf,
 } from "@synara/shared/path";
 import { isScratchWorkspacePath } from "@synara/shared/threadWorkspace";
@@ -43,6 +44,7 @@ export function useWorkspaceFileOpener(): WorkspaceFileOpener | null {
 // Trailing `:line` / `:line:col` suffix carried by resolved markdown file links.
 // The in-app viewer previews whole files, so the position is dropped.
 const FILE_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const TRAILING_PATH_SEPARATOR_PATTERN = /[\\/]+$/;
 const SYNARA_PUBLIC_ASSET_PATH_PREFIXES = [
   "/central-icons-reversed/",
   "/central-icons-fill/",
@@ -59,6 +61,46 @@ function resolveSynaraPublicAssetOpenTarget(path: string, workspaceRoot: string 
   }
   const relativePath = `${SYNARA_WEB_PUBLIC_WORKSPACE_DIR}${normalizedPath}`;
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
+}
+
+/**
+ * Maps directory references that can be identified without a filesystem probe
+ * to the workspace-relative path expected by the Explorer. The workspace root
+ * is always known to be a directory; descendants are treated as directories
+ * only when the reference keeps an explicit trailing separator.
+ *
+ * An empty string means the workspace root itself. Null means the reference is
+ * not a known in-workspace directory and should continue through file opening.
+ */
+export function resolveWorkspaceDirectoryOpenTarget(
+  rawPath: string,
+  workspaceRoot: string | null,
+): string | null {
+  if (!workspaceRoot) {
+    return null;
+  }
+  const withoutPosition = rawPath.trim().replace(FILE_POSITION_SUFFIX_PATTERN, "");
+  if (withoutPosition.length === 0) {
+    return null;
+  }
+  // Relative Markdown links can retain harmless "." segments after cwd is
+  // joined. Keep ".." intact so the containment checks still reject traversal.
+  const directoryPath = withoutPosition
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== ".")
+    .join("/");
+  if (localPathsEqual(directoryPath, workspaceRoot)) {
+    return "";
+  }
+  if (!TRAILING_PATH_SEPARATOR_PATTERN.test(withoutPosition)) {
+    return null;
+  }
+  const withoutTrailingSeparators = directoryPath.replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
+  if (isWorkspaceRelativePathSafe(withoutTrailingSeparators)) {
+    return withoutTrailingSeparators.replaceAll("\\", "/");
+  }
+  return workspaceRelativePathOf(withoutTrailingSeparators, workspaceRoot);
 }
 
 /**

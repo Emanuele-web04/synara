@@ -182,7 +182,6 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
-    deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
     (left.goal ?? "") === (right.goal ?? "") &&
     (left.goalStartedAt ?? null) === (right.goalStartedAt ?? null) &&
@@ -561,6 +560,7 @@ export function normalizeChatMessage(
     previous.text === incoming.text &&
     previous.dispatchMode === incoming.dispatchMode &&
     previous.dispatchOrigin === incoming.dispatchOrigin &&
+    previous.startsNewTurn === incoming.startsNewTurn &&
     previous.turnId === incoming.turnId &&
     previous.createdAt === incoming.createdAt &&
     previous.streaming === incoming.streaming &&
@@ -583,6 +583,7 @@ export function normalizeChatMessage(
       : {}),
     ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
     ...(incoming.dispatchOrigin ? { dispatchOrigin: incoming.dispatchOrigin } : {}),
+    ...(incoming.startsNewTurn !== undefined ? { startsNewTurn: incoming.startsNewTurn } : {}),
     turnId: incoming.turnId,
     createdAt: incoming.createdAt,
     streaming: incoming.streaming,
@@ -644,6 +645,7 @@ function readModelMessageFromChatMessage(
     text: message.text,
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
     ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
+    ...(message.startsNewTurn !== undefined ? { startsNewTurn: message.startsNewTurn } : {}),
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     source: message.source ?? "native",
@@ -782,6 +784,7 @@ function mergeReadModelMessagesWithLiveHotPath(
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
+      startsNewTurn: incomingMessage.startsNewTurn ?? previousMessage.startsNewTurn,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
@@ -1587,10 +1590,6 @@ export function normalizeThreadFromReadModel(
     deepEqualJson(previous.pinnedMessages, incoming.pinnedMessages ?? null)
       ? previous.pinnedMessages
       : (incoming.pinnedMessages as Thread["pinnedMessages"]);
-  const threadMarkers =
-    previous?.threadMarkers && deepEqualJson(previous.threadMarkers, incoming.threadMarkers ?? null)
-      ? previous.threadMarkers
-      : (incoming.threadMarkers as Thread["threadMarkers"]);
   const notes = incoming.notes;
   const goal = incoming.goal;
   const goalStartedAt = incoming.goalStartedAt;
@@ -1703,7 +1702,6 @@ export function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
     previous.pinnedMessages === pinnedMessages &&
-    previous.threadMarkers === threadMarkers &&
     previous.notes === notes &&
     previous.goal === goal &&
     (previous.goalStartedAt ?? null) === (goalStartedAt ?? null) &&
@@ -1760,7 +1758,6 @@ export function normalizeThreadFromReadModel(
     lastKnownPr,
     handoff,
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
-    ...(threadMarkers !== undefined ? { threadMarkers } : {}),
     ...(notes !== undefined ? { notes } : {}),
     ...(goal !== undefined ? { goal } : {}),
     ...(goalStartedAt !== undefined ? { goalStartedAt } : {}),
@@ -1875,7 +1872,6 @@ export function normalizeThreadShellSnapshot(
     // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those
     // values instead of clobbering them with `undefined`. Goals are shell state and update here.
     ...(previous?.pinnedMessages !== undefined ? { pinnedMessages: previous.pinnedMessages } : {}),
-    ...(previous?.threadMarkers !== undefined ? { threadMarkers: previous.threadMarkers } : {}),
     ...(previous?.notes !== undefined ? { notes: previous.notes } : {}),
     ...(previous?.goalAchievements !== undefined
       ? { goalAchievements: previous.goalAchievements }
