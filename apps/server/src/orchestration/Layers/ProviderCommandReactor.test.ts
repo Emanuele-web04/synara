@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  ClaudeCacheObservation,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -271,6 +272,9 @@ describe("ProviderCommandReactor", () => {
     readonly serverSettings?: DeepPartial<ServerSettings>;
     readonly confirmNativeResume?: (resumeCursor: unknown) => boolean;
     readonly generateThreadTitle?: TextGenerationShape["generateThreadTitle"];
+    readonly getClaudeCacheObservation?: NonNullable<
+      ProviderServiceShape["getClaudeCacheObservation"]
+    >;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -607,6 +611,9 @@ describe("ProviderCommandReactor", () => {
         }),
       rollbackConversation,
       compactThread: () => unsupported(),
+      ...(input?.getClaudeCacheObservation
+        ? { getClaudeCacheObservation: input.getClaudeCacheObservation }
+        : {}),
       closeRuntimeEvents: Effect.void,
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
@@ -1068,6 +1075,397 @@ describe("ProviderCommandReactor", () => {
           } as ProviderRuntimeEvent),
     );
   }
+
+  describe("Claude cache review", () => {
+    function expiredCacheObservation(): ClaudeCacheObservation {
+      return {
+        nativeSessionId: "native-claude-session-1",
+        lifecycleGeneration: "generation-1",
+        model: "claude-opus-4-6",
+        observedAt: new Date().toISOString(),
+        contextTokens: 120_000,
+        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
+        ttlSeconds: 3_600,
+        state: "likely-expired",
+        source: "request-usage",
+      };
+    }
+
+    async function createCacheHarness(
+      observation: () => ClaudeCacheObservation | undefined = expiredCacheObservation,
+      startReactor = true,
+    ) {
+      return createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        getClaudeCacheObservation: () => Effect.sync(observation),
+        startReactor,
+      });
+    }
+
+    async function sendHeldMessage(harness: Awaited<ReturnType<typeof createHarness>>) {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "cache-held-message",
+        text: "Continue with this exact message",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "pending",
+      );
+      await harness.drain();
+      const review = (await readHarnessThread(harness))?.claudeCacheReview;
+      expect(review).toBeTruthy();
+      return review!;
+    }
+
+    async function respondToReview(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      review: NonNullable<Awaited<ReturnType<typeof readHarnessThread>>>["claudeCacheReview"],
+      decision: "continue" | "cancel",
+      suffix: string = decision,
+    ) {
+      const command: OrchestrationCommand = {
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe(`cmd-cache-${suffix}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        reviewId: review!.reviewId,
+        messageId: review!.messageId,
+        decision,
+        createdAt: new Date().toISOString(),
+      };
+      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.drain();
+      return command;
+    }
+
+    it("holds the first large expired-cache send and later queued messages", async () => {
+      const harness = await createCacheHarness();
+      const review = await sendHeldMessage(harness);
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(review).toMatchObject({
+        messageId: "cache-held-message",
+        assessment: { state: "likely-expired", contextTokens: 120_000 },
+      });
+      expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "cache-later-message",
+        text: "This message must remain queued",
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+
+      const thread = await readHarnessThread(harness);
+      expect(thread?.claudeCacheReview?.reviewId).toBe(review.reviewId);
+      expect(thread?.messages.map((message) => message.id)).toEqual([
+        "cache-held-message",
+        "cache-later-message",
+      ]);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["none", "archive", "stop", "delete"] as const)(
+      "recovers a pending review without replaying its original provider send (intervening action: %s)",
+      async (interveningAction) => {
+        const observation = expiredCacheObservation();
+        const harness = await createCacheHarness(() => observation, false);
+        const now = new Date().toISOString();
+        const receipt = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("cmd-cache-before-recovery"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            message: {
+              messageId: asMessageId("cache-recovery-message"),
+              role: "user",
+              text: "Hold this message across recovery",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: now,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.claude-cache.set",
+            commandId: CommandId.makeUnsafe("cmd-cache-review-before-recovery"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            review: {
+              reviewId: "durable-review-before-recovery",
+              messageId: asMessageId("cache-recovery-message"),
+              sourceEventSequence: receipt.sequence,
+              assessment: observation,
+              status: "pending",
+              createdAt: now,
+            },
+            expectedReviewId: null,
+            createdAt: now,
+          }),
+        );
+
+        if (interveningAction !== "none") {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-cache-continue-before-archive"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: "durable-review-before-recovery",
+              messageId: asMessageId("cache-recovery-message"),
+              decision: "continue",
+              createdAt: now,
+            }),
+          );
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("responding");
+          const commandId = CommandId.makeUnsafe(`cmd-cache-${interveningAction}-before-dispatch`);
+          const threadId = ThreadId.makeUnsafe("thread-1");
+          await Effect.runPromise(
+            harness.engine.dispatch(
+              interveningAction === "stop"
+                ? { type: "thread.session.stop", commandId, threadId, createdAt: now }
+                : {
+                    type: interveningAction === "archive" ? "thread.archive" : "thread.delete",
+                    commandId,
+                    threadId,
+                  },
+            ),
+          );
+          if (interveningAction === "archive") {
+            await Effect.runPromise(
+              harness.engine.dispatch({
+                type: "thread.unarchive",
+                commandId: CommandId.makeUnsafe("cmd-cache-unarchive-before-dispatch"),
+                threadId,
+              }),
+            );
+          }
+        }
+
+        await harness.startReactor();
+        await harness.drain();
+
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        if (interveningAction !== "none") {
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).not.toBe(
+            "responding",
+          );
+        } else {
+          expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+            reviewId: "durable-review-before-recovery",
+            status: "pending",
+          });
+        }
+      },
+    );
+
+    it("continues the persisted original message once and does not replay duplicate responses", async () => {
+      const observation = expiredCacheObservation();
+      const harness = await createCacheHarness(() => observation);
+      const review = await sendHeldMessage(harness);
+
+      const continueCommand = await respondToReview(harness, review, "continue");
+      await waitFor(async () => (await readHarnessThread(harness))?.claudeCacheReview == null);
+
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId: "thread-1",
+        input: "Continue with this exact message",
+      });
+
+      await Effect.runPromise(harness.engine.dispatch(continueCommand));
+      await harness.drain();
+      await expect(respondToReview(harness, review, "continue", "duplicate")).rejects.toThrow(
+        "Command produced no events.",
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(
+        (await readHarnessThread(harness))?.messages.filter((message) => message.role === "user"),
+      ).toHaveLength(1);
+    });
+
+    it("cancels the send while retaining the original user message", async () => {
+      const harness = await createCacheHarness();
+      const review = await sendHeldMessage(harness);
+      const pendingBeforeCancel = await Effect.runPromise(harness.sql`
+        SELECT pending_message_id FROM projection_turns
+        WHERE thread_id = 'thread-1' AND turn_id IS NULL
+      `);
+      expect(pendingBeforeCancel).toHaveLength(1);
+
+      await respondToReview(harness, review, "cancel");
+      await waitFor(async () => (await readHarnessThread(harness))?.claudeCacheReview == null);
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.messages).toContainEqual(
+        expect.objectContaining({
+          id: "cache-held-message",
+          role: "user",
+          text: "Continue with this exact message",
+        }),
+      );
+      expect(
+        await Effect.runPromise(harness.sql`
+        SELECT pending_message_id FROM projection_turns
+        WHERE thread_id = 'thread-1' AND turn_id IS NULL
+      `),
+      ).toEqual([]);
+    });
+
+    it("settles a removed held message as failed instead of leaving the review responding", async () => {
+      const observation = expiredCacheObservation();
+      const harness = await createCacheHarness(() => observation);
+      const review = await sendHeldMessage(harness);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.conversation.rollback.complete",
+          commandId: CommandId.makeUnsafe("cmd-remove-held-message"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: review.messageId,
+          numTurns: 1,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      expect((await readHarnessThread(harness))?.messages).toEqual([]);
+
+      await respondToReview(harness, review, "continue");
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+        reviewId: review.reviewId,
+        status: "failed",
+        error: expect.stringContaining("could not start"),
+      });
+    });
+
+    it("allows another thread to send while the first thread awaits cache review", async () => {
+      const harness = await createCacheHarness();
+      const review = await sendHeldMessage(harness);
+      const threadId = ThreadId.makeUnsafe("thread-cache-independent");
+      const now = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-cache-independent-create"),
+          threadId,
+          projectId: asProjectId("project-1"),
+          title: "Independent thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        }),
+      );
+      harness.sendTurn.mockImplementationOnce(() =>
+        Effect.succeed({ threadId, turnId: asTurnId("turn-cache-independent") }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-cache-independent-send"),
+          threadId,
+          message: {
+            messageId: asMessageId("cache-independent-message"),
+            role: "user",
+            text: "Run independently of the pending review",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId,
+        input: "Run independently of the pending review",
+      });
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+        reviewId: review.reviewId,
+        status: "pending",
+      });
+    });
+
+    it.each(["nativeSessionId", "lifecycleGeneration", "model"] as const)(
+      "requires a new review when %s changes before Continue",
+      async (field) => {
+        let observation = expiredCacheObservation();
+        const harness = await createCacheHarness(() => observation);
+        const review = await sendHeldMessage(harness);
+        observation = { ...observation, [field]: `${observation[field]}-changed` };
+
+        await respondToReview(harness, review, "continue");
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "pending",
+        );
+
+        const renewedReview = (await readHarnessThread(harness))?.claudeCacheReview;
+        expect(renewedReview?.reviewId).not.toBe(review.reviewId);
+        expect(renewedReview?.messageId).toBe(review.messageId);
+        expect(renewedReview?.assessment[field]).toBe(observation[field]);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["warm", "small", "unknown"] as const)(
+      "sends normally when the cache assessment is %s",
+      async (assessment) => {
+        const expired = expiredCacheObservation();
+        const observation: ClaudeCacheObservation =
+          assessment === "warm"
+            ? { ...expired, state: "likely-warm", lastResponseAt: new Date().toISOString() }
+            : assessment === "small"
+              ? { ...expired, contextTokens: 50_000 }
+              : { observedAt: expired.observedAt, state: "unknown", source: "local-estimate" };
+        const harness = await createCacheHarness(() => observation);
+
+        await dispatchHarnessUserTurn(harness, {
+          messageId: `cache-${assessment}-message`,
+          text: `Proceed with ${assessment} context`,
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        await harness.drain();
+
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
+      },
+    );
+
+    it("pauses a goal continuation before sending a large expired-cache request", async () => {
+      const harness = await createCacheHarness();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-cold-goal"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          goal: "Complete the remaining work",
+          goalStartBehavior: "defer",
+        }),
+      );
+      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+      expect(goalStartedAt).toBeTruthy();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.goal.continue",
+          commandId: CommandId.makeUnsafe("cmd-cold-goal-continue"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          goalStartedAt: goalStartedAt!,
+          trigger: "turn-completed",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
+      await harness.drain();
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
+    });
+  });
 
   it("regenerates a title from durable conversation context without steering an active turn", async () => {
     const harness = await createHarness();

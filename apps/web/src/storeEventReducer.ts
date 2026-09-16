@@ -1138,6 +1138,30 @@ function applyOrchestrationEvent(
         },
       );
 
+    case "thread.claude-cache-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          if (
+            event.sequence <=
+            Math.max(thread.claudeCacheReviewSequence ?? 0, state.shellSnapshotSequence ?? 0)
+          ) {
+            return thread;
+          }
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          return {
+            ...thread,
+            claudeCacheReview: deepEqualJson(thread.claudeCacheReview ?? null, event.payload.review)
+              ? (thread.claudeCacheReview ?? null)
+              : event.payload.review,
+            claudeCacheReviewSequence: event.sequence,
+            updatedAt,
+          };
+        },
+        options,
+      );
+
     case "thread.session-set":
       return applyThreadUpdate(
         state,

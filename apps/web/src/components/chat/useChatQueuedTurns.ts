@@ -18,6 +18,8 @@ import {
   tryBeginQueuedComposerAutoDispatch,
 } from "../../lib/queuedComposerDrain";
 import { derivePhase } from "../../session-logic";
+import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 import { type ChatMessage, type Thread } from "../../types";
 import {
   resolveQueuedComposerAutoDispatchHold,
@@ -90,6 +92,7 @@ interface ChatQueuedTurnsInput {
   activeLatestTurn: Thread["latestTurn"];
   isConnecting: boolean;
   activePendingApproval: ReturnType<typeof useChatPendingInteractions>["activePendingApproval"];
+  hasPendingCacheReview?: boolean;
   activePendingProgress: ReturnType<typeof useChatPendingInteractions>["activePendingProgress"];
   pendingUserInputs: ReturnType<typeof useChatPendingInteractions>["pendingUserInputs"];
   sendInFlightRef: RefObject<boolean>;
@@ -130,11 +133,14 @@ export function useChatQueuedTurns({
   activeLatestTurn,
   isConnecting,
   activePendingApproval,
+  hasPendingCacheReview: hasPendingCacheReviewInput,
   activePendingProgress,
   pendingUserInputs,
   sendInFlightRef,
   sendPreflightInFlightRef,
 }: ChatQueuedTurnsInput) {
+  const hasPendingCacheReview =
+    hasPendingCacheReviewInput === true || activeThread?.claudeCacheReview != null;
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
 
   const autoDispatchingQueuedTurnRef = useRef(false);
@@ -271,6 +277,12 @@ export function useChatQueuedTurns({
 
   const dispatchQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
+      if (
+        hasPendingCacheReview ||
+        getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview != null
+      ) {
+        return false;
+      }
       const lateSendHandlers = lateComposerSendHandlersRef.current;
       if (!lateSendHandlers) {
         return false;
@@ -285,11 +297,17 @@ export function useChatQueuedTurns({
         queuedTurn,
       });
     },
-    [lateComposerSendHandlersRef],
+    [hasPendingCacheReview, lateComposerSendHandlersRef, threadId],
   );
 
   const onSteerQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn) => {
+      if (
+        hasPendingCacheReview ||
+        getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview != null
+      ) {
+        return;
+      }
       const previousQueue = queuedComposerTurnsRef.current;
       const queuedIndex = previousQueue.findIndex((entry) => entry.id === queuedTurn.id);
       if (queuedIndex < 0) {
@@ -302,13 +320,16 @@ export function useChatQueuedTurns({
         return;
       }
       insertQueuedComposerTurn(threadId, queuedTurn, queuedIndex);
-      recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
+      if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+        recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
+      }
       setQueuedAutoDispatchTick((tick) => tick + 1);
     },
     [
       queuedComposerTurnsRef,
       setQueuedAutoDispatchTick,
       dispatchQueuedComposerTurn,
+      hasPendingCacheReview,
       insertQueuedComposerTurn,
       removeQueuedComposerTurnFromDraft,
       threadId,
@@ -371,6 +392,10 @@ export function useChatQueuedTurns({
   ]);
 
   useEffect(() => {
+    if (hasPendingCacheReview) {
+      clearQueuedComposerAutoDispatchRetry(threadId);
+      return;
+    }
     if (
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
@@ -434,7 +459,9 @@ export function useChatQueuedTurns({
           removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
           return;
         }
-        recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+          recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        }
         setQueuedAutoDispatchTick((tick) => tick + 1);
       },
       onSettled: () => {
@@ -453,6 +480,7 @@ export function useChatQueuedTurns({
     activeThread?.messages,
     activeThread?.session,
     dispatchQueuedComposerTurn,
+    hasPendingCacheReview,
     isConnecting,
     isLocalDraftThread,
     localDispatch,
