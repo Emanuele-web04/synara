@@ -111,6 +111,17 @@ export function ComputerSettingsPanel({
   // The native permission surface is the AppSnap helper: the same coach that
   // AppSnap's own settings drive, asked about the computer-use grant set.
   const hasNativePermissionSetup = typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
+  // Returning from System Settings must re-pull both the server status and the
+  // native grant snapshot — the toggle the user just flipped lives in the
+  // second one.
+  const refreshPermissionState = useCallback(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    void bridge
+      .getState(COMPUTER_PERMISSION_KINDS)
+      .then((next) => setAppSnapState(next))
+      .catch(() => undefined);
+  }, []);
   const handleAppSnapStateChange = useCallback(
     (next: DesktopAppSnapState) => {
       setAppSnapState(next);
@@ -123,17 +134,6 @@ export function ComputerSettingsPanel({
     },
     [statusQuery.refetch],
   );
-  // Returning from System Settings must re-pull both the server status and the
-  // native grant snapshot — the toggle the user just flipped lives in the
-  // second one.
-  const refreshPermissionState = useCallback(() => {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
-    void bridge
-      .getState(COMPUTER_PERMISSION_KINDS)
-      .then(handleAppSnapStateChange)
-      .catch(() => undefined);
-  }, [handleAppSnapStateChange]);
   useRefreshOnWindowReturn(() => {
     void statusQuery.refetch({ cancelRefetch: false });
     refreshPermissionState();
