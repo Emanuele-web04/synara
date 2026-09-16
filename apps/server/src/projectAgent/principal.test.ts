@@ -1,7 +1,12 @@
 import { ProjectId, ProjectTaskId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { canAcceptTask, canStartGoal, isCoordinatorPrincipal } from "./principal";
+import {
+  canAcceptTask,
+  canStartGoal,
+  canWriteUserOwnedDocuments,
+  isCoordinatorPrincipal,
+} from "./principal";
 
 const projectId = ProjectId.makeUnsafe("project-1");
 
@@ -50,5 +55,16 @@ describe("project agent principal", () => {
         ProjectId.makeUnsafe("other"),
       ),
     ).toBe(false);
+  });
+
+  it("does not treat unmanaged provider threads as the user", () => {
+    const unmanaged = {
+      kind: "unmanaged" as const,
+      threadId: ThreadId.makeUnsafe("t3"),
+      projectId,
+    };
+    expect(canStartGoal(unmanaged)).toBe(false);
+    expect(canWriteUserOwnedDocuments(unmanaged)).toBe(false);
+    expect(canWriteUserOwnedDocuments({ kind: "user" })).toBe(true);
   });
 });

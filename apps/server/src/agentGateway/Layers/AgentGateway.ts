@@ -277,6 +277,14 @@ export const makeAgentGateway = Effect.gen(function* () {
     serverConfig,
     loadProviderAvailabilities,
     requireThreadShell,
+    authorizeManagedGoalCreation: (input) =>
+      projectAgentService
+        .authorizeManagedGoalCreation(input)
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
+    recordManagedWorkerThreads: (input) =>
+      projectAgentService
+        .recordManagedWorkerThreads(input)
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
   });
 
   const createThreads: ToolEntry = {

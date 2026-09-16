@@ -409,6 +409,32 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.map(Option.map(toConfig)),
         Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.getConfig", "config")),
       ),
+    listConfigs: () =>
+      SqlSchema.findAll({
+        Request: Schema.Struct({}),
+        Result: ConfigRow,
+        execute: () => sql`
+          SELECT
+            project_id AS "projectId",
+            coordinator_thread_id AS "coordinatorThreadId",
+            coordinator_name AS "coordinatorName",
+            coordinator_model_selection_json AS "coordinatorModelSelection",
+            coordinator_provider_options_json AS "coordinatorProviderOptions",
+            worker_routing_json AS "workerRouting",
+            limits_json AS "limits",
+            capture_enabled AS "captureEnabled",
+            enabled,
+            automation_id AS "automationId",
+            revision,
+            created_at AS "createdAt",
+            updated_at AS "updatedAt",
+            disabled_at AS "disabledAt"
+          FROM project_agent_configs
+        `,
+      })({}).pipe(
+        Effect.map((rows) => rows.map(toConfig)),
+        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config")),
+      ),
     getConfigByCoordinatorThread: (threadId) =>
       getConfigByCoordinatorRow({ threadId }).pipe(
         Effect.map(Option.map(toConfig)),

@@ -294,6 +294,7 @@ import {
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
+import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
 import {
   resolveAuxiliarySurface,
   resolveProjectPanelEnabled,
@@ -1025,10 +1026,14 @@ export default function ChatView({
     confirmTerminalClose: settings.confirmTerminalTabClose,
     onDeletePlaceholderThread: deletePlaceholderTerminalThread,
   });
-  const projectInstructions = useProjectInstructionsStore((state) =>
+  const localProjectInstructions = useProjectInstructionsStore((state) =>
     activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
   );
   const setProjectInstructions = useProjectInstructionsStore((state) => state.setInstructions);
+  const serverProjectInstructions = useProjectInstructionsSource(activeProjectId ?? null);
+  const projectInstructions = serverProjectInstructions.serverBacked
+    ? serverProjectInstructions.instructions
+    : localProjectInstructions;
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
@@ -4945,7 +4950,9 @@ export default function ChatView({
     activeProjectId,
     projectInstructions,
     canCopyProjectInstructionsToNotes: !isLocalDraftThread,
-    onProjectInstructionsChange: setProjectInstructions,
+    onProjectInstructionsChange: serverProjectInstructions.serverBacked
+      ? serverProjectInstructions.onChange
+      : setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
     onOpenAutomation: (definition: AutomationDefinition) => onOpenAutomation(definition.id),
@@ -5956,6 +5963,7 @@ export default function ChatView({
               }
               importedInstructions={projectInstructions}
               onOpenCoordinator={(threadId) => onNavigateToThread(threadId)}
+              onOpenThread={(threadId) => onNavigateToThread(threadId)}
               onClose={() => setProjectFromAuxiliary(false)}
             />
           ) : null}

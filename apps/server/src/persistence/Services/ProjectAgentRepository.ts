@@ -36,6 +36,7 @@ export interface ProjectAgentRepositoryShape {
   readonly getConfig: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ProjectAgentConfig>, ProjectAgentRepositoryError>;
+  readonly listConfigs: () => Effect.Effect<ReadonlyArray<ProjectAgentConfig>, ProjectAgentRepositoryError>;
   readonly getConfigByCoordinatorThread: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectAgentConfig>, ProjectAgentRepositoryError>;

@@ -2089,10 +2089,35 @@ const makeWsRpcHandlersLayer = () =>
             projectAgentService.listTasks(input, { kind: "user" }),
             "Failed to list project tasks",
           ),
+        [WS_METHODS.projectAgentCreateTask]: (input) =>
+          rpcEffect(
+            projectAgentService.createTask(input, { kind: "user" }),
+            "Failed to create project task",
+          ),
         [WS_METHODS.projectAgentUpdateTask]: (input) =>
           rpcEffect(
             projectAgentService.updateTask(input, { kind: "user" }),
             "Failed to update project task",
+          ),
+        [WS_METHODS.projectAgentListEvidence]: (input) =>
+          rpcEffect(
+            projectAgentService.listEvidence(input, { kind: "user" }),
+            "Failed to list task evidence",
+          ),
+        [WS_METHODS.projectAgentListThreadIndex]: (input) =>
+          rpcEffect(
+            projectAgentService.listThreadIndex(input, { kind: "user" }),
+            "Failed to list project threads",
+          ),
+        [WS_METHODS.projectAgentExcludeThread]: (input) =>
+          rpcEffect(
+            projectAgentService.excludeThread(input, { kind: "user" }),
+            "Failed to update thread coverage",
+          ),
+        [WS_METHODS.projectAgentBackfillSummaries]: (input) =>
+          rpcEffect(
+            projectAgentService.backfillSummaries(input, { kind: "user" }),
+            "Failed to backfill project summaries",
           ),
         [WS_METHODS.projectAgentListActivity]: (input) =>
           rpcEffect(

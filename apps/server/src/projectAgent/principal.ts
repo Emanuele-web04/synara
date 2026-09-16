@@ -12,10 +12,23 @@ export type ProjectAgentPrincipal =
       readonly threadId: ThreadId;
       readonly projectId: ProjectId;
       readonly taskId: ProjectTaskId;
+    }
+  | {
+      readonly kind: "unmanaged";
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
     };
 
 export function isUserPrincipal(principal: ProjectAgentPrincipal): boolean {
   return principal.kind === "user";
+}
+
+export function principalProjectId(principal: ProjectAgentPrincipal): ProjectId | null {
+  return principal.kind === "user" ? null : principal.projectId;
+}
+
+export function canWriteUserOwnedDocuments(principal: ProjectAgentPrincipal): boolean {
+  return isUserPrincipal(principal);
 }
 
 export function isCoordinatorPrincipal(

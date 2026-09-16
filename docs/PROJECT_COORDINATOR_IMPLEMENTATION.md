@@ -9,12 +9,12 @@ Approved spec: [PROJECT_COORDINATOR_PLAN.md](PROJECT_COORDINATOR_PLAN.md)
 
 | Increment | Status | Notes |
 |---|---|---|
-| 1. Contracts, persistence, authorization | done | Migration 081, CAS, user-only goal grants, managed-thread drive checks |
-| 2. Context workspace | done | Atomic Markdown mirrors, 32k packet, instruction import on setup |
-| 3. Project interface | done | Shared 220ms auxiliary panel, Project icon, four views, setup |
-| 4. Observation and summaries | done | Inbox/cursor, latest-20 + pending backfill, digest + generateProjectDigest |
-| 5. Bounded coordination | done | Project-event heartbeat, limits, pause/stop, attempt→review |
-| 6. Integration and rollout | done | Focused Vitest; no blanket fmt/lint/typecheck |
+| 1. Contracts, persistence, authorization | repaired | Unmanaged MCP principals are not user; worker drive requires active-goal association |
+| 2. Context workspace | repaired | Context Save uses CAS; preview/source/history/export; Environment instructions use server doc when configured |
+| 3. Project interface | repaired | Editable setup/settings; Work evidence/archive; activity pagination; thread exclusion |
+| 4. Observation and summaries | repaired | `generateProjectDigest` with 60s debounce, one inflight, source validation, last-good retention |
+| 5. Bounded coordination | repaired | Wake event-range receipts + restart reconcile; creationCoordinator goal/limit hook; context packet injected at provider turn dispatch |
+| 6. Integration and rollout | in progress | Focused Vitest; isolated preview owned by root; no fmt/lint/typecheck |
 
 Feature stays disabled until a project is configured. Autonomous work starts only after a user starts a goal.
 
@@ -41,13 +41,14 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 
 ## Remaining requirements
 
-- Isolated Synara preview (separate state/ports) is for the root coordinator
-- Environment instructions editor still uses the browser store until a project is configured; setup imports it server-side
-- Document source save from the Context view is preview/read-oriented; writes go through `writeDocument`
-- No 1,000-thread / 10,000-activity soak in this pass
+- Isolated Synara preview (separate state/ports) remains root-owned; this repair did not relaunch it
+- No 1,000-thread / 10,000-activity soak
+- `bun fmt` / `bun lint` / `bun typecheck` still unauthorized
+- ProviderCommandReactor tests stub `formatContextPacketForTurn`; live injection needs preview
+- Settings model picker reuses the current chat model rather than a full composer catalog
 
 ## Risks
 
-- AgentGateway tests now stub ProjectAgentService; live managed-thread checks need isolated preview
-- Digest model generation is implemented on TextGeneration but refreshDigest currently uses a deterministic last-good path unless wired in a follow-up call
-- `bun typecheck` was not run; some UI prop tightness may still fail a later typecheck pass
+- `Effect.service` / `forkDaemon` / stream `Queue` APIs must match this Effect build in preview
+- Digest generation depends on TextGeneration availability; failures keep last-good and mark `generationState: failed`
+- Unmanaged MCP threads can still *read* their own project's overview; they cannot write user-owned docs or start goals

@@ -99,6 +99,7 @@ import {
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -638,11 +639,15 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
+    const projectAgentLayer = Layer.succeed(ProjectAgentService, {
+      formatContextPacketForTurn: () => Effect.succeed(""),
+    } as unknown as (typeof ProjectAgentService)["Service"]);
     const layer = makeProviderCommandReactorLive(
       input?.commandEventTimeout === undefined
         ? undefined
         : { commandEventTimeout: input.commandEventTimeout },
     ).pipe(
+      Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),

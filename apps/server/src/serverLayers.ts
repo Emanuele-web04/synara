@@ -187,6 +187,7 @@ export function makeServerRuntimeServicesLayer(
   const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
     Layer.provideMerge(ProjectAgentRepositoryLive),
     Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const projectAgentReactorLayer = ProjectAgentReactorLive.pipe(

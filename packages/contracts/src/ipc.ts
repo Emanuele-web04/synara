@@ -62,9 +62,17 @@ import type {
   ProjectAgentUpdateGoalInput,
   ProjectAgentUpdateTaskInput,
   ProjectAgentWriteDocumentInput,
+  ProjectAgentCreateTaskInput,
+  ProjectAgentExcludeThreadInput,
+  ProjectAgentBackfillInput,
+  ProjectAgentListThreadIndexInput,
+  ProjectAgentListThreadIndexResult,
+  ProjectAgentListEvidenceInput,
+  ProjectAgentListEvidenceResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
+  ProjectThreadIndexEntry,
 } from "./projectAgent";
 import type {
   GitCheckoutInput,
@@ -986,7 +994,14 @@ export interface NativeApi {
     resumeGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
     stopGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
     listTasks: (input: ProjectAgentListTasksInput) => Promise<ProjectAgentListTasksResult>;
+    createTask: (input: ProjectAgentCreateTaskInput) => Promise<ProjectTask>;
     updateTask: (input: ProjectAgentUpdateTaskInput) => Promise<ProjectTask>;
+    listEvidence: (input: ProjectAgentListEvidenceInput) => Promise<ProjectAgentListEvidenceResult>;
+    listThreadIndex: (
+      input: ProjectAgentListThreadIndexInput,
+    ) => Promise<ProjectAgentListThreadIndexResult>;
+    excludeThread: (input: ProjectAgentExcludeThreadInput) => Promise<ProjectThreadIndexEntry>;
+    backfillSummaries: (input: ProjectAgentBackfillInput) => Promise<ProjectAgentOverview>;
     listActivity: (input: ProjectAgentListActivityInput) => Promise<ProjectAgentListActivityResult>;
     listDocuments: (input: ProjectAgentListDocumentsInput) => Promise<ProjectAgentListDocumentsResult>;
     readDocument: (input: ProjectAgentReadDocumentInput) => Promise<ProjectAgentReadDocumentResult>;

@@ -44,9 +44,17 @@ import {
   ProjectAgentUpdateGoalInput,
   ProjectAgentUpdateTaskInput,
   ProjectAgentWriteDocumentInput,
+  ProjectAgentCreateTaskInput,
+  ProjectAgentExcludeThreadInput,
+  ProjectAgentBackfillInput,
+  ProjectAgentListThreadIndexInput,
+  ProjectAgentListThreadIndexResult,
+  ProjectAgentListEvidenceInput,
+  ProjectAgentListEvidenceResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
+  ProjectThreadIndexEntry,
 } from "./projectAgent";
 import { OpenInEditorInput } from "./editor";
 import {
@@ -1351,6 +1359,31 @@ export const WsProjectAgentUpdateTaskRpc = Rpc.make(WS_METHODS.projectAgentUpdat
   success: ProjectTask,
   error: WsRpcError,
 });
+export const WsProjectAgentCreateTaskRpc = Rpc.make(WS_METHODS.projectAgentCreateTask, {
+  payload: ProjectAgentCreateTaskInput,
+  success: ProjectTask,
+  error: WsRpcError,
+});
+export const WsProjectAgentListEvidenceRpc = Rpc.make(WS_METHODS.projectAgentListEvidence, {
+  payload: ProjectAgentListEvidenceInput,
+  success: ProjectAgentListEvidenceResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentListThreadIndexRpc = Rpc.make(WS_METHODS.projectAgentListThreadIndex, {
+  payload: ProjectAgentListThreadIndexInput,
+  success: ProjectAgentListThreadIndexResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentExcludeThreadRpc = Rpc.make(WS_METHODS.projectAgentExcludeThread, {
+  payload: ProjectAgentExcludeThreadInput,
+  success: ProjectThreadIndexEntry,
+  error: WsRpcError,
+});
+export const WsProjectAgentBackfillSummariesRpc = Rpc.make(WS_METHODS.projectAgentBackfillSummaries, {
+  payload: ProjectAgentBackfillInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
 export const WsProjectAgentListActivityRpc = Rpc.make(WS_METHODS.projectAgentListActivity, {
   payload: ProjectAgentListActivityInput,
   success: ProjectAgentListActivityResult,
@@ -1528,6 +1561,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectAgentStopGoalRpc,
   WsProjectAgentListTasksRpc,
   WsProjectAgentUpdateTaskRpc,
+  WsProjectAgentCreateTaskRpc,
+  WsProjectAgentListEvidenceRpc,
+  WsProjectAgentListThreadIndexRpc,
+  WsProjectAgentExcludeThreadRpc,
+  WsProjectAgentBackfillSummariesRpc,
   WsProjectAgentListActivityRpc,
   WsProjectAgentListDocumentsRpc,
   WsProjectAgentReadDocumentRpc,

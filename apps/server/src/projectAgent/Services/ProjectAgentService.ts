@@ -1,8 +1,10 @@
 import type {
   ProjectActivity,
+  ProjectAgentBackfillInput,
   ProjectAgentConfigureInput,
   ProjectAgentContextPacket,
   ProjectAgentCreateTaskInput,
+  ProjectAgentExcludeThreadInput,
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
@@ -11,8 +13,12 @@ import type {
   ProjectAgentListActivityResult,
   ProjectAgentListDocumentsInput,
   ProjectAgentListDocumentsResult,
+  ProjectAgentListEvidenceInput,
+  ProjectAgentListEvidenceResult,
   ProjectAgentListTasksInput,
   ProjectAgentListTasksResult,
+  ProjectAgentListThreadIndexInput,
+  ProjectAgentListThreadIndexResult,
   ProjectAgentOverview,
   ProjectAgentReadDocumentInput,
   ProjectAgentReadDocumentResult,
@@ -28,6 +34,7 @@ import type {
   ProjectGoal,
   ProjectId,
   ProjectTask,
+  ProjectThreadIndexEntry,
   ThreadId,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
@@ -101,6 +108,37 @@ export interface ProjectAgentServiceShape {
     input: ProjectAgentRefreshDigestInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly scheduleDigest: (projectId: ProjectId) => Effect.Effect<void, never>;
+  readonly listEvidence: (
+    input: ProjectAgentListEvidenceInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentListEvidenceResult, ProjectAgentServiceError>;
+  readonly listThreadIndex: (
+    input: ProjectAgentListThreadIndexInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentListThreadIndexResult, ProjectAgentServiceError>;
+  readonly excludeThread: (
+    input: ProjectAgentExcludeThreadInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectThreadIndexEntry, ProjectAgentServiceError>;
+  readonly backfillSummaries: (
+    input: ProjectAgentBackfillInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly formatContextPacketForTurn: (
+    threadId: ThreadId,
+  ) => Effect.Effect<string, ProjectAgentServiceError>;
+  readonly authorizeManagedGoalCreation: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly requestedCount: number;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
+  readonly recordManagedWorkerThreads: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly requestId: string;
+    readonly threadIds: ReadonlyArray<ThreadId>;
+    readonly titles: ReadonlyArray<string>;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
+  readonly reconcilePendingWakes: () => Effect.Effect<void, ProjectAgentServiceError>;
   readonly reportResult: (
     input: ProjectAgentReportResultInput,
     principal: ProjectAgentPrincipal,

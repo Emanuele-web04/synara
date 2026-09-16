@@ -6,6 +6,7 @@ import {
   AutomationId,
   CommandId,
   DEFAULT_PROJECT_AGENT_LIMITS,
+  PROJECT_AGENT_DIGEST_DEBOUNCE_MS,
   PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
   ProjectActivityId,
   ProjectAgentConfig,
@@ -38,10 +39,11 @@ import {
   normalizeProjectDocumentPath,
   truncateToContextBudget,
 } from "@synara/shared/projectAgent";
-import { Effect, Layer, Option, PubSub, Stream } from "effect";
+import { Duration, Effect, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
+import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
@@ -53,9 +55,15 @@ import {
   writeProjectDocumentMirror,
 } from "../materializer.ts";
 import {
+  mergePinnedFocusItems,
+  validateDigestFocusItems,
+  wakeReceiptRequestId,
+} from "../digest.ts";
+import {
   canAcceptTask,
   canConfigureProject,
   canStartGoal,
+  canWriteUserOwnedDocuments,
   isCoordinatorPrincipal,
   isUserPrincipal,
   type ProjectAgentPrincipal,
@@ -96,7 +104,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const serverConfig = yield* ServerConfig;
+  const textGeneration = yield* TextGeneration;
   const events = yield* PubSub.unbounded<ProjectAgentStreamEvent>();
+  const digestInflight = yield* Ref.make(new Set<string>());
+  const digestPending = yield* Ref.make(new Set<string>());
+  const digestTimer = yield* Ref.make(new Set<string>());
 
   const publish = (event: ProjectAgentStreamEvent) => PubSub.publish(events, event).pipe(Effect.asVoid);
   const toServiceError = (message: string) => (cause: unknown) =>
@@ -197,30 +209,49 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const threads = yield* projectionThreads
         .listByProjectId({ projectId })
         .pipe(Effect.mapError(toServiceError("Failed to index project threads.")));
+      const existing = yield* repository
+        .listThreadIndex(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
+      const excludedIds = new Set(
+        existing.filter((entry) => entry.excluded).map((entry) => entry.threadId),
+      );
+      const coveredIds = new Set(
+        existing
+          .filter((entry) => entry.summaryStatus === "covered" && !entry.excluded)
+          .map((entry) => entry.threadId),
+      );
       const persistent = threads.filter((thread) => thread.deletedAt === null);
       const sorted = [...persistent].toSorted((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt),
       );
-      let index = 0;
+      let assignedCoverage = coveredIds.size;
       for (const thread of sorted) {
-        const covered = index < PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT;
+        const excluded = excludedIds.has(thread.threadId);
+        const alreadyCovered = coveredIds.has(thread.threadId);
+        const covered =
+          alreadyCovered ||
+          (!excluded && assignedCoverage < PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT);
+        if (covered && !alreadyCovered && !excluded) assignedCoverage += 1;
         yield* repository
           .upsertThreadIndex({
             projectId,
             threadId: thread.threadId,
-            excluded: false,
+            excluded,
             archived: thread.archivedAt !== null,
-            summaryStatus: covered ? "covered" : "pending",
+            summaryStatus: excluded ? "skipped" : covered ? "covered" : "pending",
             lastUpdatedAt: thread.updatedAt,
-            lastSummarizedAt: covered ? isoNow() : null,
+            lastSummarizedAt: covered && !excluded ? isoNow() : null,
           })
           .pipe(Effect.mapError(toServiceError("Failed to store thread index.")));
-        index += 1;
       }
-      return {
-        summarizedThreadCount: Math.min(sorted.length, PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT),
-        pendingThreadCount: Math.max(0, sorted.length - PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT),
-      };
+      const index = yield* repository
+        .listThreadIndex(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
+      const summarizedThreadCount = index.filter((entry) => entry.summaryStatus === "covered").length;
+      const pendingThreadCount = index.filter(
+        (entry) => !entry.excluded && entry.summaryStatus === "pending",
+      ).length;
+      return { summarizedThreadCount, pendingThreadCount };
     });
 
   const buildOverview = (projectId: ProjectId): Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError> =>
@@ -331,6 +362,124 @@ export const makeProjectAgentService = Effect.gen(function* () {
     }
     return Effect.void;
   };
+
+  const generateDigestNow = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const inflight = yield* Ref.get(digestInflight);
+      if (inflight.has(projectId)) {
+        yield* Ref.update(digestPending, (pending) => new Set(pending).add(projectId));
+        return;
+      }
+      yield* Ref.update(digestInflight, (current) => new Set(current).add(projectId));
+      yield* Ref.update(digestPending, (pending) => {
+        const next = new Set(pending);
+        next.delete(projectId);
+        return next;
+      });
+      const previous = yield* repository
+        .getDigest(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load digest.")));
+      const lastGood = Option.isSome(previous) ? previous.value : null;
+      const coverage = yield* indexProjectThreads(projectId);
+      const activity = yield* repository
+        .listActivity({ projectId, limit: 40 })
+        .pipe(Effect.mapError(toServiceError("Failed to load digest activity.")));
+      const tasks = yield* repository
+        .listTasks({ projectId, includeArchived: false, limit: 100 })
+        .pipe(Effect.mapError(toServiceError("Failed to load digest tasks.")));
+      const documents = yield* repository
+        .listDocumentHeads(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load digest documents.")));
+      const threads = yield* repository
+        .listThreadIndex(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load digest threads.")));
+      const running = {
+        projectId,
+        summary: lastGood?.summary ?? "Generating project summary…",
+        focusItems: lastGood?.focusItems ?? [],
+        coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
+        coverageToSequence: activity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
+        historicalCoverage: coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+        summarizedThreadCount: coverage.summarizedThreadCount,
+        pendingThreadCount: coverage.pendingThreadCount,
+        generationState: "running" as const,
+        generatedAt: lastGood?.generatedAt ?? null,
+        lastGoodAt: lastGood?.lastGoodAt ?? null,
+        lastError: null,
+      };
+      yield* repository.saveDigest(running).pipe(Effect.mapError(toServiceError("Failed to mark digest running.")));
+      const project = yield* snapshotQuery
+        .getProjectShellById(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load project for digest.")));
+      const cwd = Option.isSome(project) ? project.value.workspaceRoot : serverConfig.cwd;
+      const allowed = new Set([
+        ...activity.map((entry) => entry.id),
+        ...tasks.map((task) => task.id),
+        ...threads.map((thread) => thread.threadId),
+        ...documents.map((doc) => doc.logicalPath),
+      ]);
+      const generated = yield* textGeneration
+        .generateProjectDigest({
+          cwd,
+          previousSummary: lastGood?.summary,
+          activity: activity.map((entry) => `${entry.id}: ${entry.summary}`).join("\n"),
+          coverage: `summarized=${coverage.summarizedThreadCount} pending=${coverage.pendingThreadCount}`,
+          pinnedFocus: (lastGood?.focusItems ?? [])
+            .filter((item) => item.pinned)
+            .map((item) => item.title)
+            .join("\n"),
+        })
+        .pipe(
+          Effect.map((result) => ({
+            summary: result.summary,
+            focusItems: mergePinnedFocusItems(
+              validateDigestFocusItems(result.focusItems, allowed),
+              (lastGood?.focusItems ?? []).filter((item) => item.pinned),
+            ),
+            error: null as string | null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              summary: lastGood?.summary ?? "Project summary is unavailable until the next successful refresh.",
+              focusItems: lastGood?.focusItems ?? [],
+              error: error instanceof Error ? error.message : "Project digest generation failed.",
+            }),
+          ),
+        );
+      const digest = {
+        projectId,
+        summary: generated.summary,
+        focusItems: generated.focusItems,
+        coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
+        coverageToSequence: activity[0]?.sequence ?? 0,
+        historicalCoverage: coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+        summarizedThreadCount: coverage.summarizedThreadCount,
+        pendingThreadCount: coverage.pendingThreadCount,
+        generationState: generated.error ? ("failed" as const) : ("idle" as const),
+        generatedAt: generated.error ? lastGood?.generatedAt ?? null : isoNow(),
+        lastGoodAt: generated.error ? lastGood?.lastGoodAt ?? null : isoNow(),
+        lastError: generated.error,
+      };
+      yield* repository.saveDigest(digest).pipe(Effect.mapError(toServiceError("Failed to save digest.")));
+      yield* publish({ type: "digest-upserted", digest });
+      yield* Ref.update(digestInflight, (current) => {
+        const next = new Set(current);
+        next.delete(projectId);
+        return next;
+      });
+      const stillPending = yield* Ref.get(digestPending);
+      if (stillPending.has(projectId)) {
+        yield* impl.scheduleDigest(projectId);
+      }
+    }).pipe(
+      Effect.ensuring(
+        Ref.update(digestInflight, (current) => {
+          const next = new Set(current);
+          next.delete(projectId);
+          return next;
+        }),
+      ),
+    );
 
   const impl: ProjectAgentServiceShape = {
     getOverview: (input, principal) =>
@@ -886,8 +1035,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
           return yield* Effect.fail(fail("Generated views cannot be overwritten directly.", "forbidden"));
         }
-        if (logicalPath === "instructions.md" && principal.kind === "worker") {
-          return yield* Effect.fail(fail("Workers cannot rewrite user instructions.", "forbidden"));
+        if (isUserOwnedDocumentPath(logicalPath) && !canWriteUserOwnedDocuments(principal)) {
+          return yield* Effect.fail(
+            fail("Only the user can edit project instructions and notes.", "forbidden"),
+          );
         }
         if (isInboxDocumentPath(logicalPath) && principal.kind === "worker") {
           const expectedPrefix = `inbox/${principal.threadId}/`;
@@ -1016,38 +1167,238 @@ export const makeProjectAgentService = Effect.gen(function* () {
     refreshDigest: (input, principal) =>
       Effect.gen(function* () {
         yield* assertSameProject(principal, input.projectId);
+        yield* generateDigestNow(input.projectId);
+        return yield* buildOverview(input.projectId);
+      }),
+
+    scheduleDigest: (projectId) =>
+      Effect.gen(function* () {
+        yield* Ref.update(digestPending, (pending) => new Set(pending).add(projectId));
+        const timers = yield* Ref.get(digestTimer);
+        if (timers.has(projectId)) return;
+        yield* Ref.update(digestTimer, (current) => new Set(current).add(projectId));
+        yield* Effect.sleep(Duration.millis(PROJECT_AGENT_DIGEST_DEBOUNCE_MS)).pipe(
+          Effect.andThen(generateDigestNow(projectId)),
+          Effect.catch(() => Effect.void),
+          Effect.ensuring(
+            Ref.update(digestTimer, (current) => {
+              const next = new Set(current);
+              next.delete(projectId);
+              return next;
+            }),
+          ),
+          Effect.forkDaemon,
+        );
+      }).pipe(Effect.asVoid),
+
+    listEvidence: (input, principal) =>
+      assertSameProject(principal, input.projectId).pipe(
+        Effect.andThen(
+          repository
+            .listEvidenceForTask(input.taskId)
+            .pipe(Effect.mapError(toServiceError("Failed to list task evidence."))),
+        ),
+        Effect.map((evidence) => ({ evidence })),
+      ),
+
+    listThreadIndex: (input, principal) =>
+      assertSameProject(principal, input.projectId).pipe(
+        Effect.andThen(
+          repository
+            .listThreadIndex(input.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to list project threads."))),
+        ),
+        Effect.map((threads) => ({ threads })),
+      ),
+
+    excludeThread: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Thread coverage is a user action.", "forbidden"));
+        }
         yield* requireConfig(input.projectId);
-        const coverage = yield* indexProjectThreads(input.projectId);
-        const activity = yield* repository
-          .listActivity({ projectId: input.projectId, limit: 20 })
-          .pipe(Effect.mapError(toServiceError("Failed to load digest activity.")));
-        const previous = yield* repository
-          .getDigest(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load digest.")));
-        const pinned = Option.isSome(previous)
-          ? previous.value.focusItems.filter((item) => item.pinned)
-          : [];
-        const digest = {
+        const existing = yield* repository
+          .listThreadIndex(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
+        const current = existing.find((entry) => entry.threadId === input.threadId);
+        const entry = {
           projectId: input.projectId,
-          summary:
-            activity[0]?.summary ??
-            "No project activity yet. Start a goal to begin bounded coordination.",
-          focusItems: pinned,
-          coverageFromSequence: Option.isSome(previous) ? previous.value.coverageFromSequence : 0,
-          coverageToSequence: activity[0]?.sequence ?? 0,
-          historicalCoverage: coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
-          summarizedThreadCount: coverage.summarizedThreadCount,
-          pendingThreadCount: coverage.pendingThreadCount,
-          generationState: "idle" as const,
-          generatedAt: isoNow(),
-          lastGoodAt: isoNow(),
-          lastError: null,
+          threadId: input.threadId,
+          excluded: input.excluded,
+          archived: current?.archived ?? false,
+          summaryStatus: input.excluded ? ("skipped" as const) : (current?.summaryStatus ?? "pending"),
+          lastUpdatedAt: isoNow(),
+          lastSummarizedAt: current?.lastSummarizedAt ?? null,
         };
         yield* repository
-          .saveDigest(digest)
-          .pipe(Effect.mapError(toServiceError("Failed to save digest.")));
-        yield* publish({ type: "digest-upserted", digest });
+          .upsertThreadIndex(entry)
+          .pipe(Effect.mapError(toServiceError("Failed to update thread coverage.")));
+        yield* impl.scheduleDigest(input.projectId);
+        return entry;
+      }),
+
+    backfillSummaries: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Historical backfill is a user action.", "forbidden"));
+        }
+        const index = yield* repository
+          .listThreadIndex(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load pending threads.")));
+        const pending = index.filter((entry) => !entry.excluded && entry.summaryStatus === "pending");
+        for (const entry of pending.slice(0, PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT)) {
+          yield* repository
+            .upsertThreadIndex({
+              ...entry,
+              summaryStatus: "covered",
+              lastSummarizedAt: isoNow(),
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to backfill thread summary.")));
+        }
+        yield* generateDigestNow(input.projectId);
         return yield* buildOverview(input.projectId);
+      }),
+
+    formatContextPacketForTurn: (threadId) =>
+      Effect.gen(function* () {
+        const principal = yield* impl.resolvePrincipalForThread(threadId);
+        if (principal.kind !== "coordinator" && principal.kind !== "worker") {
+          return "";
+        }
+        const packet = yield* impl.buildContextPacket(principal.projectId, threadId);
+        const budget = truncateToContextBudget([
+          { label: "Goal", text: packet.goal?.objective ?? "No active goal." },
+          { label: "Instructions", text: packet.instructions },
+          { label: "Decisions", text: packet.relevantDecisions },
+          {
+            label: "Tasks",
+            text: packet.tasks.map((task) => `- ${task.status} ${task.title}`).join("\n"),
+          },
+        ]);
+        return [
+          "Project context packet (authoritative durable state; additional documents via synara_project_read_document):",
+          budget.packet,
+          packet.historicalCoverage === "partial"
+            ? "Historical coverage is partial; remaining threads are not yet summarized."
+            : "",
+        ]
+          .filter((section) => section.length > 0)
+          .join("\n\n");
+      }),
+
+    authorizeManagedGoalCreation: (input) =>
+      Effect.gen(function* () {
+        const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
+        if (principal.kind !== "coordinator") return;
+        const goal = yield* repository
+          .getActiveGoal(principal.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
+        if (Option.isNone(goal) || goal.value.status !== "active") {
+          return yield* Effect.fail(
+            fail("The coordinator can create workers only while a user-authorized goal is active.", "forbidden"),
+          );
+        }
+        const running = yield* repository
+          .countRunningWorkers(principal.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to count running workers.")));
+        if (input.requestedCount > goal.value.limits.maxNewWorkersPerTurn) {
+          return yield* Effect.fail(
+            fail(
+              `This goal allows at most ${goal.value.limits.maxNewWorkersPerTurn} new workers per turn.`,
+              "limit",
+            ),
+          );
+        }
+        if (running + input.requestedCount > goal.value.limits.maxConcurrentWorkers) {
+          return yield* Effect.fail(
+            fail(
+              `This goal allows at most ${goal.value.limits.maxConcurrentWorkers} concurrent workers.`,
+              "limit",
+            ),
+          );
+        }
+        if (goal.value.workerCreationCount + input.requestedCount > goal.value.limits.maxWorkerCreationsPerGoal) {
+          return yield* Effect.fail(
+            fail(
+              `This goal allows at most ${goal.value.limits.maxWorkerCreationsPerGoal} worker creations.`,
+              "limit",
+            ),
+          );
+        }
+      }),
+
+    recordManagedWorkerThreads: (input) =>
+      Effect.gen(function* () {
+        const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
+        if (principal.kind !== "coordinator") return;
+        const goal = yield* repository
+          .getActiveGoal(principal.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
+        if (Option.isNone(goal) || goal.value.status !== "active") return;
+        for (const [index, threadId] of input.threadIds.entries()) {
+          const task = yield* impl.createTask(
+            {
+              requestId: `${input.requestId}:task:${threadId}`,
+              projectId: principal.projectId,
+              goalId: goal.value.id,
+              title: input.titles[index] ?? `Worker ${index + 1}`,
+              dependsOnTaskIds: [],
+            },
+            principal,
+          );
+          const assigned = {
+            ...task,
+            status: "running" as const,
+            assignedThreadId: threadId,
+            revision: task.revision + 1,
+            updatedAt: isoNow(),
+          };
+          yield* repository
+            .saveTask(assigned, task.revision)
+            .pipe(Effect.mapError(toServiceError("Failed to assign worker thread.")));
+          yield* repository
+            .saveAttempt({
+              id: branded.attempt(),
+              projectId: principal.projectId,
+              taskId: task.id,
+              workerThreadId: threadId,
+              gatewayOperationId: input.requestId,
+              requestId: `${input.requestId}:attempt:${threadId}`,
+              attemptNumber: 1,
+              outcome: "running",
+              error: null,
+              createdAt: isoNow(),
+              finishedAt: null,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+        }
+        yield* repository
+          .saveGoal(
+            {
+              ...goal.value,
+              workerCreationCount: goal.value.workerCreationCount + input.threadIds.length,
+              revision: goal.value.revision + 1,
+              updatedAt: isoNow(),
+            },
+            goal.value.revision,
+          )
+          .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+      }),
+
+    reconcilePendingWakes: () =>
+      Effect.gen(function* () {
+        const configs = yield* repository
+          .listConfigs()
+          .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+        for (const config of configs) {
+          if (!config.enabled) continue;
+          const cursor = yield* repository
+            .getCursor(config.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load wake cursor.")));
+          if (cursor.coordinatorBusy || cursor.frozenFromInboxId) {
+            yield* impl.processPendingWakes(config.projectId);
+          }
+        }
       }),
 
     reportResult: (input, principal) =>
@@ -1203,6 +1554,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
         if (!inserted.inserted) return;
+        yield* impl.scheduleDigest(projectId);
         if (eligibleWake) {
           yield* impl.processPendingWakes(projectId);
         } else {
@@ -1275,34 +1627,67 @@ export const makeProjectAgentService = Effect.gen(function* () {
           if (busy) return;
         }
         if (!config.automationId) return;
+        const fromInboxId = eligible[0]!.id;
+        const toInboxId = eligible[eligible.length - 1]!.id;
+        const receiptId = wakeReceiptRequestId({
+          projectId,
+          fromInboxId,
+          toInboxId,
+        });
+        const existingWake = yield* repository
+          .getReceipt(receiptId)
+          .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
         yield* repository
           .saveCursor({
             projectId,
             processedThroughInboxId: cursor.processedThroughInboxId,
-            frozenFromInboxId: eligible[0]!.id,
-            frozenToInboxId: eligible[eligible.length - 1]!.id,
+            frozenFromInboxId: fromInboxId,
+            frozenToInboxId: toInboxId,
             coordinatorBusy: true,
             updatedAt: isoNow(),
           })
           .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
-        const run = yield* automationService
-          .runNow({ automationId: config.automationId })
-          .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
-        yield* repository
-          .saveGoal(
-            {
-              ...goal.value,
-              continuationCount: goal.value.continuationCount + 1,
-              revision: goal.value.revision + 1,
+        const latestGoal = yield* repository
+          .getActiveGoal(projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to re-check goal before wake.")));
+        if (Option.isNone(latestGoal) || latestGoal.value.status !== "active") {
+          yield* repository
+            .saveCursor({
+              projectId,
+              processedThroughInboxId: cursor.processedThroughInboxId,
+              frozenFromInboxId: null,
+              frozenToInboxId: null,
+              coordinatorBusy: false,
               updatedAt: isoNow(),
-            },
-            goal.value.revision,
-          )
-          .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to unfreeze stale wake.")));
+          return;
+        }
+        let runId = Option.isSome(existingWake)
+          ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
+          : undefined;
+        if (!runId) {
+          const run = yield* automationService
+            .runNow({ automationId: config.automationId })
+            .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
+          runId = run.run.id;
+          yield* storeReceipt(receiptId, projectId, "wake", { runId });
+          yield* repository
+            .saveGoal(
+              {
+                ...latestGoal.value,
+                continuationCount: latestGoal.value.continuationCount + 1,
+                revision: latestGoal.value.revision + 1,
+                updatedAt: isoNow(),
+              },
+              latestGoal.value.revision,
+            )
+            .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+        }
         yield* repository
           .saveCursor({
             projectId,
-            processedThroughInboxId: eligible[eligible.length - 1]!.id,
+            processedThroughInboxId: toInboxId,
             frozenFromInboxId: null,
             frozenToInboxId: null,
             coordinatorBusy: false,
@@ -1314,12 +1699,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           kind: "wake-enqueued",
           actorKind: "system",
           actorThreadId: config.coordinatorThreadId,
-          goalId: goal.value.id,
+          goalId: latestGoal.value.id,
           taskId: eligible[0]?.taskId ?? null,
           source: null,
-          summary: `Dispatched coordinator continuation ${run.run.id}. Later events remain queued.`,
+          summary: `Dispatched coordinator continuation ${runId}. Later events remain queued.`,
           createdAt: isoNow(),
         });
+        yield* impl.scheduleDigest(projectId);
       }),
 
     resolvePrincipalForThread: (threadId) =>
@@ -1345,7 +1731,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
             taskId: task.value.id,
           };
         }
-        return { kind: "user" as const };
+        const shell = yield* snapshotQuery.getThreadShellById(threadId).pipe(
+          Effect.mapError(toServiceError("Failed to resolve thread project.")),
+        );
+        if (Option.isNone(shell)) {
+          return yield* Effect.fail(fail("Thread was not found.", "not-found"));
+        }
+        return {
+          kind: "unmanaged" as const,
+          threadId,
+          projectId: shell.value.projectId,
+        };
       }),
 
     assertCallerMayDriveManagedThread: (input) =>
@@ -1373,7 +1769,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
               fail("The coordinator may drive only threads associated with its active authorized goal.", "forbidden"),
             );
           }
-          if (target.kind === "worker" && target.projectId === caller.projectId) return;
           if (targetShell.projectId !== caller.projectId) {
             return yield* Effect.fail(fail("Cross-project control is blocked.", "forbidden"));
           }
@@ -1423,10 +1818,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }),
 
     streamEvents: (input) =>
-      Stream.concat(
-        Stream.fromEffect(buildOverview(input.projectId).pipe(Effect.map((overview) => ({ type: "snapshot" as const, overview })))),
-        Stream.fromPubSub(events).pipe(
-          Stream.filter((event) => {
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const matchesProject = (event: ProjectAgentStreamEvent) => {
             if (event.type === "snapshot") return event.overview.projectId === input.projectId;
             if (event.type === "config-upserted") return event.config.projectId === input.projectId;
             if (event.type === "goal-upserted") return event.goal.projectId === input.projectId;
@@ -1434,8 +1828,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (event.type === "activity-appended") return event.activity.projectId === input.projectId;
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
             return event.head.projectId === input.projectId;
-          }),
-        ),
+          };
+          const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent>(64);
+          yield* Stream.fromPubSub(events).pipe(
+            Stream.filter(matchesProject),
+            Stream.runIntoQueue(liveQueue),
+            Effect.forkScoped,
+          );
+          const overview = yield* buildOverview(input.projectId);
+          return Stream.concat(
+            Stream.succeed({ type: "snapshot" as const, overview }),
+            Stream.fromQueue(liveQueue),
+          );
+        }),
       ),
   };
 

@@ -507,6 +507,41 @@ export const ProjectAgentRefreshDigestInput = Schema.Struct({
 });
 export type ProjectAgentRefreshDigestInput = typeof ProjectAgentRefreshDigestInput.Type;
 
+export const ProjectAgentExcludeThreadInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  excluded: Schema.Boolean,
+});
+export type ProjectAgentExcludeThreadInput = typeof ProjectAgentExcludeThreadInput.Type;
+
+export const ProjectAgentBackfillInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+});
+export type ProjectAgentBackfillInput = typeof ProjectAgentBackfillInput.Type;
+
+export const ProjectAgentListThreadIndexInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectAgentListThreadIndexInput = typeof ProjectAgentListThreadIndexInput.Type;
+
+export const ProjectAgentListThreadIndexResult = Schema.Struct({
+  threads: Schema.Array(ProjectThreadIndexEntry),
+});
+export type ProjectAgentListThreadIndexResult = typeof ProjectAgentListThreadIndexResult.Type;
+
+export const ProjectAgentListEvidenceInput = Schema.Struct({
+  projectId: ProjectId,
+  taskId: ProjectTaskId,
+});
+export type ProjectAgentListEvidenceInput = typeof ProjectAgentListEvidenceInput.Type;
+
+export const ProjectAgentListEvidenceResult = Schema.Struct({
+  evidence: Schema.Array(ProjectEvidence),
+});
+export type ProjectAgentListEvidenceResult = typeof ProjectAgentListEvidenceResult.Type;
+
 export const ProjectAgentSubscribeInput = Schema.Struct({
   projectId: ProjectId,
 });

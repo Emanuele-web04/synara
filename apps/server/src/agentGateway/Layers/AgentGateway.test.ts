@@ -807,6 +807,15 @@ function makeHarnessLayer(
     writeDocument: () => Effect.fail(new Error("not configured")),
     reportResult: () => Effect.fail(new Error("not configured")),
     buildContextPacket: () => Effect.fail(new Error("not configured")),
+    formatContextPacketForTurn: () => Effect.succeed(""),
+    authorizeManagedGoalCreation: () => Effect.void,
+    recordManagedWorkerThreads: () => Effect.void,
+    scheduleDigest: () => Effect.void,
+    reconcilePendingWakes: () => Effect.void,
+    listEvidence: () => Effect.succeed({ evidence: [] }),
+    listThreadIndex: () => Effect.succeed({ threads: [] }),
+    excludeThread: () => Effect.fail(new Error("not configured")),
+    backfillSummaries: () => Effect.fail(new Error("not configured")),
   } as unknown as (typeof ProjectAgentService)["Service"]);
 
   const gitLayer = Layer.succeed(GitCore, {

@@ -109,6 +109,7 @@ import { resolveTextGenerationInputForSelection } from "../../git/textGeneration
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -2092,6 +2093,14 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const projectContext = yield* Effect.gen(function* () {
+      const projectAgent = yield* ProjectAgentService;
+      return yield* projectAgent.formatContextPacketForTurn(input.threadId);
+    }).pipe(Effect.catch(() => Effect.succeed("")));
+    const promptWithProjectContext =
+      projectContext.trim().length > 0
+        ? `${projectContext}\n\n${input.messageText}`
+        : input.messageText;
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
@@ -2099,12 +2108,12 @@ const make = Effect.gen(function* () {
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
       maxTotalContextChars: availableThreadMentionContextChars(
-        input.messageText,
+        promptWithProjectContext,
         providerPromptOverheadChars,
       ),
     });
     const messageText = appendThreadMentionContextBlocks({
-      text: input.messageText,
+      text: promptWithProjectContext,
       contextBlocks: threadMentionProjection.contextBlocks,
     });
     const mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);

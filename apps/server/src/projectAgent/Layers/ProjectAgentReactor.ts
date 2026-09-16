@@ -18,6 +18,14 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectAgent = yield* ProjectAgentService;
 
+  yield* projectAgent.reconcilePendingWakes().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("project agent wake reconciliation failed", {
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
+
   const worker = yield* makeDrainableWorker((event: OrchestrationEvent) =>
     Effect.gen(function* () {
       if (event.type === "project.deleted") {
