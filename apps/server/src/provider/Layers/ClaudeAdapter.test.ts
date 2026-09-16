@@ -21,6 +21,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { Deferred, Effect, Exit, Fiber, Layer, Queue, Random, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { vi } from "vitest";
@@ -33,6 +34,7 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
+import { claudeCacheForModel } from "../claudeCacheObservation.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
@@ -12246,6 +12248,73 @@ describe("Claude cache preflight", () => {
     source: "request-usage" as const,
   };
 
+  for (const timing of ["early", "late"] as const) {
+    for (const model of [undefined, "claude-opus-4-6", "claude-opus-4-6[1m]"]) {
+      it.effect(
+        `identifies ${timing} model-less cache evidence using configured model ${model}`,
+        () => {
+          let hookResult: Promise<unknown> | undefined;
+          const reportWarmCache = (options: ClaudeQueryOptions) =>
+            options.hooks!.SessionStart![0]!.hooks[0]!(
+              {
+                hook_event_name: "SessionStart",
+                session_id: nativeSessionId,
+                source: "resume",
+                context_tokens: 120_000,
+                seconds_since_last_response: 0,
+                prompt_cache_likely_expired: false,
+                transcript_path: "/tmp/fixture.jsonl",
+                cwd: "/tmp",
+              },
+              undefined,
+              { signal: new AbortController().signal },
+            );
+          const harness = makeHarness({
+            onCreate: (options) => {
+              if (timing === "early") hookResult = reportWarmCache(options);
+            },
+          });
+          return Effect.gen(function* () {
+            const adapter = yield* ClaudeAdapter;
+            yield* adapter.startSession({
+              threadId: THREAD_ID,
+              runtimeMode: "full-access",
+              ...(model ? { modelSelection: { provider: "claudeAgent" as const, model } } : {}),
+              resumeCursor: { resume: nativeSessionId },
+            });
+            if (timing === "late") {
+              hookResult = reportWarmCache(harness.getLastCreateQueryInput()!.options);
+            }
+            yield* Effect.promise(() => hookResult!);
+            const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+            assert.equal(observation?.model, model);
+            assert.equal(observation?.contextTokens, 120_000);
+            assert.equal(observation?.state, "likely-warm");
+            const now = Date.parse(observation!.observedAt);
+            assert.isFalse(
+              assessClaudeCache(claudeCacheForModel(observation, model), now).requiresConfirmation,
+            );
+            assert.equal(
+              assessClaudeCache(claudeCacheForModel(observation, "claude-sonnet-4-6"), now)
+                .requiresConfirmation,
+              model !== undefined,
+            );
+            assert.deepEqual(harness.query.setModelCalls, []);
+            assert.deepEqual(harness.query.getContextUsageDetails, ["summary"]);
+            const cursor = (yield* adapter.listSessions())[0]!.resumeCursor as Record<
+              string,
+              unknown
+            >;
+            assert.deepEqual(cursor.claudeCache, observation);
+          }).pipe(
+            Effect.provideService(Random.Random, makeDeterministicRandomService()),
+            Effect.provide(harness.layer),
+          );
+        },
+      );
+    }
+  }
+
   for (const update of ["early-hook", "late-hook", "model-change"] as const) {
     it.effect(`persists ${update} cache evidence across a restart before SDK messages`, () => {
       let created = 0;
@@ -12456,6 +12525,7 @@ describe("Claude cache preflight", () => {
       const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
       assert.equal(observation?.state, "likely-expired");
       assert.equal(observation?.contextTokens, resumedObservation.contextTokens);
+      assert.equal(observation?.model, "claude-opus-4-6");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

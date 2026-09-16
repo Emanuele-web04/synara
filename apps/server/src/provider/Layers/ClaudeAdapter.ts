@@ -5952,14 +5952,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const contextTokens =
           (usage ? claudeCacheContextTokens(usage) : undefined) ?? previous?.contextTokens;
         if (!previous && contextTokens === undefined) return undefined;
+        // SessionStart can report cache size/warmth without a model. Bind that
+        // evidence to the current runtime before preflight compares a requested
+        // switch; retain an explicit old-model prefix until a request refreshes it.
+        const model = previous?.model ?? context.currentApiModelId;
         const observation: ClaudeCacheObservation = {
           ...(previous ?? {
             observedAt,
             state: "unknown" as const,
             source: "local-estimate" as const,
             ...(context.resumeSessionId ? { nativeSessionId: context.resumeSessionId } : {}),
-            ...(context.currentApiModelId ? { model: context.currentApiModelId } : {}),
           }),
+          ...(model ? { model } : {}),
           ...(context.lifecycleGeneration
             ? { lifecycleGeneration: context.lifecycleGeneration }
             : {}),
