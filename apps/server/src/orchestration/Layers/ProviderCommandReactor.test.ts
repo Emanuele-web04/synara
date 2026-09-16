@@ -1466,6 +1466,87 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("failed");
     });
 
+    it.each(["cache-revalidation", "persisted-compacting"] as const)(
+      "fails a compact request when rollback removes its message during %s",
+      async (stage) => {
+        const observation = expiredCacheObservation();
+        let getterCalls = 0;
+        let releaseObservation!: (observation: ClaudeCacheObservation) => void;
+        const observationGate = new Promise<ClaudeCacheObservation>((resolve) => {
+          releaseObservation = resolve;
+        });
+        const startClaudeCompaction = vi.fn<
+          NonNullable<ProviderServiceShape["startClaudeCompaction"]>
+        >((input) => Effect.succeed(input));
+        const harness = await createHarness({
+          threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          startClaudeCompaction,
+          getClaudeCacheObservation: () => {
+            getterCalls += 1;
+            return stage === "cache-revalidation" && getterCalls === 2
+              ? Effect.promise(() => observationGate)
+              : Effect.succeed(observation);
+          },
+        });
+        const review = await sendHeldMessage(harness);
+        const rollback: OrchestrationCommand = {
+          type: "thread.conversation.rollback.complete",
+          commandId: CommandId.makeUnsafe("cmd-compact-authorization-rollback"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: review.messageId,
+          numTurns: 1,
+          createdAt: new Date().toISOString(),
+        };
+        let sawPersistedCompacting = false;
+        if (stage === "persisted-compacting") {
+          const dispatch = harness.engine.dispatch;
+          harness.interceptEngineDispatch((command) => {
+            if (
+              command.type !== "thread.claude-cache.set" ||
+              command.review?.status !== "compacting"
+            )
+              return undefined;
+            return Effect.gen(function* () {
+              const receipt = yield* dispatch(command);
+              const thread = (yield* harness.engine.getReadModel()).threads.find(
+                (candidate) => candidate.id === rollback.threadId,
+              );
+              expect(thread?.claudeCacheReview?.status).toBe("compacting");
+              sawPersistedCompacting = true;
+              yield* dispatch(rollback);
+              return receipt;
+            });
+          });
+        }
+        try {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-compact-authorization-respond"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: review.reviewId,
+              messageId: review.messageId,
+              decision: "compact",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          if (stage === "cache-revalidation") {
+            await waitFor(() => getterCalls === 2);
+            await Effect.runPromise(harness.engine.dispatch(rollback));
+          }
+        } finally {
+          releaseObservation(observation);
+        }
+        await harness.drain();
+
+        if (stage === "persisted-compacting") expect(sawPersistedCompacting).toBe(true);
+        expect(startClaudeCompaction).not.toHaveBeenCalled();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.messages).toEqual([]);
+        expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("failed");
+      },
+    );
+
     it.each(["archive", "stop", "rollback"] as const)(
       "revokes an accepted Continue when %s arrives during cache revalidation",
       async (action) => {

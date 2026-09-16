@@ -3480,6 +3480,9 @@ const make = Effect.gen(function* () {
       eventTypes: ["turn.completed", "turn.aborted"],
     });
     const terminalSequence = journalEvents[0]?.sequence;
+    // Production journals before publishing runtime events. A retained row can
+    // be absent here after acknowledgement-based pruning; it cannot disappear
+    // while the ingestion consumer still needs to apply that terminal event.
     if (
       terminalSequence !== undefined &&
       (yield* runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER)) <
@@ -3665,7 +3668,13 @@ const make = Effect.gen(function* () {
           const observation = providerService.getClaudeCacheObservation
             ? yield* providerService.getClaudeCacheObservation(threadId)
             : undefined;
-          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "responding"))) return;
+          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "responding"))) {
+            return yield* new ProviderAdapterValidationError({
+              provider: "claudeAgent",
+              operation: "thread.claude-cache.compact",
+              issue: "The saved message is no longer available for compaction.",
+            });
+          }
           if (!observation || !sameClaudeCacheContext(review.assessment, observation)) {
             yield* setClaudeCacheReview(
               threadId,
@@ -3692,7 +3701,13 @@ const make = Effect.gen(function* () {
               : {}),
           };
           yield* setClaudeCacheReview(threadId, compactingReview, review.reviewId);
-          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "compacting"))) return;
+          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "compacting"))) {
+            return yield* new ProviderAdapterValidationError({
+              provider: "claudeAgent",
+              operation: "thread.claude-cache.compact",
+              issue: "The saved message is no longer available for compaction.",
+            });
+          }
           yield* providerService.startClaudeCompaction({ threadId, turnId }).pipe(
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
@@ -3749,12 +3764,12 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             const review = (yield* resolveThread(event.payload.threadId))?.claudeCacheReview;
+            const rejected =
+              classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
             if (
               review?.reviewId === event.payload.review.reviewId &&
-              review.status === "responding"
+              (review.status === "responding" || (review.status === "compacting" && rejected))
             ) {
-              const rejected =
-                classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
               yield* setClaudeCacheReview(
                 event.payload.threadId,
                 {
