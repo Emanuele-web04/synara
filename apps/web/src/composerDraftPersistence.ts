@@ -1143,6 +1143,7 @@ export function partializeComposerDraftStoreState(
             id: selection.id,
             assistantMessageId: selection.assistantMessageId,
             text: selection.text,
+            ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
           })),
           ...(queuedTurn.browserAnnotations.length > 0
             ? {
@@ -1264,6 +1265,7 @@ export function partializeComposerDraftStoreState(
                         id: selection.id,
                         assistantMessageId: selection.assistantMessageId,
                         text: selection.text,
+                        ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
                       }),
                     ),
                   }
@@ -1332,6 +1334,7 @@ export function partializeComposerDraftStoreState(
               id: selection.id,
               assistantMessageId: selection.assistantMessageId,
               text: selection.text,
+              ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
             })),
           }
         : {}),

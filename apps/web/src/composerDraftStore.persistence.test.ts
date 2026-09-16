@@ -791,6 +791,124 @@ describe("composerDraftStore queued follow-ups", () => {
   });
 });
 
+describe("composerDraftStore assistant selection comments", () => {
+  const threadId = ThreadId.makeUnsafe("thread-selection-comment");
+  const annotatedSelection = {
+    type: "assistant-selection" as const,
+    id: "selection-annotated",
+    assistantMessageId: "assistant-message-1",
+    text: "selected assistant text",
+    comment: "check this race",
+  };
+  const persistedSelection = {
+    id: annotatedSelection.id,
+    assistantMessageId: annotatedSelection.assistantMessageId,
+    text: annotatedSelection.text,
+    comment: annotatedSelection.comment,
+  };
+
+  const persistApi = () =>
+    useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+
+  const roundTrip = () => {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown;
+    return persistApi().getOptions().merge(persistedState, useComposerDraftStore.getInitialState());
+  };
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists selection comments on live drafts", () => {
+    useComposerDraftStore.getState().addAssistantSelection(threadId, annotatedSelection);
+
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
+      draftsByThreadId?: Record<string, { assistantSelections?: Array<Record<string, unknown>> }>;
+    };
+    expect(persistedState.draftsByThreadId?.[threadId]?.assistantSelections).toEqual([
+      persistedSelection,
+    ]);
+
+    const mergedState = roundTrip();
+    expect(mergedState.draftsByThreadId[threadId]?.assistantSelections).toEqual([
+      annotatedSelection,
+    ]);
+  });
+
+  it("persists selection comments on queued chat turns", () => {
+    const queuedChatTurn = makeQueuedChatTurn("queued-chat-comment");
+    if (queuedChatTurn.kind !== "chat") {
+      throw new Error("Expected a queued chat turn fixture");
+    }
+    useComposerDraftStore.getState().enqueueQueuedTurn(threadId, {
+      ...queuedChatTurn,
+      assistantSelections: [annotatedSelection],
+    });
+
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
+      draftsByThreadId?: Record<string, { queuedTurns?: Array<Record<string, unknown>> }>;
+    };
+    expect(
+      persistedState.draftsByThreadId?.[threadId]?.queuedTurns?.[0]?.assistantSelections,
+    ).toEqual([persistedSelection]);
+
+    const mergedState = roundTrip();
+    const mergedTurn = mergedState.draftsByThreadId[threadId]?.queuedTurns?.[0];
+    expect(mergedTurn?.kind === "chat" ? mergedTurn.assistantSelections : []).toEqual([
+      annotatedSelection,
+    ]);
+  });
+
+  it("persists selection comments on prompt-history saved drafts", () => {
+    useComposerDraftStore.getState().setPromptHistorySavedDraft(threadId, {
+      prompt: "saved prompt",
+      images: [],
+      files: [],
+      nonPersistedImageIds: [],
+      persistedAttachments: [],
+      assistantSelections: [annotatedSelection],
+      browserAnnotations: [],
+      terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      pullRequestContexts: [],
+      skills: [],
+      mentions: [],
+    });
+
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
+      draftsByThreadId?: Record<
+        string,
+        { promptHistorySavedDraft?: { assistantSelections?: Array<Record<string, unknown>> } }
+      >;
+    };
+    expect(
+      persistedState.draftsByThreadId?.[threadId]?.promptHistorySavedDraft?.assistantSelections,
+    ).toEqual([persistedSelection]);
+
+    const mergedState = roundTrip();
+    expect(
+      mergedState.draftsByThreadId[threadId]?.promptHistorySavedDraft?.assistantSelections,
+    ).toEqual([annotatedSelection]);
+  });
+});
+
 function createMockStorage() {
   const store = new Map<string, string>();
   return {
