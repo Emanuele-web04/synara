@@ -13,7 +13,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
-import { listFiles, pruneProductionPublicAssets } from "./build/public-assets.ts";
+import { listFiles, pruneProductionPublicAssets } from "./build/public-assets";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();

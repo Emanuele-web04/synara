@@ -13,7 +13,9 @@ export function includeDesktopDependencySources(
     "SYNARA_DESKTOP_SOURCEMAP",
     "SYNARA_SERVER_SOURCEMAP",
     "SYNARA_WEB_SOURCEMAP",
-  ].some((name) => ["1", "true", "hidden", "yes", "on"].includes(env[name]?.trim().toLowerCase() ?? ""));
+  ].some((name) =>
+    ["1", "true", "hidden", "yes", "on"].includes(env[name]?.trim().toLowerCase() ?? ""),
+  );
 }
 
 export function desktopPackageFiles(
@@ -34,6 +36,7 @@ export function desktopPackageFiles(
       "!**/node_modules/**/*.{js,mjs,cjs,ts,mts,cts}.map",
       "!**/node_modules/**/*.d.{mts,cts}",
       // Only these audited packages expose compiled runtime JS outside src/.
+      // Keep non-code files here, including vendored dependency license notices.
       // Do not generalize this to all .ts files: agent extensions can execute TS.
       ...[
         "effect",
@@ -42,7 +45,7 @@ export function desktopPackageFiles(
         "openai",
         "@anthropic-ai/sdk",
         "zod",
-      ].map((name) => `!**/node_modules/${name}/src/**`),
+      ].map((name) => `!**/node_modules/${name}/src/**/*.{ts,mts,cts}`),
     );
   }
 

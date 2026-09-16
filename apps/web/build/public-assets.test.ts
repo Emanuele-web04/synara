@@ -6,7 +6,7 @@ import {
   CENTRAL_ICON_DIRECTORIES,
   pruneProductionPublicAssets,
   referencedCentralIcons,
-} from "./public-assets.ts";
+} from "./public-assets";
 
 const fixtures: string[] = [];
 afterEach(async () => {
