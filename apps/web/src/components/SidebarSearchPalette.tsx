@@ -853,11 +853,18 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </CommandGroupLabel>
                     {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
                       const matchLabel = threadMatchLabel({ matchKind, messageMatchCount });
+                      const matchContext =
+                        snippet ??
+                        (matchKind === "project"
+                          ? [thread.projectName, thread.projectRemoteName, thread.spaceName]
+                              .filter(Boolean)
+                              .join(" · ")
+                          : null);
                       return (
                         <CommandItem
                           key={id}
                           value={id}
-                          className={cn(PALETTE_ITEM_CLASS, snippet ? "py-1" : undefined)}
+                          className={cn(PALETTE_ITEM_CLASS, matchContext ? "py-1" : undefined)}
                           onMouseDown={(event) => {
                             event.preventDefault();
                           }}
@@ -882,14 +889,13 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                   query={query}
                                 />
                               </div>
-                              {/* Project only, not "project · space": a thread's Space is
-                                  already implied by its project. Space stays searchable. */}
+                              {/* Keep the idle row compact; metadata search context appears below. */}
                               <span className={PALETTE_META_CLASS}>{thread.projectName}</span>
                             </div>
-                            {snippet ? (
+                            {matchContext ? (
                               <div className="flex items-start gap-3">
                                 <div className="min-w-0 flex-1 line-clamp-1 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/78">
-                                  <HighlightedText text={snippet} query={query} />
+                                  <HighlightedText text={matchContext} query={query} />
                                 </div>
                                 {matchLabel ? (
                                   <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/58">

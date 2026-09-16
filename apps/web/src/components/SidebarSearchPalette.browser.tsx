@@ -1,0 +1,84 @@
+import "../index.css";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { page } from "vitest/browser";
+import { expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+
+import { SidebarSearchPalette } from "./SidebarSearchPalette";
+import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
+
+const thread: SidebarSearchThread = {
+  id: "thread-1",
+  title: "Fix login flow",
+  projectId: "project-1",
+  projectName: "Dashboard",
+  projectRemoteName: "acme/control-panel",
+  spaceName: "Client work",
+  provider: "codex",
+  createdAt: "2026-09-16T12:00:00Z",
+  messages: [{ text: "Check the expired session token" }],
+};
+
+async function renderPalette() {
+  const onOpenThread = vi.fn();
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SidebarSearchPalette
+        open
+        mode="search"
+        onModeChange={vi.fn()}
+        onOpenChange={vi.fn()}
+        actions={[]}
+        projects={[]}
+        threads={[thread]}
+        onCreateChat={vi.fn()}
+        onCreateThread={vi.fn()}
+        onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
+        homeDir={null}
+        onOpenSettings={vi.fn()}
+        onOpenFeedback={vi.fn()}
+        onOpenUsageSettings={vi.fn()}
+        onOpenProject={vi.fn()}
+        onOpenThread={onOpenThread}
+        importProviders={[]}
+        onImportThread={vi.fn().mockResolvedValue(undefined)}
+      />
+    </QueryClientProvider>,
+  );
+  return { onOpenThread };
+}
+
+it.each(["Dashboard", "control-panel", "Client work"])(
+  "explains a thread found by project or space metadata: %s",
+  async (query) => {
+    const { onOpenThread } = await renderPalette();
+    await page.getByPlaceholder("Search chats or run a command").fill(query);
+
+    const result = page.getByRole("option", { name: /Fix login flow/ });
+    await expect.element(result).toBeVisible();
+    await expect.element(result).toHaveTextContent("Project match");
+    // These matches have no message snippet. The matching metadata must still
+    // be shown and highlighted instead of returning an unexplained chat title.
+    await expect.element(result).toHaveTextContent(query);
+    const highlighted = result.element().querySelectorAll("mark");
+    expect(Array.from(highlighted, (mark) => mark.textContent).join(" ")).toContain(query);
+    await result.click();
+    expect(onOpenThread).toHaveBeenCalledWith(thread.id);
+  },
+);
+
+it("keeps recent and title matches compact, while retaining message snippets", async () => {
+  await renderPalette();
+  const result = page.getByRole("option", { name: /Fix login flow/ });
+  await expect.element(result).toBeVisible();
+  await expect.element(result).not.toHaveTextContent(thread.spaceName);
+  await expect.element(result).not.toHaveTextContent("Project match");
+
+  const input = page.getByPlaceholder("Search chats or run a command");
+  await input.fill("login");
+  await expect.element(result).not.toHaveTextContent(thread.spaceName);
+  await input.fill("expired");
+  await expect.element(result).toHaveTextContent("Check the expired session token");
+  await expect.element(result).toHaveTextContent("Chat match");
+});
