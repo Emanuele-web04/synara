@@ -1,7 +1,13 @@
 import type { ContextMenuItem } from "@synara/contracts";
+import { createCentralIconElement } from "./lib/central-icons";
+import { isInlineSvgMenuIcon } from "./lib/nativeMenuIcons";
 
-export interface ContextMenuItemWithIcon<T extends string = string> extends ContextMenuItem<T> {
-  icon?: string; // SVG string
+function createMenuIconElement(icon: string): HTMLElement | null {
+  if (!isInlineSvgMenuIcon(icon)) return createCentralIconElement(icon, "opacity-60");
+  const wrapper = document.createElement("span");
+  wrapper.className = "flex size-4 shrink-0 items-center justify-center opacity-60 [&>svg]:size-4";
+  wrapper.innerHTML = icon;
+  return wrapper;
 }
 
 /**
@@ -10,7 +16,7 @@ export interface ContextMenuItemWithIcon<T extends string = string> extends Cont
  * with the clicked item id, or null if dismissed.
  */
 export function showContextMenuFallback<T extends string>(
-  items: readonly ContextMenuItemWithIcon<T>[],
+  items: readonly ContextMenuItem<T>[],
   position?: { x: number; y: number },
 ): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
@@ -89,11 +95,9 @@ export function showContextMenuFallback<T extends string>(
         ? "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-colors"
         : "flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-colors";
 
-      if (item.icon) {
-        const iconWrapper = document.createElement("span");
-        iconWrapper.className = "size-4 flex items-center justify-center opacity-60";
-        iconWrapper.innerHTML = item.icon;
-        btn.appendChild(iconWrapper);
+      const icon = item.icon ? createMenuIconElement(item.icon) : null;
+      if (icon) {
+        btn.appendChild(icon);
       }
 
       const label = document.createElement("span");
