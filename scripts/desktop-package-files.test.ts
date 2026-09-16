@@ -46,6 +46,12 @@ describe("desktop package file policy", () => {
       "node_modules/@earendil-works/pi-coding-agent/docs/extensions.md",
       "node_modules/@shikijs/langs/dist/italian.mjs",
       "node_modules/effect/LICENSE",
+      "node_modules/@anthropic-ai/sdk/src/internal/qs/LICENSE.md",
+      "node_modules/@earendil-works/pi-ai/node_modules/@anthropic-ai/sdk/src/internal/qs/LICENSE.md",
+      "node_modules/openai/src/internal/qs/LICENSE.md",
+      "node_modules/openai/src/_vendor/zod-to-json-schema/LICENSE",
+      "node_modules/openai/src/resources/responses/api.md",
+      "node_modules/effect/src/runtime.json",
       "apps/server/dist/client/assets/worker.js.br",
       "apps/server/dist/client/assets/worker.js.gz",
       "apps/server/dist/index.mjs.map",
@@ -121,6 +127,8 @@ describe("desktop package file policy", () => {
       "node_modules/node-pty/build/deps/winpty/src/winpty.vcxproj",
       "node_modules/node-pty/build/pty.vcxproj.filters",
       "node_modules/node-pty/node-addon-api/node_addon_api.vcxproj",
+      "node_modules/node-pty/node-addon-api/Release/obj/node_addon_api_except/node_add.4DE47F45.tlog/Cl.items.tlog",
+      "node_modules/node-pty/node-addon-api/Release/obj/node_addon_api_except/node_add.4DE47F45.tlog/node_addon_api_except.lastbuildstate",
       "node_modules/msgpackr-extract/build/Release/extract.ipdb",
     ]) {
       assert.equal(ships(path, "win"), false, path);

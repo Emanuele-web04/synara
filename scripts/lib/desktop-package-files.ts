@@ -63,7 +63,10 @@ export function createDesktopPackageFilePatterns(
       // variants and incremental compiler caches, none of which execute.
       "!**/node_modules/**/*.d.{mts,cts}",
       "!**/node_modules/**/*.tsbuildinfo",
-      ...COMPILED_SOURCE_PACKAGES.map((name) => `!**/node_modules/${name}/src/**`),
+      // Keep non-code assets and vendored license notices inside src/.
+      ...COMPILED_SOURCE_PACKAGES.map(
+        (name) => `!**/node_modules/${name}/src/**/*.{ts,tsx,mts,cts}`,
+      ),
       "!**/node_modules/node-pty/src/**",
       "!**/node_modules/node-pty/lib/*.test.js",
     );
@@ -74,7 +77,7 @@ export function createDesktopPackageFilePatterns(
       // only omit audited build intermediates from these two native packages.
       patterns.push(
         "!**/node_modules/{node-pty,msgpackr-extract}/build/**/*.{iobj,ipdb,exp,lib,tlog,lastbuildstate,recipe,vcxproj,filters}",
-        "!**/node_modules/node-pty/node-addon-api/**/*.{recipe,vcxproj,filters}",
+        "!**/node_modules/node-pty/node-addon-api/**/*.{tlog,lastbuildstate,recipe,vcxproj,filters}",
       );
     }
   }
