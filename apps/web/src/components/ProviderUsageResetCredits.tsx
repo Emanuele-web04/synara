@@ -69,7 +69,7 @@ export function ProviderUsageResetCredits({
     try {
       const api = readNativeApi();
       const confirmationMessage = [
-        `Use Codex reset "${label}"?`,
+        `Use Codex reset?`,
         "This immediately resets Codex limits and cannot be undone.",
       ].join("\n");
       const confirmed = api
