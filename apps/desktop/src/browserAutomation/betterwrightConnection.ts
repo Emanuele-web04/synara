@@ -118,6 +118,9 @@ export async function openBetterwrightConnection(
       cdpUrl: `ws://127.0.0.1:${address.port}/browser`,
       headers: { authorization: `Bearer ${capability}` },
     },
+    get closed() {
+      return closing !== undefined;
+    },
     close,
   };
 }
