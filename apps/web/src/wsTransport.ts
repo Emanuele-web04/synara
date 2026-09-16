@@ -1435,7 +1435,10 @@ export class WsTransport {
       }
     }
 
-    if (this.recovery.phase === "recovering" && session.id === this.currentFeatureSession?.id) {
+    if (
+      session.id === this.currentFeatureSession?.id &&
+      (this.recovery.phase === "recovering" || this.reconnectPromise !== null)
+    ) {
       this.recovery.candidateFailedSessionId = session.id;
       return;
     }

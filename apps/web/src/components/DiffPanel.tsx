@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   gitBranchesQueryOptions,
   gitQueryKeys,
-  refreshGitWorkingTreeDiffsForCwd,
+  refreshGitAfterFileWrite,
   gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
   gitWorkingTreeDiffStatsQueryOptions,
@@ -841,7 +841,7 @@ export default function DiffPanel({
     if (!activeCwd) {
       return;
     }
-    void refreshGitWorkingTreeDiffsForCwd(queryClient, activeCwd);
+    void refreshGitAfterFileWrite(queryClient, activeCwd);
   }, [activeCwd, queryClient]);
   useProjectFileChangeSubscription({
     cwd: activeCwd,

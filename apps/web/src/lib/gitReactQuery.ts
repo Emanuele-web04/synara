@@ -276,6 +276,48 @@ export async function refreshGitWorkingTreeDiffsForCwd(
   }
 }
 
+const activeFileWriteRefreshes = new WeakMap<
+  QueryClient,
+  Map<string, { generation: number; promise: Promise<void> }>
+>();
+
+/** Refresh only working-copy data after file writes. Autosave must not refetch
+ * PRs, branches or revision blobs for each pause in typing. Watcher echoes join
+ * the pending refresh; events arriving during a read request one fresh pass. */
+export function refreshGitAfterFileWrite(queryClient: QueryClient, cwd: string): Promise<void> {
+  let refreshes = activeFileWriteRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeFileWriteRefreshes.set(queryClient, refreshes);
+  }
+  const existing = refreshes.get(cwd);
+  if (existing) {
+    existing.generation += 1;
+    return existing.promise;
+  }
+  const entry = { generation: 0, promise: Promise.resolve() };
+  refreshes.set(cwd, entry);
+  entry.promise = (async () => {
+    let completed: number;
+    do {
+      completed = entry.generation;
+      // Keep the visible patch first: status may need a separate Git process.
+      await refreshGitWorkingTreeDiffsForCwd(queryClient, cwd);
+      await queryClient.invalidateQueries({
+        queryKey: gitQueryKeys.status(cwd),
+        exact: true,
+        refetchType: "none",
+      });
+      await enqueueGitRefresh(queryClient, () =>
+        refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
+      );
+    } while (completed !== entry.generation);
+  })().finally(() => {
+    if (refreshes.get(cwd) === entry) refreshes.delete(cwd);
+  });
+  return entry.promise;
+}
+
 /**
  * Coalesces refreshes by repository and serializes their expensive reads across the client.
  * Availability is refreshed first; active diff/PR details follow one at a time so Git UI work

@@ -85,7 +85,8 @@ export function sessionCookieParameters(cookie: Cookie): Record<string, unknown>
 
 /** No snapshot from an unclean run is replayed, including an interrupted logout. */
 export class BrowserSessionRestore {
-  private readonly keys: VaultKeyProtection;
+  private keyProtection: VaultKeyProtection | undefined;
+  private disposed = false;
   private readonly dirtyPath: string;
   private readonly snapshotPath: string;
   private domains = new Set<string>();
@@ -97,11 +98,15 @@ export class BrowserSessionRestore {
   constructor(
     private readonly directory: string,
     private readonly backend: CookieSessionBackend,
-    store: VaultKeyStore,
+    private readonly store: VaultKeyStore,
   ) {
-    this.keys = new VaultKeyProtection(directory, store);
     this.dirtyPath = join(directory, "active-run");
     this.snapshotPath = join(directory, "sessions.enc");
+  }
+
+  private get keys(): VaultKeyProtection {
+    if (this.disposed) throw new Error("Browser session restoration is unavailable.");
+    return (this.keyProtection ??= new VaultKeyProtection(this.directory, this.store));
   }
 
   private syncDirectory(): void {
@@ -137,6 +142,11 @@ export class BrowserSessionRestore {
       this.revision++;
       if (this.clean) this.invalidate();
     });
+    // Fresh installs have no sessions to decrypt. Defer OS key creation until an import.
+    if (!existsSync(this.snapshotPath)) {
+      this.available = true;
+      return;
+    }
     const key = await this.keys.provide();
     key.fill(0);
     this.available = true;
@@ -187,6 +197,13 @@ export class BrowserSessionRestore {
 
   async rememberImport(domains: readonly string[]): Promise<void> {
     if (!this.available) throw new Error("Secure browser session storage is unavailable.");
+    try {
+      const key = await this.keys.provide();
+      key.fill(0);
+    } catch {
+      this.available = false;
+      throw new Error("Secure browser session storage is unavailable.");
+    }
     let raw: unknown[];
     try {
       raw = await this.backend.read();
@@ -246,7 +263,7 @@ export class BrowserSessionRestore {
 
   async shutdown(): Promise<void> {
     try {
-      if (!this.available) return;
+      if (!this.available || !this.keyProtection) return;
       const revision = this.revision;
       await this.save();
       if (this.revision !== revision) throw new Error("Browser cookies changed during shutdown.");
@@ -254,7 +271,8 @@ export class BrowserSessionRestore {
       unlinkSync(this.dirtyPath);
       this.syncDirectory();
     } finally {
-      this.keys.dispose();
+      this.disposed = true;
+      this.keyProtection?.dispose();
       this.backend.dispose();
     }
   }

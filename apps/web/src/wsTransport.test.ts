@@ -172,6 +172,8 @@ interface WsTransportInternals {
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
   sessionVersion: number;
+  currentFeatureSession: { id: number; failed: boolean } | null;
+  reconnectPromise: Promise<unknown> | null;
   readonly recovery: {
     phase: "ready" | "scheduled" | "recovering" | "tripped";
     episodeRef: string | null;
@@ -243,6 +245,8 @@ function makeBareTransport(): {
     state: "ready",
     stateListeners: new Set(),
     sessionVersion: 1,
+    currentFeatureSession: null,
+    reconnectPromise: null,
     recovery: makeRecoveryState(),
     getClientRuntime: () => ({
       runCallback: (
@@ -906,6 +910,28 @@ describe("WsTransport", () => {
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(internals.recovery.suppressedSessionId).toBe(7);
     expect(internals.recovery.phase).toBe("recovering");
+  });
+
+  it("marks a replacement session that fails before its reconnect settles", () => {
+    const { internals } = makeBareTransport();
+    const session = { id: 8, failed: false };
+    Object.assign(internals, {
+      currentFeatureSession: session,
+      reconnectPromise: new Promise(() => undefined),
+    });
+    // Adoption currently resets the phase before subscription restoration has
+    // completed. The active reconnect promise still identifies this session as
+    // a candidate, so its failure must be caught by openReconnectSession's
+    // post-restoration guard instead of joining and stranding its own promise.
+    internals.recovery.phase = "ready";
+    const failure = new RpcClientError.RpcClientError({
+      reason: new Socket.SocketCloseError({ code: 1006, closeReason: "" }),
+    });
+
+    internals.noteProtocolFailure(session, failure);
+
+    expect(internals.recovery.candidateFailedSessionId).toBe(session.id);
+    expect(internals.recovery.phase).toBe("ready");
   });
 
   it("opens the defect circuit breaker after two defective sessions", async () => {
