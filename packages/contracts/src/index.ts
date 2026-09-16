@@ -39,3 +39,4 @@ export * from "./studio";
 export * from "./filesystem";
 export * from "./device";
 export * from "./rpc";
+export * from "./claudeCache";
