@@ -1,4 +1,11 @@
-import { ProjectId, SpaceId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  MessageId,
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  TurnId,
+  type PendingClaudeCacheReview,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -24,6 +31,92 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("persists cache reviews, preserves omitted reviews, and clears them explicitly", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-cache-review");
+      const projectId = ProjectId.makeUnsafe("project-cache-review");
+      const now = "2026-09-16T10:00:00.000Z";
+      const thread = {
+        threadId,
+        projectId,
+        title: "Cache review",
+        modelSelection: { provider: "claudeAgent" as const, model: "claude-opus-4-6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        envMode: "local" as const,
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        notes: null,
+        goal: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      };
+      const review: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("pending-cache-message"),
+        sourceEventSequence: 7,
+        assessment: {
+          nativeSessionId: "native-cache-session",
+          observedAt: now,
+          contextTokens: 850_000,
+          ttlSeconds: 3_600,
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: now,
+      };
+
+      // Old callers omit the additive field when creating or updating a row.
+      yield* threads.upsert(thread);
+      assert.isNull(Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview);
+      yield* threads.upsert({ ...thread, claudeCacheReview: review });
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview,
+        review,
+      );
+      yield* threads.upsert({ ...thread, title: "Renamed while awaiting a decision" });
+      assert.deepStrictEqual(
+        (yield* threads.listByProjectId({ projectId }))[0]?.claudeCacheReview,
+        review,
+      );
+
+      const uncertain: PendingClaudeCacheReview = {
+        ...review,
+        status: "uncertain",
+        compactionTurnId: TurnId.makeUnsafe("compact-cache-turn"),
+        error: "The provider delivery outcome could not be confirmed.",
+      };
+      yield* threads.upsert({ ...thread, claudeCacheReview: uncertain });
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview,
+        uncertain,
+      );
+      yield* threads.upsert({ ...thread, claudeCacheReview: null });
+      assert.isNull(Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview);
+      const [row] = yield* sql<{ readonly review: string | null }>`
+        SELECT claude_cache_review_json AS review FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.isNull(row?.review);
+    }),
+  );
+
   it.effect("clears active and soft-deleted project assignments for a deleted space", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
