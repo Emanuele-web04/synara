@@ -3489,6 +3489,8 @@ const make = Effect.gen(function* () {
 
   const earlyClaudeCompactionTerminals = new Map<ThreadId, ProviderQueueDrainEvent>();
   const pendingClaudeCompactionIngestion = new Set<ThreadId>();
+  const startupClaudeCompactionTurns = new Set<TurnId>();
+  let isRecoveringClaudeCompactions = true;
 
   // Execution evidence belongs to the event log, independently of the user's
   // current send authorization. Stop/archive can revoke the latter while a
@@ -3583,9 +3585,31 @@ const make = Effect.gen(function* () {
           Effect.ensuring(
             Effect.sync(() => pendingClaudeCompactionIngestion.delete(event.threadId)),
           ),
-          Effect.catchCause((cause) =>
-            Effect.logError("Could not await Claude compaction ingestion", {
-              cause: Cause.pretty(cause),
+          Effect.tapCause((cause) =>
+            Effect.gen(function* () {
+              // Shutdown must preserve durable recovery; a failed terminal
+              // release must not leave an unclickable in-progress review.
+              if (Cause.hasInterruptsOnly(cause)) return;
+              yield* Effect.logError("Could not await Claude compaction ingestion", {
+                cause: Cause.pretty(cause),
+              });
+              const current = (yield* resolveThread(event.threadId))?.claudeCacheReview;
+              if (
+                current?.reviewId === attempt.reviewId &&
+                current.compactionTurnId === event.turnId &&
+                (current.status === "compacting" || current.status === "uncertain")
+              ) {
+                yield* setClaudeCacheReview(
+                  event.threadId,
+                  {
+                    ...current,
+                    status: "failed",
+                    error:
+                      "Compaction finished, but its result could not be applied. Review the saved message before continuing.",
+                  },
+                  current.reviewId,
+                );
+              }
             }),
           ),
           Effect.forkScoped,
@@ -3809,6 +3833,11 @@ const make = Effect.gen(function* () {
             });
           }
           yield* providerService.startClaudeCompaction({ threadId, turnId }).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (isRecoveringClaudeCompactions) startupClaudeCompactionTurns.add(turnId);
+              }),
+            ),
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 const rejected =
@@ -6411,7 +6440,13 @@ const make = Effect.gen(function* () {
       }
       // Replay may just have started a previously undispatched request. Its
       // current runtime still owns the operation; wait for that terminal event.
-      if ((yield* resolveLiveProviderTurnId(thread.id)) === review.compactionTurnId) continue;
+      // A turn accepted by this startup is not abandoned merely because the
+      // adapter has settled its live state before journaling the terminal.
+      if (
+        startupClaudeCompactionTurns.has(review.compactionTurnId) ||
+        (yield* resolveLiveProviderTurnId(thread.id)) === review.compactionTurnId
+      )
+        continue;
       if (review.compactionResponseEventSequence !== undefined && reconcileDeliveryRuntime) {
         const delivery = yield* deliveryRepository.getDelivery({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -6489,7 +6524,16 @@ const make = Effect.gen(function* () {
     Effect.andThen(
       Effect.all([
         startProviderIntentSource.pipe(
-          Effect.andThen(recoverClaudeCompactions),
+          Effect.andThen(
+            recoverClaudeCompactions.pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  isRecoveringClaudeCompactions = false;
+                  startupClaudeCompactionTurns.clear();
+                }),
+              ),
+            ),
+          ),
           Effect.andThen(recoverQueuedTurnPromotions),
           Effect.andThen(recoverActiveThreadGoals),
         ),
