@@ -449,6 +449,7 @@ function makeHarness(config?: {
 function makeMultiQueryHarness(config?: {
   readonly failCreateAt?: number;
   readonly gatewayCredentials?: AgentGatewayCredentialsShape;
+  readonly onCreate?: (options: ClaudeQueryOptions) => void;
 }) {
   const queries: Array<FakeClaudeQuery> = [];
   const createInputs: Array<{
@@ -463,6 +464,7 @@ function makeMultiQueryHarness(config?: {
       const query = new FakeClaudeQuery();
       queries.push(query);
       createInputs.push(input);
+      config?.onCreate?.(input.options);
       return query;
     },
   }).pipe(
@@ -11743,6 +11745,95 @@ describe("Claude cache preflight", () => {
     state: "likely-warm" as const,
     source: "request-usage" as const,
   };
+
+  for (const update of ["early-hook", "late-hook", "model-change"] as const) {
+    it.effect(`persists ${update} cache evidence across a restart before SDK messages`, () => {
+      let created = 0;
+      let hookResult: Promise<unknown> | undefined;
+      const reportNativeCache = (options: ClaudeQueryOptions) =>
+        options.hooks!.SessionStart![0]!.hooks[0]!(
+          {
+            hook_event_name: "SessionStart",
+            session_id: nativeSessionId,
+            source: "resume",
+            context_tokens: 123456,
+            prompt_cache_likely_expired: true,
+            transcript_path: "/tmp/fixture.jsonl",
+            cwd: "/tmp",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        );
+      const harness = makeMultiQueryHarness({
+        onCreate: (options) => {
+          created += 1;
+          if (created === 1 && update === "early-hook") hookResult = reportNativeCache(options);
+        },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const modelSelection = {
+          provider: "claudeAgent" as const,
+          model: update === "model-change" ? "claude-sonnet-4-6" : "claude-opus-4-6",
+        };
+        const savedMetadata = {
+          resume: nativeSessionId,
+          resumeSessionAt: "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba2",
+          turnCount: 7,
+          processedTokenTotal: 1_000_000,
+          tokenAccountingVersion: 1,
+        };
+        const started = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          modelSelection,
+          lifecycleGeneration: "first-generation",
+          resumeCursor: {
+            ...savedMetadata,
+            claudeCache: { ...resumedObservation, model: "claude-opus-4-6" },
+          },
+        });
+        if (update === "early-hook") yield* Effect.promise(() => hookResult!);
+        if (update === "late-hook") {
+          yield* Effect.promise(() => reportNativeCache(harness.createInputs[0]!.options));
+        }
+        const listed = (yield* adapter.listSessions())[0]!;
+        const cursor = listed.resumeCursor as Record<string, unknown>;
+        const expectedCache = {
+          state: "likely-expired",
+          source: update === "model-change" ? "local-estimate" : "session-start",
+          contextTokens: update === "model-change" ? resumedObservation.contextTokens : 123456,
+          lifecycleGeneration: "first-generation",
+        };
+        assert.deepInclude(cursor, savedMetadata);
+        assert.deepInclude(cursor.claudeCache, expectedCache);
+        if (update !== "late-hook") assert.deepEqual(started.resumeCursor, listed.resumeCursor);
+        assert.equal(harness.queries[0]!.getContextUsageCalls, 0);
+
+        yield* adapter.stopSession(THREAD_ID);
+        const restarted = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          modelSelection,
+          lifecycleGeneration: "second-generation",
+          resumeCursor: cursor,
+        });
+        const restartedCursor = restarted.resumeCursor as Record<string, unknown>;
+        assert.deepInclude(restartedCursor, savedMetadata);
+        assert.deepInclude(restartedCursor.claudeCache, {
+          ...expectedCache,
+          lifecycleGeneration: "second-generation",
+        });
+        assert.equal(harness.queries[1]!.getContextUsageCalls, 0);
+        const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+        assert.equal(observation?.state, "likely-expired");
+        assert.deepInclude((yield* adapter.listSessions())[0]!.resumeCursor, savedMetadata);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   it.effect(
     "buffers an early startup hook without injecting context or replacing PreToolUse",

@@ -1010,6 +1010,22 @@ function invalidateClaudeCache(context: ClaudeSessionContext): void {
   }
 }
 
+function syncClaudeCacheResumeCursor(context: ClaudeSessionContext): void {
+  const { claudeCache: _previous, ...resumeCursor } = context.session.resumeCursor as Record<
+    string,
+    unknown
+  >;
+  // Cache observations can precede the first SDK message. Preserve the saved
+  // transcript counters rather than deriving them from unloaded local turns.
+  context.session = {
+    ...context.session,
+    resumeCursor: {
+      ...resumeCursor,
+      ...(context.cacheObservation ? { claudeCache: context.cacheObservation } : {}),
+    },
+  };
+}
+
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
   if (
@@ -5092,6 +5108,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             !current.hasObservedCacheRequest
           ) {
             current.cacheObservation = claudeCacheForModel(observation, current.currentApiModelId);
+            syncClaudeCacheResumeCursor(current);
             Effect.runFork(emitClaudeCacheObservation(current));
           }
           return {};
@@ -5674,6 +5691,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           const processedTokenBaselineKnown =
             input.resumeCursor === undefined || resumeState?.processedTokenTotal !== undefined;
+          const cacheObservation = claudeCacheForModel(
+            startupCacheObservation ?? resumeState?.claudeCache,
+            apiModelId,
+          );
+          const initialCacheObservation = cacheObservation
+            ? {
+                ...cacheObservation,
+                ...(input.lifecycleGeneration
+                  ? { lifecycleGeneration: input.lifecycleGeneration }
+                  : {}),
+              }
+            : undefined;
           const session: ProviderSession = {
             threadId,
             provider: PROVIDER,
@@ -5683,7 +5712,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(modelSelection?.model ? { model: modelSelection.model } : {}),
             ...(threadId ? { threadId } : {}),
             resumeCursor: {
-              ...(resumeState?.claudeCache ? { claudeCache: resumeState.claudeCache } : {}),
+              ...(initialCacheObservation ? { claudeCache: initialCacheObservation } : {}),
               ...(threadId ? { threadId } : {}),
               ...(sessionId ? { resume: sessionId } : {}),
               ...(resumeState?.resumeSessionAt
@@ -5703,19 +5732,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           };
 
           const context: ClaudeSessionContext = {
-            ...((startupCacheObservation ?? resumeState?.claudeCache)
-              ? {
-                  cacheObservation: claudeCacheForModel(
-                    {
-                      ...(startupCacheObservation ?? resumeState!.claudeCache!),
-                      ...(input.lifecycleGeneration
-                        ? { lifecycleGeneration: input.lifecycleGeneration }
-                        : {}),
-                    },
-                    apiModelId,
-                  ),
-                }
-              : {}),
+            ...(initialCacheObservation ? { cacheObservation: initialCacheObservation } : {}),
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             session,
             ...(input.lifecycleGeneration !== undefined
@@ -5852,7 +5869,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           installationComplete = true;
           return {
-            ...session,
+            ...context.session,
           };
         }).pipe(
           Effect.ensuring(
@@ -5914,7 +5931,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         const state = assessClaudeCache(observation, Date.parse(observedAt)).state;
         context.cacheObservation = { ...observation, state };
-        yield* updateResumeCursor(context);
+        syncClaudeCacheResumeCursor(context);
         yield* emitClaudeCacheObservation(context);
         return context.cacheObservation;
       });
