@@ -1,0 +1,144 @@
+name: Verify final production size reductions
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-size-final.yml]
+permissions:
+  contents: read
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  SYNARA_DESKTOP_SIGNED: "false"
+jobs:
+  prepare:
+    if: github.repository == 'Emanuele-web04/synara' && github.ref == 'refs/heads/perf/production-bundle-size-audit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
+      - name: Record the exact checked-out candidate
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install without changing dependency resolutions
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Formatting and lint
+        if: "!cancelled()"
+        run: |
+          bun run fmt:check
+          bun run lint
+      - name: Focused regression tests
+        if: "!cancelled()"
+        run: |
+          bun run --cwd scripts test lib/desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
+          bun run --cwd apps/web test build/public-assets.test.ts
+
+  measure:
+    needs: prepare
+    if: ${{ needs.prepare.result == 'success' }}
+    name: Final ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            arch: arm64
+            target: dmg
+            node: 24.20.0
+          - runner: macos-15-intel
+            platform: mac
+            arch: x64
+            target: dmg
+            node: 24.19.0
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            target: AppImage
+            node: 24.20.0
+          - runner: windows-2022
+            platform: win
+            arch: x64
+            target: nsis
+            node: 24.20.0
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Archive verified candidate source
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/final-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: final-candidate-source
+          path: ${{ runner.temp }}/final-source.tar.gz
+          retention-days: 14
+      - name: Install frozen release build dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production package
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-audit/artifacts" 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Measure using the identical baseline method
+        shell: bash
+        run: node .github/scripts/measure-bundle-size.mjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/size-audit/final" '${{ matrix.platform }}'
+      - name: Verify packaged startup and runtime imports
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-audit/artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4 2>&1 | tee "$RUNNER_TEMP/startup.log"
+      - name: Verify retained Claude fallback executes
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readdirSync, readFileSync, lstatSync, mkdtempSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux';
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'size-audit/final/bundle-size.json'), 'utf8'));
+          const stages = readdirSync(tmpdir()).filter(n => n.startsWith(`synara-desktop-${platform}-stage-`)).map(n => join(tmpdir(), n)).sort((a,b)=>lstatSync(b).mtimeMs-lstatSync(a).mtimeMs);
+          const dist=join(stages[0], 'app/dist');
+          const packaged = readdirSync(dist).find(n => lstatSync(join(dist,n)).isDirectory() && (n.startsWith('mac') || n.endsWith('-unpacked')));
+          const root=join(dist,packaged);
+          const resources=process.platform==='darwin' ? join(root,readdirSync(root).find(n=>n.endsWith('.app')),'Contents/Resources') : join(root,'resources');
+          const binary=report.asar.files.find(f=>/^node_modules\/@anthropic-ai\/claude-agent-sdk-[^/]+\/claude(?:\.exe)?$/.test(f.path) && !f.path.includes('-musl/'));
+          if (!binary?.unpacked) throw Error('Expected matching unpacked Claude binary');
+          const home=mkdtempSync(join(tmpdir(),'synara-bundle-provider-check-'));
+          const stdout=execFileSync(join(resources,'app.asar.unpacked',binary.path),['--version'],{encoding:'utf8',timeout:30000,env:{...process.env,HOME:home,USERPROFILE:home,CLAUDE_CONFIG_DIR:home}});
+          console.log(`Matching Claude fallback executes: ${stdout.trim()}`);
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-bundle-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/size-audit/final
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/startup.log
+          retention-days: 14
