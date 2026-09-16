@@ -23,6 +23,7 @@ import {
   buildVisibleToastLayout,
   DEFAULT_TOAST_TIMEOUT_MS,
   shouldHideCollapsedToastContent,
+  shouldRunVisibleToastAutoDismiss,
 } from "./toast.logic";
 import {
   NOTIFICATION_ICON_CLASS_NAME,
@@ -158,17 +159,19 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
 }
 
 function ThreadToastVisibleAutoDismiss({
-  toastId,
+  toast,
   dismissAfterVisibleMs,
   paused: pausedProp,
 }: {
-  toastId: ToastId;
+  toast: ToastObject<ThreadToastData>;
   dismissAfterVisibleMs: number | undefined;
   // While paused (e.g. an Undo is in flight) the visible timer holds so the
   // toast can't auto-dismiss out from under an action the user just triggered.
   paused?: boolean;
 }) {
   const paused = pausedProp ?? false;
+  const toastId = toast.id;
+  const toastRef = toast.ref;
   useEffect(() => {
     if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -177,11 +180,18 @@ function ThreadToastVisibleAutoDismiss({
     let startedAtMs: number | null = null;
     let timeoutId: number | null = null;
     let closed = false;
+    let disposed = false;
 
     const clearTimer = () => {
       if (timeoutId === null) return;
       window.clearTimeout(timeoutId);
       timeoutId = null;
+    };
+
+    const toastHasFocus = () => {
+      const toastElement = toastRef?.current;
+      const activeElement = document.activeElement;
+      return Boolean(toastElement && activeElement && toastElement.contains(activeElement));
     };
 
     const closeToast = () => {
@@ -215,27 +225,43 @@ function ThreadToastVisibleAutoDismiss({
     };
 
     const syncTimer = () => {
-      const shouldRun = !paused && document.visibilityState === "visible" && document.hasFocus();
+      // Focus events settle in a microtask, possibly after this effect was
+      // cleaned up by navigation or an in-flight Undo changing `paused`.
+      if (disposed) return;
+      const shouldRun = shouldRunVisibleToastAutoDismiss({
+        paused,
+        documentVisible: document.visibilityState === "visible",
+        windowFocused: document.hasFocus(),
+        toastFocused: toastHasFocus(),
+      });
       if (shouldRun) {
         start();
         return;
       }
       pause();
     };
+    const syncTimerAfterFocusChange = () => {
+      window.queueMicrotask(syncTimer);
+    };
 
     syncTimer();
     document.addEventListener("visibilitychange", syncTimer);
+    document.addEventListener("focusin", syncTimerAfterFocusChange);
+    document.addEventListener("focusout", syncTimerAfterFocusChange);
     window.addEventListener("focus", syncTimer);
     window.addEventListener("blur", syncTimer);
 
     return () => {
+      disposed = true;
       document.removeEventListener("visibilitychange", syncTimer);
+      document.removeEventListener("focusin", syncTimerAfterFocusChange);
+      document.removeEventListener("focusout", syncTimerAfterFocusChange);
       window.removeEventListener("focus", syncTimer);
       window.removeEventListener("blur", syncTimer);
       pause();
       clearTimer();
     };
-  }, [dismissAfterVisibleMs, toastId, paused]);
+  }, [dismissAfterVisibleMs, toastId, toastRef, paused]);
 
   return null;
 }
@@ -300,17 +326,14 @@ function ToastActions({
 
 function ToastCloseButton({
   compact: compactProp,
-  onDismiss,
   onClose,
 }: {
   compact?: boolean;
-  onDismiss: () => void;
   onClose?: (() => void) | undefined;
 }) {
   const compact = compactProp ?? false;
   return (
-    <button
-      type="button"
+    <Toast.Close
       aria-label="Dismiss toast"
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
@@ -321,24 +344,36 @@ function ToastCloseButton({
       data-slot="toast-close"
       onClick={() => {
         onClose?.();
-        onDismiss();
       }}
       title="Dismiss toast"
     >
       <XIcon className={compact ? "size-3" : "size-3.5"} />
-    </button>
+    </Toast.Close>
   );
+}
+
+function blurFocusedToastElement(toast: ToastObject<ThreadToastData>) {
+  if (typeof document === "undefined") return;
+  const toastElement = toast.ref?.current;
+  const activeElement = document.activeElement;
+  if (
+    toastElement &&
+    activeElement instanceof HTMLElement &&
+    toastElement.contains(activeElement)
+  ) {
+    activeElement.blur();
+  }
 }
 
 function ArchiveUndoToastSurface({
   archiveUndo,
-  toastId,
+  toast,
   dismissAfterVisibleMs,
   hideCollapsedContent,
   onDismiss,
 }: {
   archiveUndo: NonNullable<ThreadToastData["archiveUndo"]>;
-  toastId: ToastId;
+  toast: ToastObject<ThreadToastData>;
   dismissAfterVisibleMs: number | undefined;
   hideCollapsedContent: boolean;
   onDismiss: () => void;
@@ -354,6 +389,7 @@ function ArchiveUndoToastSurface({
       try {
         const restored = await archiveUndo.onUndo();
         if (restored) {
+          blurFocusedToastElement(toast);
           onDismiss();
           return;
         }
@@ -367,13 +403,12 @@ function ArchiveUndoToastSurface({
   const handleViewArchivedClick = () => {
     if (actionsDisabled) return;
     void archiveUndo.onViewArchived();
-    onDismiss();
   };
 
   return (
     <>
       <ThreadToastVisibleAutoDismiss
-        toastId={toastId}
+        toast={toast}
         dismissAfterVisibleMs={dismissAfterVisibleMs}
         paused={undoPending}
       />
@@ -400,17 +435,16 @@ function ArchiveUndoToastSurface({
             Undo
           </button>{" "}
           or view archived chats in{" "}
-          <button
-            type="button"
+          <Toast.Close
             className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
             data-base-ui-swipe-ignore
             disabled={actionsDisabled}
             onClick={handleViewArchivedClick}
           >
             Settings
-          </button>
+          </Toast.Close>
         </Toast.Title>
-        <ToastCloseButton compact onDismiss={onDismiss} />
+        <ToastCloseButton compact />
       </Toast.Content>
     </>
   );
@@ -420,12 +454,10 @@ function ToastSurface({
   toast,
   compact,
   hideCollapsedContent,
-  onDismiss,
 }: {
   toast: ToastObject<ThreadToastData>;
   compact: boolean;
   hideCollapsedContent: boolean;
-  onDismiss: () => void;
 }) {
   const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
   const compactContextual = compact && toast.data?.compactContextual === true;
@@ -504,7 +536,7 @@ function ToastSurface({
           {toast.actionProps.children}
         </Toast.Action>
       ) : null}
-      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} onDismiss={onDismiss} />
+      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} />
     </Toast.Content>
   );
 }
@@ -661,7 +693,7 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
               {archiveUndoToast && toast.data?.archiveUndo ? (
                 <ArchiveUndoToastSurface
                   archiveUndo={toast.data.archiveUndo}
-                  toastId={toast.id}
+                  toast={toast}
                   dismissAfterVisibleMs={toast.data.dismissAfterVisibleMs}
                   hideCollapsedContent={hideCollapsedContent}
                   onDismiss={() => toastManager.close(toast.id)}
@@ -670,12 +702,11 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
                 <>
                   <ThreadToastVisibleAutoDismiss
                     dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
-                    toastId={toast.id}
+                    toast={toast}
                   />
                   <ToastSurface
                     compact={compact}
                     hideCollapsedContent={hideCollapsedContent}
-                    onDismiss={() => toastManager.close(toast.id)}
                     toast={toast}
                   />
                 </>
@@ -742,12 +773,7 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <ToastSurface
-                      compact={compact}
-                      hideCollapsedContent={false}
-                      onDismiss={() => anchoredToastManager.close(toast.id)}
-                      toast={toast}
-                    />
+                    <ToastSurface compact={compact} hideCollapsedContent={false} toast={toast} />
                   )}
                 </Toast.Root>
               </Toast.Positioner>

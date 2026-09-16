@@ -10,6 +10,20 @@ export function shouldHideCollapsedToastContent(
   return visibleToastIndex > 0;
 }
 
+export function shouldRunVisibleToastAutoDismiss({
+  paused,
+  documentVisible,
+  windowFocused,
+  toastFocused,
+}: {
+  paused: boolean;
+  documentVisible: boolean;
+  windowFocused: boolean;
+  toastFocused: boolean;
+}): boolean {
+  return !paused && documentVisible && windowFocused && !toastFocused;
+}
+
 type ToastWithHeight = {
   height?: number | null | undefined;
 };
