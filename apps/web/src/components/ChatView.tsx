@@ -3909,6 +3909,7 @@ export default function ChatView({
   const {
     onSubmitPlanFollowUp,
     onEditUserMessage,
+    onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
@@ -3936,6 +3937,8 @@ export default function ChatView({
     selectedModel,
     selectedPromptEffort,
     selectedModelSelection,
+    selectedModelOptions: composerModelOptions?.[selectedProvider],
+    ...(selectedRuntimeModel ? { selectedRuntimeModel } : {}),
     providerOptionsForDispatch,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
@@ -3972,6 +3975,36 @@ export default function ChatView({
     [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const retryEffortContext = useMemo(() => {
+    if (!activeThread || !isServerThread) return null;
+    return {
+      threadId: activeThread.id,
+      messages: activeThread.messages,
+      runtimeMode,
+      modelSelection: selectedModelSelection,
+      modelOptions: selectedProviderModelOptions,
+      ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+      activeTurnId:
+        activeThread.session?.orchestrationStatus === "running"
+          ? (activeThread.session.activeTurnId ?? null)
+          : null,
+      isBusy: isRevertingCheckpoint || isSendBusy || isConnecting,
+      onRetryWithEffort: (assistantMessageId: MessageId, effort: string) => {
+        void onRetryAssistantWithDifferentEffort(assistantMessageId, effort);
+      },
+    };
+  }, [
+    activeThread,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    isServerThread,
+    onRetryAssistantWithDifferentEffort,
+    runtimeMode,
+    selectedModelSelection,
+    selectedProviderModelOptions,
+    selectedRuntimeModel,
+  ]);
   const composerTraitSelection = getComposerTraitSelection(
     selectedProvider,
     selectedModel,
@@ -5707,6 +5740,7 @@ export default function ChatView({
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
+                    retryEffortContext={retryEffortContext}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
