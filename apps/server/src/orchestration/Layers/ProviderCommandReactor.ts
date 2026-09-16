@@ -58,8 +58,9 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@synara/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
-import { claudeSelectionRequiresRestart } from "@synara/shared/model";
+import { claudeSelectionRequiresRestart, resolveApiModelId } from "@synara/shared/model";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
+import { claudeCacheForModel } from "../../provider/claudeCacheObservation.ts";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   formatProviderDeliveryBlockDetail,
@@ -2226,11 +2227,20 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      const observation = providerService.getClaudeCacheObservation
+      const nativeObservation = providerService.getClaudeCacheObservation
         ? yield* providerService
             .getClaudeCacheObservation(input.threadId)
             .pipe(Effect.catch(() => Effect.succeed(undefined)))
         : undefined;
+      // In-session model controls run inside sendTurn, after this preflight.
+      // Assess the requested model now without changing the native session.
+      const requestedSelection = input.modelSelection ?? thread.modelSelection;
+      const observation = claudeCacheForModel(
+        nativeObservation,
+        requestedSelection.provider === "claudeAgent"
+          ? resolveApiModelId(requestedSelection)
+          : undefined,
+      );
       const assessment = assessClaudeCache(observation, Date.now());
       if (
         observation &&

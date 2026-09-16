@@ -2019,6 +2019,86 @@ describe("ProviderCommandReactor", () => {
       },
     );
 
+    it.each([
+      { model: "claude-sonnet-4-6", tokens: 120_000, shouldHold: true },
+      { model: "claude-opus-4-6", tokens: 120_000, shouldHold: false },
+      { model: "claude-sonnet-4-6", tokens: 100_000, shouldHold: false },
+    ])(
+      "assesses a warm $tokens-token context for the requested $model model",
+      async ({ model, tokens, shouldHold }) => {
+        const createdAt = new Date().toISOString();
+        const observation: ClaudeCacheObservation = {
+          ...expiredCacheObservation(),
+          observedAt: createdAt,
+          lastResponseAt: createdAt,
+          contextTokens: tokens,
+          state: "likely-warm",
+        };
+        const harness = await createCacheHarness(() => observation);
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "warm-first-message",
+          text: "First message",
+          createdAt,
+        });
+        await harness.drain();
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("cmd-cache-model-session-ready"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            session: {
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              providerName: "claudeAgent",
+              status: "ready",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        harness.sendTurn.mockClear();
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("cmd-cache-warm-model-send"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            message: {
+              messageId: asMessageId("warm-model-message"),
+              role: "user",
+              text: "Continue using this model",
+              attachments: [],
+            },
+            modelSelection: { provider: "claudeAgent", model },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+        await harness.drain();
+        if (shouldHold) {
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          const review = (await readHarnessThread(harness))?.claudeCacheReview;
+          expect(review).toMatchObject({
+            status: "pending",
+            assessment: { state: "likely-expired", contextTokens: tokens },
+          });
+          await respondToReview(harness, review!, "continue");
+          await harness.drain();
+        }
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          input: "Continue using this model",
+          modelSelection: { provider: "claudeAgent", model },
+        });
+        expect((await readHarnessThread(harness))?.claudeCacheReview ?? null).toBeNull();
+        expect(harness.startSession).toHaveBeenCalledTimes(1);
+        expect(observation.state).toBe("likely-warm");
+      },
+    );
+
     it("holds the first large expired-cache send and later queued messages", async () => {
       const harness = await createCacheHarness();
       const review = await sendHeldMessage(harness);
