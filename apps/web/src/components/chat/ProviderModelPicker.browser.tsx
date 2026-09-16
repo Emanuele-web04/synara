@@ -404,6 +404,37 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("keeps keyboard focus in the menu when an unfavourited model returns to a collapsed group", async () => {
+    const models = [
+      { slug: "openai/current", name: "Current", upstreamProviderName: "OpenAI" },
+      { slug: "anthropic/favourite", name: "Favourite", upstreamProviderName: "Anthropic" },
+      { slug: "google/other", name: "Other", upstreamProviderName: "Google" },
+    ];
+    localStorage.setItem(
+      FAVORITE_MODEL_STORAGE_KEYS.opencode,
+      JSON.stringify(["anthropic/favourite"]),
+    );
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/current",
+      lockedProvider: "opencode",
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, opencode: models },
+    });
+    try {
+      await page.getByRole("button").click();
+      const remove = page.getByRole("button", {
+        name: "Remove Favourite — Anthropic from favourites",
+      });
+      await expect.element(remove).toBeVisible();
+      remove.element().focus();
+      await userEvent.keyboard("{Enter}");
+      await expect.element(page.getByRole("menu")).toHaveFocus();
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the searchable Cline submenu open for typing and keyboard selection", async () => {
     const mounted = await mountPicker({
       provider: "cline",
