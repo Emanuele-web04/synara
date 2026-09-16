@@ -126,7 +126,9 @@ automatic queue promotion for that task, while other tasks can continue.
 Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
 or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
-This check also covers long pauses in an existing process. It uses saved observations because some
+This check also covers long pauses in an existing process and model changes on the next send.
+A warm observation for the previous model cannot bypass the review for a different requested model;
+checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
 imported sessions without timing evidence remain unknown, so a warning cannot be guaranteed for
 them. The check makes no model request to keep a cache warm or measure its state.
