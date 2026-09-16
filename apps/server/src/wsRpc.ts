@@ -105,7 +105,7 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
-import { listProviderUsage } from "./providerUsage";
+import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
@@ -1747,6 +1747,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.serverConsumeCodexResetCredit]: (input) =>
+          rpcEffect(consumeCodexResetCreditEffect(input), "Failed to use Codex reset"),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {
