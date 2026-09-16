@@ -1,7 +1,7 @@
 // FILE: storeNormalization.test.ts
 // Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
 
-import { MessageId, TurnId } from "@synara/contracts";
+import { MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,12 +11,84 @@ import {
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   normalizeThreadFromReadModel,
+  normalizeThreadShellSnapshot,
+  threadShellsEqual,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
 type ThreadActivity = Thread["activities"][number];
+
+const cacheReview: PendingClaudeCacheReview = {
+  reviewId: "cache-review-1",
+  messageId: MessageId.makeUnsafe("held-message"),
+  sourceEventSequence: 8,
+  assessment: {
+    observedAt: "2026-09-16T10:00:00.000Z",
+    contextTokens: 800_000,
+    state: "likely-expired",
+    source: "session-start",
+  },
+  status: "pending",
+  createdAt: "2026-09-16T10:00:00.000Z",
+};
+
+describe("Claude cache review normalization", () => {
+  it("reuses equivalent reviews and updates reviews when only their status changes", () => {
+    const incoming = makeReadModelThread({ claudeCacheReview: cacheReview });
+    const initial = normalizeThreadFromReadModel(incoming, undefined);
+    const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial);
+    expect(replay).toBe(initial);
+    expect(replay.claudeCacheReview).toBe(initial.claudeCacheReview);
+
+    const changed = normalizeThreadFromReadModel(
+      { ...incoming, claudeCacheReview: { ...cacheReview, status: "compacting" } },
+      initial,
+    );
+    expect(changed).not.toBe(initial);
+    expect(changed.claudeCacheReview?.status).toBe("compacting");
+    const cleared = normalizeThreadFromReadModel({ ...incoming, claudeCacheReview: null }, changed);
+    expect(cleared.claudeCacheReview).toBeNull();
+  });
+
+  it("includes the durable review in shell equality without invalidating equivalent snapshots", () => {
+    const incoming = makeReadModelThread({ claudeCacheReview: cacheReview });
+    const thread = normalizeThreadFromReadModel(incoming, undefined);
+    const initial = normalizeThreadShellSnapshot(incoming, thread).shell;
+    const replay = normalizeThreadShellSnapshot(structuredClone(incoming), thread).shell;
+    expect(replay.claudeCacheReview).toBe(initial.claudeCacheReview);
+    expect(threadShellsEqual(initial, replay)).toBe(true);
+    expect(threadShellsEqual(initial, { ...replay, claudeCacheReview: null })).toBe(false);
+    expect(
+      threadShellsEqual(initial, {
+        ...replay,
+        claudeCacheReview: { ...cacheReview, status: "failed", error: "Compaction failed" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each([cacheReview, null])(
+    "preserves live review state across older detail hydration (%j)",
+    (review) => {
+      const previous = makeThread({
+        claudeCacheReview: review,
+        updatedAt: "2026-09-16T10:01:00.000Z",
+      });
+      const stale = makeReadModelThread({
+        claudeCacheReview: review === null ? cacheReview : null,
+        updatedAt: "2026-09-16T10:00:00.000Z",
+      });
+      const merged = mergeReadModelThreadDetailWithLiveHotPath(stale, previous);
+      expect(merged.claudeCacheReview).toBe(review);
+
+      const current = { ...stale, updatedAt: "2026-09-16T10:02:00.000Z" };
+      expect(mergeReadModelThreadDetailWithLiveHotPath(current, previous).claudeCacheReview).toBe(
+        current.claudeCacheReview,
+      );
+    },
+  );
+});
 
 interface FoldStep {
   readonly changed: boolean;
