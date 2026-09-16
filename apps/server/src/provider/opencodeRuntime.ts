@@ -76,8 +76,7 @@ export interface OpenCodeCompatibleCliSpec {
 export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   defaultBinaryPath: "opencode",
   displayName: "OpenCode",
-  // OpenCode 2.x dropped the binary name from this line. The parser below also
-  // accepts the 1.x marker so an upgraded Synara can still use older CLIs.
+  // Accept both the newer CLI handler's marker and the legacy prefixed marker.
   serverReadyPrefix: "server listening",
   configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
   dataDirectoryName: "opencode",
@@ -540,10 +539,11 @@ function parseOpenCodeCliModelJson(
   const providerID = trimToNull(object.providerID) ?? parsedSlug.providerID;
   const modelID = trimToNull(object.id) ?? parsedSlug.modelID;
   const name = trimToNull(object.name) ?? fallbackOpenCodeModelName(slug, parsedSlug);
-  const variantsObject =
-    object.variants && typeof object.variants === "object" && !Array.isArray(object.variants)
-      ? (object.variants as Record<string, unknown>)
-      : {};
+  const hasNormalizedVariants =
+    object.variants !== null &&
+    typeof object.variants === "object" &&
+    !Array.isArray(object.variants);
+  const variantsObject = hasNormalizedVariants ? (object.variants as Record<string, unknown>) : {};
   const variants = Object.keys(variantsObject)
     .map((variant) => variant.trim())
     .filter((variant) => variant.length > 0)
@@ -584,12 +584,9 @@ function parseOpenCodeCliModelJson(
       ];
     },
   );
-  const supportedReasoningEfforts =
-    rawReasoningOptions !== undefined
-      ? parseOpenCodeReasoningOptions(rawReasoningOptions)
-      : Array.from(
-          new Map(variantReasoningEfforts.map((effort) => [effort.value, effort])).values(),
-        );
+  const supportedReasoningEfforts = hasNormalizedVariants
+    ? Array.from(new Map(variantReasoningEfforts.map((effort) => [effort.value, effort])).values())
+    : parseOpenCodeReasoningOptions(rawReasoningOptions);
   const defaultReasoningEffort =
     trimToNull(object.defaultReasoningEffort) ??
     trimToNull(object.default_reasoning_effort) ??
@@ -926,9 +923,8 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
-        // OpenCode 2.x protects foreground servers with a generated password even when
-        // OPENCODE_SERVER_PASSWORD is not present. Set one ourselves so the SDK can
-        // authenticate deterministically instead of relying on parsing a secret from stdout.
+        // Protect managed servers that support the environment-based auth contract.
+        // Keep the credential with the process so every SDK client can authenticate.
         const configuredServerPassword = process.env.OPENCODE_SERVER_PASSWORD;
         const serverPassword =
           configuredServerPassword && configuredServerPassword.length > 0

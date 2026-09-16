@@ -301,25 +301,30 @@ function resolveOpenCodeModelReasoningSupport(
         : model.options?.reasoning_options !== undefined
           ? model.options.reasoning_options
           : model.options?.reasoningOptions;
-  const descriptors =
-    rawReasoningOptions !== undefined
-      ? parseOpenCodeReasoningOptions(rawReasoningOptions)
-      : Object.entries(model.variants ?? {}).flatMap(([variantKey, variant]) => {
-          const value = readOpenCodeInventoryVariantValue(variantKey, variant);
-          if (!value) {
-            return [];
-          }
+  const variantDescriptors = Object.entries(model.variants ?? {}).flatMap(
+    ([variantKey, variant]) => {
+      const value = readOpenCodeInventoryVariantValue(variantKey, variant);
+      if (!value) {
+        return [];
+      }
 
-          const label = trimNonEmptyString(variant.label);
-          const description = trimNonEmptyString(variant.description);
-          return [
-            {
-              value,
-              ...(label ? { label } : {}),
-              ...(description ? { description } : {}),
-            },
-          ];
-        });
+      const label = trimNonEmptyString(variant.label);
+      const description = trimNonEmptyString(variant.description);
+      return [
+        {
+          value,
+          ...(label ? { label } : {}),
+          ...(description ? { description } : {}),
+        },
+      ];
+    },
+  );
+  // The server's variants include provider transport limits and user overrides.
+  // An empty record can mean every variant was disabled by the user.
+  const descriptors =
+    model.variants !== undefined
+      ? variantDescriptors
+      : parseOpenCodeReasoningOptions(rawReasoningOptions);
   if (descriptors.length > 0) {
     return normalizeOpenCodeReasoningDescriptors({
       descriptors,

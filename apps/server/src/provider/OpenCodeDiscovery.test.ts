@@ -606,6 +606,71 @@ describe("flattenOpenCodeModels", () => {
     ]);
   });
 
+  it.each([
+    { reasoningOptions: [{ type: "budget_tokens", min: 1024, max: 8192 }] },
+    { reasoningOptions: [{ type: "effort", values: ["low", "high", "max"] }] },
+    { reasoningOptions: null },
+  ])("preserves server-normalized variants when raw metadata is %j", ({ reasoningOptions }) => {
+    const models = flattenOpenCodeModels({
+      inventory: {
+        providerList: {
+          connected: ["anthropic"],
+          all: [
+            makeProvider({
+              id: "anthropic",
+              name: "Anthropic",
+              source: "api",
+              models: {
+                "claude-test": makeModel({
+                  id: "claude-test",
+                  providerID: "anthropic",
+                  name: "Claude Test",
+                  reasoning_options: reasoningOptions,
+                  variants: { high: { thinking: { budgetTokens: 4096 } } },
+                }),
+              },
+            }),
+          ],
+        },
+        consoleState: null,
+      },
+    });
+
+    expect(models[0]?.supportedReasoningEfforts).toEqual([{ value: "high" }]);
+  });
+
+  it.each([{ variants: {} }, { variants: { creative: { temperature: 0.9 } } }])(
+    "does not restore reasoning disabled in normalized variants: %j",
+    ({ variants }) => {
+      const models = flattenOpenCodeModels({
+        inventory: {
+          providerList: {
+            connected: ["anthropic"],
+            all: [
+              makeProvider({
+                id: "anthropic",
+                name: "Anthropic",
+                source: "api",
+                models: {
+                  "claude-test": makeModel({
+                    id: "claude-test",
+                    providerID: "anthropic",
+                    name: "Claude Test",
+                    reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+                    variants,
+                  }),
+                },
+              }),
+            ],
+          },
+          consoleState: null,
+        },
+      });
+
+      expect(models[0]?.supportedReasoningEfforts ?? []).toEqual([]);
+    },
+  );
+
   it("surfaces models.dev reasoning_options when normalized variants are absent", () => {
     const models = flattenOpenCodeModels({
       inventory: {
@@ -629,7 +694,6 @@ describe("flattenOpenCodeModels", () => {
                       values: ["minimal", "low", "medium", "high", "xhigh"],
                     },
                   ],
-                  variants: {},
                 },
               },
             }),
