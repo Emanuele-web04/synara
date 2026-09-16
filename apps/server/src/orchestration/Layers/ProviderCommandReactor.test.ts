@@ -2641,6 +2641,74 @@ describe("ProviderCommandReactor", () => {
       ).toEqual([]);
     });
 
+    it("creates a recovered cache hold from a shell-only command snapshot", async () => {
+      const harness = await createCacheHarness(expiredCacheObservation, false);
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "recovered-cache-message",
+        text: "Preserve this send across recovery",
+        createdAt: new Date().toISOString(),
+      });
+      await Effect.runPromise(harness.engine.refreshCommandReadModel());
+      expect((await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages).toEqual(
+        [],
+      );
+
+      await harness.startReactor();
+      await harness.drain();
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+        messageId: "recovered-cache-message",
+        status: "pending",
+      });
+    });
+
+    it("continues a recovered cache hold from a shell-only command snapshot", async () => {
+      const observation = expiredCacheObservation();
+      const harness = await createCacheHarness(() => observation);
+      const review = await sendHeldMessage(harness);
+      await Effect.runPromise(harness.engine.refreshCommandReadModel());
+      expect((await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.messages).toEqual(
+        [],
+      );
+
+      await respondToReview(harness, review, "continue");
+
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        input: "Continue with this exact message",
+      });
+    });
+
+    it("deletes a held pending turn when its thread is deleted", async () => {
+      const harness = await createCacheHarness();
+      await sendHeldMessage(harness);
+      expect(
+        await Effect.runPromise(harness.sql`
+        SELECT pending_message_id FROM projection_turns
+        WHERE thread_id = 'thread-1' AND turn_id IS NULL
+      `),
+      ).toHaveLength(1);
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.makeUnsafe("cmd-delete-cache-hold"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+        }),
+      );
+      await harness.drain();
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(
+        await Effect.runPromise(harness.sql`
+        SELECT pending_message_id FROM projection_turns
+        WHERE thread_id = 'thread-1' AND turn_id IS NULL
+      `),
+      ).toEqual([]);
+    });
+
     it("settles a removed held message as failed instead of leaving the review responding", async () => {
       const observation = expiredCacheObservation();
       const harness = await createCacheHarness(() => observation);

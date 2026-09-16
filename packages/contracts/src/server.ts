@@ -143,6 +143,52 @@ export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
+export const ServerCodexResetCreditStatus = Schema.Literals([
+  "available",
+  "redeeming",
+  "redeemed",
+  "unknown",
+]);
+export type ServerCodexResetCreditStatus = typeof ServerCodexResetCreditStatus.Type;
+
+export const ServerCodexResetCredit = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  status: Schema.optional(ServerCodexResetCreditStatus),
+  grantedAt: Schema.optional(IsoDateTime),
+  expiresAt: Schema.optional(IsoDateTime),
+  title: Schema.optional(TrimmedNonEmptyString),
+  description: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerCodexResetCredit = typeof ServerCodexResetCredit.Type;
+
+export const ServerCodexResetCredits = Schema.Struct({
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  canUse: Schema.optional(Schema.Boolean),
+  availableCount: NonNegativeInt,
+  credits: Schema.optional(Schema.Array(ServerCodexResetCredit)),
+});
+export type ServerCodexResetCredits = typeof ServerCodexResetCredits.Type;
+
+export const CodexResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type CodexResetCreditOutcome = typeof CodexResetCreditOutcome.Type;
+
+export const ServerConsumeCodexResetCreditInput = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  idempotencyKey: TrimmedNonEmptyString,
+  creditId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerConsumeCodexResetCreditInput = typeof ServerConsumeCodexResetCreditInput.Type;
+
+export const ServerConsumeCodexResetCreditResult = Schema.Struct({
+  outcome: CodexResetCreditOutcome,
+});
+export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexResetCreditResult.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
   updatedAt: IsoDateTime,
@@ -152,6 +198,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: Schema.optional(ProviderUsageStatus),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  resetCredits: Schema.optional(ServerCodexResetCredits),
   // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
   // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
   stale: Schema.optional(Schema.Boolean),

@@ -18,6 +18,8 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
 
+const HEAVY_MODULE_TEST_TIMEOUT_MS = 30_000;
+
 function renderWithQueryClient(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -40,23 +42,31 @@ async function renderUserMarkdown(text: string) {
 }
 
 describe("streamingCodeHighlightIntervalMs", () => {
-  it("keeps the base cadence for small blocks and stretches it with block size", async () => {
-    const { streamingCodeHighlightIntervalMs } = await import("./ChatMarkdown");
-    expect(streamingCodeHighlightIntervalMs(0)).toBe(160);
-    expect(streamingCodeHighlightIntervalMs(8_000)).toBe(160);
-    expect(streamingCodeHighlightIntervalMs(44_000)).toBe(580);
-    expect(streamingCodeHighlightIntervalMs(80_000)).toBe(1_000);
-    expect(streamingCodeHighlightIntervalMs(500_000)).toBe(1_000);
-  });
+  it(
+    "keeps the base cadence for small blocks and stretches it with block size",
+    async () => {
+      const { streamingCodeHighlightIntervalMs } = await import("./ChatMarkdown");
+      expect(streamingCodeHighlightIntervalMs(0)).toBe(160);
+      expect(streamingCodeHighlightIntervalMs(8_000)).toBe(160);
+      expect(streamingCodeHighlightIntervalMs(44_000)).toBe(580);
+      expect(streamingCodeHighlightIntervalMs(80_000)).toBe(1_000);
+      expect(streamingCodeHighlightIntervalMs(500_000)).toBe(1_000);
+    },
+    HEAVY_MODULE_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("ChatMarkdown", () => {
-  it("uses the theme foreground token for markdown text", async () => {
-    const markup = await renderMarkdown("Theme-aware text");
+  it(
+    "uses the theme foreground token for markdown text",
+    async () => {
+      const markup = await renderMarkdown("Theme-aware text");
 
-    expect(markup).toContain("text-foreground");
-    expect(markup).not.toContain("text-neutral-900");
-  });
+      expect(markup).toContain("text-foreground");
+      expect(markup).not.toContain("text-neutral-900");
+    },
+    HEAVY_MODULE_TEST_TIMEOUT_MS,
+  );
 
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");

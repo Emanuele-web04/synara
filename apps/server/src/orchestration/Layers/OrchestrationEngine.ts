@@ -541,6 +541,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.handoff.create":
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
+      case "thread.claude-cache.set":
+        return command.hold
+          ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
+          : Effect.succeed(commandReadModel);
       case "thread.turn.start":
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
