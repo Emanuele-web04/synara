@@ -14,6 +14,7 @@ import {
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
+import { createDesktopPackageFilePatterns } from "./lib/desktop-package-files.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
@@ -44,7 +45,10 @@ describe("createDesktopPlatformBuildConfig", () => {
       "apps/desktop/native/appsnap/build/synara-appsnap-helper",
     );
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
-    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.deepStrictEqual(config.files, [
+      ...createDesktopPackageFilePatterns("mac"),
+      MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+    ]);
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",

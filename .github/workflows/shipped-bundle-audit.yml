@@ -1,0 +1,100 @@
+name: Verify final Windows bundle reduction
+
+on:
+  push:
+    branches: [perf/shipped-app-size-20260916]
+    paths:
+      - .github/workflows/shipped-bundle-audit.yml
+      - scripts/lib/desktop-package-files.ts
+      - scripts/desktop-package-files.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Verify win-x64
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
+      - name: Retain identical baseline measurement script
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/shipped-size-audit"
+          git show dd15b18bdedc99faeb68b82c7d75d7bca3468445:.github/scripts/measure-bundle-size.mjs > "$RUNNER_TEMP/shipped-size-audit/measure.mjs"
+      - name: Install frozen release build dependencies
+        shell: bash
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Verify packaging policy and retained non-Windows runtime scope
+        shell: bash
+        run: |
+          bun run --cwd scripts test -- desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
+          git show b28d09428e4130bba8c2d617b95509c00677a708:scripts/lib/desktop-package-files.ts > scripts/lib/audited-package-policy.ts
+          node --input-type=module <<'NODE'
+          import {strict as assert} from 'node:assert';
+          import {createDesktopPackageFilePatterns as before} from './scripts/lib/audited-package-policy.ts';
+          import {createDesktopPackageFilePatterns as after} from './scripts/lib/desktop-package-files.ts';
+          // The only non-Windows policy change retains non-TypeScript assets,
+          // including vendored notices, inside these compiled packages' src/.
+          const sourcePackages = ['effect','@effect/platform-node','@effect/platform-node-shared','@anthropic-ai/sdk','openai','zod'];
+          const preserveSourceAssets = patterns => patterns.map(pattern => sourcePackages.some(name => pattern === `!**/node_modules/${name}/src/**`) ? pattern.replace(/\/src\/\*\*$/, '/src/**/*.{ts,tsx,mts,cts}') : pattern);
+          for(const platform of ['mac','linux']) for(const env of [{},{SYNARA_DESKTOP_SOURCEMAP:'1'}]) assert.deepEqual(after(platform,env),preserveSourceAssets(before(platform,env)));
+          assert.deepEqual(after('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}),before('win',{SYNARA_DESKTOP_SOURCEMAP:'1'}));
+          console.log('Non-Windows runtime scope is unchanged; vendored notices and non-TypeScript source assets are retained. Windows diagnostic packaging is unchanged.');
+          NODE
+          rm scripts/lib/audited-package-policy.ts
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- --platform win --target nsis --arch x64 --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/shipped-size-audit/artifacts"
+      - name: Measure candidate
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/shipped-size-audit/measure.mjs" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/shipped-size-audit/candidate" win
+      - name: Verify packaged payload inventory
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {strict as assert} from 'node:assert';
+          import {readFileSync} from 'node:fs';
+          import {join} from 'node:path';
+          const report=JSON.parse(readFileSync(join(process.env.RUNNER_TEMP,'shipped-size-audit/candidate/bundle-size.json'),'utf8'));
+          const files=new Set(report.asar.files.map(file=>file.path));
+          assert.equal([...files].filter(path=>path.includes('node_modules/') && /\.(js|mjs|cjs|ts|mts|cts|css)\.map$/.test(path)).length,0);
+          assert.equal([...files].filter(path=>path.includes('node_modules/') && /(?:\.d\.(mts|cts)|\.tsbuildinfo)$/.test(path)).length,0);
+          assert.equal([...files].filter(path=>/node_modules\/(node-pty|msgpackr-extract)\/(build|node-addon-api)\//.test(path) && /\.(iobj|ipdb|exp|lib|tlog|lastbuildstate|recipe|vcxproj|filters)$/.test(path)).length,0);
+          for(const path of ['node_modules/effect/dist/Effect.js','node_modules/betterwright/dist/src/index.js','node_modules/node-pty/build/Release/conpty.node','node_modules/node-pty/build/Release/winpty-agent.exe','node_modules/node-pty/build/Release/winpty.dll','node_modules/msgpackr-extract/build/Release/extract.node']) assert.ok(files.has(path),`Missing runtime: ${path}`);
+          for(const path of ['node_modules/@anthropic-ai/sdk/src/internal/qs/LICENSE.md','node_modules/@earendil-works/pi-ai/node_modules/@anthropic-ai/sdk/src/internal/qs/LICENSE.md','node_modules/openai/src/internal/qs/LICENSE.md','node_modules/openai/src/_vendor/zod-to-json-schema/LICENSE']) assert.ok(files.has(path),`Missing vendored notice: ${path}`);
+          assert.ok([...files].some(path=>path.startsWith(`node_modules/@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`)));
+          for(const path of files) {
+            if(path.includes('/central-icons-') && /\.(gz|br)$/.test(path)) assert.ok(files.has(path.replace(/\.(gz|br)$/,'')),`Orphan sidecar: ${path}`);
+            assert.ok(!path.startsWith('apps/server/dist/client/mockServiceWorker.js'));
+          }
+          console.log('Final Windows production payload inventory verified.');
+          NODE
+      - name: Smoke isolated packaged desktop startup and runtime dependencies
+        shell: bash
+        run: |
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/shipped-size-audit/artifacts" --platform win --arch x64 --version 0.8.4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shipped-size-win-x64
+          path: ${{ runner.temp }}/shipped-size-audit/candidate
+          retention-days: 14
+          if-no-files-found: warn
