@@ -1,0 +1,231 @@
+name: Verify final production size reductions
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-size-final.yml]
+permissions:
+  contents: read
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  SYNARA_DESKTOP_SIGNED: "false"
+jobs:
+  prepare:
+    if: github.repository == 'Emanuele-web04/synara' && github.ref == 'refs/heads/perf/production-bundle-size-audit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/production-bundle-size-audit
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.20.0
+      - name: Apply scoped parser and packaging changes with exact-match checks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          def replace(file, old, new, count=1):
+              p=Path(file); s=p.read_text(); assert s.count(old)==count, (file, old)
+              p.write_text(s.replace(old,new))
+          for file in ['apps/web/vite.config.ts','apps/web/build/public-assets.test.ts']:
+              replace(file, 'public-assets.ts"', 'public-assets"')
+          p=Path('apps/server/src/checkpointing/pierreParser.ts')
+          assert not p.exists()
+          p.write_text('// FILE: pierreParser.ts\n// Purpose: A narrow export boundary lets the server bundle only the diff parser.\n// Layer: Server checkpointing dependency boundary; the renderer keeps the full UI package.\nexport { parsePatchFiles } from "@pierre/diffs";\n')
+          replace('apps/server/src/checkpointing/Diffs.ts', 'typeof import("@pierre/diffs")', 'typeof import("./pierreParser.ts")')
+          replace('apps/server/src/checkpointing/Diffs.ts', 'lazyModule(() => import("@pierre/diffs"))', 'lazyModule(() => import("./pierreParser.ts"))')
+          replace('apps/server/src/checkpointing/Diffs.ts', '// `@pierre/diffs` pulls in Shiki\'s grammar and theme tables, which costs ~38ms\n// on every server boot — including the many boots that never parse a diff. Load\n// it on first parse instead; later parses reuse the same module namespace.', '// Keep the parser lazy, but expose only its pure parsing function to the server\n// bundler. The renderer still uses the full UI package and all language support.\n// Later parses reuse the same module namespace.')
+          replace('apps/server/src/runtimeDependencySmoke.ts', 'await import("@pierre/diffs")', 'await import("./checkpointing/pierreParser.ts")')
+          replace('apps/server/tsdown.config.ts', '  noExternal: (id) => id.startsWith("@synara/"),', '  noExternal: (id) => id.startsWith("@synara/") || id === "@pierre/diffs",\n  // Preserve the upstream license when its parser is bundled into our CLI.\n  copy: [{\n    from: path.resolve(path.dirname(fileURLToPath(import.meta.resolve("@pierre/diffs"))), "../LICENSE.md"),\n    to: "dist/licenses",\n    rename: "pierre-diffs-LICENSE.md",\n  }],')
+          manifest=Path('apps/server/package.json'); obj=json.loads(manifest.read_text())
+          assert obj['dependencies'].pop('@pierre/diffs')=='^1.2.12'
+          assert '@pierre/diffs' not in obj['devDependencies']
+          obj['devDependencies']['@pierre/diffs']='^1.2.12'
+          manifest.write_text(json.dumps(obj,indent=2)+'\n')
+          lock=Path('bun.lock'); s=lock.read_text(); start=s.index('    "apps/server": {'); end=s.index('    "apps/web": {',start)
+          block=s[start:end]; dep='        "@pierre/diffs": "^1.2.12",\n'
+          assert block.count(dep)==1
+          block=block.replace(dep,''); anchor='        "@effect/vitest": "catalog:",\n'; assert block.count(anchor)==1
+          block=block.replace(anchor,anchor+dep)
+          lock.write_text(s[:start]+block+s[end:])
+          replace('scripts/lib/desktop-package-files.ts', '      "!**/node_modules/**/*.d.{mts,cts}",', '      "!**/node_modules/**/*.d.{mts,cts}",\n      // Linker intermediates are build inputs, not native runtime bindings.\n      // Keep .node/.dll/.exe files and restore diagnostics when requested.\n      "!**/node_modules/{node-pty,msgpackr-extract}/build/**/*.{iobj,ipdb,tlog,exp,lib}",')
+          test=Path('scripts/lib/desktop-package-files.test.ts')
+          s=test.read_text(); anchor='describe("desktop package file policy", () => {\n'; assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+'''  it("omits Windows linker intermediates while retaining executable native payloads", () => {
+              for (const name of ["node-pty", "msgpackr-extract"]) {
+                for (const suffix of ["iobj", "ipdb", "tlog", "exp", "lib"]) {
+                  const file = `node_modules/${name}/build/Release/native.${suffix}`;
+                  expect(ships("win", file)).toBe(false);
+                  expect(ships("win", file, true)).toBe(true);
+                }
+                for (const suffix of ["node", "dll", "exe"]) {
+                  expect(ships("win", `node_modules/${name}/build/Release/native.${suffix}`)).toBe(true);
+                }
+              }
+            });
+          ''');test.write_text(s)
+          test=Path('apps/server/src/checkpointing/pierreParser.test.ts'); assert not test.exists()
+          test.write_text('''import { parsePatchFiles as upstreamParsePatchFiles } from "@pierre/diffs";
+          import { describe, expect, it } from "vitest";
+          import { parsePatchFiles } from "./pierreParser.ts";
+          describe("server diff parser boundary", () => {
+            it("re-exports the exact upstream implementation rather than reimplementing parsing", () => {
+              expect(parsePatchFiles).toBe(upstreamParsePatchFiles);
+            });
+            it("retains the upstream result for binary changes and renames", () => {
+              for (const patch of [
+                "diff --git a/a.png b/a.png\\nindex 111111..222222 100644\\nBinary files a/a.png and b/a.png differ\\n",
+                "diff --git a/old.txt b/new.txt\\nsimilarity index 100%\\nrename from old.txt\\nrename to new.txt\\n",
+              ]) expect(parsePatchFiles(patch)).toEqual(upstreamParsePatchFiles(patch));
+            });
+          });
+          ''')
+          PY
+      - name: Install without changing dependency resolutions
+        run: bun install --frozen-lockfile
+      - name: Format only the audited changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          baseline='dd88d9272f97e4dda5735281e73ce14de388ad25'
+          changed=subprocess.check_output(['git','diff','--name-only',baseline],text=True).splitlines()
+          changed+=subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines()
+          files=sorted({p for p in changed if pathlib.Path(p).is_file() and pathlib.Path(p).suffix in {'.ts','.mts','.mjs','.json','.yml'}})
+          subprocess.run(['node','node_modules/oxfmt/bin/oxfmt',*files],check=True)
+          PY
+      - name: Commit scoped changes to the isolated audit branch
+        id: commit
+        shell: bash
+        run: |
+          git add apps/server/package.json apps/server/tsdown.config.ts apps/server/src/checkpointing/Diffs.ts apps/server/src/checkpointing/pierreParser.ts apps/server/src/checkpointing/pierreParser.test.ts apps/server/src/runtimeDependencySmoke.ts bun.lock
+          git add apps/web/build apps/web/vite.config.ts apps/web/tsconfig.json scripts/lib/desktop-package-files.ts scripts/lib/desktop-package-files.test.ts scripts/lib/desktop-platform-build-config.ts scripts/build-desktop-artifact-mac-config.test.ts .github/scripts/measure-bundle-size.mjs .github/workflows/bundle-size-audit.yml .github/workflows/bundle-size-final.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: bundle only the server diff parser and omit native linker intermediates'
+          git push origin HEAD:refs/heads/perf/production-bundle-size-audit
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Formatting and lint
+        if: '!cancelled()'
+        run: |
+          bun run fmt:check
+          bun run lint
+      - name: Focused regression tests
+        if: '!cancelled()'
+        run: |
+          bun run --cwd scripts test lib/desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
+          bun run --cwd apps/web test build/public-assets.test.ts
+          bun run --cwd apps/server test src/checkpointing/Diffs.test.ts src/checkpointing/pierreParser.test.ts
+
+  measure:
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.outputs.commit != '' }}
+    name: Final ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            arch: arm64
+            target: dmg
+            node: 24.20.0
+          - runner: macos-15-intel
+            platform: mac
+            arch: x64
+            target: dmg
+            node: 24.19.0
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            target: AppImage
+            node: 24.20.0
+          - runner: windows-2022
+            platform: win
+            arch: x64
+            target: nsis
+            node: 24.20.0
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Archive verified candidate source
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/final-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: final-candidate-source
+          path: ${{ runner.temp }}/final-source.tar.gz
+          retention-days: 14
+      - name: Install frozen release build dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production package
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version 0.8.4 --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-audit/artifacts" 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Measure using the identical baseline method
+        shell: bash
+        run: node .github/scripts/measure-bundle-size.mjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/size-audit/final" '${{ matrix.platform }}'
+      - name: Verify packaged startup and runtime imports
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-audit/artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version 0.8.4 2>&1 | tee "$RUNNER_TEMP/startup.log"
+      - name: Verify retained Claude fallback executes and bundled parser license ships
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readdirSync, readFileSync, lstatSync, mkdtempSync, mkdirSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux';
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'size-audit/final/bundle-size.json'), 'utf8'));
+          const stages = readdirSync(tmpdir()).filter(n => n.startsWith(`synara-desktop-${platform}-stage-`)).map(n => join(tmpdir(), n)).sort((a,b)=>lstatSync(b).mtimeMs-lstatSync(a).mtimeMs);
+          const dist=join(stages[0], 'app/dist');
+          const packaged = readdirSync(dist).find(n => lstatSync(join(dist,n)).isDirectory() && (n.startsWith('mac') || n.endsWith('-unpacked')));
+          const root=join(dist,packaged);
+          const resources=process.platform==='darwin' ? join(root,readdirSync(root).find(n=>n.endsWith('.app')),'Contents/Resources') : join(root,'resources');
+          const binary=report.asar.files.find(f=>/^node_modules\/@anthropic-ai\/claude-agent-sdk-[^/]+\/claude(?:\.exe)?$/.test(f.path) && !f.path.includes('-musl/'));
+          if (!binary?.unpacked) throw Error('Expected matching unpacked Claude binary');
+          const home=mkdtempSync(join(tmpdir(),'synara-bundle-provider-check-'));
+          const stdout=execFileSync(join(resources,'app.asar.unpacked',binary.path),['--version'],{encoding:'utf8',timeout:30000,env:{...process.env,HOME:home,USERPROFILE:home,CLAUDE_CONFIG_DIR:home}});
+          const license=report.asar.files.find(f=>f.path==='apps/server/dist/licenses/pierre-diffs-LICENSE.md');
+          if (!license || license.bytes<1000) throw Error('Missing bundled parser license');
+          console.log(`Matching Claude fallback executes: ${stdout.trim()}; parser license: ${license.bytes} bytes`);
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-bundle-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/size-audit/final
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/startup.log
+          retention-days: 14
