@@ -57,6 +57,23 @@ describe("desktop bundle file selection", () => {
     expect(preserveDependencyDiagnostics({ SYNARA_SERVER_SOURCEMAP: "false" })).toBe(false);
   });
 
+  it("retains vendored licenses and non-TypeScript source assets", () => {
+    const patterns = createDesktopBundleFilePatterns("linux");
+    for (const path of [
+      "node_modules/openai/src/_vendor/zod-to-json-schema/LICENSE",
+      "node_modules/openai/src/internal/qs/LICENSE.md",
+      "node_modules/@anthropic-ai/sdk/src/internal/qs/LICENSE.md",
+      "node_modules/effect/src/NOTICE",
+      "node_modules/@effect/platform-node-shared/src/runtime-data.json",
+    ]) {
+      expect(excluded(path, patterns), path).toBe(false);
+    }
+    expect(excluded("node_modules/openai/src/internal/qs/index.ts", patterns)).toBe(true);
+    expect(excluded("node_modules/@anthropic-ai/sdk/src/internal/qs/index.ts", patterns)).toBe(
+      true,
+    );
+  });
+
   it("only removes the musl SDK executable for a confirmed glibc Linux build", () => {
     const musl = "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude";
     expect(excluded(musl, createDesktopBundleFilePatterns("linux"))).toBe(false);

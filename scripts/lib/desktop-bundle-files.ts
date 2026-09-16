@@ -7,10 +7,11 @@ const DIAGNOSTIC_FILES = [
   "!node_modules/**/*.{d.mts,d.cts,tsbuildinfo}",
   // These packages execute their compiled JS exports. Keep arbitrary dependency
   // sources: extension loaders and native helpers can legitimately need them.
-  "!node_modules/effect/src/**",
-  "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**",
-  "!node_modules/openai/src/**",
-  "!node_modules/@anthropic-ai/sdk/src/**",
+  // Remove only TypeScript, retaining vendored licenses and other source assets.
+  "!node_modules/effect/src/**/*.ts",
+  "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**/*.ts",
+  "!node_modules/openai/src/**/*.ts",
+  "!node_modules/@anthropic-ai/sdk/src/**/*.ts",
 ] as const;
 
 export function preserveDependencyDiagnostics(env: NodeJS.ProcessEnv): boolean {
