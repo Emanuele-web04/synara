@@ -29,7 +29,7 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 
 ## Commits
 
-Pending first local commit on `synara/build-project-coordinator`.
+- `3bad29eecfb842e387a35f46c53c13f9eff9e82e` Add Project Coordinator domain, panel, and bounded wakes.
 
 ## Checks
 
