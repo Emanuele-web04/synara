@@ -1860,13 +1860,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.claude-cache.set": {
+      if (command.hold) {
+        const target = readModel.threads.find((thread) => thread.id === command.threadId);
+        if (
+          !target ||
+          target.deletedAt != null ||
+          target.archivedAt != null ||
+          isExpiredSidechat(target) ||
+          command.hold.session.threadId !== command.threadId ||
+          command.hold.session.status !== "ready" ||
+          (command.review !== null &&
+            (command.review.status !== "pending" ||
+              !target.messages.some(
+                (message) => message.id === command.review?.messageId && message.role === "user",
+              )))
+        )
+          return [];
+      }
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       if (
         command.expectedReviewId !== undefined &&
         (thread.claudeCacheReview?.reviewId ?? null) !== command.expectedReviewId
       )
         return [];
-      return {
+      const reviewEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1880,6 +1897,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+      return command.hold
+        ? [
+            reviewEvent,
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.session-set",
+              payload: { threadId: command.threadId, session: command.hold.session },
+            },
+          ]
+        : reviewEvent;
     }
 
     case "thread.claude-cache.respond": {

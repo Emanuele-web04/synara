@@ -123,6 +123,8 @@ Synara holds the next message before delivering it to the runtime. The composer 
 with the full history or cancel that send. The held message and attachments survive reconnects and
 server restarts; cancelling keeps the message in the conversation. An unresolved request blocks
 automatic queue promotion for that task, while other tasks can continue.
+Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
+or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
 This check also covers long pauses in an existing process. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or

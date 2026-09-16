@@ -1398,6 +1398,9 @@ const ThreadClaudeCacheSetCommand = Schema.Struct({
   threadId: ThreadId,
   review: Schema.NullOr(PendingClaudeCacheReview),
   expectedReviewId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  hold: Schema.optional(
+    Schema.Struct({ sourceEventSequence: PositiveInt, session: OrchestrationSession }),
+  ),
   createdAt: IsoDateTime,
 });
 
