@@ -42,6 +42,36 @@ import {
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
+describe("computer control defaults", () => {
+  it("leaves computer control off until a preference is explicitly saved", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ autoOpenComputerPane: false });
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(false);
+  });
+
+  it("preserves a saved computer control preference", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      computerControlEnabled: true,
+    });
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(true);
+  });
+
+  it("migrates the legacy per-chat computer control default", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      allowComputerControlInNewChats: true,
+    });
+    const normalized = normalizeStoredAppSettings(decoded);
+    expect(normalized.computerControlEnabled).toBe(true);
+    expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
+  });
+
+  it("defaults the in-chat preview to the compact footprint", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerPreviewSize).toBe("compact");
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ computerPreviewSize: "large" });
+    expect(normalizeStoredAppSettings(decoded).computerPreviewSize).toBe("large");
+  });
+});
+
 describe("server-backed provider enablement", () => {
   it("reads disabled providers from the server settings view", () => {
     expect(

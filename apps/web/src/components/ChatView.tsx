@@ -110,6 +110,12 @@ import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { useComputerControlModeChange } from "~/hooks/useComputerControlModeChange";
+import { useThreadComputerStateSeed } from "../hooks/useThreadComputerStateSeed";
+import {
+  useThreadComputerAvailability,
+  useThreadComputerControlGeneration,
+} from "../computerStateStore";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { appendComposerPromptText } from "../lib/chatReferences";
@@ -200,10 +206,12 @@ import {
   appendVoiceTranscriptToPrompt,
   buildLocalDraftThread,
   buildThreadBreadcrumbs,
+  canApplyComposerFocus,
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
   hasFileUndoSettled,
   resolveActiveThreadTitle,
+  type TurnDispatchSettings,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
@@ -253,6 +261,11 @@ import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
+import {
+  COMPUTER_CONTROL_HINT_EFFORT,
+  shouldShowComputerControlEffortHint,
+} from "./chat/composerComputerControlHint";
+import { ComposerComputerControlEffortHint } from "./chat/ComposerComputerControlEffortHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
@@ -309,6 +322,17 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import { AmbientRailSlot } from "./chat/AmbientRailSlot";
+import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
+import {
+  computerPreviewBudgetPx,
+  computerPreviewCardCaps,
+} from "./chat/ComputerPreviewPopover.logic";
+import {
+  selectThreadComputerPreviewLayout,
+  selectThreadComputerPreviewSession,
+  useComputerPreviewStore,
+} from "../computerPreviewStore";
 import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { createThreadFindHighlightStore, type ThreadFindMatch } from "./chat/threadFind.logic";
@@ -462,6 +486,12 @@ interface ChatViewProps {
   } | null;
   onChangeThreadInSplitPane?: () => void;
   onCloseThreadPane?: () => void;
+  /**
+   * Enables the ambient computer preview rail for this chat: when provided,
+   * a live computer session renders below the Environment card and the chat
+   * reserves gutter space for it so it never covers the transcript. Absent
+   * in editor-rail and dock-sidechat views, which keep no preview.
+   */
 }
 
 // Builds an ephemeral transcript bubble for the conversational automation-setup
@@ -559,6 +589,8 @@ export default function ChatView({
     setComposerDraftProviderModelOptions,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
+    setComposerDraftComputerControlMode,
+    setComposerDraftComputerControl,
     enqueueQueuedComposerTurn,
     insertQueuedComposerTurn,
     removeQueuedComposerTurnFromDraft,
@@ -803,6 +835,12 @@ export default function ChatView({
     [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  // Invocation needs the current revocation generation before the preview appears.
+  useThreadComputerStateSeed(threadId);
+  const computerAvailability = useThreadComputerAvailability(threadId);
+  const computerControlGeneration =
+    useThreadComputerControlGeneration(threadId) ?? composerDraft.computerControlGeneration ?? 0;
+  const computerControlAvailable = computerAvailability?.kind === "available";
   // Local threads reconcile their stored branch to the shared checkout as soon as the
   // branch query resolves. Keep the branch seen when a thread becomes active so a settled
   // thread can explain that change before the user's first resumed message.
@@ -1245,6 +1283,9 @@ export default function ChatView({
     composerSkills,
     composerMentions,
   });
+  // Computer control follows the Settings switch. Ordinary messages never
+  // attach Computer schemas/instructions unless the switch is on.
+  const enableComputerControl = settings.computerControlEnabled === true;
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2353,9 +2394,18 @@ export default function ChatView({
   const focusComposer = useCallback(() => {
     // Secondary chrome is deferred during thread switches; replay focus once it
     // mounts. A disabled editor (dispatch connecting, pending approval) cannot
-    // take focus either, so keep the request pending until it re-enables.
+    // take focus either. Never ask the renderer to focus while another app owns
+    // the desktop; on macOS that can activate Synara and switch Spaces.
     const editor = composerEditorRef.current;
-    if (!secondaryChromeReady || !editor || isComposerEditorDisabled) {
+    if (
+      !editor ||
+      !canApplyComposerFocus({
+        windowHasFocus: document.hasFocus(),
+        secondaryChromeReady,
+        editorAvailable: true,
+        editorDisabled: isComposerEditorDisabled,
+      })
+    ) {
       pendingComposerFocusRef.current = true;
       return;
     }
@@ -2377,6 +2427,16 @@ export default function ChatView({
       focusComposer();
     });
   }, [pendingComposerFocusRef, focusComposer]);
+  const { change: handleComputerControlModeChange, sequence: computerControlChangeSequence } =
+    useComputerControlModeChange({
+      threadId,
+      setMode: setComposerDraftComputerControlMode,
+      focusComposer: scheduleComposerFocus,
+    });
+  // The denial card switches control on; the composer keeps the plain message.
+  const handleEnableComputerControlFromDenial = useCallback(() => {
+    handleComputerControlModeChange("chat");
+  }, [handleComputerControlModeChange]);
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -2396,6 +2456,18 @@ export default function ChatView({
       window.cancelAnimationFrame(frame);
     };
   }, [pendingComposerFocusRef, focusComposer, secondaryChromeReady, secondaryChromeThreadId]);
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (!pendingComposerFocusRef.current) return;
+      window.requestAnimationFrame(() => {
+        focusComposer();
+      });
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
   const handleModelPickerOpenChange = useCallback(
     (open: boolean) => {
@@ -3099,6 +3171,33 @@ export default function ChatView({
     worktreePath: resolvedThreadWorktreePath,
   });
 
+  // Every turn this view dispatches carries the same settings block. Assemble it
+  // once here so each dispatch site spreads a projection of one object instead of
+  // re-deriving the fields inline, and so the send callbacks depend on one value
+  // instead of listing six that are easy to forget (see commit ca0e72f3e).
+  const turnDispatchSettings = useMemo<TurnDispatchSettings>(
+    () => ({
+      modelSelection: selectedModelSelection,
+      providerOptions: providerOptionsForDispatch,
+      enableComputerControl,
+      computerControlGeneration,
+      assistantDeliveryMode,
+      runtimeMode,
+      interactionMode,
+      envMode,
+    }),
+    [
+      assistantDeliveryMode,
+      computerControlGeneration,
+      enableComputerControl,
+      envMode,
+      interactionMode,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModelSelection,
+    ],
+  );
+
   useEffect(() => {
     if (!activeThreadId) return;
     const previous = terminalOpenByThreadRef.current[activeThreadId] ?? false;
@@ -3723,6 +3822,8 @@ export default function ChatView({
     setComposerDraftModelSelection,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
+    setComposerDraftComputerControlMode,
+    setComposerDraftComputerControl,
     setComposerCursor,
     setComposerTrigger,
     scheduleComposerFocus,
@@ -3749,9 +3850,9 @@ export default function ChatView({
     isConnecting,
     sendPreflightInFlightRef,
     sendInFlightRef,
-    runtimeMode,
-    interactionMode,
-    envMode,
+    turnDispatchSettings,
+    computerControlChangeSequence,
+    setComposerDraftComputerControlMode,
     showPlanFollowUpPrompt,
     activeProposedPlan,
     hasQueueableLiveTurn,
@@ -3784,7 +3885,6 @@ export default function ChatView({
     createWorktreeMutation,
     isLocalDraftThread,
     threadNotes,
-    assistantDeliveryMode,
     setSettledThreadBranchWarningDismissedThreadId,
     setQueuedSteerGate,
     planSidebarDismissedForTurnRef,
@@ -3852,8 +3952,6 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
     pendingAutomationConversationRef,
     setPendingAutomationConversation,
     pendingAutomationConversation,
@@ -3889,15 +3987,15 @@ export default function ChatView({
     sendInFlightRef,
     setThreadError,
     setTailAnchor,
-    runtimeMode,
+    turnDispatchSettings,
+    computerControlChangeSequence,
+    setComposerDraftComputerControlMode,
     activeProposedPlan,
-    assistantDeliveryMode,
     setQueuedSteerGate,
     planSidebarDismissedForTurnRef,
     setPlanSidebarOpen,
     isRevertingCheckpoint,
     setIsRevertingCheckpoint,
-    interactionMode,
     isSendBusy,
     beginLocalDispatch,
     armLocalDispatchAckFallback,
@@ -3905,8 +4003,6 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
@@ -3915,7 +4011,6 @@ export default function ChatView({
     rememberCustomBinaryPathForDispatch,
     workflowRunState,
     lateComposerSendHandlersRef,
-    envMode,
     activeThreadId,
     markWorkflowRunDismissed,
     activeProject,
@@ -4526,6 +4621,48 @@ export default function ChatView({
     if (!activeRateLimitBannerDismissalKey) return;
     setDismissedRateLimitBannerKey(activeRateLimitBannerDismissalKey);
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
+  const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
+  const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
+  const [mainContentWidth, setMainContentWidth] = useState(1600);
+  useEffect(() => {
+    const element = mainContentRef.current;
+    if (!element) return;
+    const update = () => {
+      const width = element.clientWidth;
+      setMainContentWidth((previous) => (previous === width ? previous : width));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
+  const applyComputerControlEffortHint = useCallback(() => {
+    setComposerDraftProviderModelOptions(
+      threadId,
+      selectedProvider,
+      buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
+        [composerEffortOptionId]: COMPUTER_CONTROL_HINT_EFFORT,
+      }),
+      { model: selectedModelForPickerWithCustomFallback, persistSticky: true },
+    );
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [
+    composerEffortOptionId,
+    scheduleComposerFocus,
+    selectedModelForPickerWithCustomFallback,
+    selectedProvider,
+    selectedProviderModelOptions,
+    setComposerDraftProviderModelOptions,
+    threadId,
+    updateSettings,
+  ]);
+  const dismissComputerControlEffortHint = useCallback(() => {
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [scheduleComposerFocus, updateSettings]);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -4858,6 +4995,32 @@ export default function ChatView({
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+
+  // Ambient preview rail: the live card sits below the Environment card and
+  // the chat frees its gutter, so it never covers the transcript. Space is
+  // reserved only for a card that actually has content (live phase + a landed
+  // frame), at its fitted width — never for an armed or waiting session.
+  const environmentInsetPx = environmentAppliesContentInset
+    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+    : 0;
+  const previewCaps = computerPreviewCardCaps(
+    settings.computerPreviewSize === "large" ? "large" : "compact",
+  );
+  const previewBudgetPx = computerPreviewBudgetPx({
+    mainContentWidthPx: mainContentWidth,
+    environmentInsetPx: environmentInsetPx,
+    caps: previewCaps,
+  });
+  const previewReservesInset =
+    environmentOverlayVariant === "docked" &&
+    settings.autoOpenComputerPane &&
+    previewSession?.phase === "live" &&
+    previewLayout?.hasFrame === true;
+  const previewInsetPx = previewReservesInset
+    ? Math.min(previewLayout?.width ?? previewBudgetPx, previewBudgetPx) + 24
+    : 0;
+  const contentInsetRightPx =
+    environmentInsetPx + previewInsetPx > 0 ? environmentInsetPx + previewInsetPx : undefined;
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
@@ -4871,6 +5034,13 @@ export default function ChatView({
   const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
+  const showComposerComputerControlEffortHint = shouldShowComputerControlEffortHint({
+    enableComputerControl,
+    computerControlAvailable,
+    dismissed: settings.dismissedComputerControlEffortHint,
+    provider: selectedProvider,
+    traits: composerTraitSelection,
+  });
   const startReplacementSidechat = () => {
     const sourceThreadId = activeThread?.sidechatSourceThreadId;
     if (!sourceThreadId) return;
@@ -5010,6 +5180,20 @@ export default function ChatView({
                     showComposerWorkflowRunCard ||
                     showComposerSubagentStrip ||
                     queuedComposerTurns.length > 0
+                  }
+                />
+              ) : null}
+              {showComposerComputerControlEffortHint ? (
+                <ComposerComputerControlEffortHint
+                  onApply={applyComputerControlEffortHint}
+                  onDismiss={dismissComputerControlEffortHint}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard ||
+                    showComposerSubagentStrip ||
+                    queuedComposerTurns.length > 0 ||
+                    showComposerGoalHeader
                   }
                 />
               ) : null}
@@ -5533,7 +5717,7 @@ export default function ChatView({
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div ref={mainContentRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
@@ -5662,6 +5846,8 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    computerControlEnabled={enableComputerControl}
+                    onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
@@ -5696,11 +5882,7 @@ export default function ChatView({
                     onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
-                    contentInsetRightPx={
-                      environmentAppliesContentInset
-                        ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
-                        : undefined
-                    }
+                    contentInsetRightPx={contentInsetRightPx}
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
@@ -5719,12 +5901,8 @@ export default function ChatView({
                       CHAT_COLUMN_GUTTER_CLASS_NAME,
                     )}
                     // Match the transcript's right inset so the composer stays aligned with chat
-                    // content (and clear of the docked Environment overlay).
-                    style={
-                      environmentAppliesContentInset
-                        ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
-                        : undefined
-                    }
+                    // content (and clear of the docked Environment overlay and preview rail).
+                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
@@ -5800,6 +5978,18 @@ export default function ChatView({
               {...environmentPanelProps}
               open={environmentPanelVisible}
               variant={environmentOverlayVariant}
+              railBottom={
+                previewSession ? (
+                  <AmbientRailSlot envOpen={environmentPanelVisible}>
+                    <ComputerPreviewPopover
+                      key={threadId}
+                      threadId={threadId}
+                      maxWidthPx={previewBudgetPx}
+                      size={settings.computerPreviewSize === "large" ? "large" : "compact"}
+                    />
+                  </AmbientRailSlot>
+                ) : undefined
+              }
             />
           ) : null}
         </div>

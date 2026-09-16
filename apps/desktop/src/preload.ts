@@ -3,6 +3,7 @@ import type {
   BrowserAnnotationEvent,
   BrowserUseOpenPanelRequest,
   DesktopBridge,
+  DesktopComputerPreviewFrame,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -31,6 +32,36 @@ function parseBrowserOpenPanelRequest(payload: unknown): BrowserUseOpenPanelRequ
     return null;
   }
   return { threadId: threadId as BrowserUseOpenPanelRequest["threadId"] };
+}
+
+// Structured clone delivers a Node Buffer as Uint8Array; the JSON-era
+// {type:"Buffer",data:[...]} shape is normalized too so the listener always
+// receives a plain Uint8Array.
+function computerPreviewFrameBytes(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    (value as { readonly type?: unknown }).type === "Buffer" &&
+    Array.isArray((value as { readonly data?: unknown }).data)
+  ) {
+    return Uint8Array.from((value as { readonly data: readonly number[] }).data);
+  }
+  return null;
+}
+
+function parseComputerPreviewFrame(payload: unknown): DesktopComputerPreviewFrame | null {
+  if (!payload || typeof payload !== "object") return null;
+  const frame = payload as Record<string, unknown>;
+  if (typeof frame.windowId !== "number" || !Number.isFinite(frame.windowId)) return null;
+  if (typeof frame.seq !== "number" || !Number.isFinite(frame.seq)) return null;
+  const jpeg = computerPreviewFrameBytes(frame.jpeg);
+  if (!jpeg || jpeg.byteLength === 0) return null;
+  return { windowId: frame.windowId, seq: frame.seq, jpeg };
 }
 
 function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent | null {
@@ -116,6 +147,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
     relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
   },
+  computerPreview: {
+    onFrame: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        const frame = parseComputerPreviewFrame(payload);
+        if (frame) listener(frame);
+      };
+
+      ipcRenderer.on(IPC.computerPreviewFrame, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IPC.computerPreviewFrame, wrappedListener);
+      };
+    },
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -178,16 +222,33 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
   appSnap: {
-    getState: () => ipcRenderer.invoke(IPC.appSnap.getState),
+    captureCurrentApp: (requestId) => ipcRenderer.invoke(IPC.appSnap.captureCurrentApp, requestId),
+    cancelCapture: (requestId) => ipcRenderer.invoke(IPC.appSnap.cancelCapture, requestId),
+    getState: (permissions) => ipcRenderer.invoke(IPC.appSnap.getState, permissions),
     setEnabled: (enabled) => ipcRenderer.invoke(IPC.appSnap.setEnabled, enabled),
     checkShortcut: (shortcut) => ipcRenderer.invoke(IPC.appSnap.checkShortcut, shortcut),
     setShortcut: (shortcut) => ipcRenderer.invoke(IPC.appSnap.setShortcut, shortcut),
-    requestPermissions: () => ipcRenderer.invoke(IPC.appSnap.requestPermissions),
+    requestPermissions: (permissions) =>
+      ipcRenderer.invoke(IPC.appSnap.requestPermissions, permissions),
+    startPermissionSetup: (permissions) =>
+      ipcRenderer.invoke(IPC.appSnap.startPermissionSetup, permissions),
     listPendingCaptures: () => ipcRenderer.invoke(IPC.appSnap.listPendingCaptures),
     acknowledgeCapture: (captureId) =>
       ipcRenderer.invoke(IPC.appSnap.acknowledgeCapture, captureId),
     listWindows: () => ipcRenderer.invoke(IPC.appSnap.listWindows),
     captureWindow: (input) => ipcRenderer.invoke(IPC.appSnap.captureWindow, input),
+    openPermissionSettings: (pane) => ipcRenderer.invoke(IPC.appSnap.openPermissionSettings, pane),
+    restartApp: () => ipcRenderer.invoke(IPC.appSnap.restartApp),
+    showPermissionGuide: (pane) => ipcRenderer.invoke(IPC.appSnap.showPermissionGuide, pane),
+    hidePermissionGuide: () => ipcRenderer.invoke(IPC.appSnap.hidePermissionGuide),
+    onPermissionGuideState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "string") return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.appSnap.permissionGuideState, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.appSnap.permissionGuideState, wrappedListener);
+    },
     onCaptured: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
         if (typeof capture !== "object" || capture === null) return;

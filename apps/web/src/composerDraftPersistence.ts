@@ -1,4 +1,5 @@
 import { normalizePendingUserInputDrafts } from "./pendingUserInputRecovery";
+import { resolveComputerControlMode } from "./computerControlMode";
 // FILE: composerDraftPersistence.ts
 // Purpose: Owns composer draft schema v6, migrations, partialization, merge normalization, and hydration.
 // Exports: Persist middleware transitions and persisted state type.
@@ -211,6 +212,9 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
   sourceProposedPlan: Schema.optionalKey(PersistedSourceProposedPlanReference),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -231,6 +235,9 @@ const PersistedQueuedComposerPlanFollowUp = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
   runtimeMode: RuntimeMode,
 });
 
@@ -293,6 +300,9 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
 });
 
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
@@ -659,6 +669,21 @@ function normalizePersistedQueuedTurns(
     const runtimeMode = Schema.is(RuntimeMode)(candidate.runtimeMode)
       ? candidate.runtimeMode
       : null;
+    const computerControlMode = resolveComputerControlMode(
+      candidate.computerControlMode === "off" ||
+        candidate.computerControlMode === "request" ||
+        candidate.computerControlMode === "chat"
+        ? candidate.computerControlMode
+        : undefined,
+      candidate.enableComputerControl === true,
+    );
+    const computerControlGeneration =
+      typeof candidate.computerControlGeneration === "number" &&
+      Number.isSafeInteger(candidate.computerControlGeneration) &&
+      candidate.computerControlGeneration >= 0
+        ? candidate.computerControlGeneration
+        : undefined;
+    const enableComputerControl = computerControlMode !== "off";
     if (
       id.length === 0 ||
       createdAt.length === 0 ||
@@ -747,6 +772,9 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
+        computerControlMode,
+        ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
@@ -776,6 +804,9 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
+        computerControlMode,
+        ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
         runtimeMode,
       });
       seenIds.add(id);
@@ -993,6 +1024,24 @@ function normalizePersistedDraftsByThreadId(
     const interactionMode = Schema.is(ProviderInteractionMode)(draftCandidate.interactionMode)
       ? draftCandidate.interactionMode
       : null;
+    // Tri-state: only an explicit boolean is a recorded choice; anything else
+    // means the chat follows the new-chat default.
+    const enableComputerControl =
+      typeof draftCandidate.enableComputerControl === "boolean"
+        ? draftCandidate.enableComputerControl
+        : undefined;
+    const computerControlMode =
+      draftCandidate.computerControlMode === "off" ||
+      draftCandidate.computerControlMode === "request" ||
+      draftCandidate.computerControlMode === "chat"
+        ? draftCandidate.computerControlMode
+        : undefined;
+    const computerControlGeneration =
+      typeof draftCandidate.computerControlGeneration === "number" &&
+      Number.isSafeInteger(draftCandidate.computerControlGeneration) &&
+      draftCandidate.computerControlGeneration >= 0
+        ? draftCandidate.computerControlGeneration
+        : undefined;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -1069,7 +1118,9 @@ function normalizePersistedDraftsByThreadId(
       restoredSourceProposedPlan === null &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      enableComputerControl === undefined &&
+      computerControlMode === undefined
     ) {
       continue;
     }
@@ -1091,6 +1142,9 @@ function normalizePersistedDraftsByThreadId(
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
+      ...(computerControlMode !== undefined ? { computerControlMode } : {}),
+      ...(computerControlGeneration !== undefined ? { computerControlGeneration } : {}),
     };
   }
 
@@ -1192,6 +1246,18 @@ export function partializeComposerDraftStoreState(
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
             : {}),
+          enableComputerControl:
+            resolveComputerControlMode(
+              queuedTurn.computerControlMode,
+              queuedTurn.enableComputerControl,
+            ) !== "off",
+          ...(queuedTurn.computerControlGeneration !== undefined
+            ? { computerControlGeneration: queuedTurn.computerControlGeneration }
+            : {}),
+          computerControlMode: resolveComputerControlMode(
+            queuedTurn.computerControlMode,
+            queuedTurn.enableComputerControl,
+          ),
           ...(queuedTurn.sourceProposedPlan
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
             : {}),
@@ -1215,6 +1281,18 @@ export function partializeComposerDraftStoreState(
         ...(queuedTurn.providerOptionsForDispatch
           ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
           : {}),
+        enableComputerControl:
+          resolveComputerControlMode(
+            queuedTurn.computerControlMode,
+            queuedTurn.enableComputerControl,
+          ) !== "off",
+        ...(queuedTurn.computerControlGeneration !== undefined
+          ? { computerControlGeneration: queuedTurn.computerControlGeneration }
+          : {}),
+        computerControlMode: resolveComputerControlMode(
+          queuedTurn.computerControlMode,
+          queuedTurn.enableComputerControl,
+        ),
         runtimeMode: queuedTurn.runtimeMode,
       });
     }
@@ -1238,7 +1316,9 @@ export function partializeComposerDraftStoreState(
       draft.restoredSourceProposedPlan == null &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.enableComputerControl === undefined &&
+      draft.computerControlMode === undefined
     ) {
       continue;
     }
@@ -1389,6 +1469,15 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.computerControlGeneration !== undefined
+        ? { computerControlGeneration: draft.computerControlGeneration }
+        : {}),
+      ...(draft.computerControlMode !== undefined
+        ? { computerControlMode: draft.computerControlMode }
+        : {}),
+      ...(draft.enableComputerControl !== undefined
+        ? { enableComputerControl: draft.enableComputerControl }
+        : {}),
     };
     persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
   }
@@ -1574,5 +1663,11 @@ export function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    computerControlMode: persistedDraft.computerControlMode,
+    computerControlGeneration: persistedDraft.computerControlGeneration,
+    enableComputerControl:
+      typeof persistedDraft.enableComputerControl === "boolean"
+        ? persistedDraft.enableComputerControl
+        : undefined,
   };
 }

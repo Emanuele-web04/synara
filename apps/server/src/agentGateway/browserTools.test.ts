@@ -14,6 +14,7 @@ const context: ToolContext = {
     turnId: "turn-a",
   },
   callerThreadId: "thread-a",
+  callerThreadLabel: null,
   callerSessionKey: "gateway-session:test",
   callerProvider: "claudeAgent",
   callerCapabilities: new Set(["browser:control"]),
@@ -94,6 +95,41 @@ describe("agent gateway browser tools", () => {
     expect(tools.some((tool) => tool.definition.name === "browser_click")).toBe(false);
   });
 
+  it("refreshes browser routing guidance per thread without repeating every call", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({ tabId: TAB_ID, value: { visible: "History" }, serializedByteCount: 21 }),
+    );
+    const run = makeAgentGatewayBrowserTools({ available: true, execute }).find(
+      (tool) => tool.definition.name === "browser_run",
+    )!;
+    const guided: boolean[] = [];
+
+    for (let index = 0; index < 11; index += 1) {
+      const result = await Effect.runPromise(
+        run.handler({ code: "return await snapshot()" }, context),
+      );
+      guided.push(JSON.stringify(result.content).includes("Browser routing reminder"));
+    }
+
+    expect(guided).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    const otherThread = await Effect.runPromise(
+      run.handler({ code: "return await snapshot()" }, { ...context, callerThreadId: "thread-b" }),
+    );
+    expect(JSON.stringify(otherThread.content)).toContain("Browser routing reminder");
+  });
+
   it.each(["short-visible-result", "synthetic-page-content ".repeat(500)])(
     "returns browser data once for Codex even when the entire envelope is printed",
     async (visible) => {
@@ -120,7 +156,7 @@ describe("agent gateway browser tools", () => {
         { type: "text", text: expect.stringContaining("Untrusted browser data") },
       ]);
       expect(JSON.stringify(result).split(visible)).toHaveLength(2);
-      expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 180);
+      expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 700);
     },
   );
 

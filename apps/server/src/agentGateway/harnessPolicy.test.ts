@@ -149,7 +149,9 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_000);
+    // Budget raised for the one-line Computer discoverability affordance
+    // above (242 chars); it still guards against accidental bloat.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_300);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -159,4 +161,74 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
   });
+
+  it("keeps the Computer discoverability affordance unconditional on the Computer flag", () => {
+    // A session without Computer tools is exactly where the affordance pays:
+    // the model must route desktop-app work to the Settings switch instead
+    // of substituting shell/AppleScript/browser/device tools.
+    const affordance =
+      "To operate real macOS/Windows apps (open, click, type, scroll), use computer_* tools only when this session lists them; otherwise tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.";
+    for (const gatewayControlAvailable of [true, false] as const) {
+      for (const enableComputerControl of [true, false, undefined] as const) {
+        const policy = renderSynaraHarnessPolicy({
+          gatewayControlAvailable,
+          ...(enableComputerControl === undefined ? {} : { enableComputerControl }),
+        });
+        assert.include(policy, affordance, `${gatewayControlAvailable}/${enableComputerControl}`);
+      }
+    }
+    // One line, not the gated guidance: sessions without control must not pay
+    // for the full Computer instructions.
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true }),
+      "## Synara computer use",
+    );
+  });
+});
+
+it("adds Computer guidance only for an explicitly enabled scoped session across all providers", () => {
+  const providers = [
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "devin",
+    "opencode",
+    "pi",
+    "antigravity",
+  ] as const;
+  for (const provider of providers) {
+    const off = takeSynaraHarnessPolicyForProviderSession(
+      {},
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    const explicitOff = takeSynaraHarnessPolicyForProviderSession(
+      { enableComputerControl: false },
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    assert.strictEqual(off, explicitOff);
+    assert.notInclude(off ?? "", "## Synara computer use");
+    const state = { enableComputerControl: true };
+    const on =
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }) ?? "";
+    assert.equal(on.split("## Synara computer use").length - 1, 1, provider);
+    assert.include(on, "Never replay an uncertain action");
+    assert.isNull(
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }),
+    );
+    assert.notInclude(
+      takeSynaraHarnessPolicyForProviderSession(
+        { enableComputerControl: true },
+        { provider, scopedGatewayConnectionAvailable: false },
+      ) ?? "",
+      "## Synara computer use",
+    );
+  }
 });

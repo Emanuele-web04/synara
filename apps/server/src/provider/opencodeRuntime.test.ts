@@ -57,7 +57,7 @@ function mockOpenCodeServerHandle(input: {
   kill?: () => Effect.Effect<void, never>;
 }) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(input.pid ?? 1),
+    pid: ChildProcessSpawner.ProcessId(input.pid ?? 0x7fff_fffe),
     exitCode: input.exitCode ?? Effect.never,
     isRunning: Effect.succeed(true),
     kill: input.kill ?? (() => Effect.void),
@@ -429,7 +429,7 @@ describe("OpenCodeRuntime local server pool", () => {
       },
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
-        expect(rootPid).toBe(1);
+        expect(rootPid).toBe(0x7fff_fffe);
         await exitProof;
         return { escalated: false, signalErrors: [] };
       },

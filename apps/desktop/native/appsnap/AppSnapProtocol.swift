@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 struct AppSnapFailure: Error {
@@ -6,12 +7,19 @@ struct AppSnapFailure: Error {
 }
 
 enum AppSnapMode {
-    case checkPermissions
-    case requestPermissions
+    case checkPermissions(Set<AppSnapPermission>)
+    case requestPermissions(Set<AppSnapPermission>)
+    case releaseHeldInput
+    case permissionGuide(pane: String, appPath: String, appName: String)
     case watch(
         outputDirectory: URL,
         excludedBundleIdentifier: String,
         externalTrigger: Bool
+    )
+    case computerFrames(
+        windowID: CGWindowID,
+        ownerPID: pid_t?,
+        socketPath: String
     )
 }
 
@@ -23,6 +31,13 @@ struct AppSnapOptions {
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
         var externalTrigger = false
+        var permissions = Set<AppSnapPermission>()
+        var guidePane: String?
+        var guideAppPath: String?
+        var guideAppName: String?
+        var frameWindowID: String?
+        var frameSocketPath: String?
+        var frameOwnerPID: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -51,7 +66,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--watch":
+            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -65,6 +80,27 @@ struct AppSnapOptions {
                 excludedBundleIdentifier = try readValue("--excluded-bundle-id", "a bundle identifier")
             case "--external-trigger":
                 externalTrigger = true
+            case "--permission":
+                let value = try readValue("--permission", "a value")
+                guard let permission = AppSnapPermission(rawValue: value) else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--permission requires accessibility, or screenRecording."
+                    )
+                }
+                permissions.insert(permission)
+            case "--pane":
+                guidePane = try readValue("--pane", "a value")
+            case "--app-path":
+                guideAppPath = try readValue("--app-path", "a path")
+            case "--app-name":
+                guideAppName = try readValue("--app-name", "a value")
+            case "--window-id":
+                frameWindowID = try readValue("--window-id", "a window number")
+            case "--out":
+                frameSocketPath = try readValue("--out", "a socket path")
+            case "--pid":
+                frameOwnerPID = try readValue("--pid", "a process identifier")
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -74,14 +110,53 @@ struct AppSnapOptions {
             index += 1
         }
 
+        if requestedMode != "--permission-guide",
+           guidePane != nil || guideAppPath != nil || guideAppName != nil {
+            throw AppSnapFailure(code: "invalid_arguments", message: "Guide metadata is only used by the permission guide.")
+        }
+        if requestedMode != "--computer-frames",
+           frameWindowID != nil || frameSocketPath != nil || frameOwnerPID != nil {
+            throw AppSnapFailure(code: "invalid_arguments", message: "Frame arguments are only used by the computer frames mode.")
+        }
         switch requestedMode {
+        case "--permission-guide":
+            try rejectWatchArguments("The permission guide does not accept watch arguments.")
+            guard permissions.isEmpty, let guidePane,
+                  guidePane == "accessibility" || guidePane == "screen-recording",
+                  let appPath = guideAppPath, appPath.hasPrefix("/"),
+                  appPath.hasSuffix(".app"), FileManager.default.fileExists(atPath: appPath),
+                  let appName = guideAppName, !appName.isEmpty, appName.count <= 256 else {
+                throw AppSnapFailure(code: "invalid_arguments", message: "The permission guide requires --pane accessibility, or screen-recording, the running app bundle, and its name.")
+            }
+            return AppSnapOptions(
+                mode: .permissionGuide(pane: guidePane, appPath: appPath, appName: appName)
+            )
         case "--check-permissions":
             try rejectWatchArguments("Permission checks do not accept watch arguments.")
-            return AppSnapOptions(mode: .checkPermissions)
+            return AppSnapOptions(mode: .checkPermissions(
+                permissions.isEmpty ? [.accessibility, .screenRecording] : permissions
+            ))
         case "--request-permissions":
             try rejectWatchArguments("Permission requests do not accept watch arguments.")
-            return AppSnapOptions(mode: .requestPermissions)
+            return AppSnapOptions(mode: .requestPermissions(
+                permissions.isEmpty ? [.accessibility, .screenRecording] : permissions
+            ))
+        case "--release-held-input":
+            try rejectWatchArguments("Held-input release does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--release-held-input does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .releaseHeldInput)
         case "--watch":
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--watch does not accept permission selectors."
+                )
+            }
             guard let outputDirectory, !outputDirectory.isEmpty else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -101,10 +176,50 @@ struct AppSnapOptions {
                     externalTrigger: externalTrigger
                 )
             )
+        case "--computer-frames":
+            try rejectWatchArguments("Computer frames do not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames does not accept permission selectors."
+                )
+            }
+            guard let windowIDText = frameWindowID,
+                  let windowID = CGWindowID(windowIDText), windowID > 0 else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames requires --window-id with a window number."
+                )
+            }
+            guard let socketPath = frameSocketPath,
+                  socketPath.hasPrefix("/"),
+                  socketPath.utf8.count < 104 else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--computer-frames requires --out with a unix socket path."
+                )
+            }
+            var ownerPID: pid_t?
+            if let pidText = frameOwnerPID {
+                guard let pid = pid_t(pidText), pid > 0 else {
+                    throw AppSnapFailure(
+                        code: "invalid_arguments",
+                        message: "--pid requires a process identifier."
+                    )
+                }
+                ownerPID = pid
+            }
+            return AppSnapOptions(
+                mode: .computerFrames(
+                    windowID: windowID,
+                    ownerPID: ownerPID,
+                    socketPath: socketPath
+                )
+            )
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, or --watch."
+                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, or --computer-frames."
             )
         }
     }
@@ -206,12 +321,22 @@ final class NDJSONEmitter {
         ])
     }
 
-    func emitPermissions(inputMonitoring: Bool, screenRecording: Bool) {
+    func emitPermissionGuide(state: String) {
         emit([
-            "type": "permissions",
-            "inputMonitoring": inputMonitoring ? "granted" : "denied",
-            "screenRecording": screenRecording ? "granted" : "denied",
+            "type": "permission-guide",
+            "state": state,
         ])
+    }
+
+    func emitPermissions(_ permissions: AppSnapPermissionState) {
+        var payload: [String: Any] = ["type": "permissions"]
+        if let accessibility = permissions.accessibility {
+            payload["accessibility"] = accessibility ? "granted" : "denied"
+        }
+        if let screenRecording = permissions.screenRecording {
+            payload["screenRecording"] = screenRecording ? "granted" : "denied"
+        }
+        emit(payload)
     }
 
     private func writeDiagnostic(_ message: String) {

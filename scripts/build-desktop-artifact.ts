@@ -23,7 +23,7 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
-import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
+import { finalizeSignedMacDmg, rebuildUnsignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import {
   RELEASE_LOCKFILE_PATH,
@@ -34,7 +34,19 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Data, Effect, FileSystem, Layer, Logger, Option, Path, Schema } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -354,18 +366,30 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
 const commandOutputOptions = (verbose: boolean) =>
   ({
-    stdout: verbose ? "inherit" : "ignore",
+    stdout: verbose ? "inherit" : "pipe",
     stderr: "inherit",
   }) as const;
 
 const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Command) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* commandSpawner.spawn(command);
+  const collectStdout = child.stdout.pipe(
+    Stream.decodeText(),
+    Stream.runCollect,
+    Effect.map((chunks) => chunks.join("")),
+    Effect.orElseSucceed(() => ""),
+  );
+  const collectStdoutFiber = yield* collectStdout.pipe(Effect.forkChild);
   const exitCode = yield* child.exitCode;
+  const stdout = yield* Effect.race(
+    Fiber.join(collectStdoutFiber),
+    Effect.sleep("500 millis").pipe(Effect.as("")),
+  );
 
   if (exitCode !== 0) {
+    const outputTail = stdout.trimEnd().split("\n").slice(-30).join("\n");
     return yield* new BuildScriptError({
-      message: `Command exited with non-zero exit code (${exitCode})`,
+      message: `Command exited with non-zero exit code (${exitCode}).${outputTail ? `\n${outputTail}` : ""}`,
     });
   }
 });
@@ -1036,6 +1060,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   if (options.platform === "mac") {
+    const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
+    const cuaDestination = path.join(stageResourcesDir, "cua-driver");
+    yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: repoRoot,
+        ...commandOutputOptions(options.verbose),
+      })`node ${provisionCua} --destination ${cuaDestination} --arch ${options.arch}`,
+    );
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
 
@@ -1133,6 +1166,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac") {
     yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+  }
+
+  if (options.platform === "mac" && options.target === "dmg" && !options.signed) {
+    yield* Effect.log("[desktop-artifact] Rebuilding unsigned macOS DMG from the final app...");
+    yield* Effect.try({
+      try: () =>
+        rebuildUnsignedMacDmg({
+          stageDistDir,
+          productName: desktopPackageJson.productName ?? "Synara",
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Unsigned macOS DMG finalization failed.",
+          cause,
+        }),
+    });
   }
 
   if (options.platform === "mac" && options.target === "dmg" && options.signed) {

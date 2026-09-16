@@ -41,6 +41,7 @@ const READY_STATE: DesktopAppSnapState = {
   inputMonitoringPermission: "granted",
   screenRecordingPermission: "granted",
   message: null,
+  appDisplayName: "Synara",
 };
 
 const CAPTURE: DesktopAppSnapCapture = {
@@ -77,6 +78,11 @@ function appSnapBridge(overrides: {
   captureWindow?: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
   acknowledgeCapture?: (captureId: string) => Promise<void>;
   onState?: (listener: (state: DesktopAppSnapState) => void) => () => void;
+  openPermissionSettings?: (pane: unknown) => Promise<boolean>;
+  restartApp?: () => Promise<void>;
+  showPermissionGuide?: (pane: unknown) => Promise<void>;
+  hidePermissionGuide?: () => Promise<void>;
+  onPermissionGuideState?: (listener: (state: unknown) => void) => () => void;
 }) {
   return {
     appSnap: {
@@ -103,6 +109,11 @@ function appSnapBridge(overrides: {
       captureWindow: overrides.captureWindow ?? (() => Promise.resolve(CAPTURE)),
       acknowledgeCapture: overrides.acknowledgeCapture ?? (() => Promise.resolve()),
       onState: overrides.onState ?? (() => () => undefined),
+      openPermissionSettings: overrides.openPermissionSettings ?? (() => Promise.resolve(true)),
+      restartApp: overrides.restartApp ?? (() => Promise.resolve()),
+      showPermissionGuide: overrides.showPermissionGuide ?? (() => Promise.resolve()),
+      hidePermissionGuide: overrides.hidePermissionGuide ?? (() => Promise.resolve()),
+      onPermissionGuideState: overrides.onPermissionGuideState ?? (() => () => undefined),
     },
   };
 }
