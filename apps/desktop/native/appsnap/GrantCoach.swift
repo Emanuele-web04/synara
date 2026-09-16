@@ -106,11 +106,8 @@ final class GrantCoach {
     private var paneTitle: String {
         pane == "accessibility" ? "Accessibility" : "Screen Recording"
     }
-    private var allowsDrop: Bool { pane != "accessibility" }
     private var headline: String {
-        allowsDrop
-            ? "Drop \(appName) on the list above."
-            : "Turn \(appName) on in the list above."
+        "Drop \(appName) on the list above."
     }
     func present(onGranted: @escaping () -> Void, onDismissed: (() -> Void)? = nil) {
         self.onGranted = onGranted
@@ -172,8 +169,7 @@ final class GrantCoach {
     }
     private func build() {
         let width: CGFloat = 360, pad: CGFloat = 16, gap: CGFloat = 12, row: CGFloat = 20, chipHeight: CGFloat = 36
-        let hintHeight: CGFloat = 34
-        let height = pad + row + gap + (allowsDrop ? chipHeight : hintHeight) + pad
+        let height = pad + row + gap + chipHeight + pad
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
@@ -204,20 +200,10 @@ final class GrantCoach {
         title.lineBreakMode = .byTruncatingTail
         title.frame = NSRect(x: pad + row + 8, y: arrowY, width: width - pad * 2 - row - 8, height: row)
         card.addSubview(title)
-        if allowsDrop {
-            let chip = AppDragView(frame: NSRect(x: pad, y: pad, width: width - pad * 2, height: chipHeight),
-                                   appName: appName, appPath: appPath,
-                                   toolTipText: "Drag \(appName) onto the \(paneTitle) list")
-            card.addSubview(chip)
-        } else {
-            let hint = NSTextField(labelWithString: "Use the toggle. If the app is missing, click + and add it.")
-            hint.font = NSFont.systemFont(ofSize: 12)
-            hint.textColor = .secondaryLabelColor
-            hint.lineBreakMode = .byWordWrapping
-            hint.maximumNumberOfLines = 2
-            hint.frame = NSRect(x: pad, y: pad, width: width - pad * 2, height: hintHeight)
-            card.addSubview(hint)
-        }
+        let chip = AppDragView(frame: NSRect(x: pad, y: pad, width: width - pad * 2, height: chipHeight),
+                               appName: appName, appPath: appPath,
+                               toolTipText: "Drag \(appName) onto the \(paneTitle) list")
+        card.addSubview(chip)
         self.panel = panel
     }
     private func follow() {
