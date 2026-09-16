@@ -389,6 +389,8 @@ const sameClaudeCacheContext = (
   left: ClaudeCacheObservation,
   right: ClaudeCacheObservation,
 ): boolean =>
+  // A newer local observation does not revoke consent. Changed size or native
+  // response evidence can change the expense the user agreed to and must match.
   left.nativeSessionId === right.nativeSessionId &&
   left.lifecycleGeneration === right.lifecycleGeneration &&
   left.model === right.model &&
@@ -1992,6 +1994,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     review: PendingClaudeCacheReview | null,
     expectedReviewId: string | null,
+    hold?: { readonly sourceEventSequence: number; readonly session: OrchestrationSession },
   ) =>
     orchestrationEngine
       .dispatch({
@@ -2000,6 +2003,7 @@ const make = Effect.gen(function* () {
         threadId,
         review,
         expectedReviewId,
+        ...(hold ? { hold } : {}),
         createdAt: new Date().toISOString(),
       })
       .pipe(
@@ -2033,6 +2037,7 @@ const make = Effect.gen(function* () {
 
   const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly sourceEventSequence: number;
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
@@ -2205,8 +2210,20 @@ const make = Effect.gen(function* () {
         (!input.acceptedCacheReview ||
           !sameClaudeCacheContext(input.acceptedCacheReview.assessment, observation))
       ) {
+        const createdAt = new Date().toISOString();
+        const hold = {
+          sourceEventSequence: input.sourceEventSequence,
+          session: {
+            threadId: input.threadId,
+            runtimeMode: activeSession.runtimeMode,
+            providerName: activeSession.provider,
+            status: "ready" as const,
+            lastError: null,
+            activeTurnId: null,
+            updatedAt: createdAt,
+          },
+        };
         if (input.cacheReviewSource) {
-          const createdAt = new Date().toISOString();
           yield* setClaudeCacheReview(
             input.threadId,
             {
@@ -2218,6 +2235,7 @@ const make = Effect.gen(function* () {
               createdAt,
             },
             pendingReview?.reviewId ?? null,
+            hold,
           );
         } else {
           // Autonomous iterations have no user message to release. Pause the
@@ -2235,20 +2253,8 @@ const make = Effect.gen(function* () {
             turnId: null,
             createdAt: new Date().toISOString(),
           });
+          yield* setClaudeCacheReview(input.threadId, null, null, hold);
         }
-        yield* setThreadSession({
-          threadId: input.threadId,
-          session: {
-            threadId: input.threadId,
-            runtimeMode: activeSession.runtimeMode,
-            providerName: activeSession.provider,
-            status: "ready",
-            lastError: null,
-            activeTurnId: null,
-            updatedAt: new Date().toISOString(),
-          },
-          createdAt: new Date().toISOString(),
-        });
         return;
       }
     }
@@ -3307,6 +3313,7 @@ const make = Effect.gen(function* () {
 
       const startedTurn = yield* dispatchTurnForThread({
         cacheReviewSource: event,
+        sourceEventSequence: event.sequence,
         ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
@@ -3856,6 +3863,7 @@ const make = Effect.gen(function* () {
 
         const startedTurn = yield* dispatchTurnForThread({
           threadId: thread.id,
+          sourceEventSequence: event.sequence,
           messageId: MessageId.makeUnsafe(`goal-continuation:${event.eventId}`),
           messageText: buildGoalContinuationInput(),
           runtimeMode: thread.runtimeMode,

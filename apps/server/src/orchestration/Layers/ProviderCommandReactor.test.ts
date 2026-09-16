@@ -1462,6 +1462,188 @@ describe("ProviderCommandReactor", () => {
       });
     });
 
+    it.each([
+      ["fresh", "stop"],
+      ["fresh", "archive"],
+      ["fresh", "delete"],
+      ["renewed", "stop"],
+      ["renewed", "archive"],
+      ["renewed", "delete"],
+    ] as const)(
+      "does not install a %s hold after %s during cache observation",
+      async (mode, action) => {
+        const observation = expiredCacheObservation();
+        let getterCalls = 0;
+        let releaseObservation!: () => void;
+        const observationGate = new Promise<void>((resolve) => {
+          releaseObservation = resolve;
+        });
+        const gateCall = mode === "fresh" ? 1 : 2;
+        const harness = await createHarness({
+          threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          getClaudeCacheObservation: () => {
+            getterCalls += 1;
+            return getterCalls === gateCall
+              ? Effect.promise(() => observationGate).pipe(
+                  Effect.as({ ...observation, nativeSessionId: "refreshed-native-session" }),
+                )
+              : Effect.succeed(observation);
+          },
+        });
+        if (mode === "renewed") {
+          const review = await sendHeldMessage(harness);
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-cache-renew-during-observation"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: review.reviewId,
+              messageId: review.messageId,
+              decision: "continue",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        } else {
+          await dispatchHarnessUserTurn(harness, {
+            messageId: "cache-held-message",
+            text: "Hold only while still authorized",
+            createdAt: new Date().toISOString(),
+          });
+        }
+        let cancellationSequence = 0;
+        try {
+          await waitFor(() => getterCalls === gateCall);
+          const commandId = CommandId.makeUnsafe("cmd-cache-cancel-observation");
+          const threadId = ThreadId.makeUnsafe("thread-1");
+          cancellationSequence = (
+            await Effect.runPromise(
+              harness.engine.dispatch(
+                action === "stop"
+                  ? {
+                      type: "thread.session.stop",
+                      commandId,
+                      threadId,
+                      createdAt: new Date().toISOString(),
+                    }
+                  : {
+                      type: action === "archive" ? "thread.archive" : "thread.delete",
+                      commandId,
+                      threadId,
+                    },
+              ),
+            )
+          ).sequence;
+        } finally {
+          releaseObservation();
+        }
+        await harness.drain();
+        const laterEvents = await Effect.runPromise(
+          Stream.runCollect(harness.engine.readEvents(cancellationSequence)),
+        );
+        expect(
+          Array.from(laterEvents).filter(
+            (event) =>
+              (event.type === "thread.claude-cache-set" && event.payload.review !== null) ||
+              (event.type === "thread.session-set" && event.payload.session.status === "ready"),
+          ),
+        ).toEqual([]);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["stop", "archive", "delete"] as const)(
+      "does not restore ready after %s following hold persistence",
+      async (action) => {
+        const harness = await createCacheHarness();
+        const dispatch = harness.engine.dispatch;
+        let cancellationSequence = 0;
+        harness.interceptEngineDispatch((command) => {
+          if (command.type !== "thread.claude-cache.set" || command.review?.status !== "pending")
+            return undefined;
+          return dispatch(command).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                const commandId = CommandId.makeUnsafe("cmd-cache-cancel-after-hold");
+                const threadId = ThreadId.makeUnsafe("thread-1");
+                const result = yield* dispatch(
+                  action === "stop"
+                    ? {
+                        type: "thread.session.stop",
+                        commandId,
+                        threadId,
+                        createdAt: new Date().toISOString(),
+                      }
+                    : {
+                        type: action === "archive" ? "thread.archive" : "thread.delete",
+                        commandId,
+                        threadId,
+                      },
+                );
+                cancellationSequence = result.sequence;
+              }),
+            ),
+          );
+        });
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "cache-held-message",
+          text: "Do not revive a cancelled hold",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => cancellationSequence > 0);
+        await harness.drain();
+        const laterEvents = await Effect.runPromise(
+          Stream.runCollect(harness.engine.readEvents(cancellationSequence)),
+        );
+        expect(
+          Array.from(laterEvents).filter(
+            (event) =>
+              event.type === "thread.session-set" && event.payload.session.status === "ready",
+          ),
+        ).toEqual([]);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      },
+    );
+
+    it("continues once when only the observation time refreshes", async () => {
+      const observation = {
+        ...expiredCacheObservation(),
+        observedAt: new Date(Date.now() - 60_000).toISOString(),
+      };
+      let observations = 0;
+      const harness = await createCacheHarness(() => ({
+        ...observation,
+        observedAt: new Date(
+          Date.parse(observation.observedAt) + ++observations * 1_000,
+        ).toISOString(),
+      }));
+      const review = await sendHeldMessage(harness);
+
+      await respondToReview(harness, review, "continue");
+
+      expect(observations).toBe(2);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
+    });
+
+    it("allows a new message to create a hold after an earlier stop", async () => {
+      const harness = await createCacheHarness();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.makeUnsafe("cmd-cache-earlier-stop"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await harness.drain();
+
+      const review = await sendHeldMessage(harness);
+
+      expect(review.status).toBe("pending");
+      expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
+
     it.each(["nativeSessionId", "lifecycleGeneration", "model"] as const)(
       "requires a new review when %s changes before Continue",
       async (field) => {
@@ -1507,6 +1689,69 @@ describe("ProviderCommandReactor", () => {
         expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
       },
     );
+
+    it("does not restore a goal session stopped during cache observation", async () => {
+      let readingObservation = false;
+      let releaseObservation!: () => void;
+      const observationGate = new Promise<void>((resolve) => {
+        releaseObservation = resolve;
+      });
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        getClaudeCacheObservation: () => {
+          readingObservation = true;
+          return Effect.promise(() => observationGate).pipe(Effect.as(expiredCacheObservation()));
+        },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-cache-goal-before-stop"),
+          threadId,
+          goal: "Complete remaining work",
+          goalStartBehavior: "defer",
+        }),
+      );
+      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.goal.continue",
+          commandId: CommandId.makeUnsafe("cmd-cache-goal-racing-stop"),
+          threadId,
+          goalStartedAt: goalStartedAt!,
+          trigger: "turn-completed",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      let cancellationSequence = 0;
+      try {
+        await waitFor(() => readingObservation);
+        cancellationSequence = (
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.session.stop",
+              commandId: CommandId.makeUnsafe("cmd-cache-goal-stop"),
+              threadId,
+              createdAt: new Date().toISOString(),
+            }),
+          )
+        ).sequence;
+      } finally {
+        releaseObservation();
+      }
+      await harness.drain();
+      const laterEvents = await Effect.runPromise(
+        Stream.runCollect(harness.engine.readEvents(cancellationSequence)),
+      );
+      expect(
+        Array.from(laterEvents).filter(
+          (event) =>
+            event.type === "thread.session-set" && event.payload.session.status === "ready",
+        ),
+      ).toEqual([]);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
 
     it("pauses a goal continuation before sending a large expired-cache request", async () => {
       const harness = await createCacheHarness();
