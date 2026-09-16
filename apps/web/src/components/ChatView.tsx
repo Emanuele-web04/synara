@@ -94,6 +94,7 @@ import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
   canOfferSideSlashCommand,
+  hasProviderNativeSlashCommand,
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
 import { stripDiffSearchParams } from "../diffRouteSearch";
@@ -103,6 +104,7 @@ import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItem
 import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
+import { useClaudeContextCompaction } from "../hooks/useClaudeContextCompaction";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -1838,6 +1840,7 @@ export default function ChatView({
     serverConfigQuery.data?.homeDir ?? null,
     isMacNavigatorPlatform(),
   );
+  const [isContextWindowMeterOpen, setIsContextWindowMeterOpen] = useState(false);
   const {
     mentionTriggerQuery,
     isLocalFolderBrowserOpen,
@@ -1850,6 +1853,7 @@ export default function ChatView({
     supportsTextNativeReviewCommand,
     isComposerMenuLoading,
     canCompactThread,
+    isNativeCommandDiscoveryPending,
   } = useComposerDiscovery({
     threadId,
     selectedProvider,
@@ -1859,15 +1863,47 @@ export default function ChatView({
     providerOptionsForDispatch,
     gitCwd,
     piAgentDir: settings.piAgentDir,
+    discoverNativeCompaction:
+      selectedProvider === "claudeAgent" &&
+      (isContextWindowMeterOpen || activeThread?.claudeCacheReview != null),
   });
-  const claudeCompactDisabledReason =
-    !canCompactThread || selectedProvider !== "claudeAgent"
-      ? "Compaction is unavailable for this Claude session."
-      : hasLiveTurn || isConnecting || (activeBackgroundTasks?.activeCount ?? 0) > 0
-        ? "Wait for Claude and its background tasks to finish."
-        : activePendingApproval || pendingUserInputs.length > 0
-          ? "Resolve the pending request before compacting."
-          : null;
+  const canRequestNativeClaudeCompaction =
+    selectedProvider === "claudeAgent" &&
+    hasProviderNativeSlashCommand(
+      "claudeAgent",
+      providerNativeCommands.map((command) => command.name),
+      "compact",
+    );
+  const claudeCompactDisabledReason = !canRequestNativeClaudeCompaction
+    ? isNativeCommandDiscoveryPending
+      ? "Checking Claude's available commands..."
+      : "Compaction is unavailable for this Claude session."
+    : hasLiveTurn || isConnecting || (activeBackgroundTasks?.activeCount ?? 0) > 0
+      ? "Wait for Claude and its background tasks to finish."
+      : activePendingApproval || pendingUserInputs.length > 0
+        ? "Resolve the pending request before compacting."
+        : null;
+  const standaloneClaudeCompactDisabledReason =
+    activeThread?.claudeCacheReview != null
+      ? "Choose how to resume the held message above."
+      : isWorking
+        ? "Wait for Claude to finish before compacting."
+        : claudeCompactDisabledReason;
+  const { compact: onCompactClaudeContext, isSubmitting: isRequestingClaudeCompaction } =
+    useClaudeContextCompaction({
+      threadId,
+      disabledReason: standaloneClaudeCompactDisabledReason,
+      onBegin: beginLocalDispatch,
+      onAccepted: armLocalDispatchAckFallback,
+      onFailure: resetLocalDispatch,
+    });
+  const cacheReviewMessageId = activeThread?.claudeCacheReview?.messageId;
+  const cacheReviewMessage = cacheReviewMessageId
+    ? activeThread?.messages.find((entry) => entry.id === cacheReviewMessageId)
+    : undefined;
+  const cacheReviewIsCompactionRequest = /^\/compact(?:\s|$)/u.test(
+    cacheReviewMessage?.text.trim() ?? "",
+  );
   const onRespondToClaudeCacheReview = useCallback(
     async (review: PendingClaudeCacheReview, decision: ClaudeCacheReviewDecision) => {
       const api = readNativeApi();
@@ -5087,6 +5123,7 @@ export default function ChatView({
                     key={`${threadId}:${activeThread.claudeCacheReview.reviewId}`}
                     review={activeThread.claudeCacheReview}
                     compactDisabledReason={claudeCompactDisabledReason}
+                    isCompactionRequest={cacheReviewIsCompactionRequest}
                     onRespond={onRespondToClaudeCacheReview}
                   />
                 </div>
@@ -5301,6 +5338,19 @@ export default function ChatView({
                       composerFooterControlsPlan.showContextMeter ? (
                         <ContextWindowMeter
                           usage={runtimeUsageContextWindow}
+                          showClaudeCache={activeThread?.session?.provider === "claudeAgent"}
+                          onOpenChange={setIsContextWindowMeterOpen}
+                          {...(selectedProvider === "claudeAgent" &&
+                          activeThread?.session?.provider === "claudeAgent" &&
+                          isServerThread
+                            ? {
+                                compactAction: {
+                                  disabledReason: standaloneClaudeCompactDisabledReason,
+                                  isSubmitting: isRequestingClaudeCompaction,
+                                  onCompact: onCompactClaudeContext,
+                                },
+                              }
+                            : {})}
                           {...(activeCumulativeCostUsd != null
                             ? { cumulativeCostUsd: activeCumulativeCostUsd }
                             : {})}

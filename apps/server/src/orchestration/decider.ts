@@ -1425,7 +1425,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             (entry) => entry.id === threadId,
           )?.claudeCacheReview;
           const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
-          if (review && review.status !== "compacting" && review.status !== "uncertain") {
+          if (review) {
             events.push({
               ...withEventBase({
                 aggregateKind: "thread",
@@ -1914,6 +1914,46 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         : reviewEvent;
     }
 
+    case "thread.claude-cache.compacted": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const review = thread.claudeCacheReview;
+      if (
+        !review ||
+        review.reviewId !== command.reviewId ||
+        (review.status !== "compacting" && review.status !== "uncertain") ||
+        review.compactionTurnId !== command.turnId ||
+        thread.archivedAt != null
+      )
+        return [];
+      const base = {
+        aggregateKind: "thread" as const,
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      };
+      return [
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-set",
+          payload: {
+            threadId: command.threadId,
+            review: { ...review, status: "responding" as const },
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-response-requested",
+          payload: {
+            threadId: command.threadId,
+            review,
+            decision: "continue" as const,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
+    }
+
     case "thread.claude-cache.respond": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const review = thread.claudeCacheReview;
@@ -2374,7 +2414,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       const review = thread.claudeCacheReview;
-      return review && review.status !== "compacting" && review.status !== "uncertain"
+      return review
         ? [
             {
               ...withEventBase({

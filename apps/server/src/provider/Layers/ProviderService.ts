@@ -2957,6 +2957,37 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const startClaudeCompaction: NonNullable<ProviderServiceShape["startClaudeCompaction"]> = (
+      input,
+    ) =>
+      runTurnDispatch(input.threadId, (generation) =>
+        Effect.gen(function* () {
+          const routed = yield* resolveRoutableSession({
+            threadId: input.threadId,
+            operation: "ProviderService.startClaudeCompaction",
+            allowRecovery: true,
+          });
+          if (!routed.adapter.startClaudeCompaction) {
+            return yield* toValidationError(
+              "ProviderService.startClaudeCompaction",
+              "Native Claude compaction is unavailable.",
+            );
+          }
+          const turn = yield* routed.adapter.startClaudeCompaction(input);
+          const persistenceInput: StartedTurnPersistenceInput = {
+            threadId: input.threadId,
+            provider: routed.adapter.provider,
+            turnId: String(turn.turnId),
+            generation,
+            ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+            lastRuntimeEvent: "provider.startClaudeCompaction",
+          };
+          rememberSuccessfulTurnDispatch(persistenceInput);
+          yield* persistStartedTurn(persistenceInput);
+          return turn;
+        }),
+      );
+
     const getClaudeCacheObservation: NonNullable<
       ProviderServiceShape["getClaudeCacheObservation"]
     > = (threadId) =>
@@ -3201,6 +3232,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       listSessions,
       getCapabilities,
       getClaudeCacheObservation,
+      startClaudeCompaction,
       rollbackConversation,
       compactThread,
       closeRuntimeEvents,

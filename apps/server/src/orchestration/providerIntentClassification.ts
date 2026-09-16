@@ -75,8 +75,10 @@ export const isClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
 
 /**
  * Intents that must still execute while a thread is quarantined by a blocking
- * delivery. Skipping an interrupt is never safe: the turn it would settle keeps
- * running (or keeps showing as running) with no other way out for the user.
+ * delivery. Interrupt, stop and archive must still be able to tear down live
+ * work; quarantining new work must never disable cancellation.
  */
 export const isQuarantineExemptProviderIntent = (event: ProviderIntentEvent): boolean =>
-  event.type === "thread.turn-interrupt-requested";
+  event.type === "thread.turn-interrupt-requested" ||
+  event.type === "thread.session-stop-requested" ||
+  event.type === "thread.archived";

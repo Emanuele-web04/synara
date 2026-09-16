@@ -6,7 +6,7 @@ export function ClaudeCacheDetails({
   observation,
   nowMs,
 }: {
-  observation: ClaudeCacheObservation;
+  observation: ClaudeCacheObservation | undefined;
   nowMs: number;
 }) {
   const assessment = assessClaudeCache(observation, nowMs);
@@ -16,12 +16,12 @@ export function ClaudeCacheDetails({
       : assessment.state === "likely-expired"
         ? "Likely expired"
         : "Unknown";
-  const usage = observation.lastRequest;
+  const usage = observation?.lastRequest;
 
   return (
     <div className="space-y-1.5 border-t border-border/50 pt-2 text-xs text-muted-foreground">
       <div className="font-medium text-foreground">Claude prompt cache: {label}</div>
-      {observation.ttlSeconds !== undefined ? (
+      {observation?.ttlSeconds !== undefined ? (
         <div>Observed lifetime: {formatCacheDuration(observation.ttlSeconds)}</div>
       ) : (
         <div>Cache lifetime is unavailable.</div>
@@ -29,7 +29,7 @@ export function ClaudeCacheDetails({
       {assessment.idleSeconds !== undefined ? (
         <div>Last response: {formatCacheDuration(assessment.idleSeconds)} ago</div>
       ) : null}
-      {assessment.state === "likely-expired" && observation.contextTokens !== undefined ? (
+      {assessment.state === "likely-expired" && observation?.contextTokens !== undefined ? (
         <p className="max-w-72 leading-relaxed">
           The next request may reprocess about{" "}
           {formatContextWindowTokens(observation.contextTokens)} tokens.

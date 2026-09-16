@@ -10,10 +10,12 @@ export type ClaudeCacheReviewDecision = "continue" | "compact" | "cancel";
 export function ComposerClaudeCacheReviewPanel({
   review,
   compactDisabledReason,
+  isCompactionRequest = false,
   onRespond,
 }: {
   review: PendingClaudeCacheReview;
   compactDisabledReason: string | null;
+  isCompactionRequest?: boolean;
   onRespond: (
     review: PendingClaudeCacheReview,
     decision: ClaudeCacheReviewDecision,
@@ -31,12 +33,14 @@ export function ComposerClaudeCacheReviewPanel({
       : review.status === "responding"
         ? "Resuming your saved message"
         : review.status === "uncertain"
-          ? "Checking the pending request"
-          : "Claude's prompt cache likely expired";
+          ? "Request status is uncertain"
+          : isCompactionRequest
+            ? "Compaction will read the expired context"
+            : "Claude's prompt cache likely expired";
 
   const respondOnce = (decision: ClaudeCacheReviewDecision) => {
     if (disabled || submittedReviewRef.current === review) return;
-    if (decision === "compact" && compactDisabledReason !== null) return;
+    if (decision === "compact" && (compactDisabledReason !== null || isCompactionRequest)) return;
     submittedReviewRef.current = review;
     setSubmittedReview(review);
     setDispatchError(null);
@@ -72,8 +76,7 @@ export function ComposerClaudeCacheReviewPanel({
       </p>
       {actionable ? (
         <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-          Compacting also reads the expired context once, then uses a summary for later turns. It
-          can consume usage and is not a free cache refresh.
+          Compacting also processes the full history once. Later requests use its summary.
         </p>
       ) : null}
       {review.error || dispatchError ? (
@@ -84,20 +87,27 @@ export function ComposerClaudeCacheReviewPanel({
       <div className="mt-2.5 space-y-0.5">
         <ComposerChoiceRow
           shortcut={null}
-          label="Continue with full context"
-          description="Send the saved message with the existing history"
+          label={isCompactionRequest ? "Compact this conversation" : "Continue with full context"}
+          description={
+            isCompactionRequest
+              ? "Process the existing history and save its summary"
+              : "Send the saved message with the existing history"
+          }
           disabled={disabled}
           onSelect={() => respondOnce("continue")}
         />
-        <ComposerChoiceRow
-          shortcut={null}
-          label="Compact, then send"
-          description={
-            compactDisabledReason ?? "Summarize this conversation before sending the saved message"
-          }
-          disabled={disabled || compactDisabledReason !== null}
-          onSelect={() => respondOnce("compact")}
-        />
+        {!isCompactionRequest ? (
+          <ComposerChoiceRow
+            shortcut={null}
+            label="Compact, then send"
+            description={
+              compactDisabledReason ??
+              "Summarize this conversation before sending the saved message"
+            }
+            disabled={disabled || compactDisabledReason !== null}
+            onSelect={() => respondOnce("compact")}
+          />
+        ) : null}
         <ComposerChoiceRow
           shortcut={null}
           label="Cancel this send"

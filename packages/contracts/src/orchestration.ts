@@ -772,6 +772,9 @@ export const PendingClaudeCacheReview = Schema.Struct({
   assessment: ClaudeCacheObservation,
   status: Schema.Literals(["pending", "responding", "compacting", "failed", "uncertain"]),
   compactionTurnId: Schema.optional(TurnId),
+  compactionResponseEventSequence: Schema.optional(PositiveInt),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  requestedAt: Schema.optional(IsoDateTime),
   error: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
@@ -1404,6 +1407,15 @@ const ThreadClaudeCacheSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadClaudeCacheCompactedCommand = Schema.Struct({
+  type: Schema.Literal("thread.claude-cache.compacted"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  reviewId: TrimmedNonEmptyString,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -1718,6 +1730,7 @@ const ThreadSidechatExpireCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadClaudeCacheCompactedCommand,
   ThreadClaudeCacheSetCommand,
   ThreadSessionSetCommand,
   ThreadGoalContinueCommand,
