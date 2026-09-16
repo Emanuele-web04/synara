@@ -120,8 +120,8 @@ export interface EnvironmentPanelProps {
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
   diffTotals: RepoDiffTotals;
-  /** Env/branch picker config — `variant` is supplied by the panel. */
-  branchToolbar: Omit<BranchToolbarProps, "variant">;
+  /** Env/branch picker config; null when the workspace is inherited from a source chat. */
+  branchToolbar: Omit<BranchToolbarProps, "variant"> | null;
   /** Compact idle-generated chat memory for the top of the panel. */
   recap?: {
     readonly text: string | null;
@@ -346,7 +346,7 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
+      {isGitRepo && branchToolbar ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
 
       {showGitActions ? (
         <GitActionsControl

@@ -1527,6 +1527,7 @@ export default function ChatView({
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
+  const isSidechat = Boolean(activeThread?.sidechatSourceThreadId);
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
   const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
@@ -4660,6 +4661,8 @@ export default function ChatView({
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
   };
+  // Sidechats share their source workspace; they have no independent setup or handoff.
+  const showTrailingBranchToolbar = !isSidechat && isGitRepo && !environmentEnabled;
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
@@ -4693,6 +4696,7 @@ export default function ChatView({
       </span>
     ) : null;
   const showEmptyLandingControls =
+    !isSidechat &&
     isCenteredEmptyLanding &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
@@ -4831,7 +4835,7 @@ export default function ChatView({
         })),
     diffDisabledReason,
     diffTotals: repoDiffTotals,
-    branchToolbar: branchToolbarProps,
+    branchToolbar: isSidechat ? null : branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
     pinnedMessageTextById,
@@ -5389,7 +5393,7 @@ export default function ChatView({
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
             : {})}
-          isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
+          isSidechat={isSidechat}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
           minimalChrome={isCenteredEmptyLanding}
@@ -5730,11 +5734,9 @@ export default function ChatView({
                   </div>
                   {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
                       composer is the last element, so give it a comfortable bottom margin. */}
-                  <div
-                    className={cn(isGitRepo && !environmentEnabled ? "pt-0.5" : "pt-3 sm:pt-4")}
-                  />
+                  <div className={cn(showTrailingBranchToolbar ? "pt-0.5" : "pt-3 sm:pt-4")} />
                   {secondaryChromeReady &&
-                  ((isGitRepo && !environmentEnabled) || relocateComposerLeadingControls) ? (
+                  (showTrailingBranchToolbar || relocateComposerLeadingControls) ? (
                     <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                       <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                         <div className="flex w-full items-center gap-1">
@@ -5743,7 +5745,7 @@ export default function ChatView({
                               {renderComposerLeadingControls({ iconOnly: true })}
                             </div>
                           ) : null}
-                          {isGitRepo && !environmentEnabled ? (
+                          {showTrailingBranchToolbar ? (
                             <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
                           ) : null}
                         </div>

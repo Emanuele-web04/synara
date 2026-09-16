@@ -59,6 +59,7 @@ import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
+import { useRightDockStore } from "../rightDockStore";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
@@ -2176,6 +2177,7 @@ describe("ChatView transcript geometry (full app)", () => {
     useTemporaryThreadStore.setState({
       temporaryThreadIds: {},
     });
+    useRightDockStore.setState({ dockStateByThreadId: {} });
     useTerminalStateStore.setState({
       terminalStateByThreadId: {},
     });
@@ -6805,6 +6807,99 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each([
+    { kind: "project", envMode: "local", hasMessages: false },
+    { kind: "project", envMode: "worktree", hasMessages: false },
+    { kind: "project", envMode: "local", hasMessages: true },
+    { kind: "project", envMode: "worktree", hasMessages: true },
+    { kind: "home", envMode: "local", hasMessages: false },
+    { kind: "studio", envMode: "local", hasMessages: false },
+  ] as const)(
+    "keeps sidechat workspace controls hidden for $kind/$envMode with messages=$hasMessages",
+    async ({ kind, envMode, hasMessages }) => {
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("sidechat-workspace-message"),
+        targetText: "Explain this change",
+      });
+      const snapshot =
+        kind === "home"
+          ? withActiveHomeChatThread(baseSnapshot)
+          : kind === "studio"
+            ? withStudioProject(baseSnapshot)
+            : baseSnapshot;
+      const sourceThread = {
+        ...snapshot.threads[0]!,
+        projectId: kind === "studio" ? STUDIO_PROJECT_ID : snapshot.threads[0]!.projectId,
+        envMode,
+        worktreePath: envMode === "worktree" ? "/repo/project/.worktrees/source" : null,
+        workingDirectory: kind === "studio" ? "/repo/project" : null,
+      };
+      const sidechatId = ThreadId.makeUnsafe("sidechat-workspace");
+      const mounted = await mountChatView({
+        viewport: { name: "sidechat", width: 1440, height: 1000 },
+        snapshot: {
+          ...snapshot,
+          threads: [
+            sourceThread,
+            {
+              ...sourceThread,
+              id: sidechatId,
+              title: "Sidechat: Explain this change",
+              sidechatSourceThreadId: sourceThread.id,
+              messages: hasMessages ? sourceThread.messages : [],
+              session: null,
+            },
+          ],
+        },
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = { ...nextFixture.welcome, homeDir: "/Users/tester" };
+        },
+      });
+
+      try {
+        useRightDockStore.getState().openPane(THREAD_ID, {
+          kind: "sidechat",
+          threadId: sidechatId,
+        });
+        const dock = await waitForElement(
+          () => document.querySelector<HTMLElement>("[data-right-dock-content]"),
+          "Sidechat dock did not mount.",
+        );
+        await waitForElement(
+          () => dock.querySelector<HTMLElement>('[contenteditable="true"]'),
+          "Sidechat composer did not mount.",
+        );
+        await vi.waitFor(() => {
+          expect(useStore.getState().threadDetailSyncById?.[sidechatId]).toBe("synced");
+          expect(
+            dock.querySelector(
+              hasMessages ? "[data-message-id]" : '[data-testid="empty-landing-heading"]',
+            ),
+          ).not.toBeNull();
+        });
+        await waitForLayout();
+
+        expect(dock.querySelector('[data-empty-landing-controls="true"]')).toBeNull();
+        expect(dock.querySelector('[data-testid="workspace-picker-trigger"]')).toBeNull();
+        expect(dock.querySelector('[data-testid="project-picker-trigger"]')).toBeNull();
+        expect(dock.querySelector('[aria-label="Temporary chat"]')).toBeNull();
+        expect(
+          Array.from(dock.querySelectorAll("button")).some((button) =>
+            /^(Local|Worktree|main)$/.test(button.textContent?.trim() ?? ""),
+          ),
+        ).toBe(false);
+        expect(useStore.getState().threadShellById?.[sidechatId]).toMatchObject({
+          projectId: sourceThread.projectId,
+          envMode,
+          worktreePath: sourceThread.worktreePath,
+          workingDirectory: sourceThread.workingDirectory,
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("lets an empty project draft switch to another open project", async () => {
     const mounted = await mountChatView({
