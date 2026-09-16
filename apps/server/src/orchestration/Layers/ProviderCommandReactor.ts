@@ -3718,6 +3718,23 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // The projection can lag a live turn. Only use session stop when neither
+    // side owns a turn to interrupt, and retire the runtime rather than just
+    // changing the UI state: a half-started session may still emit events.
+    const interruptSession = thread.session;
+    if (
+      interruptSession !== null &&
+      (interruptSession.status === "starting" || interruptSession.status === "running") &&
+      interruptSession.activeTurnId === null &&
+      thread.latestTurn?.state !== "running" &&
+      !(yield* hasLiveProviderTurn(input.threadId))
+    ) {
+      return yield* processThreadSessionStop({
+        threadId: input.threadId,
+        createdAt: input.createdAt,
+      });
+    }
+
     const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>
       appendProviderFailureActivity({
         threadId: input.threadId,
