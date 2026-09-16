@@ -17,6 +17,7 @@ import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
+import { ProviderUsageResetCredits } from "~/components/ProviderUsageResetCredits";
 import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
 import { Button } from "~/components/ui/button";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -74,8 +75,9 @@ function ProviderUsageCard({
   });
   const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const usageLines = usageSummary.usageLines;
-
-  const hasUsage = meterRows.length > 0 || usageLines.length > 0;
+  const resetCredits = provider === "codex" ? snapshot.resetCredits : undefined;
+  const hasResetCredits = Boolean(resetCredits && resetCredits.availableCount > 0);
+  const hasUsage = meterRows.length > 0 || usageLines.length > 0 || hasResetCredits;
   const pill = status === "ok" ? null : statusPill(snapshot.status);
 
   return (
@@ -110,10 +112,19 @@ function ProviderUsageCard({
             {meterRows.length > 0 ? (
               <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}
+            {hasResetCredits && resetCredits ? (
+              <ProviderUsageResetCredits
+                credits={(resetCredits.credits ?? []).filter(
+                  (credit) => credit.status === "available" || credit.status === undefined,
+                )}
+                availableCount={resetCredits.availableCount}
+              />
+            ) : null}
             {usageLines.length > 0 ? (
               <ProviderUsageLineList
                 className={cn(
-                  meterRows.length > 0 && "border-t border-[color:var(--color-border)] pt-3",
+                  (meterRows.length > 0 || hasResetCredits) &&
+                    "border-t border-[color:var(--color-border)] pt-3",
                 )}
                 lines={usageLines}
                 surface="settings"

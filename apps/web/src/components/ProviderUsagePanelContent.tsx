@@ -2,7 +2,7 @@
 // Purpose: Render a provider usage summary panel that can show both classic
 // rate-limit rows and archive-derived local usage lines in the same popover.
 
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderKind, ServerCodexResetCredits } from "@synara/contracts";
 import { providerUsageLabel } from "@synara/shared/providerUsage";
 
 import { ExternalLinkIcon, TriangleAlertIcon } from "~/lib/icons";
@@ -17,6 +17,7 @@ import { cn } from "~/lib/utils";
 
 import { ProviderUsageLimitRows } from "./ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "./ProviderUsageLineList";
+import { ProviderUsageResetCredits } from "./ProviderUsageResetCredits";
 
 export { providerUsageLabel };
 
@@ -29,6 +30,8 @@ export function ProviderUsagePanelContent(props: {
   isLoading?: boolean | undefined;
   learnMoreHref?: string | null | undefined;
   showUsageLines?: boolean | undefined;
+  resetCredits?: ServerCodexResetCredits | undefined;
+  resetCreditsSurface?: "settings" | "popover" | undefined;
   showTitle?: boolean | undefined;
   showLearnMore?: boolean | undefined;
   className?: string | undefined;
@@ -53,6 +56,13 @@ export function ProviderUsagePanelContent(props: {
         </p>
       ) : null}
       <ProviderUsageLimitRows rows={visibleRows} surface="popover" />
+      {props.resetCredits ? (
+        <ProviderUsageResetCredits
+          availableCount={props.resetCredits.availableCount}
+          credits={props.resetCredits.credits ?? []}
+          surface={props.resetCreditsSurface ?? "popover"}
+        />
+      ) : null}
       {props.showUsageLines !== false && props.usageLines && props.usageLines.length > 0 ? (
         <ProviderUsageLineList
           className={cn(visibleRows.length > 0 && "pt-0.5")}

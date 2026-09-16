@@ -202,6 +202,8 @@ import {
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
@@ -1063,6 +1065,15 @@ export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProvid
   error: WsRpcError,
 });
 
+export const WsServerConsumeCodexResetCreditRpc = Rpc.make(
+  WS_METHODS.serverConsumeCodexResetCredit,
+  {
+    payload: ServerConsumeCodexResetCreditInput,
+    success: ServerConsumeCodexResetCreditResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
   payload: StatsGetProfileStatsInput,
   success: StatsGetProfileStatsResult,
@@ -1367,6 +1378,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
+  WsServerConsumeCodexResetCreditRpc,
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,

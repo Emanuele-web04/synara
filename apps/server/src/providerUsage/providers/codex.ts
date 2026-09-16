@@ -16,6 +16,7 @@ import nodePath from "node:path";
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
 import { createLogger } from "../../logger";
+import { fetchCodexResetCredits } from "../codexResetCredits";
 import {
   credentialFingerprint,
   decodeJwtExpMs,
@@ -470,11 +471,19 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           `Codex usage request failed (${result.status}).`,
         );
       }
-      return parseCodexUsage({
+      const snapshot = parseCodexUsage({
         json: result.json,
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       });
+      // Banked resets live behind `codex app-server`, not wham/usage. The probe rides the
+      // same snapshot cache TTL, never throws, and resolves to "not reported" when absent.
+      const resetCredits = await fetchCodexResetCredits({
+        binaryPath: ctx.codexBinaryPath,
+        env: ctx.env,
+        cwd: ctx.homeDir,
+      });
+      return resetCredits ? { ...snapshot, resetCredits } : snapshot;
     } catch (cause) {
       log.warn("codex usage endpoint unreachable", {
         message: cause instanceof Error ? cause.message : String(cause),
