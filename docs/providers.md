@@ -77,8 +77,35 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
-Favorite models can be surfaced above larger catalogs, and supported provider executables can be
-pointed at custom binary locations.
+The composer uses the same compact model-and-reasoning panel before and after a chat starts.
+**Presets** appear above the current configuration. Set a model and effort, then use the star
+beside **Current configuration** to save that pair. You can save several efforts for the same
+model and restore one with a single click. Models without an effort ladder save their thinking
+setting, when available, or just the model. The effort slider is the default; the menu preference
+still works, and configuration changes leave the panel open so you can save the result.
+
+Open the current model label to browse providers and models inside that same panel. The Back
+control, Left Arrow outside the search field, or Escape returns one level; Escape from the
+configuration closes the picker. Choosing a model returns to its effort controls, or to a note when the model
+exposes no adjustable settings. After a chat
+starts, browsing skips the provider list and shows only the locked provider's models.
+
+Presets are stored locally, independently of model favourites. They do not copy your prompt,
+speed, context window, or agent settings. Claude Ultrathink presets apply the existing prompt-prefix
+behavior without saving prompt text; an Ultrathink-controlled prompt must be edited before a
+different effort can be restored. After a chat starts, only presets for its locked provider are
+shown. Missing models or unsupported efforts stay saved and removable, with an explanation;
+applying a preset never silently substitutes a different model or effort.
+
+In the model catalog, use the star beside any model to add or remove a favourite without selecting it or closing the
+picker. Favourites appear first, followed by the remaining model groups (or **Other models** for
+an ungrouped catalog). A model appears only once. Search filters both sections, and upstream
+provider labels distinguish favourites from different catalogs without repeating the active provider.
+
+Favourites are saved locally for each provider and also used by the next/previous model shortcuts.
+Existing Cursor, OpenCode and Pi favourites are preserved. Models absent from the current catalog
+are not displayed, but their saved preference is retained if they become available again.
+Supported provider executables can also be pointed at custom binary locations.
 
 ## Provider sessions
 

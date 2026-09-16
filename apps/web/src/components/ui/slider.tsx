@@ -115,7 +115,7 @@ function Slider({
       className={cn(
         "group/slider relative flex w-full touch-none select-none items-center data-disabled:cursor-not-allowed data-disabled:opacity-64",
         size === "large"
-          ? "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(6)] [--slider-track-size:--spacing(5)]"
+          ? "[--slider-mark-size:--spacing(1.25)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3.5)]"
           : "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3)]",
         className,
       )}
@@ -123,14 +123,14 @@ function Slider({
       {...(pressed ? { "data-pressed": "" } : {})}
     >
       <SliderPrimitive.Control
-        className="flex w-full cursor-grab items-center py-0.5 group-data-pressed/slider:cursor-grabbing data-disabled:cursor-not-allowed"
+        className="flex w-full cursor-grab items-center py-2 group-data-pressed/slider:cursor-grabbing data-disabled:cursor-not-allowed"
         onPointerDown={(event) => {
           if (disabled || event.button !== 0) return;
           setPressed(true);
         }}
       >
         <SliderPrimitive.Track
-          className="relative h-[var(--slider-track-size)] w-full overflow-visible rounded-full bg-[color-mix(in_srgb,var(--color-text-foreground)_14%,transparent)]"
+          className="relative h-[var(--slider-track-size)] w-full overflow-visible rounded-full bg-[color-mix(in_srgb,var(--color-text-foreground)_12%,transparent)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)] transition-colors duration-150 group-hover/slider:bg-[color-mix(in_srgb,var(--color-text-foreground)_16%,transparent)] motion-reduce:transition-none dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
           data-slot="slider-track"
         >
           {/* At the minimum the fill sits entirely under the thumb, but the thumb and
@@ -138,7 +138,7 @@ function Slider({
               accent peeking out. Hide the fill there instead of relying on overlap. */}
           <SliderPrimitive.Indicator
             className={cn(
-              "rounded-full bg-[var(--color-text-accent)]",
+              "rounded-full bg-[linear-gradient(90deg,var(--color-text-accent),color-mix(in_srgb,var(--color-text-accent)_70%,white))]",
               magnetic && MAGNETIC_MOTION_CLASS,
               magnetic && "transition-[inset-inline-start,width,opacity]",
               valuePercent <= 0 && "opacity-0",
@@ -156,8 +156,8 @@ function Slider({
                   className={cn(
                     "absolute top-1/2 size-[var(--slider-mark-size)] -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-180 motion-reduce:transition-none",
                     percent <= valuePercent + Number.EPSILON
-                      ? "bg-white/55"
-                      : "bg-[color-mix(in_srgb,var(--color-text-foreground)_28%,transparent)]",
+                      ? "bg-white/90"
+                      : "bg-[color-mix(in_srgb,var(--color-text-foreground)_35%,transparent)]",
                   )}
                   style={{ left: `${percent}%` }}
                 />
@@ -170,7 +170,7 @@ function Slider({
               ? { getAriaValueText: (_formatted: string, next: number) => getAriaValueText(next) }
               : {})}
             className={cn(
-              "size-[var(--slider-thumb-size)] cursor-grab rounded-full outline-none has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/40 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing",
+              "size-[var(--slider-thumb-size)] cursor-grab rounded-full outline-none transition-[box-shadow] duration-150 ease-out has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/60 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing",
               magnetic && MAGNETIC_MOTION_CLASS,
             )}
             data-slot="slider-thumb"
@@ -180,7 +180,7 @@ function Slider({
                 the track edge and expose the fill behind it. */}
             <span
               aria-hidden="true"
-              className="block size-full rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12),0_0_0_0.5px_rgba(0,0,0,0.05)] transition-[scale,box-shadow] duration-150 ease-out group-data-pressed/slider:scale-105 group-data-pressed/slider:shadow-[0_2px_5px_rgba(0,0,0,0.14),0_0_0_0.5px_rgba(0,0,0,0.05)] motion-reduce:transition-none"
+              className="block size-full rounded-full border border-black/10 bg-[radial-gradient(circle_at_35%_30%,white_55%,color-mix(in_srgb,white_88%,var(--color-text-accent))_100%)] shadow-[0_1px_3px_rgba(0,0,0,0.18)] transition-[scale,box-shadow] duration-150 ease-out group-data-pressed/slider:scale-110 group-data-pressed/slider:shadow-[0_2px_6px_rgba(0,0,0,0.2)] motion-reduce:transition-none dark:border-white/15"
             />
           </SliderPrimitive.Thumb>
         </SliderPrimitive.Track>

@@ -269,7 +269,9 @@ import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
-import { ProviderModelPicker, resolveProviderModelLabel } from "./chat/ProviderModelPicker";
+import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
+import type { ComposerModelPreset } from "../lib/composerModelPresets";
+import { planComposerModelPreset } from "./chat/composerModelPresetSelection";
 import {
   RateLimitBanner,
   deriveLatestRateLimitStatus,
@@ -277,7 +279,7 @@ import {
 } from "./chat/RateLimitBanner";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
-import { TraitsPicker, resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
+import { resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -1200,7 +1202,6 @@ export default function ChatView({
   ]);
 
   const {
-    hasThreadStarted,
     lockedProvider,
     serverConfigQuery,
     selectedProvider,
@@ -2188,10 +2189,6 @@ export default function ChatView({
       }),
     [keybindings],
   );
-  const traitsPickerShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
-    [keybindings],
-  );
   const onToggleDiff = useCallback(() => {
     if (diffEnvironmentPending && !diffOpen) {
       return;
@@ -2396,7 +2393,7 @@ export default function ChatView({
       window.cancelAnimationFrame(frame);
     };
   }, [pendingComposerFocusRef, focusComposer, secondaryChromeReady, secondaryChromeThreadId]);
-  // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
+  // Keep the model and traits shortcut intents mutually exclusive; both open the shared panel.
   const handleModelPickerOpenChange = useCallback(
     (open: boolean) => {
       setIsModelPickerOpen(open);
@@ -3268,29 +3265,44 @@ export default function ChatView({
     markWorkflowRunDismissed(activeThreadId, workflowTaskId);
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
 
-  const onProviderModelSelect = useCallback(
-    async (provider: ProviderKind, model: ModelSlug) => {
-      if (!activeThread) return;
+  const modelSelectionRequestRef = useRef(0);
+  const onProviderModelOrPresetSelect = useCallback(
+    async (provider: ProviderKind, model: ModelSlug, preset?: ComposerModelPreset) => {
+      if (!activeThread) return false;
       if (lockedProvider !== null && provider !== lockedProvider) {
-        scheduleComposerFocus();
-        return;
+        return false;
       }
-      const resolvedModel = resolveCommittedProviderModel({
-        selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
-        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-      });
+      const selectionRequest = ++modelSelectionRequestRef.current;
+      const resolvedModel = preset
+        ? preset.model
+        : resolveCommittedProviderModel({
+            selectedModel: model,
+            availableOptions: modelOptionsByProvider[provider],
+            fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
+          });
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model: resolvedModel,
         runtimeModels: runtimeModelsByProvider[provider],
       });
-      const nextModelSelection = buildModelSelection(
-        provider,
-        resolvedModel,
-        undefined,
-        provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
-      );
+      const planPreset = () =>
+        preset
+          ? planComposerModelPreset({
+              preset,
+              lockedProvider,
+              availableModels: modelOptionsByProvider[provider],
+              providerAvailable:
+                preset.provider === provider &&
+                preset.model === model &&
+                (lockedProvider === provider || !settings.hiddenProviders.includes(provider)) &&
+                findProviderStatus(providerStatuses, provider)?.available === true,
+              loading: loadingModelProviders[provider] ?? false,
+              runtimeModel,
+              prompt: promptRef.current,
+            })
+          : null;
+      let presetPlan = planPreset();
+      if (presetPlan?.kind === "unavailable") return false;
       const providerStatus = findProviderStatus(providerStatuses, provider);
       const nextRuntimeMode =
         runtimeMode === "auto" &&
@@ -3303,35 +3315,79 @@ export default function ChatView({
         currentRuntimeMode: runtimeMode,
         nextRuntimeMode,
         persistRuntimeMode: persistRuntimeModeChange,
+        canCommit: () => {
+          if (
+            activeThreadIdRef.current !== activeThread.id ||
+            modelSelectionRequestRef.current !== selectionRequest
+          )
+            return false;
+          // The user can edit or switch chats while access-mode persistence is pending.
+          // Re-plan against the current prompt so Ultrathink never overwrites newer text.
+          presetPlan = planPreset();
+          return presetPlan?.kind !== "unavailable";
+        },
         commit: () => {
+          const currentOptions =
+            useComposerDraftStore.getState().draftsByThreadId[activeThread.id]
+              ?.modelSelectionByProvider[provider]?.options ?? composerModelOptions?.[provider];
+          const nextModelSelection = buildModelSelection(
+            provider,
+            resolvedModel,
+            presetPlan?.kind === "ready" && presetPlan.patch
+              ? buildNextProviderOptions(provider, currentOptions, presetPlan.patch)
+              : undefined,
+            provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+          );
           setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
-          if (provider === "cursor") {
+          if (provider === "cursor" && !preset) {
             setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
               persistSticky: true,
               model: resolvedModel,
             });
           }
+          if (presetPlan?.kind === "ready" && presetPlan.prompt !== undefined) {
+            promptRef.current = presetPlan.prompt;
+            setPrompt(presetPlan.prompt);
+            setComposerCursor(
+              collapseExpandedComposerCursor(presetPlan.prompt, presetPlan.prompt.length),
+            );
+            setComposerTrigger(detectComposerTrigger(presetPlan.prompt, presetPlan.prompt.length));
+          }
         },
       });
       if (!didCommitSelection) {
-        scheduleComposerFocus();
-        return;
+        return false;
       }
-      scheduleComposerFocus();
+      return true;
     },
     [
       activeThread,
+      activeThreadIdRef,
+      composerModelOptions,
       customModelsByProvider,
       lockedProvider,
+      loadingModelProviders,
       modelOptionsByProvider,
       persistRuntimeModeChange,
       providerStatuses,
+      promptRef,
       runtimeMode,
       runtimeModelsByProvider,
-      scheduleComposerFocus,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
+      setComposerCursor,
+      setComposerTrigger,
+      setPrompt,
+      settings.hiddenProviders,
     ],
+  );
+
+  const onProviderModelSelect = useCallback(
+    async (provider: ProviderKind, model: ModelSlug) => {
+      await onProviderModelOrPresetSelect(provider, model);
+      scheduleComposerFocus();
+    },
+    [onProviderModelOrPresetSelect, scheduleComposerFocus],
   );
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
@@ -3929,7 +3985,6 @@ export default function ChatView({
     (nextPrompt: string) => {
       const currentPrompt = promptRef.current;
       if (nextPrompt === currentPrompt) {
-        scheduleComposerFocus();
         return;
       }
       promptRef.current = nextPrompt;
@@ -3937,9 +3992,8 @@ export default function ChatView({
       const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
       setComposerCursor(nextCursor);
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      scheduleComposerFocus();
     },
-    [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
+    [promptRef, setComposerCursor, setComposerTrigger, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
   const composerTraitSelection = getComposerTraitSelection(
@@ -3973,7 +4027,6 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
-  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -3999,7 +4052,6 @@ export default function ChatView({
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
     Boolean(runtimeUsageContextWindow),
-    useSplitComposerPickerControls,
   ].join(":");
   useLayoutEffect(() => {
     composerFooterDemotionWidthsRef.current = [];
@@ -4018,8 +4070,6 @@ export default function ChatView({
   useLayoutEffect(() => {
     composerFooterLayoutSyncRef.current?.();
   }, [composerFooterLayoutSyncRef, composerFooterTier]);
-  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-32" : "w-36 sm:w-44";
-  const composerOptionsPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32";
   const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
   const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
   const handleComposerModelEffortPickerOpenChange = useCallback(
@@ -4034,57 +4084,11 @@ export default function ChatView({
     [setIsModelPickerOpen, setIsTraitsPickerOpen, handleModelPickerOpenChange],
   );
   const composerPickerControls = showComposerModelBootstrapSkeleton ? (
-    useSplitComposerPickerControls ? (
-      <>
-        {selectedProviderRuntimeModelDiscoveryPending ? (
-          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
-        ) : (
-          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-        )}
-        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
-      </>
-    ) : selectedProviderRuntimeModelDiscoveryPending ? (
+    selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
       <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
     )
-  ) : useSplitComposerPickerControls ? (
-    <>
-      <ProviderModelPicker
-        compact={isComposerFooterCompact}
-        hideLabel={!composerFooterControlsPlan.showModelLabel}
-        provider={selectedProvider}
-        model={selectedModelForPickerWithCustomFallback}
-        lockedProvider={lockedProvider}
-        providers={providerStatuses}
-        modelOptionsByProvider={modelOptionsByProvider}
-        loadingModelProviders={loadingModelProviders}
-        discoveryErrorsByProvider={discoveryErrorsByProvider}
-        hiddenProviders={settings.hiddenProviders}
-        providerOrder={settings.providerOrder}
-        onProviderModelChange={onProviderModelSelect}
-        onSelectionCommitted={scheduleComposerFocus}
-        open={isModelPickerOpen}
-        onOpenChange={handleModelPickerOpenChange}
-        shortcutLabel={modelPickerShortcutLabel}
-      />
-      <TraitsPicker
-        provider={selectedProvider}
-        threadId={threadId}
-        model={selectedModelForPickerWithCustomFallback}
-        runtimeModel={selectedRuntimeModel}
-        runtimeModels={runtimeModelsByProvider[selectedProvider]}
-        runtimeAgents={dynamicAgents}
-        modelOptions={selectedProviderModelOptions}
-        prompt={prompt}
-        onPromptChange={setPromptFromTraits}
-        open={isTraitsPickerOpen}
-        onOpenChange={handleTraitsPickerOpenChange}
-        onSelectionCommitted={scheduleComposerFocus}
-        shortcutLabel={traitsPickerShortcutLabel}
-        hideLabel={!composerFooterControlsPlan.showTraitsLabel}
-      />
-    </>
   ) : (
     <ComposerModelEffortPicker
       compact={isComposerFooterCompact}
@@ -4103,11 +4107,12 @@ export default function ChatView({
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModels={runtimeModelsByProvider[selectedProvider]}
+      runtimeModelsByProvider={runtimeModelsByProvider}
       runtimeAgents={dynamicAgents}
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
-      onProviderModelChange={onProviderModelSelect}
+      onProviderModelChange={onProviderModelOrPresetSelect}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}
