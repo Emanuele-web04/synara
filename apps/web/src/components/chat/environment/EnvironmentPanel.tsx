@@ -23,9 +23,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
+import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
@@ -512,7 +512,7 @@ export function EnvironmentPanel({
       <div
         className={cn(
           ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          ENVIRONMENT_PANEL_MOTION_CLASS,
+          AUXILIARY_PANEL_MOTION_CLASS,
           "flex max-h-full w-72 flex-col",
           open
             ? "pointer-events-auto translate-x-0 opacity-100"

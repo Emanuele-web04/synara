@@ -38,6 +38,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { buildAutomationProposalActivity } from "../../automation/proposalActivity.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
@@ -78,6 +79,7 @@ import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
+import { makeProjectAgentTools } from "../projectAgentTools.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
@@ -115,6 +117,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
+  const projectAgentService = yield* ProjectAgentService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -235,6 +238,12 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         );
       }
+      yield* projectAgentService
+        .assertCallerMayDriveManagedThread({
+          callerThreadId: ThreadId.makeUnsafe(caller.id),
+          targetThreadId: ThreadId.makeUnsafe(target.id),
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
     });
 
   const readTools = makeThreadReadTools({
@@ -813,6 +822,9 @@ export const makeAgentGateway = Effect.gen(function* () {
         );
       }).pipe(Effect.orElseSucceed(() => null)),
   });
+  const projectAgentTools = makeProjectAgentTools({
+    projectAgent: projectAgentService,
+  });
 
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
@@ -830,6 +842,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
       : []),
+    ...projectAgentTools,
   ];
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({

@@ -306,6 +306,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -362,6 +363,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
           { migration_id: 103, name: "ClaudeTokenAccounting" },
           { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
+          { migration_id: 105, name: "ProjectAgent" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -459,6 +461,7 @@ agentGatewayRetentionLegacyLayer(
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -558,6 +561,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -598,6 +602,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
         ],
       );
 
@@ -692,6 +697,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -728,6 +734,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "ProjectAgent"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

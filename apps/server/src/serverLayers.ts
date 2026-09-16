@@ -47,6 +47,9 @@ import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService"
 import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectAgentRepositoryLive } from "./persistence/Layers/ProjectAgentRepository";
+import { ProjectAgentReactorLive } from "./projectAgent/Layers/ProjectAgentReactor";
+import { ProjectAgentServiceLive } from "./projectAgent/Layers/ProjectAgentService";
 import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
@@ -181,6 +184,15 @@ export function makeServerRuntimeServicesLayer(
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
+    Layer.provideMerge(ProjectAgentRepositoryLive),
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const projectAgentReactorLayer = ProjectAgentReactorLive.pipe(
+    Layer.provideMerge(projectAgentServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const externalMcpServiceLayer = ExternalMcpServiceLive.pipe(
     Layer.provideMerge(ExternalMcpRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
@@ -198,6 +210,7 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(projectAgentServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
@@ -225,6 +238,9 @@ export function makeServerRuntimeServicesLayer(
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    ProjectAgentRepositoryLive,
+    projectAgentServiceLayer,
+    projectAgentReactorLayer,
     managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
     AgentGatewayOperationRepositoryLive,

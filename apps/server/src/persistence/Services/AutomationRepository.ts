@@ -31,6 +31,7 @@ export const CreateAutomationDefinitionInput = Schema.Struct({
   input: AutomationCreateInput,
   now: Schema.String,
   nextRunAt: Schema.optional(Schema.NullOr(Schema.String)),
+  managedByProject: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type CreateAutomationDefinitionInput = typeof CreateAutomationDefinitionInput.Type;
 

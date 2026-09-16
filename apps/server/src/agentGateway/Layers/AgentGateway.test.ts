@@ -35,6 +35,7 @@ import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -787,6 +788,27 @@ function makeHarnessLayer(
       }),
   } as unknown as (typeof AutomationService)["Service"]);
 
+  const projectAgentLayer = Layer.succeed(ProjectAgentService, {
+    resolvePrincipalForThread: () => Effect.succeed({ kind: "user" as const }),
+    assertCallerMayDriveManagedThread: () => Effect.void,
+    getOverview: () =>
+      Effect.succeed({
+        projectId: PROJECT_ID,
+        configured: false,
+        config: null,
+        goal: null,
+        digest: null,
+        blockers: [],
+        recentOutcomes: [],
+        coordinatorStatus: "unconfigured",
+      }),
+    listTasks: () => Effect.succeed({ tasks: [], nextCursor: null }),
+    readDocument: () => Effect.fail(new Error("not configured")),
+    writeDocument: () => Effect.fail(new Error("not configured")),
+    reportResult: () => Effect.fail(new Error("not configured")),
+    buildContextPacket: () => Effect.fail(new Error("not configured")),
+  } as unknown as (typeof ProjectAgentService)["Service"]);
+
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
@@ -1232,6 +1254,7 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
+    Layer.provide(projectAgentLayer),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),

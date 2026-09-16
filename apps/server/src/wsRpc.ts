@@ -38,6 +38,7 @@ import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effe
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
+import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import {
   ServerAuth,
@@ -358,6 +359,7 @@ const makeWsRpcHandlersLayer = () =>
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
+      const projectAgentService = yield* ProjectAgentService;
       const config = yield* ServerConfig;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2046,6 +2048,89 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             automationService.resolveProposal(input),
             "Failed to resolve automation proposal",
+          ),
+        [WS_METHODS.projectAgentGetOverview]: (input) =>
+          rpcEffect(
+            projectAgentService.getOverview(input, { kind: "user" }),
+            "Failed to load project overview",
+          ),
+        [WS_METHODS.projectAgentConfigure]: (input) =>
+          rpcEffect(
+            projectAgentService.configure(input, { kind: "user" }),
+            "Failed to configure project coordinator",
+          ),
+        [WS_METHODS.projectAgentStartGoal]: (input) =>
+          rpcEffect(
+            projectAgentService.startGoal(input, { kind: "user" }),
+            "Failed to start project goal",
+          ),
+        [WS_METHODS.projectAgentUpdateGoal]: (input) =>
+          rpcEffect(
+            projectAgentService.updateGoal(input, { kind: "user" }),
+            "Failed to update project goal",
+          ),
+        [WS_METHODS.projectAgentPauseGoal]: (input) =>
+          rpcEffect(
+            projectAgentService.pauseGoal(input, { kind: "user" }),
+            "Failed to pause project goal",
+          ),
+        [WS_METHODS.projectAgentResumeGoal]: (input) =>
+          rpcEffect(
+            projectAgentService.resumeGoal(input, { kind: "user" }),
+            "Failed to resume project goal",
+          ),
+        [WS_METHODS.projectAgentStopGoal]: (input) =>
+          rpcEffect(
+            projectAgentService.stopGoal(input, { kind: "user" }),
+            "Failed to stop project goal",
+          ),
+        [WS_METHODS.projectAgentListTasks]: (input) =>
+          rpcEffect(
+            projectAgentService.listTasks(input, { kind: "user" }),
+            "Failed to list project tasks",
+          ),
+        [WS_METHODS.projectAgentUpdateTask]: (input) =>
+          rpcEffect(
+            projectAgentService.updateTask(input, { kind: "user" }),
+            "Failed to update project task",
+          ),
+        [WS_METHODS.projectAgentListActivity]: (input) =>
+          rpcEffect(
+            projectAgentService.listActivity(input, { kind: "user" }),
+            "Failed to list project activity",
+          ),
+        [WS_METHODS.projectAgentListDocuments]: (input) =>
+          rpcEffect(
+            projectAgentService.listDocuments(input, { kind: "user" }),
+            "Failed to list project documents",
+          ),
+        [WS_METHODS.projectAgentReadDocument]: (input) =>
+          rpcEffect(
+            projectAgentService.readDocument(input, { kind: "user" }),
+            "Failed to read project document",
+          ),
+        [WS_METHODS.projectAgentWriteDocument]: (input) =>
+          rpcEffect(
+            projectAgentService.writeDocument(input, { kind: "user" }),
+            "Failed to write project document",
+          ),
+        [WS_METHODS.projectAgentExportDocuments]: (input) =>
+          rpcEffect(
+            projectAgentService.exportDocuments(input, { kind: "user" }),
+            "Failed to export project documents",
+          ),
+        [WS_METHODS.projectAgentRefreshDigest]: (input) =>
+          rpcEffect(
+            projectAgentService.refreshDigest(input, { kind: "user" }),
+            "Failed to refresh project digest",
+          ),
+        [WS_METHODS.subscribeProjectAgentEvents]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: `projectAgent.events:${input.projectId}` },
+            projectAgentService.streamEvents(input).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Project event stream failed")),
+            ),
           ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(

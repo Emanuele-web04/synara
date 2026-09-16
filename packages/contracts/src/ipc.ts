@@ -42,6 +42,31 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  ProjectAgentConfigureInput,
+  ProjectAgentExportDocumentsInput,
+  ProjectAgentExportDocumentsResult,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentGoalControlInput,
+  ProjectAgentListActivityInput,
+  ProjectAgentListActivityResult,
+  ProjectAgentListDocumentsInput,
+  ProjectAgentListDocumentsResult,
+  ProjectAgentListTasksInput,
+  ProjectAgentListTasksResult,
+  ProjectAgentOverview,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentReadDocumentResult,
+  ProjectAgentRefreshDigestInput,
+  ProjectAgentStartGoalInput,
+  ProjectAgentStreamEvent,
+  ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateTaskInput,
+  ProjectAgentWriteDocumentInput,
+  ProjectDocumentRevision,
+  ProjectGoal,
+  ProjectTask,
+} from "./projectAgent";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -951,6 +976,28 @@ export interface NativeApi {
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
+  };
+  projectAgent: {
+    getOverview: (input: ProjectAgentGetOverviewInput) => Promise<ProjectAgentOverview>;
+    configure: (input: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>;
+    startGoal: (input: ProjectAgentStartGoalInput) => Promise<ProjectGoal>;
+    updateGoal: (input: ProjectAgentUpdateGoalInput) => Promise<ProjectGoal>;
+    pauseGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    resumeGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    stopGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    listTasks: (input: ProjectAgentListTasksInput) => Promise<ProjectAgentListTasksResult>;
+    updateTask: (input: ProjectAgentUpdateTaskInput) => Promise<ProjectTask>;
+    listActivity: (input: ProjectAgentListActivityInput) => Promise<ProjectAgentListActivityResult>;
+    listDocuments: (input: ProjectAgentListDocumentsInput) => Promise<ProjectAgentListDocumentsResult>;
+    readDocument: (input: ProjectAgentReadDocumentInput) => Promise<ProjectAgentReadDocumentResult>;
+    writeDocument: (input: ProjectAgentWriteDocumentInput) => Promise<ProjectDocumentRevision>;
+    exportDocuments: (
+      input: ProjectAgentExportDocumentsInput,
+    ) => Promise<ProjectAgentExportDocumentsResult>;
+    refreshDigest: (input: ProjectAgentRefreshDigestInput) => Promise<ProjectAgentOverview>;
+    subscribe: (input: { projectId: string }) => Promise<void>;
+    unsubscribe: (input: { projectId: string }) => Promise<void>;
+    onEvent: (callback: (event: ProjectAgentStreamEvent) => void) => () => void;
   };
   automation: {
     list: (input?: AutomationListInput) => Promise<AutomationListResult>;

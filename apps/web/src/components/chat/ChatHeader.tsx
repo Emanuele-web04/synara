@@ -64,6 +64,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { ProjectToggle, type ProjectToggleState } from "./project/ProjectToggle";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -116,6 +117,7 @@ interface ChatHeaderProps {
   // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
   // drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
+  projectPanel?: ProjectToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -536,6 +538,7 @@ export function ChatHeader({
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
+  projectPanel = null,
   chatLayoutAction: chatLayoutActionProp,
   changeThreadAction: changeThreadActionProp,
   editorChatControls: editorChatControlsProp,
@@ -896,6 +899,7 @@ export function ChatHeader({
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
+            {projectPanel ? <ProjectToggle project={projectPanel} /> : null}
             {rightPanelToggleControl}
           </>
         ) : (

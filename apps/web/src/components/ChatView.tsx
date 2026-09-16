@@ -289,6 +289,18 @@ import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionAction
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import {
+  ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
+  EnvironmentPanel,
+  type EnvironmentPanelProps,
+} from "./chat/environment/EnvironmentPanel";
+import { ProjectPanel } from "./chat/project/ProjectPanel";
+import {
+  resolveAuxiliarySurface,
+  resolveProjectPanelEnabled,
+  type ChatAuxiliarySurface,
+} from "./chat/auxiliary/auxiliaryPanel.logic";
+import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
+import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
@@ -2665,6 +2677,34 @@ export default function ChatView({
     environmentEnabled,
     environmentPanelOpen,
   });
+  const projectPanelEnabled = resolveProjectPanelEnabled({
+    environmentEnabled,
+    isOrdinaryProject: Boolean(activeProject) && !isHomeChatContainer && !isStudioContainer,
+  });
+  const [auxiliarySurface, setAuxiliarySurface] = useState<ChatAuxiliarySurface | null>(
+    environmentPanelVisible ? "environment" : null,
+  );
+  const setEnvironmentFromAuxiliary = useCallback(
+    (open: boolean) => {
+      setAuxiliarySurface((current) =>
+        open ? "environment" : current === "environment" ? null : current,
+      );
+      setEnvironmentPanelOpenPreference(open);
+    },
+    [setEnvironmentPanelOpenPreference],
+  );
+  const setProjectFromAuxiliary = useCallback((open: boolean) => {
+    setAuxiliarySurface((current) => resolveAuxiliarySurface({ current, next: "project" }) && open
+      ? "project"
+      : open
+        ? "project"
+        : current === "project"
+          ? null
+          : current);
+    if (open) {
+      setEnvironmentPanelOpenPreference(false);
+    }
+  }, [setEnvironmentPanelOpenPreference]);
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );
@@ -4922,12 +4962,22 @@ export default function ChatView({
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
-  const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
+  const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
+  const environmentPanelVisibleEffective =
+    environmentPanelVisible && auxiliarySurface !== "project";
+  const environmentAppliesContentInset =
+    (environmentPanelVisibleEffective || projectPanelVisible) && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
-        open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelOpenPreference,
+        open: environmentPanelVisibleEffective,
+        onOpenChange: setEnvironmentFromAuxiliary,
+      }
+    : null;
+  const projectHeaderState = projectPanelEnabled
+    ? {
+        open: projectPanelVisible,
+        onOpenChange: setProjectFromAuxiliary,
       }
     : null;
 
@@ -5508,6 +5558,7 @@ export default function ChatView({
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
           environment={isEditorRail ? null : environmentHeaderState}
+          projectPanel={isEditorRail ? null : projectHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
             surfaceMode === "single" && onSplitSurface
@@ -5889,8 +5940,23 @@ export default function ChatView({
           {environmentEnabled ? (
             <EnvironmentPanel
               {...environmentPanelProps}
-              open={environmentPanelVisible}
+              open={environmentPanelVisibleEffective}
               variant={environmentOverlayVariant}
+            />
+          ) : null}
+          {projectPanelEnabled ? (
+            <ProjectPanel
+              open={projectPanelVisible}
+              variant={environmentOverlayVariant}
+              mobile={isMobileViewport}
+              projectId={activeProjectId}
+              projectName={activeProjectDisplayName ?? activeProject?.name ?? "Project"}
+              defaultModelSelection={
+                activeThread.modelSelection ?? activeProject?.defaultModelSelection ?? null
+              }
+              importedInstructions={projectInstructions}
+              onOpenCoordinator={(threadId) => onNavigateToThread(threadId)}
+              onClose={() => setProjectFromAuxiliary(false)}
             />
           ) : null}
         </div>

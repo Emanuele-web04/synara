@@ -38,6 +38,7 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
@@ -623,6 +624,25 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateProjectDigest: TextGenerationShape["generateProjectDigest"] = (input) => {
+    const { prompt, outputSchemaJson } = buildProjectDigestPrompt({
+      ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+      activity: input.activity,
+      coverage: input.coverage,
+      pinnedFocus: input.pinnedFocus,
+    });
+    return runCodexJson({
+      operation: "generateProjectDigest",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
   const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = (input) => {
     const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
       message: input.message,
@@ -666,6 +686,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateProjectDigest,
     generateAutomationIntent,
     evaluateAutomationCompletion,
   } satisfies TextGenerationShape;

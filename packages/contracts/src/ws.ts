@@ -15,6 +15,23 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import {
+  ProjectAgentConfigureInput,
+  ProjectAgentExportDocumentsInput,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentGoalControlInput,
+  ProjectAgentListActivityInput,
+  ProjectAgentListDocumentsInput,
+  ProjectAgentListTasksInput,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentRefreshDigestInput,
+  ProjectAgentStartGoalInput,
+  ProjectAgentStreamEvent,
+  ProjectAgentSubscribeInput,
+  ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateTaskInput,
+  ProjectAgentWriteDocumentInput,
+} from "./projectAgent";
+import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
   OrchestrationImportThreadInput,
@@ -301,6 +318,23 @@ export const WS_METHODS = {
   automationArchiveRun: "automation.archiveRun",
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
+
+  projectAgentGetOverview: "projectAgent.getOverview",
+  projectAgentConfigure: "projectAgent.configure",
+  projectAgentStartGoal: "projectAgent.startGoal",
+  projectAgentUpdateGoal: "projectAgent.updateGoal",
+  projectAgentPauseGoal: "projectAgent.pauseGoal",
+  projectAgentResumeGoal: "projectAgent.resumeGoal",
+  projectAgentStopGoal: "projectAgent.stopGoal",
+  projectAgentListTasks: "projectAgent.listTasks",
+  projectAgentUpdateTask: "projectAgent.updateTask",
+  projectAgentListActivity: "projectAgent.listActivity",
+  projectAgentListDocuments: "projectAgent.listDocuments",
+  projectAgentReadDocument: "projectAgent.readDocument",
+  projectAgentWriteDocument: "projectAgent.writeDocument",
+  projectAgentExportDocuments: "projectAgent.exportDocuments",
+  projectAgentRefreshDigest: "projectAgent.refreshDigest",
+  subscribeProjectAgentEvents: "projectAgent.subscribe",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -312,6 +346,7 @@ export const WS_CHANNELS = {
   projectProvisionProgress: "project.provisionProgress",
   terminalEvent: "terminal.event",
   projectDevServerEvent: "project.devServerEvent",
+  projectAgentEvent: "projectAgent.event",
   serverWelcome: "server.welcome",
   serverMaintenanceUpdated: "server.maintenanceUpdated",
   serverConfigUpdated: "server.configUpdated",
@@ -512,6 +547,23 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
+
+  tagRequestBody(WS_METHODS.projectAgentGetOverview, ProjectAgentGetOverviewInput),
+  tagRequestBody(WS_METHODS.projectAgentConfigure, ProjectAgentConfigureInput),
+  tagRequestBody(WS_METHODS.projectAgentStartGoal, ProjectAgentStartGoalInput),
+  tagRequestBody(WS_METHODS.projectAgentUpdateGoal, ProjectAgentUpdateGoalInput),
+  tagRequestBody(WS_METHODS.projectAgentPauseGoal, ProjectAgentGoalControlInput),
+  tagRequestBody(WS_METHODS.projectAgentResumeGoal, ProjectAgentGoalControlInput),
+  tagRequestBody(WS_METHODS.projectAgentStopGoal, ProjectAgentGoalControlInput),
+  tagRequestBody(WS_METHODS.projectAgentListTasks, ProjectAgentListTasksInput),
+  tagRequestBody(WS_METHODS.projectAgentUpdateTask, ProjectAgentUpdateTaskInput),
+  tagRequestBody(WS_METHODS.projectAgentListActivity, ProjectAgentListActivityInput),
+  tagRequestBody(WS_METHODS.projectAgentListDocuments, ProjectAgentListDocumentsInput),
+  tagRequestBody(WS_METHODS.projectAgentReadDocument, ProjectAgentReadDocumentInput),
+  tagRequestBody(WS_METHODS.projectAgentWriteDocument, ProjectAgentWriteDocumentInput),
+  tagRequestBody(WS_METHODS.projectAgentExportDocuments, ProjectAgentExportDocumentsInput),
+  tagRequestBody(WS_METHODS.projectAgentRefreshDigest, ProjectAgentRefreshDigestInput),
+  tagRequestBody(WS_METHODS.subscribeProjectAgentEvents, ProjectAgentSubscribeInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -552,6 +604,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverProviderStatusesUpdated]: typeof ServerProviderStatusesUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
+  readonly [WS_CHANNELS.projectAgentEvent]: typeof ProjectAgentStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.gitWorktreeSetupProgress]: typeof GitWorktreeSetupProgressEvent.Type;
   readonly [WS_CHANNELS.projectProvisionProgress]: typeof GitHubProjectProvisionProgressEvent.Type;
@@ -598,6 +651,10 @@ export const WsPushAutomationEvent = makeWsPushSchema(
   WS_CHANNELS.automationEvent,
   AutomationStreamEvent,
 );
+export const WsPushProjectAgentEvent = makeWsPushSchema(
+  WS_CHANNELS.projectAgentEvent,
+  ProjectAgentStreamEvent,
+);
 export const WsPushGitActionProgress = makeWsPushSchema(
   WS_CHANNELS.gitActionProgress,
   GitActionProgressEvent,
@@ -639,6 +696,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverProviderStatusesUpdated,
   WS_CHANNELS.serverSettingsUpdated,
   WS_CHANNELS.automationEvent,
+  WS_CHANNELS.projectAgentEvent,
   WS_CHANNELS.terminalEvent,
   WS_CHANNELS.projectDevServerEvent,
   DEVICE_WS_CHANNELS.event,
@@ -655,6 +713,7 @@ export const WsPush = Schema.Union([
   WsPushServerProviderStatusesUpdated,
   WsPushServerSettingsUpdated,
   WsPushAutomationEvent,
+  WsPushProjectAgentEvent,
   WsPushGitActionProgress,
   WsPushGitWorktreeSetupProgress,
   WsPushProjectProvisionProgress,

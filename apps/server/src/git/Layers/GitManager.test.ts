@@ -84,6 +84,12 @@ interface FakeGitTextGeneration {
   generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<{ recap: string }, TextGenerationError>;
+  generateProjectDigest: (input: {
+    cwd: string;
+    activity: string;
+    coverage: string;
+    pinnedFocus: string;
+  }) => Effect.Effect<{ summary: string; focusItems: ReadonlyArray<unknown> }, TextGenerationError>;
   generateAutomationIntent: (
     input: AutomationIntentGenerationInput,
   ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
@@ -180,6 +186,11 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         recap: "Update workflow recap",
       }),
+    generateProjectDigest: () =>
+      Effect.succeed({
+        summary: "Update workflow digest",
+        focusItems: [],
+      }),
     generateAutomationIntent: () =>
       Effect.succeed({
         isAutomation: true,
@@ -265,6 +276,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateThreadRecap",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateProjectDigest: (input) =>
+      implementation.generateProjectDigest(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateProjectDigest",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

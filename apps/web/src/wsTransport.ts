@@ -36,6 +36,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ProjectAgentStreamEvent,
   type ProjectDevServerEvent,
   type ProjectFileChangeEvent,
   type ProjectWatchFileInput,
@@ -786,6 +787,7 @@ export class WsTransport {
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
+  private readonly projectAgentSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
   // Tracks the last server generation this transport observed so cross-restart
@@ -852,6 +854,33 @@ export class WsTransport {
         this.threadSubscriptions.set(threadId, input);
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
         await this.startThreadStream(client, threadId, input as never, wasSubscribed);
+        return undefined as T;
+      }
+      if (method === WS_METHODS.subscribeProjectAgentEvents) {
+        const projectId = (params as { projectId: string }).projectId;
+        const streamKey = `projectAgent.events:${projectId}`;
+        this.resetStreamCapacityRetry(streamKey);
+        this.projectAgentSubscriptions.set(projectId, params);
+        this.startStream(
+          client,
+          streamKey,
+          client[WS_METHODS.subscribeProjectAgentEvents](params as never),
+          (event: ProjectAgentStreamEvent) => this.emit(WS_CHANNELS.projectAgentEvent, event),
+          () => {
+            if (this.projectAgentSubscriptions.has(projectId)) {
+              void this.getClient().then((nextClient) => {
+                this.startStream(
+                  nextClient,
+                  streamKey,
+                  nextClient[WS_METHODS.subscribeProjectAgentEvents](params as never),
+                  (event: ProjectAgentStreamEvent) =>
+                    this.emit(WS_CHANNELS.projectAgentEvent, event),
+                  () => undefined,
+                );
+              });
+            }
+          },
+        );
         return undefined as T;
       }
 

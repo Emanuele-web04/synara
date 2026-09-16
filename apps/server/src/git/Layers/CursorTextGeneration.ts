@@ -24,6 +24,7 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
@@ -311,6 +312,33 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateProjectDigest: TextGenerationShape["generateProjectDigest"] = Effect.fn(
+    "CursorTextGeneration.generateProjectDigest",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateProjectDigest",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+    const { prompt, outputSchemaJson, rawTextFallback } = buildProjectDigestPrompt({
+      ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+      activity: input.activity,
+      coverage: input.coverage,
+      pinnedFocus: input.pinnedFocus,
+    });
+    return yield* runCursorJson({
+      operation: "generateProjectDigest",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      rawTextFallback,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  });
+
   const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
     "CursorTextGeneration.generateAutomationIntent",
   )(function* (input) {
@@ -367,6 +395,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateProjectDigest,
     generateAutomationIntent,
     evaluateAutomationCompletion,
   } satisfies TextGenerationShape;

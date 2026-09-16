@@ -32,6 +32,9 @@ export interface AutomationServiceShape {
   readonly create: (
     input: AutomationCreateInput,
   ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;
+  readonly createProjectManaged: (
+    input: AutomationCreateInput,
+  ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;
   readonly update: (
     input: AutomationUpdateInput,
   ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;

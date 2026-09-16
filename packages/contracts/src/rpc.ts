@@ -22,6 +22,32 @@ import {
   AutomationStreamEvent,
   AutomationUpdateInput,
 } from "./automation";
+import {
+  ProjectAgentConfigureInput,
+  ProjectAgentExportDocumentsInput,
+  ProjectAgentExportDocumentsResult,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentGoalControlInput,
+  ProjectAgentListActivityInput,
+  ProjectAgentListActivityResult,
+  ProjectAgentListDocumentsInput,
+  ProjectAgentListDocumentsResult,
+  ProjectAgentListTasksInput,
+  ProjectAgentListTasksResult,
+  ProjectAgentOverview,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentReadDocumentResult,
+  ProjectAgentRefreshDigestInput,
+  ProjectAgentStartGoalInput,
+  ProjectAgentStreamEvent,
+  ProjectAgentSubscribeInput,
+  ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateTaskInput,
+  ProjectAgentWriteDocumentInput,
+  ProjectDocumentRevision,
+  ProjectGoal,
+  ProjectTask,
+} from "./projectAgent";
 import { OpenInEditorInput } from "./editor";
 import {
   ExternalMcpCreateIntegrationInput,
@@ -1280,6 +1306,88 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
+export const WsProjectAgentGetOverviewRpc = Rpc.make(WS_METHODS.projectAgentGetOverview, {
+  payload: ProjectAgentGetOverviewInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentConfigureRpc = Rpc.make(WS_METHODS.projectAgentConfigure, {
+  payload: ProjectAgentConfigureInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentStartGoalRpc = Rpc.make(WS_METHODS.projectAgentStartGoal, {
+  payload: ProjectAgentStartGoalInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentUpdateGoalRpc = Rpc.make(WS_METHODS.projectAgentUpdateGoal, {
+  payload: ProjectAgentUpdateGoalInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentPauseGoalRpc = Rpc.make(WS_METHODS.projectAgentPauseGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentResumeGoalRpc = Rpc.make(WS_METHODS.projectAgentResumeGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentStopGoalRpc = Rpc.make(WS_METHODS.projectAgentStopGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentListTasksRpc = Rpc.make(WS_METHODS.projectAgentListTasks, {
+  payload: ProjectAgentListTasksInput,
+  success: ProjectAgentListTasksResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentUpdateTaskRpc = Rpc.make(WS_METHODS.projectAgentUpdateTask, {
+  payload: ProjectAgentUpdateTaskInput,
+  success: ProjectTask,
+  error: WsRpcError,
+});
+export const WsProjectAgentListActivityRpc = Rpc.make(WS_METHODS.projectAgentListActivity, {
+  payload: ProjectAgentListActivityInput,
+  success: ProjectAgentListActivityResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentListDocumentsRpc = Rpc.make(WS_METHODS.projectAgentListDocuments, {
+  payload: ProjectAgentListDocumentsInput,
+  success: ProjectAgentListDocumentsResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentReadDocumentRpc = Rpc.make(WS_METHODS.projectAgentReadDocument, {
+  payload: ProjectAgentReadDocumentInput,
+  success: ProjectAgentReadDocumentResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentWriteDocumentRpc = Rpc.make(WS_METHODS.projectAgentWriteDocument, {
+  payload: ProjectAgentWriteDocumentInput,
+  success: ProjectDocumentRevision,
+  error: WsRpcError,
+});
+export const WsProjectAgentExportDocumentsRpc = Rpc.make(WS_METHODS.projectAgentExportDocuments, {
+  payload: ProjectAgentExportDocumentsInput,
+  success: ProjectAgentExportDocumentsResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentRefreshDigestRpc = Rpc.make(WS_METHODS.projectAgentRefreshDigest, {
+  payload: ProjectAgentRefreshDigestInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribeProjectAgentEvents, {
+  payload: ProjectAgentSubscribeInput,
+  success: ProjectAgentStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -1411,4 +1519,20 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsProjectAgentGetOverviewRpc,
+  WsProjectAgentConfigureRpc,
+  WsProjectAgentStartGoalRpc,
+  WsProjectAgentUpdateGoalRpc,
+  WsProjectAgentPauseGoalRpc,
+  WsProjectAgentResumeGoalRpc,
+  WsProjectAgentStopGoalRpc,
+  WsProjectAgentListTasksRpc,
+  WsProjectAgentUpdateTaskRpc,
+  WsProjectAgentListActivityRpc,
+  WsProjectAgentListDocumentsRpc,
+  WsProjectAgentReadDocumentRpc,
+  WsProjectAgentWriteDocumentRpc,
+  WsProjectAgentExportDocumentsRpc,
+  WsProjectAgentRefreshDigestRpc,
+  WsSubscribeProjectAgentEventsRpc,
 );

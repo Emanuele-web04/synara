@@ -346,6 +346,12 @@ describe("computeAutomationScheduleSpacingSeconds", () => {
     ).toBeNull();
     expect(
       computeAutomationScheduleSpacingSeconds(
+        { type: "project-event", projectId: "project-1" },
+        "2026-06-16T10:00:00.000Z",
+      ),
+    ).toBeNull();
+    expect(
+      computeAutomationScheduleSpacingSeconds(
         { type: "once", runAt: "2026-06-16T10:00:15.000Z" },
         "2026-06-16T10:00:00.000Z",
       ),

@@ -48,6 +48,7 @@ import {
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   type DeviceEvent,
+  type ProjectAgentStreamEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -159,6 +160,7 @@ const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
+const projectAgentEventListeners = createListenerRegistry<ProjectAgentStreamEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
@@ -179,6 +181,7 @@ function clearWsNativeApiListeners(): void {
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
   deviceEventListeners.clear();
+  projectAgentEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -474,6 +477,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
     deviceEventListeners.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.projectAgentEvent, (message) => {
+    projectAgentEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
@@ -815,6 +821,26 @@ export function createWsNativeApi(): NativeApi {
       },
       onShellEvent: orchestrationShellEventListeners.subscribe,
       onThreadEvent: orchestrationThreadEventListeners.subscribe,
+    },
+    projectAgent: {
+      getOverview: (input) => transport.request(WS_METHODS.projectAgentGetOverview, input),
+      configure: (input) => transport.request(WS_METHODS.projectAgentConfigure, input),
+      startGoal: (input) => transport.request(WS_METHODS.projectAgentStartGoal, input),
+      updateGoal: (input) => transport.request(WS_METHODS.projectAgentUpdateGoal, input),
+      pauseGoal: (input) => transport.request(WS_METHODS.projectAgentPauseGoal, input),
+      resumeGoal: (input) => transport.request(WS_METHODS.projectAgentResumeGoal, input),
+      stopGoal: (input) => transport.request(WS_METHODS.projectAgentStopGoal, input),
+      listTasks: (input) => transport.request(WS_METHODS.projectAgentListTasks, input),
+      updateTask: (input) => transport.request(WS_METHODS.projectAgentUpdateTask, input),
+      listActivity: (input) => transport.request(WS_METHODS.projectAgentListActivity, input),
+      listDocuments: (input) => transport.request(WS_METHODS.projectAgentListDocuments, input),
+      readDocument: (input) => transport.request(WS_METHODS.projectAgentReadDocument, input),
+      writeDocument: (input) => transport.request(WS_METHODS.projectAgentWriteDocument, input),
+      exportDocuments: (input) => transport.request(WS_METHODS.projectAgentExportDocuments, input),
+      refreshDigest: (input) => transport.request(WS_METHODS.projectAgentRefreshDigest, input),
+      subscribe: (input) => transport.request(WS_METHODS.subscribeProjectAgentEvents, input),
+      unsubscribe: async () => undefined,
+      onEvent: projectAgentEventListeners.subscribe,
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
