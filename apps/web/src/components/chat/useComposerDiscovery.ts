@@ -48,6 +48,7 @@ interface ComposerDiscoveryInput {
   providerOptionsForDispatch: ProviderStartOptions | undefined;
   gitCwd: string | null;
   piAgentDir: string;
+  discoverNativeCompaction?: boolean;
 }
 
 export function useComposerDiscovery({
@@ -59,6 +60,7 @@ export function useComposerDiscovery({
   providerOptionsForDispatch,
   gitCwd,
   piAgentDir,
+  discoverNativeCompaction,
 }: ComposerDiscoveryInput) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -100,7 +102,9 @@ export function useComposerDiscovery({
           : undefined,
       agentDir: selectedProvider === "pi" ? piAgentDir || null : null,
       enabled:
-        (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
+        (composerTriggerKind === "slash-command" ||
+          composerTriggerKind === "slash-model" ||
+          discoverNativeCompaction === true) &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
         composerSkillCwd !== null,
     }),
@@ -208,5 +212,10 @@ export function useComposerDiscovery({
     supportsTextNativeReviewCommand,
     isComposerMenuLoading,
     canCompactThread: supportsThreadCompaction(providerComposerCapabilitiesQuery.data),
+    isNativeCommandDiscoveryPending:
+      providerComposerCapabilitiesQuery.isPending ||
+      (supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
+        providerCommandsQuery.isPending) ||
+      providerCommandsQuery.isFetching,
   };
 }

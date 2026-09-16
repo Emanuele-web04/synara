@@ -99,6 +99,80 @@ async function decide(command: OrchestrationCommand, readModel: OrchestrationRea
 }
 
 describe("decider Claude cache review", () => {
+  const compactionTurnId = TurnId.makeUnsafe("turn-cache-compaction");
+
+  function compacted(overrides: { reviewId?: string; turnId?: TurnId } = {}): OrchestrationCommand {
+    return {
+      type: "thread.claude-cache.compacted",
+      commandId: CommandId.makeUnsafe("cmd-cache-compacted"),
+      threadId: THREAD_ID,
+      reviewId: overrides.reviewId ?? REVIEW.reviewId,
+      turnId: overrides.turnId ?? compactionTurnId,
+      createdAt: NOW,
+    };
+  }
+
+  it.each(["compacting", "uncertain"] as const)(
+    "releases the matching %s compaction into a server-owned Continue response",
+    async (status) => {
+      const review: PendingClaudeCacheReview = { ...REVIEW, status, compactionTurnId };
+      const events = await decide(compacted(), makeReadModel({ review }));
+
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.claude-cache-set",
+        "thread.claude-cache-response-requested",
+      ]);
+      expect(events[0]).toMatchObject({
+        payload: { review: { status: "responding", messageId: MESSAGE_ID } },
+      });
+      expect(events[1]).toMatchObject({
+        payload: {
+          threadId: THREAD_ID,
+          decision: "continue",
+          review: { reviewId: REVIEW.reviewId, messageId: MESSAGE_ID },
+        },
+      });
+
+      let readModel = makeReadModel({ review });
+      for (const [index, event] of events.entries()) {
+        readModel = await Effect.runPromise(
+          projectEvent(readModel, { ...event, sequence: 43 + index }),
+        );
+      }
+      expect(await decide(compacted(), readModel)).toEqual([]);
+    },
+  );
+
+  it.each(["pending", "responding", "failed"] as const)(
+    "does not release a compaction completion when the current review is %s",
+    async (status) => {
+      expect(
+        await decide(
+          compacted(),
+          makeReadModel({ review: { ...REVIEW, status, compactionTurnId } }),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    { reviewId: "different-review" },
+    { turnId: TurnId.makeUnsafe("different-compaction-turn") },
+  ])("ignores a stale compaction completion identity %j", async (overrides) => {
+    expect(
+      await decide(
+        compacted(overrides),
+        makeReadModel({
+          review: {
+            ...REVIEW,
+            status: "compacting",
+            compactionTurnId,
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it.each([undefined, null])(
     "creates a review when expectedReviewId is null and current is %s",
     async (review) => {

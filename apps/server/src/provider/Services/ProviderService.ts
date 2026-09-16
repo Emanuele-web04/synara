@@ -30,6 +30,7 @@ import type {
   ProviderStopSessionInput,
   ProviderStopTaskInput,
   ThreadId,
+  TurnId,
   ProviderTurnStartResult,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
@@ -73,6 +74,10 @@ export interface ProviderSessionStartOutcomeOptions {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly startClaudeCompaction?: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+  }) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;

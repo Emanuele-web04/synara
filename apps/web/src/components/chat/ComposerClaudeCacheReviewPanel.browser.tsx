@@ -22,6 +22,28 @@ function makeReview(overrides: Partial<PendingClaudeCacheReview> = {}): PendingC
 }
 
 describe("ComposerClaudeCacheReviewPanel", () => {
+  it("confirms an already requested native compact without offering a second compaction", async () => {
+    const review = makeReview();
+    const onRespond = vi.fn(async () => undefined);
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={review}
+        isCompactionRequest
+        compactDisabledReason={null}
+        onRespond={onRespond}
+      />,
+    );
+    try {
+      await expect
+        .element(page.getByRole("button", { name: /^Compact, then send/ }))
+        .not.toBeInTheDocument();
+      await page.getByRole("button", { name: /^Compact this conversation/ }).click();
+      expect(onRespond).toHaveBeenCalledExactlyOnceWith(review, "continue");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("submits only the existing review once while waiting for durable state", async () => {
     const review = makeReview();
     const onRespond = vi.fn(async () => undefined);

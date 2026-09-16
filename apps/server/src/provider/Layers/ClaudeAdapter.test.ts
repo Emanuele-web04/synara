@@ -22,6 +22,7 @@ import {
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
@@ -69,6 +70,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private contextUsageResponse: SDKControlGetContextUsageResponse | undefined;
   private contextUsageNeverResolves = false;
   public closeCalls = 0;
+  public supportedCommandList: Array<{ name: string; description: string; argumentHint: string }> =
+    [];
+  public supportedCommandsNeverResolves = false;
 
   emit(message: SDKMessage): void {
     if (this.done) {
@@ -158,7 +162,8 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   readonly supportedCommands = async (): Promise<
     Array<{ name: string; description: string; argumentHint: string }>
   > => {
-    return [];
+    if (this.supportedCommandsNeverResolves) return new Promise(() => {});
+    return this.supportedCommandList;
   };
 
   readonly supportedModels = async (): Promise<Array<ModelInfo>> => {
@@ -9538,6 +9543,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("invalidates compaction-call usage until the next assistant response", () => {
     const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const observation = yield* observeCompactionUsageEvents(adapter, 4);
@@ -9705,6 +9713,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("does not promote partial accounting from a legacy resume cursor", () => {
     const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const observation = yield* observeCompactionUsageEvents(adapter, 3);
@@ -11731,6 +11742,379 @@ describe("ClaudeAdapterLive forkThread", () => {
       Effect.provide(layer),
     );
   });
+});
+
+describe("Claude explicit native compaction", () => {
+  const nativeSessionId = "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba1";
+  const compactionTurnId = TurnId.makeUnsafe("native-compact-turn");
+
+  for (const command of ["/compact", "/compact preserve the current investigation"]) {
+    it.effect(
+      `dispatches ordinary ${command} as a native command in Plan mode with Ultrathink`,
+      () => {
+        const harness = makeHarness();
+        harness.query.supportedCommandList = [
+          { name: "compact", description: "Compact context", argumentHint: "" },
+        ];
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            resumeCursor: { resume: nativeSessionId },
+          });
+          const events = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "turn.completed"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const started = yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: command,
+            attachments: [],
+            interactionMode: "plan",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-sonnet-4-6",
+              options: { effort: "ultrathink" },
+            },
+          });
+          const prompt = yield* Effect.promise(() =>
+            harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+          );
+          assert.deepEqual(prompt.value?.message.content, [{ type: "text", text: command }]);
+          assert.deepEqual(harness.query.setPermissionModeCalls, []);
+          emitCompactionBoundary(harness.query, nativeSessionId, "ordinary-boundary");
+          emitSuccessResult(harness.query, nativeSessionId, "ordinary-result", {});
+          const [completed] = yield* Fiber.join(events);
+          assert.equal(completed?.turnId, started.turnId);
+          assert.equal(completed?.payload.contextCompacted, true);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  for (const text of ["/compactly", "Explain /compact"]) {
+    it.effect(`does not treat ordinary text as native compaction: ${text}`, () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        const started = yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: text,
+          attachments: [],
+        });
+        assert.ok(started.turnId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  for (const scenario of [
+    "success",
+    "no-boundary",
+    "foreign-boundary",
+    "failed",
+    "interrupted",
+  ] as const) {
+    it.effect(`verifies terminal compaction outcome: ${scenario}`, () => {
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [
+        { name: "compact", description: "Compact context", argumentHint: "" },
+      ];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          resumeCursor: { resume: nativeSessionId },
+        });
+        const events = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "turn.completed"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const started = yield* adapter.startClaudeCompaction!({
+          threadId: THREAD_ID,
+          turnId: compactionTurnId,
+        });
+        assert.equal(started.turnId, compactionTurnId);
+        const prompt = yield* Effect.promise(() =>
+          harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+        );
+        assert.deepEqual(prompt.value?.message.content, [{ type: "text", text: "/compact" }]);
+        if (scenario !== "no-boundary")
+          emitCompactionBoundary(
+            harness.query,
+            scenario === "foreign-boundary" ? "foreign-session" : nativeSessionId,
+            "explicit-boundary",
+          );
+        if (scenario === "failed") {
+          harness.query.emit({
+            type: "result",
+            subtype: "error_during_execution",
+            is_error: true,
+            errors: ["Compaction failed"],
+            session_id: nativeSessionId,
+            uuid: "failed-compact",
+            usage: {},
+          } as unknown as SDKMessage);
+        } else if (scenario === "interrupted") {
+          yield* adapter.stopSession(THREAD_ID);
+        } else emitSuccessResult(harness.query, nativeSessionId, "explicit-result", {});
+        const [completed] = yield* Fiber.join(events);
+        assert.equal(completed?.turnId, compactionTurnId);
+        assert.equal(completed?.payload.contextCompacted, scenario === "success");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  it.effect("does not queue a prompt when native command discovery omits compact", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      const result = yield* adapter.startClaudeCompaction!({
+        threadId: THREAD_ID,
+        turnId: compactionTurnId,
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("bounds native command discovery without queueing a prompt", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandsNeverResolves = true;
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      const operation = yield* adapter.startClaudeCompaction!({
+        threadId: THREAD_ID,
+        turnId: compactionTurnId,
+      }).pipe(Effect.result, Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      assert.equal((yield* Fiber.join(operation))._tag, "Failure");
+      assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("preserves the selected model and permission mode while compacting", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId },
+      });
+      const completed = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "Plan",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      emitSuccessResult(harness.query, nativeSessionId, "planned", {});
+      yield* Fiber.join(completed);
+      const permissionsBefore = [...harness.query.setPermissionModeCalls];
+      const settingsBefore = [...harness.query.applyFlagSettingsCalls];
+      const modelsBefore = [...harness.query.setModelCalls];
+      yield* adapter.startClaudeCompaction!({ threadId: THREAD_ID, turnId: compactionTurnId });
+      assert.deepEqual(harness.query.setPermissionModeCalls, permissionsBefore);
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, settingsBefore);
+      assert.deepEqual(harness.query.setModelCalls, modelsBefore);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "rejects attachments on native compaction before creating a turn or reading files",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        const result = yield* adapter
+          .sendTurn({
+            threadId: THREAD_ID,
+            input: "/compact retain the plan",
+            attachments: [
+              {
+                type: "image",
+                id: "missing-image-12345678-1234-1234-1234-123456789abc",
+                name: "diagram.png",
+                mimeType: "image/png",
+                sizeBytes: 4,
+              },
+            ],
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.instanceOf(result.failure, ProviderAdapterValidationError);
+          assert.include(String(result.failure), "does not accept attachments");
+        }
+        assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  for (const pendingKind of ["approval", "user-input"] as const) {
+    it.effect(`blocks ordinary compaction while a ${pendingKind} is pending`, () => {
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [
+        { name: "compact", description: "Compact context", argumentHint: "" },
+      ];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "approval-required" });
+        const pending = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "request.opened" || event.type === "user-input.requested",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const callback = harness.getLastCreateQueryInput()!.options.canUseTool!;
+        const permission = callback(
+          pendingKind === "approval" ? "Bash" : "AskUserQuestion",
+          pendingKind === "approval"
+            ? { command: "pwd" }
+            : {
+                questions: [
+                  {
+                    question: "Continue?",
+                    header: "Continue",
+                    options: [
+                      { label: "Yes", description: "Continue" },
+                      { label: "No", description: "Stop" },
+                    ],
+                    multiSelect: false,
+                  },
+                ],
+              },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "pending-tool",
+            requestId: "pending-request",
+          },
+        );
+        yield* Fiber.join(pending);
+        const result = yield* adapter
+          .sendTurn({ threadId: THREAD_ID, input: "/compact", attachments: [] })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+        yield* adapter.stopSession(THREAD_ID);
+        yield* Effect.promise(() => permission);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  for (const activeWork of ["turn", "tracked-task", "workflow"] as const) {
+    it.effect(`rejects compaction while shared work is active: ${activeWork}`, () => {
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [
+        { name: "compact", description: "Compact context", argumentHint: "" },
+      ];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          resumeCursor: {
+            resume: nativeSessionId,
+            ...(activeWork === "tracked-task"
+              ? {
+                  trackedTasks: [
+                    { id: "shared-task", subject: "Working", status: "in_progress", blockedBy: [] },
+                  ],
+                }
+              : {}),
+          },
+        });
+        const active =
+          activeWork === "turn"
+            ? yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Working", attachments: [] })
+            : undefined;
+        if (activeWork === "workflow") {
+          const workflowStarted = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "task.started"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          harness.query.emit({
+            type: "system",
+            subtype: "task_started",
+            task_id: "shared-workflow",
+            task_type: "local_workflow",
+            workflow_name: "spec",
+            description: "Work in progress",
+            session_id: nativeSessionId,
+            uuid: "workflow-start",
+          } as unknown as SDKMessage);
+          yield* Fiber.join(workflowStarted);
+        }
+        const result = yield* adapter.startClaudeCompaction!({
+          threadId: THREAD_ID,
+          turnId: compactionTurnId,
+        }).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        const ordinaryResult = yield* adapter
+          .sendTurn({ threadId: THREAD_ID, input: "/compact retain active work", attachments: [] })
+          .pipe(Effect.result);
+        assert.equal(ordinaryResult._tag, "Failure");
+        if (activeWork === "turn") {
+          const steerResult = yield* adapter.steerTurn!({
+            threadId: THREAD_ID,
+            input: "/compact",
+            attachments: [],
+          }).pipe(Effect.result);
+          assert.equal(steerResult._tag, "Failure");
+        }
+        assert.equal((yield* adapter.listSessions())[0]?.activeTurnId, active?.turnId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 });
 
 describe("Claude cache preflight", () => {

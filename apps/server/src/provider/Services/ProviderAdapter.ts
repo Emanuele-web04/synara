@@ -235,6 +235,12 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /** Queue native Claude compaction; terminal events report whether it actually compacted. */
+  readonly startClaudeCompaction?: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+  }) => Effect.Effect<ProviderTurnStartResult, TError>;
+
   /** Read bounded native/local cache evidence without delivering a model prompt. */
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,

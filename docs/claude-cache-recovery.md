@@ -57,6 +57,9 @@ mode, and settings. Plan and Ultrathink prompt prefixes must not be prepended to
 A successful result alone is insufficient: the operation must observe the corresponding native
 compaction boundary as well. A failed, interrupted, or unrelated operation cannot release the held
 message. The original message must not be bound to the temporary compaction turn.
+Release also waits for the compaction dispatch to settle and for runtime ingestion to acknowledge
+the terminal event. This prevents delayed compaction lifecycle events from consuming the restored
+pending-message binding. A matching uncertain review completes through one atomic internal command.
 
 Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
 on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite

@@ -42,6 +42,7 @@ import {
   Option,
   Queue,
   Schema,
+  Scope,
   Semaphore,
   ServiceMap,
   Stream,
@@ -110,6 +111,11 @@ import { providerDisabledSettingsMessage } from "../../provider/enabledProviderA
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
+import {
+  ProviderRuntimeEventRepository,
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/QueuedTurnPromotions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import {
@@ -710,6 +716,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
+  const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
   const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
@@ -2231,6 +2238,10 @@ const make = Effect.gen(function* () {
               messageId: MessageId.makeUnsafe(input.messageId),
               sourceEventSequence: input.cacheReviewSource.sequence,
               assessment: { ...observation, state: assessment.state },
+              requestedAt: input.cacheReviewSource.payload.createdAt,
+              ...(input.cacheReviewSource.payload.sourceProposedPlan
+                ? { sourceProposedPlan: input.cacheReviewSource.payload.sourceProposedPlan }
+                : {}),
               status: "pending",
               createdAt,
             },
@@ -2467,6 +2478,13 @@ const make = Effect.gen(function* () {
           )
         : "";
     const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
+      // Native control commands must remain the first token in every mode.
+      if (
+        selectedProvider === "claudeAgent" &&
+        /^\/compact(?:\s|$)/.test(input.messageText.trim())
+      ) {
+        return input.messageText.trim();
+      }
       const withMentionContext = `${composeProviderInput(bootstrap)}${mentionContextSuffix}`;
       const withSkills = skillInlineText
         ? `${withMentionContext}\n\n${skillInlineText}`
@@ -3420,6 +3438,144 @@ const make = Effect.gen(function* () {
       orchestrationEngine.readEventsThrough(Math.max(0, eventSequence - 1), eventSequence),
     ).pipe(Effect.map((events) => Array.from(events)[0]));
 
+  const readClaudeCompactionTerminal = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) {
+    const highWater = yield* runtimeEventRepository.getHighWaterSequence;
+    const events = yield* runtimeEventRepository.readThreadEvents({
+      threadId,
+      turnId,
+      throughSequenceInclusive: highWater,
+      limit: 1,
+      eventTypes: ["turn.completed", "turn.aborted"],
+    });
+    const event = events[0]?.event;
+    return event?.type === "turn.completed" || event?.type === "turn.aborted" ? event : undefined;
+  });
+
+  const earlyClaudeCompactionTerminals = new Map<ThreadId, ProviderQueueDrainEvent>();
+  const pendingClaudeCompactionIngestion = new Set<ThreadId>();
+
+  const processClaudeCompactionTerminal: (
+    event: ProviderQueueDrainEvent,
+  ) => Effect.Effect<void, unknown, Scope.Scope> = Effect.fnUntraced(function* (
+    event: ProviderQueueDrainEvent,
+  ) {
+    const thread = yield* resolveThread(event.threadId);
+    let review = thread?.claudeCacheReview;
+    if (
+      !review ||
+      !review.compactionTurnId ||
+      review.compactionTurnId !== event.turnId ||
+      (review.status !== "compacting" && review.status !== "uncertain")
+    )
+      return;
+    const journalHighWater = yield* runtimeEventRepository.getHighWaterSequence;
+    const journalEvents = yield* runtimeEventRepository.readThreadEvents({
+      threadId: event.threadId,
+      turnId: review.compactionTurnId,
+      throughSequenceInclusive: journalHighWater,
+      limit: 1,
+      eventTypes: ["turn.completed", "turn.aborted"],
+    });
+    const terminalSequence = journalEvents[0]?.sequence;
+    if (
+      terminalSequence !== undefined &&
+      (yield* runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER)) <
+        terminalSequence
+    ) {
+      // The raw provider subscriber can run ahead of transcript ingestion. A
+      // pending user row must not be restored while old control-turn events
+      // can still consume it. Wait on durable acknowledgement without holding
+      // the provider lease or the delivery source's permit.
+      if (!pendingClaudeCompactionIngestion.has(event.threadId)) {
+        pendingClaudeCompactionIngestion.add(event.threadId);
+        const reviewId = review.reviewId;
+        yield* Effect.gen(function* () {
+          while (
+            (yield* runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER)) <
+            terminalSequence
+          ) {
+            const current = (yield* resolveThread(event.threadId))?.claudeCacheReview;
+            if (current?.reviewId !== reviewId || current.compactionTurnId !== event.turnId) return;
+            yield* Effect.sleep(Duration.millis(50));
+          }
+          yield* processClaudeCompactionTerminal(event);
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => pendingClaudeCompactionIngestion.delete(event.threadId)),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logError("Could not await Claude compaction ingestion", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.forkScoped,
+        );
+      }
+      return;
+    }
+    if (review.compactionResponseEventSequence !== undefined && reconcileDeliveryRuntime) {
+      const delivery = yield* deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: review.compactionResponseEventSequence,
+      });
+      if (Option.isSome(delivery) && delivery.value.state === "inflight") {
+        earlyClaudeCompactionTerminals.set(event.threadId, event);
+        return;
+      }
+      if (
+        Option.isSome(delivery) &&
+        (delivery.value.state === "uncertain" || delivery.value.state === "dead")
+      ) {
+        yield* reconcileDeliveryRuntime({
+          threadId: event.threadId,
+          eventSequence: review.compactionResponseEventSequence,
+          expectedState: delivery.value.state,
+          outcome: "accepted",
+          reconciledBy: "claude-compaction-terminal",
+          note: "The matching native compaction terminal event confirms that the operation was accepted.",
+        });
+        review = (yield* resolveThread(event.threadId))?.claudeCacheReview;
+        if (!review || review.compactionTurnId !== event.turnId) return;
+      }
+    }
+    if (
+      event.type !== "turn.completed" ||
+      event.payload.state !== "completed" ||
+      event.payload.contextCompacted !== true ||
+      thread?.archivedAt != null ||
+      thread?.deletedAt != null
+    ) {
+      yield* setClaudeCacheReview(
+        event.threadId,
+        {
+          ...review,
+          status: "failed",
+          error:
+            "Native compaction did not complete with a confirmed context boundary. The saved message was not sent.",
+        },
+        review.reviewId,
+      );
+      return;
+    }
+    // A terminal result is the only authority for automatic release. The
+    // internal command has a stable receipt, making duplicate events harmless.
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.claude-cache.compacted",
+        commandId: CommandId.makeUnsafe(
+          `server:claude-cache-compacted:${review.reviewId}:${event.turnId}`,
+        ),
+        threadId: event.threadId,
+        reviewId: review.reviewId,
+        turnId: review.compactionTurnId!,
+        createdAt: event.createdAt,
+      })
+      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
+  });
+
   const processClaudeCacheResponse = (
     event: Extract<ProviderIntentEvent, { type: "thread.claude-cache-response-requested" }>,
   ) =>
@@ -3452,19 +3608,6 @@ const make = Effect.gen(function* () {
           yield* drainQueuedTurnsForSession(threadId);
           return;
         }
-        if (decision === "compact") {
-          yield* setClaudeCacheReview(
-            threadId,
-            {
-              ...review,
-              status: "failed",
-              error:
-                "Compaction must complete before this message can be sent. Use Continue or cancel this send.",
-            },
-            review.reviewId,
-          );
-          return;
-        }
         const source = yield* readOrchestrationEventAtSequence(review.sourceEventSequence);
         if (
           !source ||
@@ -3481,6 +3624,92 @@ const make = Effect.gen(function* () {
               error: "The saved message is unavailable or Claude is busy. Nothing was sent.",
             },
             review.reviewId,
+          );
+          return;
+        }
+        if (decision === "compact") {
+          const message = thread.messages.find((entry) => entry.id === review.messageId);
+          const busyTasks = providerService.hasLiveRuntimeTasks
+            ? yield* providerService.hasLiveRuntimeTasks({ threadId })
+            : false;
+          const pending = yield* pendingInteractions.getPendingCountsByThreadId({ threadId });
+          if (
+            !providerService.startClaudeCompaction ||
+            !message ||
+            /^\/compact(?:\s|$)/.test(message.text.trim()) ||
+            busyTasks ||
+            pending.pendingApprovalCount > 0 ||
+            pending.pendingUserInputCount > 0
+          ) {
+            yield* setClaudeCacheReview(
+              threadId,
+              {
+                ...review,
+                status: "failed",
+                error:
+                  "Native compaction is unavailable or Claude still has active work. The saved message was not sent.",
+              },
+              review.reviewId,
+            );
+            return;
+          }
+          yield* ensureSessionForThread(threadId, event.payload.createdAt, {
+            ...(source.payload.modelSelection
+              ? { modelSelection: source.payload.modelSelection }
+              : {}),
+            ...(source.payload.providerOptions
+              ? { providerOptions: source.payload.providerOptions }
+              : {}),
+            runtimeMode: source.payload.runtimeMode,
+          });
+          const observation = providerService.getClaudeCacheObservation
+            ? yield* providerService.getClaudeCacheObservation(threadId)
+            : undefined;
+          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "responding"))) return;
+          if (!observation || !sameClaudeCacheContext(review.assessment, observation)) {
+            yield* setClaudeCacheReview(
+              threadId,
+              {
+                ...review,
+                reviewId: `claude-cache:${source.eventId}:${crypto.randomUUID()}`,
+                ...(observation ? { assessment: observation } : {}),
+                status: "pending",
+                error: "Claude's context changed. Review it before compacting.",
+              },
+              review.reviewId,
+            );
+            return;
+          }
+          const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+          const compactingReview: PendingClaudeCacheReview = {
+            ...review,
+            status: "compacting",
+            compactionTurnId: turnId,
+            compactionResponseEventSequence: event.sequence,
+            requestedAt: source.payload.createdAt,
+            ...(source.payload.sourceProposedPlan
+              ? { sourceProposedPlan: source.payload.sourceProposedPlan }
+              : {}),
+          };
+          yield* setClaudeCacheReview(threadId, compactingReview, review.reviewId);
+          if (!(yield* isClaudeReviewAuthorized(threadId, review.reviewId, "compacting"))) return;
+          yield* providerService.startClaudeCompaction({ threadId, turnId }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const rejected =
+                  classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
+                yield* setClaudeCacheReview(
+                  threadId,
+                  {
+                    ...compactingReview,
+                    status: rejected ? "failed" : "uncertain",
+                    error: `Compaction could not be confirmed. ${Cause.pretty(cause)}`,
+                  },
+                  review.reviewId,
+                );
+                if (!rejected) return yield* Effect.die(new Error(Cause.pretty(cause)));
+              }),
+            ),
           );
           return;
         }
@@ -3516,7 +3745,30 @@ const make = Effect.gen(function* () {
             review.reviewId,
           );
         }
-      }),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const review = (yield* resolveThread(event.payload.threadId))?.claudeCacheReview;
+            if (
+              review?.reviewId === event.payload.review.reviewId &&
+              review.status === "responding"
+            ) {
+              const rejected =
+                classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
+              yield* setClaudeCacheReview(
+                event.payload.threadId,
+                {
+                  ...review,
+                  status: rejected ? "failed" : "uncertain",
+                  error: Cause.pretty(cause),
+                },
+                review.reviewId,
+              );
+            }
+            return yield* Effect.failCause(cause);
+          }),
+        ),
+      ),
     );
 
   // Promote the next queued message only after the active provider turn settles.
@@ -3921,6 +4173,7 @@ const make = Effect.gen(function* () {
     );
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
+    yield* processClaudeCompactionTerminal(event);
     yield* observePendingContextBootstrapTerminalEvent(event);
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
@@ -5376,6 +5629,28 @@ const make = Effect.gen(function* () {
             continue;
           }
           const expiredOwner = existing.value.claimOwner ?? "";
+          if (
+            event.type === "thread.claude-cache-response-requested" &&
+            event.payload.decision === "compact"
+          ) {
+            const review = (yield* resolveThread(threadId))?.claudeCacheReview;
+            if (
+              review?.compactionResponseEventSequence === event.sequence &&
+              review.compactionTurnId &&
+              (yield* readClaudeCompactionTerminal(threadId, review.compactionTurnId))
+            ) {
+              const completed = yield* deliveryRepository.complete({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: event.sequence,
+                claimOwner: expiredOwner,
+                completedAt: new Date().toISOString(),
+              });
+              if (completed) {
+                yield* refreshCursor;
+                return;
+              }
+            }
+          }
           if (event.type === "thread.turn-start-requested") {
             const review = (yield* resolveThread(threadId))?.claudeCacheReview;
             // Persisting this review is the pre-enqueue boundary. A crash after
@@ -5562,6 +5837,35 @@ const make = Effect.gen(function* () {
       if (event.type === "thread.turn-queued") {
         yield* recoverQueuedTurnAfterDeliverySafely(event);
       }
+      if (
+        event.type === "thread.claude-cache-response-requested" &&
+        event.payload.decision === "compact"
+      ) {
+        const earlyTerminal = earlyClaudeCompactionTerminals.get(event.payload.threadId);
+        earlyClaudeCompactionTerminals.delete(event.payload.threadId);
+        const review = (yield* resolveThread(event.payload.threadId))?.claudeCacheReview;
+        if (review?.compactionTurnId && review.compactionResponseEventSequence === event.sequence) {
+          const terminal =
+            earlyTerminal?.turnId === review.compactionTurnId
+              ? earlyTerminal
+              : yield* readClaudeCompactionTerminal(
+                  event.payload.threadId,
+                  review.compactionTurnId,
+                );
+          if (terminal) {
+            // Reconciliation acquires the delivery lock itself. Never await it
+            // inside the source's permit, including after an ambiguous start.
+            yield* processClaudeCompactionTerminal(terminal).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("Could not settle Claude compaction", {
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+              Effect.forkScoped,
+            );
+          }
+        }
+      }
     });
 
     const processOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
@@ -5665,7 +5969,14 @@ const make = Effect.gen(function* () {
             if (reconciledEvent.type === "thread.claude-cache-response-requested") {
               const review = (yield* resolveThread(reconciledEvent.payload.threadId))
                 ?.claudeCacheReview;
-              if (review?.reviewId === reconciledEvent.payload.review.reviewId) {
+              if (
+                review?.reviewId === reconciledEvent.payload.review.reviewId &&
+                !(
+                  input.outcome === "accepted" &&
+                  reconciledEvent.payload.decision === "compact" &&
+                  review.compactionTurnId
+                )
+              ) {
                 yield* setClaudeCacheReview(
                   reconciledEvent.payload.threadId,
                   input.outcome === "safe_retry"
@@ -5893,6 +6204,38 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const recoverClaudeCompactions = Effect.gen(function* () {
+    const snapshot = yield* orchestrationEngine.getReadModel();
+    for (const thread of snapshot.threads) {
+      const review = thread.claudeCacheReview;
+      if (
+        !review?.compactionTurnId ||
+        (review.status !== "compacting" && review.status !== "uncertain")
+      )
+        continue;
+      const terminal = yield* readClaudeCompactionTerminal(thread.id, review.compactionTurnId);
+      if (terminal) {
+        yield* processClaudeCompactionTerminal(terminal);
+        continue;
+      }
+      // Replay may just have started a previously undispatched request. Its
+      // current runtime still owns the operation; wait for that terminal event.
+      if ((yield* resolveLiveProviderTurnId(thread.id)) === review.compactionTurnId) continue;
+      if (review.status === "compacting") {
+        yield* setClaudeCacheReview(
+          thread.id,
+          {
+            ...review,
+            status: "failed",
+            error:
+              "Compaction completion was not recorded. The saved message remains held; compaction was not retried.",
+          },
+          review.reviewId,
+        );
+      }
+    }
+  });
+
   const recoverActiveThreadGoals = Effect.gen(function* () {
     const snapshot = yield* orchestrationEngine.getReadModel();
     yield* Effect.forEach(
@@ -5922,6 +6265,7 @@ const make = Effect.gen(function* () {
     Effect.andThen(
       Effect.all([
         startProviderIntentSource.pipe(
+          Effect.andThen(recoverClaudeCompactions),
           Effect.andThen(recoverQueuedTurnPromotions),
           Effect.andThen(recoverActiveThreadGoals),
         ),
@@ -6086,6 +6430,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
     Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+    Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
   );
 
 export const ProviderCommandReactorLive = makeProviderCommandReactorLive();
