@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Fresh-orb setup for Synara.
+#
+# Installs the toolchain pinned in .mise.toml, the workspace dependencies, and the
+# browser/desktop test runtimes, so a new orb starts ready to build, test, and run.
+# Idempotent: on a warm orb every step is a check and the run takes seconds.
+# Long-lived dev servers belong in .amp/services.yaml, never here.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+started_at=$SECONDS
+step() { printf '\n==> [%02ds] %s\n' "$((SECONDS - started_at))" "$*"; }
+
+# Run a large download with retries. A failed setup publishes no snapshot, which
+# costs every later orb the whole install, so these steps warn instead of failing.
+# Everything the repository needs to build and test stays fatal below, and the run
+# reports anything still missing instead of claiming a complete environment.
+missing_runtimes=""
+retry_download() {
+  local label="$1" attempt
+  shift
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    printf '    %s failed (attempt %d/3)\n' "$label" "$attempt" >&2
+    sleep $((attempt * 5))
+  done
+  missing_runtimes="${missing_runtimes:+$missing_runtimes, }$label"
+  printf '!!! %s is unavailable; install it manually if this orb needs it\n' "$label" >&2
+}
+
+# Toolchain: node and bun pinned in .mise.toml, the same versions CI installs.
+step "Toolchain (mise: node + bun from .mise.toml)"
+if ! command -v mise >/dev/null 2>&1; then
+  curl -fsSL https://mise.run | sh
+  # The installer writes to ~/.local/bin and cannot update this shell's PATH.
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+mise install --yes
+# Use the pins for the rest of this script. Later shells get them from the hook below.
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+
+# Shims resolve .mise.toml inside this repository and fall back to the base image's
+# node/bun everywhere else, so the hook is safe to apply to every orb shell.
+if [ ! -e "$HOME/.bash_profile" ]; then
+  # Bash reads only the first existing of .bash_profile, .bash_login, and .profile.
+  # Creating .bash_profile would otherwise skip whichever login file already exists.
+  if [ -f "$HOME/.bash_login" ]; then
+    printf '%s\n' '. "$HOME/.bash_login"' >"$HOME/.bash_profile"
+  elif [ -f "$HOME/.profile" ]; then
+    printf '%s\n' '. "$HOME/.profile"' >"$HOME/.bash_profile"
+  fi
+fi
+if ! grep -Fqx "# Synara: pinned toolchain (mise)" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >>"$HOME/.bash_profile" <<'EOF'
+
+# Synara: pinned toolchain (mise)
+# Shims resolve the .mise.toml pins for anything running in this repository and
+# fall back to the base image's node/bun elsewhere.
+if [ -d "$HOME/.local/share/mise/shims" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/share/mise/shims:"*) ;;
+    *) PATH="$HOME/.local/share/mise/shims:$PATH" ;;
+  esac
+  export PATH
+fi
+EOF
+fi
+
+step "Dependencies (bun install --frozen-lockfile)"
+# Electron's binary is installed explicitly below, matching CI: skipping it here
+# keeps the dependency install from pulling it through the package postinstall.
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 bun install --frozen-lockfile
+
+step "Browser test runtime (Playwright chromium)"
+retry_download "Playwright chromium" bash -c \
+  "cd '$repo_root/apps/web' && ./node_modules/.bin/playwright install --with-deps chromium"
+
+step "Desktop runtime (Electron)"
+retry_download "Electron runtime" node apps/desktop/node_modules/electron/install.js
+
+step "Verify"
+node scripts/node-pty-smoke.mjs
+printf 'node %s | bun %s | setup finished in %ss\n' "$(node --version)" "$(bun --version)" \
+  "$((SECONDS - started_at))"
+if [ -n "$missing_runtimes" ]; then
+  printf '!!! setup finished without: %s\n' "$missing_runtimes" >&2
+fi
