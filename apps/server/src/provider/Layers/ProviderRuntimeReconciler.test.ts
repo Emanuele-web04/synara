@@ -173,6 +173,91 @@ describe("ProviderRuntimeReconcilerLive", () => {
     }
   });
 
+  it("settles a start stranded without a turn on the stalled-start clock", async () => {
+    const commands: OrchestrationCommand[] = [];
+    const snapshot = staleStartingShellSnapshot();
+    const stalledAt = new Date(Date.now() - 60_000).toISOString();
+    const thread = {
+      ...snapshot.threads[0]!,
+      updatedAt: stalledAt,
+      latestTurn: {
+        ...snapshot.threads[0]!.latestTurn!,
+        completedAt: stalledAt,
+      },
+      session: {
+        ...snapshot.threads[0]!.session!,
+        updatedAt: stalledAt,
+      },
+    };
+    const engine = {
+      dispatch: (command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+    } as unknown as OrchestrationEngineShape;
+    const reactor = {
+      start: Effect.void,
+      reconcileSettledOpenTurns: Effect.void,
+    } satisfies OrchestrationReactorShape;
+    const snapshotQuery = {
+      listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+      getThreadShellById: () => Effect.succeed(Option.some(thread)),
+      getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const directory = {
+      listBindings: () =>
+        Effect.succeed([
+          {
+            threadId: THREAD_ID,
+            provider: "codex" as const,
+            status: "starting" as const,
+            runtimePayload: { activeTurnId: null },
+          },
+        ]),
+    } as unknown as ProviderSessionDirectoryShape;
+    const provider = {
+      listSessions: () => Effect.succeed([]),
+      getRuntimeEventPumpHealth: () => Effect.succeed([]),
+    } as unknown as ProviderServiceShape;
+    const runtimeEvents = {
+      hasPendingEventsForThreads: () => Effect.succeed(false),
+    } as unknown as ProviderRuntimeEventRepositoryShape;
+
+    // The start is only a minute old: far short of the 45-minute turn-age
+    // budget, so this can only settle through the injected stalled-start clock.
+    const layer = makeProviderRuntimeReconcilerLive({
+      staleAfterMs: 1,
+      maxStalledStartAgeMs: 30_000,
+    }).pipe(
+      Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+      Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
+      Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+      Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+      Layer.provide(Layer.succeed(ProviderService, provider)),
+      Layer.provide(Layer.succeed(ProviderRuntimeEventRepository, runtimeEvents)),
+    );
+
+    await Effect.gen(function* () {
+      const reconciler = yield* ProviderRuntimeReconciler;
+      yield* reconciler.reconcileNow;
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.session.set",
+      "thread.activity.append",
+    ]);
+    const sessionCommand = commands[0];
+    expect(sessionCommand?.type).toBe("thread.session.set");
+    if (sessionCommand?.type === "thread.session.set") {
+      expect(sessionCommand.session).toMatchObject({
+        status: "interrupted",
+        activeTurnId: null,
+      });
+    }
+  });
+
   it("keeps one activity identity while a stale-turn repair is retried and refined", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();

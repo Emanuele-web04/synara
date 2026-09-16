@@ -26,6 +26,7 @@ import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
   planProviderRuntimeReconciliation,
+  RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS,
   type ProviderRuntimeReconciliationPlan,
 } from "../providerRuntimeReconciliation.ts";
 import {
@@ -44,6 +45,7 @@ const DEFAULT_RECONCILIATION_CANDIDATE_LIMIT = 256;
 export interface ProviderRuntimeReconcilerLiveOptions {
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
+  readonly maxStalledStartAgeMs?: number;
   readonly candidateLimit?: number;
 }
 
@@ -77,6 +79,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
     const staleAfterMs = Math.max(
       1,
       Math.floor(options?.staleAfterMs ?? DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS),
+    );
+    const maxStalledStartAgeMs = Math.max(
+      staleAfterMs,
+      Math.floor(options?.maxStalledStartAgeMs ?? RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS),
     );
     const candidateLimit = Math.max(
       1,
@@ -248,6 +254,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         runtimeJournalLagging,
         nowMs,
         staleAfterMs,
+        maxStalledStartAgeMs,
       });
       if (plans.length === 0) return;
 

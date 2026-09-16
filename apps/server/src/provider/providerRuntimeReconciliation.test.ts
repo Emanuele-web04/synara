@@ -792,4 +792,105 @@ describe("planProviderRuntimeReconciliation", () => {
 
     expect(plans).toEqual([]);
   });
+
+  it("settles a start stranded without a turn on the shorter stalled-start bound", () => {
+    // Ten minutes of `starting` with no turn is not a live turn: the turn start
+    // is already bounded elsewhere, so the projection must recover before the
+    // full max turn age.
+    const stalledAt = "2026-07-23T19:50:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: stalledAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: stalledAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: stalledAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        threadId: THREAD_ID,
+        projectedTurnId: null,
+        runtimeTurnId: null,
+      }),
+    ]);
+    expect(plans[0]?.reason).toContain("stranded with no turn");
+  });
+
+  it("does not settle a fresh start that has no provider turn yet", () => {
+    const freshAt = "2026-07-23T20:00:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: freshAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "interrupted",
+            completedAt: freshAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: freshAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("honors a lagging runtime journal for a stalled start until the max turn age", () => {
+    // Rows sitting in the journal may hold the turn.started for this start, so
+    // the stalled-start clock must not preempt ingestion catching up.
+    const stalledAt = "2026-07-23T19:50:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: stalledAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: stalledAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: stalledAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      runtimeJournalLagging: true,
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
 });
