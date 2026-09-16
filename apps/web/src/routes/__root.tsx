@@ -41,6 +41,7 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
+import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
@@ -328,6 +329,7 @@ function RootRouteView() {
             <AppSnapWelcomeDialog />
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
+          <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -819,6 +821,26 @@ function GlobalOnboardingDialog() {
         onOpenChange={onboarding.onOpenChange}
         onComplete={onboarding.complete}
       />
+    </Suspense>
+  );
+}
+
+const ProjectImportDialog = lazy(() =>
+  import("../projectImport/ProjectImportDialog").then((module) => ({
+    default: module.ProjectImportDialog,
+  })),
+);
+
+function GlobalProjectImportDialog() {
+  const isOpen = useProjectImportDialogStore((store) => store.isOpen);
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+  if (!isOpen && !hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <ProjectImportDialog />
     </Suspense>
   );
 }

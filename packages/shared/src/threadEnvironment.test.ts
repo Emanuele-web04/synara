@@ -74,6 +74,47 @@ describe("resolveThreadWorkspaceCwd", () => {
       }),
     ).toBe("/repo/.worktrees/feature-a");
   });
+
+  it("preserves an imported monorepo cwd inside its materialized worktree", () => {
+    expect(
+      resolveThreadWorkspaceCwd({
+        projectCwd: "/repo/apps/api",
+        envMode: "worktree",
+        worktreePath: "/worktrees/feature-a",
+        workingDirectory: "/worktrees/feature-a/apps/api/src",
+      }),
+    ).toBe("/worktrees/feature-a/apps/api/src");
+    expect(
+      resolveThreadWorkspaceCwd({
+        envMode: "worktree",
+        worktreePath: "C:\\worktrees\\feature-a",
+        workingDirectory: "C:\\worktrees\\feature-a\\apps\\api",
+      }),
+    ).toBe("C:\\worktrees\\feature-a\\apps\\api");
+  });
+
+  it.each(["/repo/apps/api", "/worktrees/feature-ab/apps/api", "/worktrees/feature-a/../other"])(
+    "ignores an imported cwd outside the current worktree: %s",
+    (workingDirectory) => {
+      expect(
+        resolveThreadWorkspaceCwd({
+          envMode: "worktree",
+          worktreePath: "/worktrees/feature-a",
+          workingDirectory,
+        }),
+      ).toBe("/worktrees/feature-a");
+    },
+  );
+
+  it("does not use a saved cwd while its worktree is pending", () => {
+    expect(
+      resolveThreadWorkspaceCwd({
+        envMode: "worktree",
+        worktreePath: null,
+        workingDirectory: "/previous/worktree/apps/api",
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("resolveThreadBranchSourceCwd", () => {

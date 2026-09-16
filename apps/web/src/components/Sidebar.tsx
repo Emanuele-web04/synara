@@ -1,3 +1,5 @@
+import { ProjectImportAnnouncement } from "~/projectImport/ProjectImportAnnouncement";
+import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
 // Exports: Sidebar
@@ -5599,6 +5601,13 @@ export default function Sidebar() {
         run: handleStartAddProject,
       },
       {
+        id: "import-projects",
+        label: "Import projects…",
+        description: "Bring Codex and Claude Code projects and conversations into Synara.",
+        keywords: ["import", "projects", "codex", "claude", "conversations", "folders"],
+        run: () => useProjectImportDialogStore.getState().openDialog(),
+      },
+      {
         id: "import-thread",
         label: "Import thread from...",
         description: "Attach a local thread to an existing provider session.",
@@ -6030,6 +6039,7 @@ export default function Sidebar() {
                 ) : null}
               </div>
             </div>
+            <ProjectImportAnnouncement />
             {/* The keyed content remounts with a short enter animation while the picker
                 stays mounted so its thumb can glide between Projects and Studio. */}
             <div
