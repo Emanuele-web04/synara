@@ -7,15 +7,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "~/components/ui/alert-dialog";
+import { showConfirmDialogFallback } from "~/confirmDialogFallback";
+import { readNativeApi } from "~/nativeApi";
 import { consumeCodexResetCredit, serverQueryKeys } from "~/lib/serverReactQuery";
 import { toastManager } from "~/components/ui/toast";
 
@@ -45,7 +38,7 @@ export function ProviderUsageResetCredits({
   surface?: "settings" | "popover";
 }) {
   const queryClient = useQueryClient();
-  const [confirmCredit, setConfirmCredit] = useState<ServerCodexResetCredit | null>(null);
+  const [confirmingCreditId, setConfirmingCreditId] = useState<string | null>(null);
   const consumeMutation = useMutation({
     mutationFn: (creditId: string) => consumeCodexResetCredit({ creditId }),
     onSuccess: (result) => {
@@ -70,6 +63,24 @@ export function ProviderUsageResetCredits({
     },
   });
   const now = Date.now();
+  const confirmAndConsume = async (credit: ServerCodexResetCredit, label: string) => {
+    if (consumeMutation.isPending || confirmingCreditId !== null) return;
+    setConfirmingCreditId(credit.id);
+    try {
+      const api = readNativeApi();
+      const confirmationMessage = [
+        `Use Codex reset "${label}"?`,
+        "This immediately resets Codex limits and cannot be undone.",
+      ].join("\n");
+      const confirmed = api
+        ? await api.dialogs.confirm(confirmationMessage)
+        : await showConfirmDialogFallback(confirmationMessage);
+      if (confirmed) consumeMutation.mutate(credit.id);
+    } finally {
+      setConfirmingCreditId(null);
+    }
+  };
+  const busy = consumeMutation.isPending || confirmingCreditId !== null;
   const classes = surface === "popover"
     ? {
         section: "space-y-0.5 border-t border-[color:var(--color-border)] pt-2",
@@ -103,7 +114,8 @@ export function ProviderUsageResetCredits({
       {credits.length > 0 ? (
         <div className={classes.list}>
           {credits.map((credit, index) => {
-            const isPending = consumeMutation.isPending;
+            const isPending = consumeMutation.isPending && consumeMutation.variables === credit.id;
+            const isConfirming = confirmingCreditId === credit.id;
             return (
               <div key={credit.id}>
                 <div className={classes.row}>
@@ -112,10 +124,10 @@ export function ProviderUsageResetCredits({
                     size="xs"
                     variant="outline"
                     className="shrink-0"
-                    disabled={consumeMutation.isPending}
-                    onClick={() => setConfirmCredit(credit)}
+                    disabled={busy}
+                    onClick={() => void confirmAndConsume(credit, `Reset ${index + 1}`)}
                   >
-                    {isPending ? "Applying…" : "Use reset"}
+                    {isPending || isConfirming ? "Applying…" : "Use reset"}
                   </Button>
                 </div>
                 <div
@@ -130,37 +142,6 @@ export function ProviderUsageResetCredits({
         </div>
       ) : null}
 
-      {/*
-        Spending a banked reset takes effect immediately and cannot be undone,
-        so it asks first like every other destructive action here.
-      */}
-      <AlertDialog open={confirmCredit !== null} onOpenChange={(open) => !open && setConfirmCredit(null)}>
-        <AlertDialogPopup>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Use this banked reset?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmCredit?.title ?? "This reset"} will be spent now and your Codex rate limits
-              reset immediately. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
-            </AlertDialogClose>
-            <Button
-              size="sm"
-              disabled={consumeMutation.isPending}
-              onClick={() => {
-                const credit = confirmCredit;
-                setConfirmCredit(null);
-                if (credit) consumeMutation.mutate(credit.id);
-              }}
-            >
-              {consumeMutation.isPending ? "Applying…" : "Use reset"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
     </div>
   );
 }
