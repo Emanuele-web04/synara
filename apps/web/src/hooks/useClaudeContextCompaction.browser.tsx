@@ -354,3 +354,73 @@ it("allows a later compaction after observing the accepted message", async () =>
     await hook.unmount();
   }
 });
+
+it("forgets acknowledged compaction even when its message is outside the loaded history", async () => {
+  const hook = await renderHook(() =>
+    useClaudeContextCompaction({ threadId, disabledReason: null, ...callbacks() }),
+  );
+  try {
+    await hook.result.current.compact();
+    expect(useClaudeCompactionRequests.getState().requests[threadId]).toBeUndefined();
+  } finally {
+    await hook.unmount();
+  }
+});
+
+it("does not erase a newer request when an older acknowledgement arrives late", async () => {
+  let acceptFirst!: () => void;
+  let acceptSecond!: () => void;
+  mocks.dispatchCommand
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          acceptFirst = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          acceptSecond = resolve;
+        }),
+    );
+  const first = await renderHook(() =>
+    useClaudeContextCompaction({ threadId, disabledReason: null, ...callbacks() }),
+  );
+  const firstSend = first.result.current.compact();
+  const command = mocks.dispatchCommand.mock.calls[0]![0];
+  useStore.setState(
+    makeState(
+      makeThread({
+        ...thread,
+        messages: [
+          {
+            id: command.message.messageId,
+            role: "user",
+            text: "/compact",
+            createdAt: command.createdAt,
+            streaming: false,
+          },
+        ],
+      }),
+    ),
+  );
+  const second = await renderHook(() =>
+    useClaudeContextCompaction({ threadId, disabledReason: null, ...callbacks() }),
+  );
+  try {
+    const secondSend = second.result.current.compact();
+    const secondCommand = mocks.dispatchCommand.mock.calls[1]![0];
+    acceptFirst();
+    await firstSend;
+    expect(useClaudeCompactionRequests.getState().requests[threadId]?.commandId).toBe(
+      secondCommand.commandId,
+    );
+    acceptSecond();
+    await secondSend;
+  } finally {
+    acceptFirst();
+    acceptSecond?.();
+    await first.unmount();
+    await second.unmount();
+  }
+});

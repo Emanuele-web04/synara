@@ -79,11 +79,12 @@ after compaction remains quarantined and requires separate reconciliation.
 
 Stopping or archiving remains available while delivery is uncertain. Revoking the send review does
 not discard the persisted compaction execution evidence: matching late terminal events can settle
-the control delivery without restoring consent or sending the cancelled message. Startup uses the
+the control delivery without restoring consent, sending the cancelled message, or replaying later
+sends that were blocked during quarantine. Startup uses the
 same evidence when the visible review has already been cleared.
 
 The standalone compact action retains its exact command in browser session storage until acceptance
-is observed in the conversation. Retrying after a lost acknowledgement reuses the command receipt,
+is confirmed by the RPC response or observed in the conversation. Retrying after a lost acknowledgement reuses the command receipt,
 including after route changes or a page reload. A proven server rejection releases that identity;
 a timeout or transport error does not create a new compaction.
 

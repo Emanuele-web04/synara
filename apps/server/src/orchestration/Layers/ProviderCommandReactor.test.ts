@@ -1238,7 +1238,7 @@ describe("ProviderCommandReactor", () => {
     ] as const)(
       "$cancellation preserves recovery of an uncertain compaction ($terminal)",
       async ({ cancellation, terminal }) => {
-        const { harness, startClaudeCompaction } = await createCompactionHarness();
+        const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness();
         const review = await sendHeldMessage(harness);
         startClaudeCompaction.mockImplementation(() =>
           Effect.fail(
@@ -1265,6 +1265,21 @@ describe("ProviderCommandReactor", () => {
           }),
         );
         await harness.drain();
+        if (cancellation === "stop") {
+          setObservation({
+            ...review.assessment,
+            state: "likely-warm",
+            contextTokens: 16_000,
+            lastResponseAt: new Date().toISOString(),
+          });
+          await dispatchHarnessUserTurn(harness, {
+            messageId: "blocked-after-stop",
+            text: "Do not silently replay this blocked send",
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+        }
         await emitCompactionTerminal(
           harness,
           asTurnId("unrelated-late-terminal"),
@@ -1286,6 +1301,17 @@ describe("ProviderCommandReactor", () => {
           state: terminal,
           contextCompacted: true,
         });
+        // The terminal removes the blocker before replay finishes; acquire the
+        // reconciliation lock again so the assertion observes the whole operation.
+        await Effect.runPromise(
+          harness.reactor.reconcileDelivery({
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            eventSequence: uncertain!.compactionResponseEventSequence!,
+            expectedState: "uncertain",
+            outcome: "accepted",
+            reconciledBy: "test-settlement-barrier",
+          }),
+        );
         const blocker = await Effect.runPromise(
           harness.deliveryRepository.firstBlockingDeliveryForThread({
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -2273,6 +2299,11 @@ describe("ProviderCommandReactor", () => {
               createdAt: now,
             }),
           );
+          await dispatchHarnessUserTurn(harness, {
+            messageId: "blocked-before-startup-recovery",
+            text: "Do not replay this blocked send at startup",
+            createdAt: now,
+          });
         }
         await harness.startReactor();
         await harness.drain();

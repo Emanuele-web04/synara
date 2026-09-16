@@ -6138,10 +6138,19 @@ const make = Effect.gen(function* () {
               yield* resumeRetryableDelivery(input);
             } else {
               quarantinedThreads.delete(input.threadId);
-              yield* replayQuarantinedThreadSideEffects({
-                threadId: input.threadId,
-                afterSequence: input.eventSequence,
-              });
+              const currentReview = (yield* resolveThread(input.threadId))?.claudeCacheReview;
+              const revokedCompaction =
+                reconciledEvent.type === "thread.claude-cache-response-requested" &&
+                reconciledEvent.payload.decision === "compact" &&
+                currentReview?.reviewId !== reconciledEvent.payload.review.reviewId;
+              // Settling a cancelled control is not permission to retry other
+              // sends that were rejected while this thread was quarantined.
+              if (!revokedCompaction) {
+                yield* replayQuarantinedThreadSideEffects({
+                  threadId: input.threadId,
+                  afterSequence: input.eventSequence,
+                });
+              }
             }
 
             const finalDelivery = yield* deliveryRepository.getDelivery({

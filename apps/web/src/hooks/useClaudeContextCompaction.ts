@@ -45,15 +45,26 @@ export function useClaudeContextCompaction({
         current?.claudeCacheReview?.messageId === request.message.messageId ||
         current?.messages.some((message) => message.id === request.message.messageId)
       ) {
-        pending.forget(threadId);
+        pending.forget(threadId, request.commandId);
       }
     };
     forgetObservedRequest();
-    return useStore.subscribe(forgetObservedRequest);
+    const unsubscribe = useStore.subscribe(forgetObservedRequest);
+    const unsubscribeHydration =
+      useClaudeCompactionRequests.persist?.onFinishHydration(forgetObservedRequest);
+    return () => {
+      unsubscribe();
+      unsubscribeHydration?.();
+    };
   }, [threadId]);
 
   const compact = useCallback(async (): Promise<boolean> => {
-    if (inFlightThreadIdsRef.current.has(threadId) || disabledReason !== null) return false;
+    if (
+      inFlightThreadIdsRef.current.has(threadId) ||
+      disabledReason !== null ||
+      useClaudeCompactionRequests.persist?.hasHydrated() === false
+    )
+      return false;
     const api = readNativeApi();
     const thread = getThreadFromState(useStore.getState(), threadId);
     if (
@@ -108,6 +119,7 @@ export function useClaudeContextCompaction({
     onBegin({ expectedUserMessageId: messageId });
     try {
       await api.orchestration.dispatchCommand(command);
+      useClaudeCompactionRequests.getState().forget(threadId, command.commandId);
       if (activeThreadIdRef.current === threadId) onAccepted(threadId);
       return true;
     } catch (error) {
@@ -117,7 +129,7 @@ export function useClaudeContextCompaction({
         current?.claudeCacheReview?.messageId === messageId ||
         current?.messages.some((message) => message.id === messageId)
       ) {
-        useClaudeCompactionRequests.getState().forget(threadId);
+        useClaudeCompactionRequests.getState().forget(threadId, command.commandId);
         if (activeThreadIdRef.current === threadId) onAccepted(threadId);
         return true;
       }
@@ -126,7 +138,7 @@ export function useClaudeContextCompaction({
         error !== null &&
         "code" in error &&
         error.code === "ORCHESTRATION_COMMAND_REJECTED";
-      if (rejected) useClaudeCompactionRequests.getState().forget(threadId);
+      if (rejected) useClaudeCompactionRequests.getState().forget(threadId, command.commandId);
       if (activeThreadIdRef.current === threadId) onFailure();
       toastManager.add({
         type: "error",
