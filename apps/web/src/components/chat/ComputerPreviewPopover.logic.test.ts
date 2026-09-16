@@ -145,15 +145,42 @@ describe("computerPreviewCardOpen", () => {
 });
 
 describe("computerPreviewStatusLabel", () => {
-  it("names the current action, then Live, then the last action, then nothing", () => {
-    expect(computerPreviewStatusLabel({ agentActive: true, lastActionLabel: "Click" })).toBe(
-      "Click",
-    );
-    expect(computerPreviewStatusLabel({ agentActive: true, lastActionLabel: null })).toBe("Live");
-    expect(computerPreviewStatusLabel({ agentActive: false, lastActionLabel: "Click" })).toBe(
-      "Click",
-    );
-    expect(computerPreviewStatusLabel({ agentActive: false, lastActionLabel: null })).toBeNull();
+  it("names live activity, then the last action, then Live, then nothing", () => {
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: true,
+        currentActivity: "Reading clipboard",
+        lastActionLabel: "Click",
+      }),
+    ).toBe("Reading clipboard");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: true,
+        currentActivity: null,
+        lastActionLabel: "Click",
+      }),
+    ).toBe("Click");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: true,
+        currentActivity: null,
+        lastActionLabel: null,
+      }),
+    ).toBe("Live");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: false,
+        currentActivity: "Thinking",
+        lastActionLabel: "Click",
+      }),
+    ).toBe("Click");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: false,
+        currentActivity: null,
+        lastActionLabel: null,
+      }),
+    ).toBeNull();
   });
 });
 

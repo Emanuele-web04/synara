@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computerActionLabel,
+  computerActionStatusLabel,
   computerBackendIsVisibleDesktop,
   computerCanvasLabel,
   computerContainRect,
@@ -620,8 +621,15 @@ describe("computerDeliveryWarning", () => {
 });
 
 describe("computerActionLabel", () => {
-  it("speaks the tool-shaped action name", () => {
-    expect(computerActionLabel({ action: "computer_double_click", ok: true })).toBe("Double click");
+  it("uses the same curated labels as approvals and transcripts", () => {
+    expect(computerActionLabel({ action: "computer_double_click", ok: true })).toBe("Double-click");
+    expect(computerActionLabel({ action: "computer_set_value", ok: true })).toBe("Set a field");
+    expect(computerActionLabel({ action: "computer_perform_action", ok: true })).toBe(
+      "Activate a control",
+    );
+    expect(computerActionLabel({ action: "computer_unknown_action", ok: true })).toBe(
+      "Unknown action",
+    );
     expect(computerActionLabel(undefined)).toBeNull();
   });
 
@@ -630,6 +638,32 @@ describe("computerActionLabel", () => {
       computerActionLabel({ action: "computer_click", ok: false, message: "window moved" }),
     ).toBe("Click failed: window moved");
     expect(computerActionLabel({ action: "computer_click", ok: false })).toBe("Click failed");
+  });
+});
+
+describe("computerActionStatusLabel", () => {
+  it("describes delivery without implying a foreground action kept focus", () => {
+    expect(
+      computerActionStatusLabel(
+        {
+          type: "computer.action",
+          action: "computer_type_text",
+          ok: true,
+          windowId: "window-1",
+          delivery: { path: "cua-foreground", verified: "confirmed" },
+        },
+        [
+          {
+            id: "window-1",
+            appName: "TextEdit",
+            title: "Untitled",
+            focused: false,
+            minimized: false,
+            visible: true,
+          },
+        ],
+      ),
+    ).toBe("Type · TextEdit · Temporary foreground");
   });
 });
 

@@ -40,20 +40,16 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
   });
 
-  it("hides the Computer pane auto-open row on a backend that never opens one", () => {
-    // `ComputerManager.surfacePaneForAgent` returns early on a visible desktop,
-    // so the setting controls nothing there and the panel hides it. A search
-    // result for a row the panel does not draw scrolls to an anchor that is not
-    // there, and tells the user Synara has a setting it does not.
+  it("keeps the Computer auto-open row searchable for every desktop preview", () => {
     const offered = rankSettingsSearchEntries("open automatically", 12, {
       computerBackendIsVisibleDesktop: false,
     });
     expect(offered.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
 
-    const hidden = rankSettingsSearchEntries("open automatically", 12, {
+    const visibleDesktop = rankSettingsSearchEntries("open automatically", 12, {
       computerBackendIsVisibleDesktop: true,
     });
-    expect(hidden.some((entry) => entry.id === "computer:open-automatically")).toBe(false);
+    expect(visibleDesktop.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
   });
 
   it("indexes the Computer control switch with its guardrails", () => {

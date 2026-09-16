@@ -113,14 +113,7 @@ describe("cursor activity", () => {
   });
 
   it("uses concise labels for actual events, without showing private content", () => {
-    for (const tool of [
-      "computer_scroll",
-      "computer_type_text",
-      "computer_wait",
-      "computer_screenshot",
-    ]) {
-      expect(cursorToolActivity(tool).length).toBeLessThanOrEqual(20);
-    }
+    expect(cursorToolActivity("computer_scroll").length).toBeLessThanOrEqual(20);
     const event = (type: string, payload = {}) => ({ type, payload }) as ProviderRuntimeEvent;
     expect(cursorRuntimeActivity(event("user-input.requested"))).toBe("Waiting for you");
     expect(cursorRuntimeActivity(event("request.opened"))).toBe("Needs approval");
@@ -133,7 +126,35 @@ describe("cursor activity", () => {
   });
 
   it("labels the registered cursor tool and never echoes unknown tool names", () => {
-    expect(cursorToolActivity("computer_move_cursor")).toBe("Moving cursor");
+    const expected = {
+      computer_screenshot: "Capturing screen",
+      computer_get_state: "Reading screen",
+      computer_get_screen_size: "Measuring screen",
+      computer_list_windows: "Finding window",
+      computer_click: "Clicking",
+      computer_double_click: "Double-clicking",
+      computer_triple_click: "Triple-clicking",
+      computer_right_click: "Right-clicking",
+      computer_move_cursor: "Moving cursor",
+      computer_drag: "Dragging",
+      computer_scroll: "Scrolling",
+      computer_type_text: "Typing",
+      computer_press_key: "Pressing key",
+      computer_hotkey: "Pressing shortcut",
+      computer_set_value: "Setting field",
+      computer_perform_action: "Activating control",
+      computer_launch_app: "Opening app",
+      computer_activate_window: "Activating window",
+      computer_wait: "Waiting for screen",
+      computer_read_clipboard: "Reading clipboard",
+      computer_write_clipboard: "Writing clipboard",
+      computer_paste: "Pasting",
+      computer_run: "Running sequence",
+    } as const;
+    for (const [tool, label] of Object.entries(expected)) {
+      expect(cursorToolActivity(tool)).toBe(label);
+      expect(label.length).toBeLessThanOrEqual(20);
+    }
     expect(cursorToolActivity("computer_move")).toBe("Working");
     expect(cursorToolActivity("unknown tool containing private text")).toBe("Working");
   });

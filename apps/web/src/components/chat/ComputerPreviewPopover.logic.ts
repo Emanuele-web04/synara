@@ -134,9 +134,10 @@ export function computerPreviewCardOpen(phase: ComputerPreviewPhase | undefined)
  */
 export function computerPreviewStatusLabel(input: {
   readonly agentActive: boolean;
+  readonly currentActivity: string | null;
   readonly lastActionLabel: string | null;
 }): string | null {
-  if (input.agentActive) return input.lastActionLabel ?? "Live";
+  if (input.agentActive) return input.currentActivity ?? input.lastActionLabel ?? "Live";
   return input.lastActionLabel;
 }
 

@@ -2442,6 +2442,29 @@ describe("computer_activate_window foreground restore", () => {
 });
 
 describe("computer_run", () => {
+  it("reports the active step instead of one generic batch label", async () => {
+    const { manager, call } = await setup();
+    const activity = vi.spyOn(manager.cursorActivity, "during");
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "click", label: "Display", window_id: "fake-calculator" },
+          { type: "type_text", text: "468", window_id: "fake-calculator" },
+          { type: "write_clipboard", text: "copied value" },
+        ],
+      });
+      expect(result.isError).not.toBe(true);
+      expect(activity.mock.calls.map((call) => call[1])).toEqual([
+        "Running sequence",
+        "Clicking",
+        "Typing",
+        "Writing clipboard",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("runs steps in order through the same manager calls and closes with fresh state", async () => {
     const { backend, manager, call } = await setup();
     try {

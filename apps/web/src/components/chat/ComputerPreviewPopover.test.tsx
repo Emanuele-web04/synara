@@ -226,11 +226,12 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).not.toContain("Stop the agent controlling");
   });
 
-  it("shows no status text: presence is the live indicator", () => {
+  it("shows the current live activity instead of a stale action", () => {
     const markup = render({
       session: { ...session("live"), lastActionLabel: "Type text" },
-      state: threadState({ agentActive: true }),
+      state: threadState({ agentActive: true, activity: "Reading clipboard" }),
     });
+    expect(markup).toContain("Reading clipboard");
     expect(markup).not.toContain("Type text");
   });
 

@@ -1687,7 +1687,11 @@ export function makeAgentGatewayComputerTools(
         signal: desktopOperationSignal(),
       });
       try {
-        const value = await preparedStep.run();
+        const value = await manager.cursorActivity.during(
+          threadId,
+          cursorToolActivity(`computer_${preparedStep.type}`),
+          preparedStep.run,
+        );
         if (
           typeof value === "object" &&
           value !== null &&

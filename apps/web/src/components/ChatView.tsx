@@ -208,15 +208,8 @@ import {
   buildThreadBreadcrumbs,
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
-  editAndResendDispatchFields,
   hasFileUndoSettled,
-  planImplementationDispatchSettings,
-  queuedChatTurnDispatchFields,
-  queuedPlanFollowUpDispatchFields,
   resolveActiveThreadTitle,
-  resolveQueuedTurnDispatchSettings,
-  threadSettingsDispatchFields,
-  turnStartDispatchFields,
   type TurnDispatchSettings,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -3840,13 +3833,9 @@ export default function ChatView({
     isConnecting,
     sendPreflightInFlightRef,
     sendInFlightRef,
-    runtimeMode,
-    interactionMode,
-    envMode,
     turnDispatchSettings,
     computerControlChangeSequence,
     setComposerDraftComputerControlMode,
-    setComposerDraftComputerControl,
     showPlanFollowUpPrompt,
     activeProposedPlan,
     hasQueueableLiveTurn,
@@ -3879,7 +3868,6 @@ export default function ChatView({
     createWorktreeMutation,
     isLocalDraftThread,
     threadNotes,
-    assistantDeliveryMode,
     setSettledThreadBranchWarningDismissedThreadId,
     setQueuedSteerGate,
     planSidebarDismissedForTurnRef,
@@ -3947,8 +3935,6 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
     pendingAutomationConversationRef,
     setPendingAutomationConversation,
     pendingAutomationConversation,
@@ -3984,19 +3970,15 @@ export default function ChatView({
     sendInFlightRef,
     setThreadError,
     setTailAnchor,
-    runtimeMode,
     turnDispatchSettings,
     computerControlChangeSequence,
     setComposerDraftComputerControlMode,
-    setComposerDraftComputerControl,
     activeProposedPlan,
-    assistantDeliveryMode,
     setQueuedSteerGate,
     planSidebarDismissedForTurnRef,
     setPlanSidebarOpen,
     isRevertingCheckpoint,
     setIsRevertingCheckpoint,
-    interactionMode,
     isSendBusy,
     beginLocalDispatch,
     armLocalDispatchAckFallback,
@@ -4004,8 +3986,6 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
@@ -4014,7 +3994,6 @@ export default function ChatView({
     rememberCustomBinaryPathForDispatch,
     workflowRunState,
     lateComposerSendHandlersRef,
-    envMode,
     activeThreadId,
     markWorkflowRunDismissed,
     activeProject,
@@ -4625,6 +4604,48 @@ export default function ChatView({
     if (!activeRateLimitBannerDismissalKey) return;
     setDismissedRateLimitBannerKey(activeRateLimitBannerDismissalKey);
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
+  const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
+  const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
+  const [mainContentWidth, setMainContentWidth] = useState(1600);
+  useEffect(() => {
+    const element = mainContentRef.current;
+    if (!element) return;
+    const update = () => {
+      const width = element.clientWidth;
+      setMainContentWidth((previous) => (previous === width ? previous : width));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
+  const applyComputerControlEffortHint = useCallback(() => {
+    setComposerDraftProviderModelOptions(
+      threadId,
+      selectedProvider,
+      buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
+        [composerEffortOptionId]: COMPUTER_CONTROL_HINT_EFFORT,
+      }),
+      { model: selectedModelForPickerWithCustomFallback, persistSticky: true },
+    );
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [
+    composerEffortOptionId,
+    scheduleComposerFocus,
+    selectedModelForPickerWithCustomFallback,
+    selectedProvider,
+    selectedProviderModelOptions,
+    setComposerDraftProviderModelOptions,
+    threadId,
+    updateSettings,
+  ]);
+  const dismissComputerControlEffortHint = useCallback(() => {
+    updateSettings({ dismissedComputerControlEffortHint: true });
+    scheduleComposerFocus();
+  }, [scheduleComposerFocus, updateSettings]);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -4962,22 +4983,6 @@ export default function ChatView({
   // the chat frees its gutter, so it never covers the transcript. Space is
   // reserved only for a card that actually has content (live phase + a landed
   // frame), at its fitted width — never for an armed or waiting session.
-  const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
-  const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
-  const mainContentRef = useRef<HTMLDivElement | null>(null);
-  const [mainContentWidth, setMainContentWidth] = useState(1600);
-  useEffect(() => {
-    const element = mainContentRef.current;
-    if (!element) return;
-    const update = () => {
-      const width = element.clientWidth;
-      setMainContentWidth((previous) => (previous === width ? previous : width));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
   const environmentInsetPx = environmentAppliesContentInset
     ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
     : 0;
@@ -5020,35 +5025,6 @@ export default function ChatView({
     provider: selectedProvider,
     traits: composerTraitSelection,
   });
-  // Applies the computer-control hint through the picker"s own commit path, so the
-  // trigger label and the Effort radio group reflect it immediately. Applying also
-  // records the dismissal: the user has answered the question once, everywhere.
-  const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
-  const applyComputerControlEffortHint = useCallback(() => {
-    setComposerDraftProviderModelOptions(
-      threadId,
-      selectedProvider,
-      buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
-        [composerEffortOptionId]: COMPUTER_CONTROL_HINT_EFFORT,
-      }),
-      { model: selectedModelForPickerWithCustomFallback, persistSticky: true },
-    );
-    updateSettings({ dismissedComputerControlEffortHint: true });
-    scheduleComposerFocus();
-  }, [
-    composerEffortOptionId,
-    scheduleComposerFocus,
-    selectedModelForPickerWithCustomFallback,
-    selectedProvider,
-    selectedProviderModelOptions,
-    setComposerDraftProviderModelOptions,
-    threadId,
-    updateSettings,
-  ]);
-  const dismissComputerControlEffortHint = useCallback(() => {
-    updateSettings({ dismissedComputerControlEffortHint: true });
-    scheduleComposerFocus();
-  }, [scheduleComposerFocus, updateSettings]);
   const startReplacementSidechat = () => {
     const sourceThreadId = activeThread?.sidechatSourceThreadId;
     if (!sourceThreadId) return;

@@ -20,6 +20,7 @@ import {
 } from "@synara/contracts";
 import { isComputerNamedKey } from "@synara/shared/computerKeyNames";
 import { listComputerPermissions } from "@synara/shared/computerGrants";
+import { COMPUTER_TOOL_TITLES, computerToolName } from "../lib/computerToolPresentation";
 
 export interface ComputerFrameGateState {
   readonly lastSequence: number | null;
@@ -417,14 +418,17 @@ export function computerActionLabel(
   action: Pick<ComputerActionEvent, "action" | "ok" | "message"> | undefined,
 ): string | null {
   if (!action) return null;
-  const spoken = action.action
+  const tool = computerToolName(action.action);
+  const fallback = action.action
     .replace(/^computer[_.]/, "")
     .replace(/[_.]+/g, " ")
     .trim();
-  if (spoken.length === 0) return null;
-  const capitalized = `${spoken[0]!.toUpperCase()}${spoken.slice(1)}`;
-  if (action.ok) return capitalized;
-  return action.message ? `${capitalized} failed: ${action.message}` : `${capitalized} failed`;
+  if (!tool && fallback.length === 0) return null;
+  const label = tool
+    ? COMPUTER_TOOL_TITLES[tool]
+    : `${fallback[0]!.toUpperCase()}${fallback.slice(1)}`;
+  if (action.ok) return label;
+  return action.message ? `${label} failed: ${action.message}` : `${label} failed`;
 }
 
 export function shouldSubscribeToComputerStream(input: {
@@ -650,8 +654,8 @@ export function computerActionStatusLabel(
   const path = action?.delivery?.path;
   const delivery = path
     ? path.includes("foreground")
-      ? "Brought app forward"
-      : "Background input"
+      ? "Temporary foreground"
+      : "Background action"
     : undefined;
   return [label, app, delivery].filter(Boolean).join(" · ");
 }

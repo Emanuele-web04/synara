@@ -4,33 +4,51 @@ import type { ProviderRuntimeEvent } from "@synara/contracts";
 export function cursorToolActivity(tool: string): string {
   switch (tool) {
     case "computer_click":
-    case "computer_double_click":
-    case "computer_triple_click":
-    case "computer_right_click":
       return "Clicking";
+    case "computer_double_click":
+      return "Double-clicking";
+    case "computer_triple_click":
+      return "Triple-clicking";
+    case "computer_right_click":
+      return "Right-clicking";
     case "computer_scroll":
       return "Scrolling";
     case "computer_type_text":
-    case "computer_set_value":
       return "Typing";
+    case "computer_set_value":
+      return "Setting field";
     case "computer_paste":
       return "Pasting";
-    case "computer_hotkey":
     case "computer_press_key":
-      return "Using keyboard";
+      return "Pressing key";
+    case "computer_hotkey":
+      return "Pressing shortcut";
     case "computer_drag":
       return "Dragging";
     case "computer_move_cursor":
       return "Moving cursor";
     case "computer_wait":
-      return "Waiting for page";
-    case "computer_launch_app":
-      return "Opening app";
+      return "Waiting for screen";
     case "computer_screenshot":
+      return "Capturing screen";
     case "computer_get_state":
-      return "Reading page";
+      return "Reading screen";
+    case "computer_get_screen_size":
+      return "Measuring screen";
     case "computer_list_windows":
       return "Finding window";
+    case "computer_perform_action":
+      return "Activating control";
+    case "computer_launch_app":
+      return "Opening app";
+    case "computer_activate_window":
+      return "Activating window";
+    case "computer_read_clipboard":
+      return "Reading clipboard";
+    case "computer_write_clipboard":
+      return "Writing clipboard";
+    case "computer_run":
+      return "Running sequence";
     default:
       return "Working";
   }

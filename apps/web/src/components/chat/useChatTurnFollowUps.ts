@@ -1,12 +1,4 @@
-import {
-  MessageId,
-  ProviderInteractionMode,
-  RuntimeMode,
-  ThreadId,
-  type ModelSelection,
-  type ProviderKind,
-  type ProviderStartOptions,
-} from "@synara/contracts";
+import { MessageId, ThreadId, type ProviderKind } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -15,11 +7,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import {
-  useComposerDraftStore,
-  type DraftThreadEnvMode,
-  type QueuedComposerPlanFollowUp,
-} from "../../composerDraftStore";
+import { useComposerDraftStore, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
@@ -65,15 +53,12 @@ interface ChatTurnFollowUpsInput {
   sendInFlightRef: RefObject<boolean>;
   setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
   setTailAnchor: Dispatch<SetStateAction<{ threadId: ThreadId; messageId: MessageId } | null>>;
-  runtimeMode: RuntimeMode;
   activeProposedPlan: LatestProposedPlanState | null;
-  assistantDeliveryMode: "streaming" | "buffered";
   setQueuedSteerGate: Dispatch<SetStateAction<QueuedSteerGate | null>>;
   planSidebarDismissedForTurnRef: RefObject<string | null>;
   setPlanSidebarOpen: Dispatch<SetStateAction<boolean>>;
   isRevertingCheckpoint: boolean;
   setIsRevertingCheckpoint: Dispatch<SetStateAction<boolean>>;
-  interactionMode: ProviderInteractionMode;
   isSendBusy: ReturnType<typeof useChatLocalDispatch>["isSendBusy"];
   beginLocalDispatch: ReturnType<typeof useChatLocalDispatch>["beginLocalDispatch"];
   armLocalDispatchAckFallback: ReturnType<
@@ -83,16 +68,11 @@ interface ChatTurnFollowUpsInput {
   selectedProvider: ProviderKind;
   selectedModel: string;
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
-  selectedModelSelection: ModelSelection;
-  providerOptionsForDispatch: ProviderStartOptions | undefined;
   turnDispatchSettings: TurnDispatchSettings;
   computerControlChangeSequence: RefObject<number>;
   setComposerDraftComputerControlMode: ReturnType<
     typeof useChatComposerDraft
   >["setComposerDraftComputerControlMode"];
-  setComposerDraftComputerControl: ReturnType<
-    typeof useChatComposerDraft
-  >["setComposerDraftComputerControl"];
   setOptimisticUserMessages: ReturnType<
     typeof useChatTimelineMessages
   >["setOptimisticUserMessages"];
@@ -111,7 +91,6 @@ interface ChatTurnFollowUpsInput {
   >["rememberCustomBinaryPathForDispatch"];
   workflowRunState: ReturnType<typeof useChatWorkLog>["workflowRunState"];
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
-  envMode: DraftThreadEnvMode;
   activeThreadId: ThreadId | null;
   markWorkflowRunDismissed: (threadId: ThreadId, workflowTaskId: string) => void;
   activeProject: Project | undefined;
@@ -129,15 +108,12 @@ export function useChatTurnFollowUps({
   sendInFlightRef,
   setThreadError,
   setTailAnchor,
-  runtimeMode,
   activeProposedPlan,
-  assistantDeliveryMode,
   setQueuedSteerGate,
   planSidebarDismissedForTurnRef,
   setPlanSidebarOpen,
   isRevertingCheckpoint,
   setIsRevertingCheckpoint,
-  interactionMode,
   isSendBusy,
   beginLocalDispatch,
   armLocalDispatchAckFallback,
@@ -145,12 +121,9 @@ export function useChatTurnFollowUps({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  providerOptionsForDispatch,
   turnDispatchSettings,
   computerControlChangeSequence,
   setComposerDraftComputerControlMode,
-  setComposerDraftComputerControl,
   setOptimisticUserMessages,
   armTranscriptAutoFollow,
   tailAnchorScrollInFlightRef,
@@ -159,7 +132,6 @@ export function useChatTurnFollowUps({
   rememberCustomBinaryPathForDispatch,
   workflowRunState,
   lateComposerSendHandlersRef,
-  envMode,
   activeThreadId,
   markWorkflowRunDismissed,
   activeProject,
@@ -420,8 +392,8 @@ export function useChatTurnFollowUps({
       selectedProvider,
       setThreadError,
       turnDispatchSettings,
-      editAndResendDispatchFields,
-      threadSettingsDispatchFields,
+      computerControlChangeSequence,
+      setComposerDraftComputerControlMode,
     ],
   );
   // Resuming a workflow is a normal composer turn instructing the agent to
@@ -468,7 +440,6 @@ export function useChatTurnFollowUps({
     selectedProvider,
     workflowRunState,
     turnDispatchSettings,
-    queuedChatTurnDispatchFields,
   ]);
 
   const onImplementPlanInNewThread = useCallback(async () => {
@@ -615,13 +586,14 @@ export function useChatTurnFollowUps({
     isServerThread,
     navigate,
     resetLocalDispatch,
+    computerControlChangeSequence,
     selectedPromptEffort,
     selectedModel,
+    selectedProvider,
     rememberCustomBinaryPathForDispatch,
+    setComposerDraftComputerControlMode,
     syncServerShellSnapshot,
     turnDispatchSettings,
-    planImplementationDispatchSettings,
-    turnStartDispatchFields,
   ]);
   return {
     onSubmitPlanFollowUp,

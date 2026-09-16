@@ -39,6 +39,7 @@ import {
   computerPreviewCardCaps,
   computerPreviewCardOpen,
   computerPreviewFrameSource,
+  computerPreviewStatusLabel,
   type ComputerPreviewCardSize,
   type ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
@@ -110,6 +111,11 @@ function ComputerPreviewPopoverCard(props: {
   const hidePreviewForTask = useComputerPreviewStore((store) => store.hidePreviewForTask);
   const notePreviewLayout = useComputerPreviewStore((store) => store.notePreviewLayout);
   const desktopControl = useComputerDesktopControl(threadId);
+  const statusLabel = computerPreviewStatusLabel({
+    agentActive: desktopControl.agentActive,
+    currentActivity: threadState?.activity ?? null,
+    lastActionLabel: session.lastActionLabel ?? null,
+  });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [slotSize, setSlotSize] = useState({ width: 0, height: 0 });
 
@@ -303,6 +309,18 @@ function ComputerPreviewPopoverCard(props: {
             className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_3px_rgba(124,58,237,0.9),0_0_7px_rgba(124,58,237,0.65)]"
             style={{ left: cursorPosition.left, top: cursorPosition.top }}
           />
+        ) : null}
+        {statusLabel ? (
+          <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-1.5 shrink-0 rounded-full bg-violet-300",
+                desktopControl.agentActive && "animate-pulse motion-reduce:animate-none",
+              )}
+            />
+            <span className="truncate">{statusLabel}</span>
+          </div>
         ) : null}
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute top-2 right-2 translate-y-1 opacity-0 transition-all duration-200 ease-out group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none pointer-coarse:translate-y-0 pointer-coarse:opacity-100">
