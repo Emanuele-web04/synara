@@ -2614,6 +2614,25 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
 });
 
 describe("commitAfterRuntimeModePersistence", () => {
+  it("rechecks selection validity after persistence, before changing model or effort", async () => {
+    const calls: string[] = [];
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return true;
+      },
+      canCommit: () => {
+        calls.push("revalidate");
+        return false;
+      },
+      commit: () => calls.push("commit"),
+    });
+    expect(committed).toBe(false);
+    expect(calls).toEqual(["persist", "revalidate"]);
+  });
+
   it("does not commit an incompatible model when the canonical downgrade fails", async () => {
     const calls: Array<string> = [];
 

@@ -3,15 +3,14 @@
 //   stacked effort/model label that opens the model list, reset, and a stepped slider).
 // Layer: Chat composer presentation
 // Depends on: shared trait resolution + effort-change planning, the trait commit hook,
-//   the shared Slider primitive, and menu submenu primitives for the model list.
+//   the shared Slider primitive, and the parent picker's model catalog navigation.
 
 import type { ProviderKind, ProviderModelDescriptor, ThreadId } from "@synara/contracts";
-import { type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ProviderOptions } from "../../providerModelOptions";
-import { MenuSub, MenuSubTriggerBase } from "../ui/menu";
+import { MenuItem } from "../ui/menu";
 import { Slider } from "../ui/slider";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -33,10 +32,7 @@ type ComposerEffortSliderCardProps = {
   modelOptions: ProviderOptions | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // Renders the model-list submenu popup inside this card's MenuSub so the stacked
-  // "effort / model" label is its trigger. A committed selection closes only the
-  // model list, keeping the card open so the new model's effort can be set at once.
-  renderModelSubmenuPopup: (onAfterSelection: () => void) => ReactNode;
+  onBrowseModels: () => void;
 };
 
 const CARD_ICON_BUTTON_CLASS_NAME =
@@ -48,8 +44,6 @@ const CARD_ICON_BUTTON_CLASS_NAME =
 // the menu open so the label and thumb update in place.
 export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { provider, threadId, model, modelOptions, prompt, onPromptChange } = props;
-  // Local so it resets whenever the card unmounts with its popup.
-  const [modelListOpen, setModelListOpen] = useState(false);
   const selection = getComposerTraitSelection(
     provider,
     model,
@@ -104,26 +98,32 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         ) : (
           <span aria-hidden="true" className="size-6" />
         )}
-        <MenuSub open={modelListOpen} onOpenChange={setModelListOpen}>
-          <MenuSubTriggerBase
-            openOnHover={false}
-            className="flex min-w-0 cursor-default select-none flex-col items-center justify-center rounded-lg px-2 py-0.5 text-center leading-snug outline-none transition-colors data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-popup-open:bg-[var(--color-background-button-secondary-hover)]"
-          >
-            {/* The chevron hangs off the label's right edge so the effort text itself is
+        <MenuItem
+          data-model-catalog-trigger=""
+          closeOnClick={false}
+          onClick={props.onBrowseModels}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowRight") {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onBrowseModels();
+            }
+          }}
+          className="flex min-w-0 cursor-default select-none flex-col items-center justify-center gap-0 rounded-lg px-2 py-0.5 text-center leading-snug outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-transparent"
+        >
+          {/* The chevron hangs off the label's right edge so the effort text itself is
                 centered over the model name instead of being pushed left by the glyph. */}
-            <span className="relative inline-block whitespace-nowrap font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-accent)]">
-              {statusLabel}
-              <ChevronRightIcon
-                aria-hidden="true"
-                className="absolute top-1/2 left-full ml-0.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-              />
-            </span>
-            <span className="max-w-full truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
-              {props.modelLabel}
-            </span>
-          </MenuSubTriggerBase>
-          {props.renderModelSubmenuPopup(() => setModelListOpen(false))}
-        </MenuSub>
+          <span className="relative inline-block whitespace-nowrap font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-accent)]">
+            {statusLabel}
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="absolute top-1/2 left-full ml-0.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+          </span>
+          <span className="max-w-full truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
+            {props.modelLabel}
+          </span>
+        </MenuItem>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -146,7 +146,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           </TooltipPopup>
         </Tooltip>
       </div>
-      <div className="mt-1 px-0.5">
+      <div className="mt-1.5 px-1">
         <Slider
           value={ladderIndex}
           min={0}
