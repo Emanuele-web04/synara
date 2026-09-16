@@ -36,7 +36,11 @@ export const COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME =
 
 export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME}`;
 
-/** Caps model-provider submenu height; pairs with the list scroll class below. */
+/** Scoped layouts for the compact provider list and wider, viewport-bound model list. */
+export const COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME = "provider-model-menu";
+export const COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME = "provider-picker-menu";
+
+/** Caps the legacy model-provider submenu height used by the effort picker. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";
 

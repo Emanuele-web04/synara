@@ -42,6 +42,11 @@ function runtimeEffortLabel(value: string): string {
   }
 }
 
+function openCodeModelIdentifier(slug: string): string {
+  // OpenCode separates the upstream at the first slash; model IDs can contain slashes.
+  return slug.slice(slug.indexOf("/") + 1).trim();
+}
+
 // Matches the selected model to its runtime descriptor after provider-specific normalization.
 export function resolveRuntimeModelDescriptor(input: {
   provider: ProviderKind;
@@ -58,7 +63,7 @@ export function resolveRuntimeModelDescriptor(input: {
     return undefined;
   }
 
-  return runtimeModels.find((candidate) => {
+  const exact = runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
     const normalizedResolvedModel =
       normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
@@ -71,6 +76,35 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
+  if (exact) {
+    return exact;
+  }
+
+  // Selections outlive catalog reshapes: a stored opencode slug can carry a
+  // stale upstream prefix (or none at all) while the label still resolves.
+  // Only use an unambiguous model identifier: upstreams may configure different
+  // variants and context limits for the same model. Other providers stay strict.
+  if (provider !== "opencode") {
+    return undefined;
+  }
+  const modelIdentifier = openCodeModelIdentifier(normalizedModel);
+  if (!modelIdentifier) {
+    return undefined;
+  }
+  let fallback: ProviderModelDescriptor | undefined;
+  for (const candidate of runtimeModels) {
+    const candidateIdentifier = openCodeModelIdentifier(
+      normalizeModelSlug(candidate.slug, provider) ?? candidate.slug,
+    );
+    const resolvedIdentifier = openCodeModelIdentifier(
+      normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel ?? "",
+    );
+    if (candidateIdentifier === modelIdentifier || resolvedIdentifier === modelIdentifier) {
+      if (fallback) return undefined;
+      fallback = candidate;
+    }
+  }
+  return fallback;
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
