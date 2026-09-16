@@ -90,6 +90,14 @@ export function createDesktopPlatformBuildConfig(
     return {
       ...nativePackaging,
       dmg: {
+        background: "apps/desktop/resources/dmgly/assets/dmg-background.png",
+        window: { width: 642, height: 406 },
+        iconSize: 128,
+        contents: [
+          // Omit path so electron-builder uses the packaged app and its actual filename.
+          { x: 172, y: 135, type: "file" },
+          { x: 514, y: 241, type: "link", path: "/Applications" },
+        ],
         sign: input.signed === true,
         // The signed release flow notarizes and staples the DMG after electron-builder exits.
         // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;

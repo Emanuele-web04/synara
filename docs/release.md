@@ -101,6 +101,35 @@ Use this before publication to validate the real native macOS, Linux, and Window
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
 
+### Local DMG appearance validation
+
+On an Apple Silicon Mac, build the DMG and macOS update ZIP in `release/` with:
+
+```bash
+SYNARA_DESKTOP_UPDATE_REPOSITORY=Emanuele-web04/synara bun run dist:desktop:dmg:arm64
+```
+
+Use `dist:desktop:dmg:x64` on Intel. The updater repository setting is needed for
+ZIP manifest finalization outside GitHub Actions. The build passes
+`--publish never` to electron-builder and defaults to unsigned; release signing,
+notarization, and updater settings remain controlled by the existing release flow.
+
+The Dmgly layout lives in `scripts/lib/desktop-platform-build-config.ts` and uses
+`apps/desktop/resources/dmgly/assets/dmg-background.png`. The packaging script
+copies this resources directory into its staging app, keeping the background path
+valid there. The supplied 642×406 PNG is a 1× background with its text and arrow
+already baked in. Do not add duplicate text or arrows. It has no baked label
+backgrounds. The exported `app-icon.png` is retained alongside it as a reference;
+the app continues to use the existing production ICNS generation pipeline.
+
+Mount the resulting DMG in Finder and check the 642×406 window, 128px icons,
+and icon centers at (172, 135) for `Synara.app` and (514, 241) for `Applications`.
+Verify both real filename labels remain readable and unclipped. Finder renders
+the app icon and Applications link, so their appearance can differ from Dmgly's
+preview; Retina displays also scale the supplied 1× background. Local Finder
+preferences can override the DMG's saved hidden path/status bars, reducing the
+visible background and requiring scrolling to reveal the Applications label.
+
 ## 2) Apple signing + notarization setup (macOS)
 
 Required secrets used by the workflow:
