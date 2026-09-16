@@ -68,4 +68,53 @@ describe("resolveRuntimeModelDescriptor", () => {
       }),
     ).toBe(zoned[0]);
   });
+
+  it("does not borrow capabilities from an ambiguous upstream model", () => {
+    const runtimeModels: ReadonlyArray<ProviderModelDescriptor> = [
+      {
+        slug: "openai/shared-model",
+        name: "Shared model",
+        supportedReasoningEfforts: [{ value: "high" }],
+      },
+      {
+        slug: "gateway/shared-model",
+        name: "Shared model",
+        supportedReasoningEfforts: [{ value: "low" }],
+      },
+    ];
+
+    for (const model of ["stale/shared-model", "shared-model"]) {
+      expect(
+        resolveRuntimeModelDescriptor({ provider: "opencode", model, runtimeModels }),
+      ).toBeUndefined();
+    }
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "gateway/shared-model",
+        runtimeModels,
+      }),
+    ).toBe(runtimeModels[1]);
+  });
+
+  it("preserves model namespaces when matching a stale upstream prefix", () => {
+    const runtimeModels: ReadonlyArray<ProviderModelDescriptor> = [
+      { slug: "gateway/vendor-a/shared-model", name: "Vendor A" },
+      { slug: "gateway/vendor-b/shared-model", name: "Vendor B" },
+    ];
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "stale/vendor-b/shared-model",
+        runtimeModels,
+      }),
+    ).toBe(runtimeModels[1]);
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "stale/vendor-c/shared-model",
+        runtimeModels,
+      }),
+    ).toBeUndefined();
+  });
 });

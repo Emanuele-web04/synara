@@ -42,6 +42,11 @@ function runtimeEffortLabel(value: string): string {
   }
 }
 
+function openCodeModelIdentifier(slug: string): string {
+  // OpenCode separates the upstream at the first slash; model IDs can contain slashes.
+  return slug.slice(slug.indexOf("/") + 1).trim();
+}
+
 // Matches the selected model to its runtime descriptor after provider-specific normalization.
 export function resolveRuntimeModelDescriptor(input: {
   provider: ProviderKind;
@@ -77,32 +82,29 @@ export function resolveRuntimeModelDescriptor(input: {
 
   // Selections outlive catalog reshapes: a stored opencode slug can carry a
   // stale upstream prefix (or none at all) while the label still resolves.
-  // Fall back to the bare model identifier so traits keep resolving; exact
-  // matches above always win, and effort ladders are consistent per model
-  // identifier across upstreams. Other providers keep strict matching.
+  // Only use an unambiguous model identifier: upstreams may configure different
+  // variants and context limits for the same model. Other providers stay strict.
   if (provider !== "opencode") {
     return undefined;
   }
-  const modelIdentifier = normalizedModel.includes("/")
-    ? normalizedModel.slice(normalizedModel.lastIndexOf("/") + 1).trim()
-    : normalizedModel.trim();
+  const modelIdentifier = openCodeModelIdentifier(normalizedModel);
   if (!modelIdentifier) {
     return undefined;
   }
-  return runtimeModels.find((candidate) => {
-    const candidateIdentifier = (
-      normalizeModelSlug(candidate.slug, provider) ?? candidate.slug
-    ).split("/");
-    const resolvedIdentifier = (
-      normalizeModelSlug(candidate.resolvedModel, provider) ??
-      candidate.resolvedModel ??
-      ""
-    ).split("/");
-    return (
-      candidateIdentifier.at(-1) === modelIdentifier ||
-      (resolvedIdentifier.at(-1) !== "" && resolvedIdentifier.at(-1) === modelIdentifier)
+  let fallback: ProviderModelDescriptor | undefined;
+  for (const candidate of runtimeModels) {
+    const candidateIdentifier = openCodeModelIdentifier(
+      normalizeModelSlug(candidate.slug, provider) ?? candidate.slug,
     );
-  });
+    const resolvedIdentifier = openCodeModelIdentifier(
+      normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel ?? "",
+    );
+    if (candidateIdentifier === modelIdentifier || resolvedIdentifier === modelIdentifier) {
+      if (fallback) return undefined;
+      fallback = candidate;
+    }
+  }
+  return fallback;
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
