@@ -70,6 +70,11 @@ session, generation, and model, even if the remaining history exceeds 100,000 to
 observation still reports expiry. Increased context or changed session identity requires a fresh
 review. An unexpected invariant failure while releasing the message leaves an actionable failed
 review and is reported instead of silently leaving compaction in progress.
+At startup, that task's domain failure does not block recovery of other tasks. Infrastructure
+failures and cancellation still propagate. If a native compaction has neither a recorded terminal
+event nor a matching live turn, its uncertain control delivery is abandoned without retrying it.
+The saved message stays held for a fresh choice. Uncertainty about delivery of the user's message
+after compaction remains quarantined and requires separate reconciliation.
 
 Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
 on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite

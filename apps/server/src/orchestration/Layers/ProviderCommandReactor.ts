@@ -138,7 +138,7 @@ import {
   listImportedForkMessages,
   listPriorTranscriptMessages,
 } from "../handoff.ts";
-import type { OrchestrationDispatchError } from "../Errors.ts";
+import { OrchestrationCommandInvariantError, type OrchestrationDispatchError } from "../Errors.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -424,6 +424,9 @@ const claudeCacheReviewCoversObservation = (
     observation.contextTokens <= review.assessment.contextTokens
   );
 };
+
+const LOST_CLAUDE_COMPACTION_ERROR =
+  "Compaction completion was not recorded. The saved message remains held; compaction was not retried.";
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -6017,6 +6020,37 @@ const make = Effect.gen(function* () {
         deliverySourceLock.withPermits(1)(
           Effect.gen(function* () {
             const reconciledAt = new Date().toISOString();
+            const delivery = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: input.eventSequence,
+            });
+            if (
+              Option.isNone(delivery) ||
+              delivery.value.threadId !== input.threadId ||
+              delivery.value.state !== input.expectedState
+            )
+              return null;
+            const reconciledEvent = yield* readProviderIntentEvent(input.eventSequence);
+            const review =
+              reconciledEvent.type === "thread.claude-cache-response-requested"
+                ? (yield* resolveThread(reconciledEvent.payload.threadId))?.claudeCacheReview
+                : undefined;
+            const abandonsCompaction =
+              input.outcome === "abandon" &&
+              reconciledEvent.type === "thread.claude-cache-response-requested" &&
+              reconciledEvent.payload.decision === "compact" &&
+              review?.reviewId === reconciledEvent.payload.review.reviewId &&
+              review.compactionResponseEventSequence === input.eventSequence &&
+              review.compactionTurnId !== undefined;
+            if (abandonsCompaction) {
+              // Persist the hold before removing its delivery blocker. If the
+              // process exits between writes, startup can finish reconciliation.
+              yield* setClaudeCacheReview(
+                reconciledEvent.payload.threadId,
+                { ...review, status: "failed", error: LOST_CLAUDE_COMPACTION_ERROR },
+                review.reviewId,
+              );
+            }
             const reconciled = yield* deliveryRepository.reconcile({
               reconciliationId: crypto.randomUUID(),
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -6030,12 +6064,12 @@ const make = Effect.gen(function* () {
             });
             if (Option.isNone(reconciled)) return null;
 
-            const reconciledEvent = yield* readProviderIntentEvent(input.eventSequence);
             if (reconciledEvent.type === "thread.claude-cache-response-requested") {
               const review = (yield* resolveThread(reconciledEvent.payload.threadId))
                 ?.claudeCacheReview;
               if (
                 review?.reviewId === reconciledEvent.payload.review.reviewId &&
+                !abandonsCompaction &&
                 !(
                   input.outcome === "accepted" &&
                   reconciledEvent.payload.decision === "compact" &&
@@ -6275,25 +6309,76 @@ const make = Effect.gen(function* () {
       const review = thread.claudeCacheReview;
       if (
         !review?.compactionTurnId ||
-        (review.status !== "compacting" && review.status !== "uncertain")
+        (review.status !== "compacting" &&
+          review.status !== "uncertain" &&
+          review.status !== "failed")
       )
         continue;
       const terminal = yield* readClaudeCompactionTerminal(thread.id, review.compactionTurnId);
-      if (terminal) {
-        yield* processClaudeCompactionTerminal(terminal);
+      if (terminal && review.status !== "failed") {
+        yield* processClaudeCompactionTerminal(terminal).pipe(
+          Effect.catchCause((cause) => {
+            const failure = Cause.findErrorOption(cause);
+            // The terminal handler already leaves this review failed. Isolate
+            // only that domain rejection; defects and cancellation still abort.
+            if (
+              cause.reasons.length !== 1 ||
+              Option.isNone(failure) ||
+              !(failure.value instanceof OrchestrationCommandInvariantError)
+            )
+              return Effect.failCause(cause);
+            return Effect.logError("Could not recover Claude compaction for task", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            });
+          }),
+        );
         continue;
       }
       // Replay may just have started a previously undispatched request. Its
       // current runtime still owns the operation; wait for that terminal event.
       if ((yield* resolveLiveProviderTurnId(thread.id)) === review.compactionTurnId) continue;
+      if (review.compactionResponseEventSequence !== undefined && reconcileDeliveryRuntime) {
+        const delivery = yield* deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: review.compactionResponseEventSequence,
+        });
+        if (
+          Option.isSome(delivery) &&
+          (delivery.value.state === "uncertain" || delivery.value.state === "dead")
+        ) {
+          const response = yield* readOrchestrationEventAtSequence(
+            review.compactionResponseEventSequence,
+          );
+          if (
+            response?.type === "thread.claude-cache-response-requested" &&
+            response.payload.threadId === thread.id &&
+            response.payload.review.reviewId === review.reviewId &&
+            response.payload.decision === "compact"
+          ) {
+            // Abandon only this lost control attempt, keeping the user message
+            // held. No provider command is retried or treated as successful.
+            yield* reconcileDeliveryRuntime({
+              threadId: thread.id,
+              eventSequence: review.compactionResponseEventSequence,
+              expectedState: delivery.value.state,
+              outcome: "abandon",
+              reconciledBy: "claude-compaction-recovery",
+              note: LOST_CLAUDE_COMPACTION_ERROR,
+            });
+            continue;
+          }
+        }
+      }
+      // Uncertainty after the control delivery settled may concern sending the
+      // user's message. It must retain its separate delivery reconciliation.
       if (review.status === "compacting") {
         yield* setClaudeCacheReview(
           thread.id,
           {
             ...review,
             status: "failed",
-            error:
-              "Compaction completion was not recorded. The saved message remains held; compaction was not retried.",
+            error: LOST_CLAUDE_COMPACTION_ERROR,
           },
           review.reviewId,
         );

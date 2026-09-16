@@ -1863,6 +1863,12 @@ describe("ProviderCommandReactor", () => {
       "confirmed",
       "confirmed-after-reconciliation",
       "confirmed-unacknowledged",
+      "confirmed-invariant-failure",
+      "confirmed-infrastructure-defect",
+      "confirmed-recovery-interrupted",
+      "uncertain-missing",
+      "failed-recovery-interrupted",
+      "uncertain-user-delivery",
       "missing",
       "failed",
     ] as const)(
@@ -1927,7 +1933,13 @@ describe("ProviderCommandReactor", () => {
             threadId,
             review: {
               ...review,
-              status: evidence === "confirmed-after-reconciliation" ? "uncertain" : "compacting",
+              status:
+                evidence === "failed-recovery-interrupted"
+                  ? "failed"
+                  : evidence === "confirmed-after-reconciliation" ||
+                      evidence === "uncertain-missing"
+                    ? "uncertain"
+                    : "compacting",
               compactionTurnId: turnId,
               compactionResponseEventSequence: compactResponse.sequence,
             },
@@ -1947,16 +1959,82 @@ describe("ProviderCommandReactor", () => {
             }),
           );
           await Effect.runPromise(
-            harness.deliveryRepository.complete({
+            (evidence === "uncertain-missing" || evidence === "failed-recovery-interrupted") &&
+              eventSequence === compactResponse.sequence
+              ? harness.deliveryRepository.markTerminalFailure({
+                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                  eventSequence,
+                  expectedClaimOwner: "previous-process",
+                  state: "uncertain",
+                  error: "Lost native compaction acknowledgement",
+                  updatedAt: now,
+                })
+              : harness.deliveryRepository.complete({
+                  consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                  eventSequence,
+                  claimOwner: "previous-process",
+                  completedAt: now,
+                }),
+          );
+        }
+        let uncertainUserDeliverySequence: number | undefined;
+        if (evidence === "uncertain-user-delivery") {
+          // A confirmed compaction may have released the user's message before
+          // its acknowledgement was lost and the old terminal was pruned.
+          const continued = await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.compacted",
+              commandId: CommandId.makeUnsafe("cmd-previous-compact-release"),
+              threadId,
+              reviewId: review.reviewId,
+              turnId,
+              createdAt: now,
+            }),
+          );
+          uncertainUserDeliverySequence = continued.sequence;
+          await Effect.runPromise(
+            harness.deliveryRepository.claim({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              eventSequence,
+              eventSequence: continued.sequence,
+              threadId,
               claimOwner: "previous-process",
-              completedAt: now,
+              claimedAt: now,
+              claimExpiresAt: now,
+            }),
+          );
+          await Effect.runPromise(
+            harness.deliveryRepository.markTerminalFailure({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: continued.sequence,
+              expectedClaimOwner: "previous-process",
+              state: "uncertain",
+              error: "Lost user message acknowledgement",
+              updatedAt: now,
+            }),
+          );
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.set",
+              commandId: CommandId.makeUnsafe("cmd-uncertain-user-delivery"),
+              threadId,
+              review: {
+                ...review,
+                status: "uncertain",
+                compactionTurnId: turnId,
+                compactionResponseEventSequence: compactResponse.sequence,
+              },
+              expectedReviewId: review.reviewId,
+              createdAt: now,
             }),
           );
         }
         let terminalSequence: number | undefined;
-        if (evidence !== "missing") {
+        if (
+          evidence !== "missing" &&
+          evidence !== "uncertain-missing" &&
+          evidence !== "failed-recovery-interrupted" &&
+          evidence !== "uncertain-user-delivery"
+        ) {
           const terminal = await Effect.runPromise(
             harness.runtimeEventRepository.append({
               eventId: asEventId("journal-cache-compaction-terminal"),
@@ -1984,10 +2062,133 @@ describe("ProviderCommandReactor", () => {
           }
         }
 
+        if (evidence === "confirmed-invariant-failure") {
+          const nextThreadId = ThreadId.makeUnsafe("thread-2");
+          const nextTurnId = asTurnId("next-native-compaction-turn");
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.create",
+              commandId: CommandId.makeUnsafe("cmd-next-cache-thread"),
+              threadId: nextThreadId,
+              projectId: asProjectId("project-1"),
+              title: "Next recovered task",
+              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              runtimeMode: "approval-required",
+              branch: null,
+              worktreePath: null,
+              createdAt: now,
+            }),
+          );
+          const nextSource = await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.makeUnsafe("cmd-next-cache-message"),
+              threadId: nextThreadId,
+              message: {
+                messageId: asMessageId("next-cache-message"),
+                role: "user",
+                text: "Continue the unaffected task",
+                attachments: [],
+              },
+              runtimeMode: "approval-required",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              createdAt: now,
+            }),
+          );
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.set",
+              commandId: CommandId.makeUnsafe("cmd-next-cache-review"),
+              threadId: nextThreadId,
+              review: {
+                ...review,
+                reviewId: "next-cache-review",
+                messageId: asMessageId("next-cache-message"),
+                sourceEventSequence: nextSource.sequence,
+                status: "compacting",
+                compactionTurnId: nextTurnId,
+              },
+              expectedReviewId: null,
+              createdAt: now,
+            }),
+          );
+          const nextTerminal = await Effect.runPromise(
+            harness.runtimeEventRepository.append({
+              eventId: asEventId("next-cache-terminal"),
+              provider: "claudeAgent",
+              threadId: nextThreadId,
+              createdAt: now,
+              turnId: nextTurnId,
+              providerRefs: {},
+              type: "turn.completed",
+              payload: { state: "completed", contextCompacted: true },
+            } as ProviderRuntimeEvent),
+          );
+          await Effect.runPromise(
+            harness.runtimeEventRepository.advanceConsumerCursor({
+              consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+              eventSequence: nextTerminal.sequence,
+              updatedAt: now,
+            }),
+          );
+        }
+        if (
+          evidence.startsWith("confirmed-") &&
+          [
+            "confirmed-invariant-failure",
+            "confirmed-infrastructure-defect",
+            "confirmed-recovery-interrupted",
+          ].includes(evidence)
+        ) {
+          harness.interceptEngineDispatch((command) => {
+            if (command.type !== "thread.claude-cache.compacted" || command.threadId !== threadId)
+              return undefined;
+            if (evidence === "confirmed-infrastructure-defect")
+              return Effect.die(new Error("Simulated recovery infrastructure defect"));
+            if (evidence === "confirmed-recovery-interrupted") return Effect.interrupt;
+            return Effect.fail(
+              new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: "Simulated per-thread recovery invariant failure",
+              }),
+            );
+          });
+        }
+        if (
+          evidence === "confirmed-infrastructure-defect" ||
+          evidence === "confirmed-recovery-interrupted"
+        ) {
+          await expect(harness.startReactor()).rejects.toThrow();
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          return;
+        }
         await harness.startReactor();
         await harness.drain();
 
         expect(startClaudeCompaction).not.toHaveBeenCalled();
+        if (evidence === "uncertain-user-delivery") {
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("uncertain");
+          expect(
+            await Effect.runPromise(
+              harness.reactor.listBlockingDeliveries({ threadId, limit: 10 }),
+            ),
+          ).toMatchObject([{ eventSequence: uncertainUserDeliverySequence, state: "uncertain" }]);
+          return;
+        }
+        if (evidence === "confirmed-invariant-failure") {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+            status: "failed",
+            error: "Simulated per-thread recovery invariant failure",
+          });
+          expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+            threadId: "thread-2",
+            input: "Continue the unaffected task",
+          });
+          return;
+        }
         if (evidence === "confirmed-unacknowledged") {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
@@ -2015,6 +2216,21 @@ describe("ProviderCommandReactor", () => {
         } else {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("failed");
+          if (evidence === "uncertain-missing" || evidence === "failed-recovery-interrupted") {
+            expect(
+              await Effect.runPromise(
+                harness.reactor.listBlockingDeliveries({ threadId, limit: 10 }),
+              ),
+            ).toEqual([]);
+            const failedReview = (await readHarnessThread(harness))!.claudeCacheReview!;
+            await respondToReview(harness, failedReview, "continue");
+            await harness.drain();
+            expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+            expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
+              "Resume the saved original message",
+            );
+            expect(startClaudeCompaction).not.toHaveBeenCalled();
+          }
         }
       },
     );
