@@ -17,6 +17,8 @@ export interface DesktopKeyboardInput {
 
 export type DesktopPhysicalZoomAction = "zoomOut" | null;
 
+export type DesktopZoomShortcutAction = "zoomIn" | "zoomOut" | "resetZoom";
+
 export interface DesktopNativeZoomTarget {
   getZoomLevel(): number;
   setZoomLevel(level: number): void;
@@ -52,6 +54,39 @@ export function applyDesktopPhysicalZoomAction(
   }
 }
 
+export function resolveDesktopZoomShortcutAction(
+  platform: NodeJS.Platform,
+  input: DesktopKeyboardInput,
+): DesktopZoomShortcutAction | null {
+  // Linux registers no native zoom accelerators (several desktops surface them
+  // as noisy native keybinding notifications), so the main process applies
+  // these chords itself via before-input-event. macOS/Windows keep their
+  // native zoom roles and must not double-handle here.
+  if (
+    platform !== "linux" ||
+    input.type !== "keyDown" ||
+    !input.control ||
+    input.meta ||
+    input.alt
+  ) {
+    return null;
+  }
+
+  // Numpad keys report dedicated codes; the key guard keeps NumLock-off
+  // presses (which surface as navigation keys like Insert) from zooming.
+  if (input.code === "NumpadAdd" && input.key === "Add") return "zoomIn";
+  if (input.code === "NumpadSubtract" && input.key === "Subtract") {
+    return input.shift ? null : "zoomOut";
+  }
+  // "+" needs Shift on most layouts (including Italian), so Shift stays
+  // allowed for zoom-in; "-" and "0" have unshifted keys, so Shift chords
+  // are left alone there.
+  if (input.key === "+" || input.key === "=") return "zoomIn";
+  if ((input.key === "-" || input.key === "_") && !input.shift) return "zoomOut";
+  if (input.key === "0" && !input.shift) return "resetZoom";
+  return null;
+}
+
 export function resolveDesktopMenuAccelerator(
   platform: NodeJS.Platform,
   accelerator: MenuItemConstructorOptions["accelerator"],
@@ -63,7 +98,9 @@ export function resolveDesktopMenuAccelerator(
 
 export function shouldUseNativeZoomMenuRoles(platform: NodeJS.Platform): boolean {
   // Zoom roles provide their own accelerators when Electron builds the menu.
-  // Linux uses custom click handlers so no hidden native keybindings are registered.
+  // Linux uses custom click handlers so no hidden native keybindings are
+  // registered; keyboard zoom is applied by the main process instead (see
+  // resolveDesktopZoomShortcutAction).
   return platform !== "linux";
 }
 

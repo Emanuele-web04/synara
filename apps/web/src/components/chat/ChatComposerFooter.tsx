@@ -165,7 +165,7 @@ export function ChatComposerFooter({
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" ? (
+        ) : submission.phase === "running" || submission.connecting ? (
           <Button
             type="button"
             variant="prominent"

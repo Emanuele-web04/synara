@@ -67,6 +67,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 
       return {
         url,
+        serverPassword: `managed-password-${index}`,
         exitCode: Effect.never,
       };
     }),
@@ -210,6 +211,10 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         "http://127.0.0.1:4301",
       ]);
       expect(runtimeMock.state.closeCalls).toEqual([]);
+      expect(runtimeMock.state.authHeaders).toEqual([
+        `Basic ${btoa("opencode:managed-password-1")}`,
+        `Basic ${btoa("opencode:managed-password-1")}`,
+      ]);
 
       yield* advanceIdleClock;
 
@@ -243,6 +248,10 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
       expect(runtimeMock.state.promptUrls).toEqual([
         "http://127.0.0.1:4301",
         "http://127.0.0.1:4302",
+      ]);
+      expect(runtimeMock.state.authHeaders).toEqual([
+        `Basic ${btoa("opencode:managed-password-1")}`,
+        `Basic ${btoa("opencode:managed-password-2")}`,
       ]);
       expect(runtimeMock.state.closeCalls).toEqual(["http://127.0.0.1:4301"]);
     }).pipe(Effect.provide(TestClock.layer())),
@@ -333,6 +342,10 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         "http://127.0.0.1:4302",
       ]);
       expect(runtimeMock.state.closeCalls).toContain("http://127.0.0.1:4302");
+      expect(runtimeMock.state.authHeaders).toEqual([
+        `Basic ${btoa("opencode:managed-password-1")}`,
+        `Basic ${btoa("opencode:managed-password-2")}`,
+      ]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -491,6 +504,23 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
 it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
   "OpenCodeTextGenerationServiceLive with configured server URL",
   (it) => {
+    it.effect("uses the managed server password instead of a saved external password", () =>
+      Effect.gen(function* () {
+        const textGeneration = yield* OpenCodeTextGeneration;
+        yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/opencode-auth",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        });
+
+        expect(runtimeMock.state.authHeaders).toEqual([
+          `Basic ${btoa("opencode:managed-password-1")}`,
+        ]);
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+
     it.effect("reuses a configured OpenCode server URL without spawning or applying idle TTL", () =>
       Effect.gen(function* () {
         const textGeneration = yield* OpenCodeTextGeneration;
