@@ -17,6 +17,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
+  PendingClaudeCacheReview,
   ThreadPinnedMessages,
   ThreadGoalAchievements,
   ProjectScript,
@@ -110,6 +111,9 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    claudeCacheReview: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
+    ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     goalAchievements: Schema.optional(
@@ -129,6 +133,9 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    claudeCacheReview: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
+    ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     modelSelection: ModelSelectionJsonUnknown,
   }),
@@ -697,6 +704,9 @@ function toProjectedThreadShellFromStoredSummary(input: {
     archivedAt: threadRow.archivedAt ?? null,
     settledAt: threadRow.settledAt ?? null,
     handoff: threadRow.handoff,
+    ...(threadRow.claudeCacheReview != null
+      ? { claudeCacheReview: threadRow.claudeCacheReview }
+      : {}),
     goal: threadRow.goal ?? "",
     goalStartedAt: threadRow.goalStartedAt ?? null,
     goalPausedAt: threadRow.goalPausedAt ?? null,
@@ -753,6 +763,9 @@ function toProjectedThread(input: {
     settledAt: threadRow.settledAt ?? null,
     deletedAt: threadRow.deletedAt,
     handoff: threadRow.handoff,
+    ...(threadRow.claudeCacheReview != null
+      ? { claudeCacheReview: threadRow.claudeCacheReview }
+      : {}),
     latestUserMessageAt: summary.latestUserMessageAt,
     hasPendingApprovals: summary.hasPendingApprovals,
     hasPendingUserInput: summary.hasPendingUserInput,
@@ -918,6 +931,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -969,6 +983,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           goal,
           goal_started_at AS "goalStartedAt",
           goal_paused_at AS "goalPausedAt",
@@ -1608,6 +1623,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -1667,6 +1683,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
