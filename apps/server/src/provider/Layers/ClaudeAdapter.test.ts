@@ -398,6 +398,7 @@ function makeHarness(config?: {
   readonly cwd?: string;
   readonly baseDir?: string;
   readonly workflowRuntimePollIntervalMs?: number;
+  readonly onCreate?: (options: ClaudeQueryOptions) => void;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -410,6 +411,7 @@ function makeHarness(config?: {
   const adapterOptions: ClaudeAdapterLiveOptions = {
     createQuery: (input) => {
       createInput = input;
+      config?.onCreate?.(input.options);
       return query;
     },
     ...(config?.nativeEventLogger
@@ -9681,7 +9683,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       const usageEvents = Array.from(yield* Fiber.join(usageFiber));
       assertTokenUsageEvent(usageEvents[0]);
-      assert.deepEqual(usageEvents[0].payload.usage, {
+      const { claudeCache, ...resumedUsage } = usageEvents[0].payload.usage;
+      assert.equal(claudeCache?.source, "request-usage");
+      assert.deepEqual(resumedUsage, {
         usedTokens: 20_000,
         tokenAccountingVersion: 1,
         lastUsedTokens: 20_000,
@@ -11723,6 +11727,231 @@ describe("ClaudeAdapterLive forkThread", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+});
+
+describe("Claude cache preflight", () => {
+  const nativeSessionId = "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba1";
+  const resumedObservation = {
+    nativeSessionId,
+    lifecycleGeneration: "previous-generation",
+    observedAt: "1970-01-01T00:00:00.000Z",
+    lastResponseAt: "1970-01-01T00:00:00.000Z",
+    contextTokens: 896542,
+    ttlSeconds: 3600,
+    state: "likely-warm" as const,
+    source: "request-usage" as const,
+  };
+
+  it.effect(
+    "buffers an early startup hook without injecting context or replacing PreToolUse",
+    () => {
+      let hookResult: Promise<unknown> | undefined;
+      const harness = makeHarness({
+        onCreate: (options) => {
+          const hook = options.hooks?.SessionStart?.[0]?.hooks[0];
+          assert.ok(hook);
+          assert.ok(options.hooks?.PreToolUse?.[0]?.hooks[0]);
+          hookResult = hook(
+            {
+              hook_event_name: "SessionStart",
+              session_id: options.sessionId!,
+              source: "resume",
+              context_tokens: 896542,
+              seconds_since_last_response: 15000,
+              prompt_cache_likely_expired: true,
+              transcript_path: "/tmp/fixture.jsonl",
+              cwd: "/tmp",
+            },
+            undefined,
+            { signal: new AbortController().signal },
+          );
+        },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        assert.deepEqual(yield* Effect.promise(() => hookResult!), {});
+        let delivered = false;
+        const iterator = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
+        void iterator.next().then(() => {
+          delivered = true;
+        });
+        const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+        assert.equal(observation?.state, "likely-expired");
+        assert.equal(observation?.contextTokens, 896542);
+        assert.equal(delivered, false);
+        assert.deepEqual(harness.query.getContextUsageDetails, ["summary"]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("uses durable response evidence after a restart when SessionStart is absent", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        lifecycleGeneration: "current-generation",
+        resumeCursor: { resume: nativeSessionId, claudeCache: resumedObservation },
+      });
+      const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(observation?.nativeSessionId, nativeSessionId);
+      assert.equal(observation?.lifecycleGeneration, "current-generation");
+      assert.equal(observation?.lastResponseAt, resumedObservation.lastResponseAt);
+      assert.equal(observation?.ttlSeconds, 3600);
+      const cursor = (yield* adapter.listSessions())[0]!.resumeCursor as { claudeCache?: unknown };
+      assert.deepEqual(cursor.claudeCache, observation);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("accepts fresh native resume metadata over restored request evidence", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId, claudeCache: resumedObservation },
+      });
+      const hook = harness.getLastCreateQueryInput()!.options.hooks!.SessionStart![0]!.hooks[0]!;
+      yield* Effect.promise(() =>
+        hook(
+          {
+            hook_event_name: "SessionStart",
+            session_id: nativeSessionId,
+            source: "resume",
+            context_tokens: 800001,
+            prompt_cache_likely_expired: true,
+            transcript_path: "/tmp/fixture.jsonl",
+            cwd: "/tmp",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(observation?.source, "session-start");
+      assert.equal(observation?.contextTokens, 800001);
+      assert.equal(observation?.state, "likely-expired");
+      assert.equal(observation?.ttlSeconds, 3600);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("marks a restored prefix expired when the requested model changes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        resumeCursor: {
+          resume: nativeSessionId,
+          claudeCache: { ...resumedObservation, model: "claude-opus-4-6" },
+        },
+      });
+      const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(observation?.state, "likely-expired");
+      assert.equal(observation?.contextTokens, resumedObservation.contextTokens);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not restore pre-compaction cache metadata from a sparse startup hook", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId, claudeCache: resumedObservation },
+      });
+      const boundary = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.type === "thread.state.changed" && event.payload.state === "compacted",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      emitCompactionBoundary(harness.query, nativeSessionId, "cache-boundary");
+      yield* Fiber.join(boundary);
+      const hook = harness.getLastCreateQueryInput()!.options.hooks!.SessionStart![0]!.hooks[0]!;
+      yield* Effect.promise(() =>
+        hook(
+          {
+            hook_event_name: "SessionStart",
+            session_id: nativeSessionId,
+            source: "compact",
+            transcript_path: "/tmp/fixture.jsonl",
+            cwd: "/tmp",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(observation?.state, "unknown");
+      assert.isUndefined(observation?.contextTokens);
+      assert.isUndefined(observation?.lastResponseAt);
+      assert.isUndefined(observation?.ttlSeconds);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("ignores a retired process's late hook and mismatched persisted identity", () => {
+    const harness = makeMultiQueryHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId },
+      });
+      const oldHook = harness.createInputs[0]!.options.hooks!.SessionStart![0]!.hooks[0]!;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: {
+          resume: nativeSessionId,
+          claudeCache: { ...resumedObservation, nativeSessionId: "another-session" },
+        },
+      });
+      yield* Effect.promise(() =>
+        oldHook(
+          {
+            hook_event_name: "SessionStart",
+            session_id: nativeSessionId,
+            source: "resume",
+            context_tokens: 999999,
+            prompt_cache_likely_expired: true,
+            transcript_path: "/tmp/fixture.jsonl",
+            cwd: "/tmp",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      assert.isUndefined(yield* adapter.getClaudeCacheObservation!(THREAD_ID));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 });

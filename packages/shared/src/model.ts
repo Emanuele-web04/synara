@@ -827,8 +827,8 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
 
 /**
  * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`, which replays the whole
- * conversation as uncached input tokens, so it must only happen for options
+ * subprocess. Restarting resumes via `--resume`; an unchanged conversation
+ * prefix can still use the provider cache until its TTL expires. Restart only for options
  * fixed at spawn — currently only `max` effort, which has no live Settings
  * equivalent. Model changes use `setModel`; other effort levels, fast mode,
  * ultracode, the auto-compact budget, and the thinking toggle all use the

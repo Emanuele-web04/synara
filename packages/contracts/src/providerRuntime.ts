@@ -13,6 +13,7 @@ import {
   TurnId,
 } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
+import { ClaudeCacheObservation } from "./claudeCache";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -317,6 +318,7 @@ const ThreadMetadataUpdatedPayload = Schema.Struct({
 export type ThreadMetadataUpdatedPayload = typeof ThreadMetadataUpdatedPayload.Type;
 
 export const ThreadTokenUsageSnapshot = Schema.Struct({
+  claudeCache: Schema.optional(ClaudeCacheObservation),
   // Provider session totals, distinct from the latest request/context snapshot.
   cumulativeUsage: Schema.optional(
     Schema.Struct({
