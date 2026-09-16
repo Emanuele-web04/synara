@@ -853,11 +853,24 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </CommandGroupLabel>
                     {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
                       const matchLabel = threadMatchLabel({ matchKind, messageMatchCount });
+                      const normalizedQuery = trimmedQuery.replaceAll(/\s+/g, " ").toLowerCase();
                       const matchContext =
                         snippet ??
                         (matchKind === "project"
-                          ? [thread.projectName, thread.projectRemoteName, thread.spaceName]
-                              .filter(Boolean)
+                          ? [
+                              ...new Set([
+                                thread.projectName,
+                                thread.projectRemoteName,
+                                thread.spaceName,
+                              ]),
+                            ]
+                              .filter((name) =>
+                                name
+                                  .trim()
+                                  .replaceAll(/\s+/g, " ")
+                                  .toLowerCase()
+                                  .includes(normalizedQuery),
+                              )
                               .join(" · ")
                           : null);
                       return (

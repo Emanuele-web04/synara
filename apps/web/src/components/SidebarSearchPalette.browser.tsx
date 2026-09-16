@@ -20,7 +20,7 @@ const thread: SidebarSearchThread = {
   messages: [{ text: "Check the expired session token" }],
 };
 
-async function renderPalette() {
+async function renderPalette(searchThread: SidebarSearchThread = thread) {
   const onOpenThread = vi.fn();
   await render(
     <QueryClientProvider client={new QueryClient()}>
@@ -31,7 +31,7 @@ async function renderPalette() {
         onOpenChange={vi.fn()}
         actions={[]}
         projects={[]}
-        threads={[thread]}
+        threads={[searchThread]}
         onCreateChat={vi.fn()}
         onCreateThread={vi.fn()}
         onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
@@ -81,4 +81,18 @@ it("keeps recent and title matches compact, while retaining message snippets", a
   await input.fill("expired");
   await expect.element(result).toHaveTextContent("Check the expired session token");
   await expect.element(result).toHaveTextContent("Chat match");
+});
+
+it("shows only unique matching metadata so a space match is not buried behind project names", async () => {
+  await renderPalette({ ...thread, projectRemoteName: thread.projectName });
+  const input = page.getByPlaceholder("Search chats or run a command");
+  await input.fill("Dashboard");
+  const result = page.getByRole("option", { name: /Fix login flow/ });
+  await expect.element(result).toHaveTextContent("Project match");
+  // One occurrence in the compact header, one highlighted match explanation.
+  expect(result.element().textContent?.match(/Dashboard/g)).toHaveLength(2);
+  await expect.element(result).not.toHaveTextContent(thread.spaceName);
+  await input.fill("  cLiEnT   work  ");
+  await expect.element(result).toHaveTextContent("Client work");
+  expect(result.element().textContent?.match(/Dashboard/g)).toHaveLength(1);
 });
