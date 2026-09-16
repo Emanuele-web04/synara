@@ -26,6 +26,242 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
   {
+    version: "0.8.4",
+    date: "Sep 14",
+    features: [
+      {
+        id: "status-cpu",
+        title: "Lower CPU use while tasks are working",
+        description: "Status animations share their timing, reducing repeated interface work.",
+        details:
+          "In three paired local Electron status-fixture samples, median total CPU time fell from 1.489 to 0.956 seconds (35.8%), GPU-process CPU from 0.894 to 0.487 seconds (45.5%), and renderer CPU from 0.577 to 0.448 seconds (22.2%) per eight-second sample. This isolated two-animation test uses the real stylesheet and macOS vibrancy; it measures CPU work in the graphics helper, not hardware GPU utilization, battery life or whole-app savings. Reduced Motion remains supported.",
+      },
+      {
+        id: "history-memory",
+        title: "Less temporary RAM for large histories",
+        description:
+          "History queries select the visible records before loading large message and tool bodies.",
+        details:
+          "In a synthetic history with 6,000 messages and 6,000 tool activities of 16 KiB each, bulk-message query-worker peak RSS fell from 565.61 to 377.48 MiB (33.3%) and bulk-activity peak RSS from 255.92 to 115.16 MiB (55.0%). Median query time fell from 43.66 to 20.44 ms and 19.15 to 7.21 ms respectively. These are three-sample query-worker measurements, including warmup, with matching returned content; they are not total Synara RAM figures.",
+      },
+      {
+        id: "provider-memory",
+        title: "Stop retaining duplicate provider output",
+        description:
+          "OpenCode and Pi keep less obsolete tool state, and provider cleanup retains ownership until teardown completes.",
+        details:
+          "In a forced-GC OpenCode comparison-key fixture with 200 outputs totaling 50 MiB, retained keys fell from 50.13 to 0.14 MiB, removing 49.99 MiB of duplicate heap; parts plus keys fell from 100.19 to 50.20 MiB. Hash creation took 24.65 ms versus 8.18 ms, trading CPU for lower retention. A separate cumulative-update fixture fell from 32.50 to 0.59 MiB. These independent fixtures cannot be added together or treated as whole-app RAM. Closed host terminals and callback buffers are also disposed more reliably.",
+      },
+      {
+        id: "streaming-storage",
+        title: "Much less rewriting during long answers",
+        description:
+          "Streamed text is appended in chunks and assembled at completion instead of rewriting the growing answer for every delta.",
+        details:
+          "For a 200 KB answer delivered in 40-byte chunks, a paired production-engine fixture reduced SQLite WAL growth from 1,346.27 to 402.48 MiB (70.1%) and median streaming time from 2,651.2 to 1,738.1 ms (34.4%). A separate follow-up reduced engine WAL from about 402 to 316.4 MiB by cutting the fixed write cost. Completion rose from 3.26 to 11.97 ms as text is assembled once. WAL volume in these controlled tests is not physical SSD writes or an everyday disk-saving percentage; history, replay and completion remain durable. Release validation also fixed embedded NUL characters truncating completed text when read through Node 24 SQLite.",
+      },
+      {
+        id: "chat-opening",
+        title: "Faster warm chat opening",
+        description:
+          "Shared storage-schema machinery avoids repeated setup while every read still validates current saved data.",
+        details:
+          "In six local Chromium development-harness samples per variant and fixture, median warm route opening fell from 570.5 to 374.5 ms (34.4%) for a short chat and from 595.3 to 326.3 ms (45.2%) for the large fixture. RPC was mocked and modules were warm. These timings measure the storage-cache change inside the refactored route, not packaged startup or model response speed. Workflow timers also update their own card without rerendering the parent transcript.",
+      },
+      {
+        id: "responsive-runtime",
+        title: "Keep commands responsive under heavy history and slow consumers",
+        description:
+          "Background event consumers and optional provider discovery no longer hold up the command queue.",
+        details:
+          "Live event delivery is bounded, with durable replay restoring missed sequences in order. Latest-turn queries fetch one indexed result per chat instead of loading every historical turn. A retained synthetic query result with 600 chats and 300,000 turns records 253.79 to 21.03 ms median and 300,000 to 600 returned rows; its hardware and repetition details were not retained, so this is limited operation-level evidence. Optional OpenCode model inventory and MCP discovery have bounded cancellation and timeouts.",
+      },
+      {
+        id: "browser-sessions",
+        title: "Browser automation with saved sessions and embedded popups",
+        description:
+          "The embedded browser now uses BetterWright and keeps sign-in popups inside Synara.",
+        details:
+          "Import eligible login cookies for the current site, or choose All sites in this profile with explicit consent. Restore protected imported sessions across restarts where secure storage is available. Saved Logins adds save/update prompts, optional autosave, account deletion, lock/unlock and master-password-protected reveal. Optional agent access discovers account metadata only; agent password filling and generation are unavailable. Browser cookies and sign-ins are shared across tasks. Browser input, redirects, cancellation, hidden captures, Retina scaling, uploads, focus restoration and stale-session recovery have also been improved.",
+      },
+      {
+        id: "browser-previews",
+        title: "Expand browser previews and improve Safari setup",
+        description:
+          "Floating previews open into the interactive browser, with clearer Safari access onboarding.",
+        details:
+          "Collapsed browser previews remain noninteractive while agents can continue operating their target. Safari setup explains Full Disk Access and uses a refreshed app-icon and Finder flow, preserves earlier choices, and can be reopened. Browser targets survive panel mounting and recover stale connections after confirmed teardown.",
+      },
+      {
+        id: "onboarding",
+        title: "A guided first run",
+        description:
+          "Set up providers, sign in, choose an appearance and add your first project in one flow.",
+        details:
+          "The interactive setup includes provider discovery and enablement, a sign-in terminal, theme selection and a feature tour. Drop a project folder into setup or choose one manually. Replay onboarding from Settings; existing installations retain completion when their last project is removed or defaults are restored.",
+      },
+      {
+        id: "workspace-editor",
+        title: "Edit workspace files directly in Synara",
+        description:
+          "Edit from Explorer, full-file previews and supported working-tree diffs, with a lightweight large-file fallback in Explorer.",
+        details:
+          "The editor follows your app theme and fonts and adds undo, redo, undoable revert-all and immediate Save controls. Explorer uses highlighting up to 1,000 lines and 250,000 characters; larger files use plain editing, with line numbers up to 20,000 lines. The full file and diff editors continue to use Pierre. Unsupported, truncated and unsafe file formats stay read-only. Cmd/Ctrl+S can be configured through the existing keybinding system.",
+      },
+      {
+        id: "editor-autosave",
+        title: "Autosave with clear conflict recovery",
+        description:
+          "Edits save after a 400 ms typing pause, and navigation or sending a prompt waits for pending writes.",
+        details:
+          "One shared draft and serialized writer coordinate Explorer, file and diff editors. Saves preserve original encoding and line endings and refresh Unstaged changes without staging. Failed or conflicting saves retain the draft in the current app session, stop automatic retries and expose explicit reload/discard or full-editor Overwrite recovery. These retained drafts are not crash-recovery backups; new typing during reload is protected.",
+      },
+      {
+        id: "diff-workflow",
+        title: "Compare refs, inspect blame and navigate changes",
+        description:
+          "Review gains branch or commit comparisons, line blame, word-level highlighting and direct editing of supported working files.",
+        details:
+          "Compare scopes are remembered per repository. Next/previous navigation, scrollbar markers and Alt+Up/Down move through changed files while the file tree follows the visible file. Blame uses the displayed base and old rename paths where needed. Binary, rename, symlink, submodule, empty-repository and SHA-256 repository cases receive more accurate handling.",
+      },
+      {
+        id: "live-and-large-diffs",
+        title: "Keep Git views fresh and large reviews usable",
+        description:
+          "Editor saves, watched file changes and Git operations refresh mounted diffs and file gutters.",
+        details:
+          "Working-tree patches over the size budget now return a clearly marked partial diff rather than failing the entire review. Truncation preserves UTF-8 boundaries and shares the budget across tracked and untracked content; AI summaries are blocked for incomplete input. Branch movement and ref comparisons refresh their displayed base instead of showing stale results.",
+      },
+      {
+        id: "selection-chat",
+        title: "Turn selected text into the next conversation",
+        description: "Select assistant text to Add to Chat, Add to Side or Add to new Chat.",
+        details:
+          "A compact shared mini composer creates a new task with the selected context. Failed queued sends remain recoverable with bounded retries. Selection controls follow your font settings and action labels no longer clip. Side chats can choose provider and model before their first real turn, including chats with imported fork history.",
+      },
+      {
+        id: "effort-and-extras",
+        title: "A clearer composer with an effort slider",
+        description:
+          "Adjust supported reasoning levels with a magnetic stepped slider and keep it open after choosing a model.",
+        details:
+          "The slider includes supported Fast and reset controls, corrected minimum fill and drag feedback; a composer setting controls the layout. The redesigned + panel groups attachments, AppSnap, Goal, Plan, Debug and supported Fast actions. Goal insertion preserves your literal text, and Fast reset and selected skill input no longer leave stale or duplicate values.",
+      },
+      {
+        id: "appsnap-picker",
+        title: "Choose the application window to attach",
+        description:
+          "On macOS, AppSnap offers a window picker with app icons, titles and capture readiness.",
+        details:
+          "The composer can capture the frontmost document window in one click; its trailing arrow or ArrowRight opens the window list. It prefers titled documents over auxiliary windows and validates the capture target with bounded retries. Window capture still depends on the relevant macOS permissions.",
+      },
+      {
+        id: "pr-context",
+        title: "Bring pull requests into the conversation",
+        description:
+          "Add expandable PR context cards from Repair or Add to Chat and open task PRs in the right dock.",
+        details:
+          "PR context survives drafts, queues, sends and retries. Modifier-click still opens GitHub. Merge controls wait for capabilities and details and recheck them at confirmation. Environment status updates immediately after actions, ignores stale fetches, and keeps merged or closed PR status visible.",
+      },
+      {
+        id: "project-preferences",
+        title: "Remember how each project starts new chats",
+        description:
+          "Each project remembers Local or Worktree, with clearer names and more consistent pickers.",
+        details:
+          "Configured project names remain readable in narrow sidebar rows. Project, branch and environment menus share compact sizing and app typography, the environment selector is labeled Work in, and sidebar PR badges use square icon controls with accessible PR numbers.",
+      },
+      {
+        id: "documents-wikilinks",
+        title: "Maximize documents and follow workspace Wiki links",
+        description:
+          "Expand file and document previews across the chat area and restore their split layout.",
+        details:
+          "Closing the final maximized pane returns to chat. Markdown supports basic workspace-root Wiki links such as [[notes/design]], [[notes/design|Design notes]] and [[guide.pdf]]. Ordinary Markdown links remain relative to the document. Embeds, heading links and block references are not added by this change.",
+      },
+      {
+        id: "codex-recovery",
+        title: "More reliable Codex startup, steering and Markdown",
+        description:
+          "Retry confirmed startup failures and keep tool calls and Markdown intact across text segments and steering.",
+        details:
+          "Codex uses one actual SQLite home instead of database/WAL symlinks through the overlay, preserving explicit overrides and regular files. Confirmed teardown permits a startup retry; uncertain process state remains protected. Effective turn boundaries persist across reloads, adjacent Markdown is kept together, and first-task startup no longer flickers.",
+      },
+      {
+        id: "claude-usage",
+        title: "Correct Claude token totals and recover pending questions",
+        description:
+          "Repeated SDK content blocks no longer count the same response tokens multiple times.",
+        details:
+          "Context usage, processed totals, cache usage and subagent totals now retain their distinct scopes. Profile Stats uses versioned, verified accounting and explains incomplete older data instead of inventing totals. Pending questions recover after restarts and expired sessions, duplicate submissions reconcile, and overage telemetry maps to the Fable weekly sublimit. Native fork resumes avoid redundant transcript recaps where supported.",
+      },
+      {
+        id: "pi-cursor-antigravity",
+        title: "Better follow-ups, background work and provider status",
+        description:
+          "Pi queues mid-turn messages, Cursor Task calls appear as active subagents, and Antigravity background commands survive its Stop hook.",
+        details:
+          "Pi retryable errors become inline warnings without losing the active turn or autonomous goal; End task cancels backoff, prompt/stop races settle, and extension status stays out of tool rows. Cursor quiet subagents remain Working. Antigravity preserves final print output, terminal results and command lifecycle while reconciling delayed and duplicate hooks. OpenCode normalizes equivalent workspace/server identities to avoid duplicate warm servers.",
+      },
+      {
+        id: "models-automations",
+        title: "Updated model names and exact automation targets",
+        description:
+          "GPT-6 Astra becomes the Codex default, and agent-authored automations can select an exact provider and model.",
+        details:
+          "Astra supports Low, Medium, High, Extra High, Max and Ultra effort with Medium as its default. Model display names are consistent without rewriting executable IDs. Standalone and dedicated automations validate explicit provider/model/options against the target workspace, can be created disabled, expose the chosen model, and preserve omitted settings on update.",
+      },
+      {
+        id: "transcript-order",
+        title: "A steadier transcript while work is in progress",
+        description:
+          "Message arrival and layout changes have separate scroll signals, and late activity keeps its chronological place.",
+        details:
+          "Tool-only activity no longer prolongs message-follow holds. Context compaction has a progress row and icon, and session restart/context-loss markers explain recovery in plain language. Duplicate approval responses and journal acknowledgement retries reconcile without stale handlers or duplicated buffered output. Completion text survives missing projected detail.",
+      },
+      {
+        id: "simulator-images-math",
+        title: "Fix simulator previews, images, math and workspace links",
+        description:
+          "The simulator no longer stays Connecting after its first frame, and chat screenshots recover their previews and downloads.",
+        details:
+          "Authenticated per-file grants renew when needed without background polling. Inspected input images stay separate from generated outputs. Bracketed display math, numeric inline formulas and literal dollar signs before links render correctly. Windows workspace directory links open through Explorer, and malformed theme share strings show a readable validation error.",
+      },
+      {
+        id: "desktop-lifetime",
+        title: "Stop the backend when its desktop owner exits",
+        description:
+          "The backend observes its owning Electron process and runs normal cleanup when that parent disappears.",
+        details:
+          "A bounded watchdog terminates a backend whose finalizer hangs, while command-line stdin behavior is preserved. Provider startup failures retain cleanup ownership, failed idle teardown can retry, and deleted host/dock terminals dispose their runtimes. These changes are covered by source and subprocess tests; release packaging is verified separately.",
+      },
+      {
+        id: "visual-polish",
+        title: "More consistent menus, glass and message surfaces",
+        description:
+          "Refined sidebar translucency, selected rows, message corners and softer surface borders in both themes.",
+        details:
+          "Final message spacing is more compact, notification surfaces are more consistent, toast actions use font-matched ghost buttons, and native macOS context-menu icons have the correct size. Picker controls use your configured typography, selection labels fit, and the sidebar trigger uses the shared PanelLeft icon.",
+      },
+      {
+        id: "transcript-marker-removal",
+        title: "Saved transcript highlights and underlines are removed",
+        description:
+          "The old marker controls and their stored annotation payloads are removed in this update.",
+        details:
+          "The migration preserves event identity, ordering and replay continuity while deleting saved highlight/underline data. Message history, pins and notes are preserved. Text selection now focuses on sending useful context into a chat or side chat.",
+      },
+      {
+        id: "build-and-maintenance",
+        title: "More focused CI work and a smaller ChatView module",
+        description:
+          "Server and browser tests are partitioned around their slowest work, while ChatView responsibilities move into focused modules.",
+        details:
+          "The local ChatView test critical path fell from 214.01 to 161.30 seconds (24.6%) and workflow jobs fell from 17 to 16; a whole hosted-CI speedup remains unverified. Windows reinstalls node_modules from the Bun cache for reliable dependency resolution. ChatView shrank from 12,932 to 5,868 lines, which is a maintainability result. Typecheck documentation now clarifies prior benchmark methodology; those earlier compiler gains are not new in 0.8.4.",
+      },
+    ],
+  },
+  {
     version: "0.8.3",
     date: "Sep 6",
     features: [

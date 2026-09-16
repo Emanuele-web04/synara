@@ -7,7 +7,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import {
@@ -25,21 +25,14 @@ import {
 import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
-import {
-  Command,
-  CommandGroup,
-  CommandGroupLabel,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "../ui/command";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { ProviderIcon } from "../ProviderIcon";
 import {
-  COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
-  COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
-} from "./composerPickerStyles";
+  COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME,
+  COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
+  ComposerMenuPanel,
+  type ComposerMenuPanelGroup,
+} from "./ComposerMenuPanel";
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -236,9 +229,6 @@ type ComposerCommandGroupModel = {
   items: ComposerCommandItem[];
 };
 
-const COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME =
-  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60";
-
 export function groupCommandItems(
   items: ComposerCommandItem[],
   triggerKind: ComposerTriggerKind | null,
@@ -318,84 +308,56 @@ export function ComposerCommandMenu(props: {
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  const itemRefs = useRef<Record<string, HTMLElement | null>>({});
   const groups = groupCommandItems(
     props.items,
     props.triggerKind,
     props.groupSlashCommandSections ?? true,
   );
-  const shouldRenderList = props.items.length > 0 || props.triggerKind === "mention";
-
-  useEffect(() => {
-    if (!props.activeItemId) {
-      return;
-    }
-
-    itemRefs.current[props.activeItemId]?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [props.activeItemId]);
+  const panelGroups: ComposerMenuPanelGroup[] = groups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    rows: group.items.map((item) => ({
+      id: item.id,
+      icon: commandMenuItemGlyph(item, props.resolvedTheme),
+      title:
+        item.type === "slash-command" || item.type === "provider-native-command"
+          ? commandMenuTitle(item)
+          : item.label,
+      secondary: commandMenuSecondaryText(item),
+      trailing: commandMenuTrailingMeta(item),
+    })),
+  }));
+  const itemsById = new Map(props.items.map((item) => [item.id, item]));
 
   return (
-    <Command
-      autoHighlight={false}
-      mode="none"
-      onItemHighlighted={(highlightedValue) => {
-        props.onHighlightedItemChange(
-          typeof highlightedValue === "string" ? highlightedValue : null,
-        );
+    <ComposerMenuPanel
+      groups={panelGroups}
+      activeRowId={props.activeItemId}
+      onHighlightRow={props.onHighlightedItemChange}
+      onSelectRow={(rowId) => {
+        const item = itemsById.get(rowId);
+        if (item) props.onSelect(item);
       }}
-    >
-      <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
-        {shouldRenderList ? (
-          <CommandList className="max-h-72 scroll-py-1 p-1">
-            {groups.map((group, groupIndex) => (
-              <div key={group.id}>
-                {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
-                <CommandGroup>
-                  {group.label ? (
-                    <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
-                      {group.label}
-                    </CommandGroupLabel>
-                  ) : null}
-                  {group.items.map((item) => (
-                    <ComposerCommandMenuItem
-                      key={item.id}
-                      item={item}
-                      resolvedTheme={props.resolvedTheme}
-                      isActive={props.activeItemId === item.id}
-                      itemRef={(node) => {
-                        itemRefs.current[item.id] = node;
-                      }}
-                      onHighlight={props.onHighlightedItemChange}
-                      onSelect={props.onSelect}
-                    />
-                  ))}
-                </CommandGroup>
-              </div>
-            ))}
-            {props.triggerKind === "mention" ? (
-              <>
-                {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
-                {/* This footer is informational copy, not a selectable result group. */}
-                <div className="pt-0.5 pb-2">
-                  <p
-                    className={cn(
-                      COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
-                      "px-2 py-0 font-medium text-muted-foreground text-xs",
-                    )}
-                  >
-                    Files
-                  </p>
-                  <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
-                    Type to search for files
-                  </p>
-                </div>
-              </>
-            ) : null}
-          </CommandList>
-        ) : null}
-        {props.items.length === 0 && (
+      footer={
+        props.triggerKind === "mention" ? (
+          /* This footer is informational copy, not a selectable result group. */
+          <div className="pt-0.5 pb-2">
+            <p
+              className={cn(
+                COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
+                "px-2 py-0 font-medium text-muted-foreground text-xs",
+              )}
+            >
+              Files
+            </p>
+            <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+              Type to search for files
+            </p>
+          </div>
+        ) : null
+      }
+      status={
+        props.items.length === 0 ? (
           <p
             className={cn(
               "text-muted-foreground/50 text-[11px]",
@@ -417,17 +379,11 @@ export function ComposerCommandMenu(props: {
                     ? "No matching skill."
                     : "No matching command."))}
           </p>
-        )}
-      </div>
-    </Command>
+        ) : null
+      }
+    />
   );
 }
-
-// Single icon column shared by every menu row. Rows differ only by the glyph,
-// its color, and the name — slot geometry stays constant so files, folders,
-// skills, plugins, commands, and agents line up identically.
-const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
-  "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60";
 
 // Files mirror the recap / diff changed-files treatment (FileEntryIcon at
 // size-3.5 with the same dimmed foreground) so a file reads identically whether
@@ -435,7 +391,7 @@ const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
 const COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME =
   "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
 
-const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = "size-3.5";
+const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME;
 
 function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {
   const Icon = slashCommandIcon(command, fallback);
@@ -491,83 +447,3 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
       return null;
   }
 }
-
-function ComposerCommandItemIcon(props: {
-  item: ComposerCommandItem;
-  resolvedTheme: "light" | "dark";
-  isActive: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME,
-        props.isActive && "text-foreground/70",
-      )}
-    >
-      {commandMenuItemGlyph(props.item, props.resolvedTheme)}
-    </span>
-  );
-}
-
-// Props are destructured rather than read off a `props` object: `itemRef` lands on a JSX `ref`,
-// which makes React Compiler treat it as a ref — and through `props.itemRef` that verdict spreads
-// to the whole `props` object, so every later `props.x` read looks like a ref access during render
-// and the component bails out of compilation entirely. Separate bindings keep the verdict on
-// `itemRef` alone. Do not collapse these back into a `props` parameter.
-const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem({
-  item,
-  resolvedTheme,
-  isActive,
-  itemRef,
-  onHighlight,
-  onSelect,
-}: {
-  item: ComposerCommandItem;
-  resolvedTheme: "light" | "dark";
-  isActive: boolean;
-  itemRef: (node: HTMLElement | null) => void;
-  onHighlight: (itemId: string | null) => void;
-  onSelect: (item: ComposerCommandItem) => void;
-}) {
-  const secondaryText = commandMenuSecondaryText(item);
-  const trailingMeta = commandMenuTrailingMeta(item);
-
-  return (
-    <CommandItem
-      ref={itemRef}
-      value={item.id}
-      className={cn(
-        COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-        isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
-      )}
-      onMouseMove={() => {
-        if (!isActive) onHighlight(item.id);
-      }}
-      onMouseDown={(event) => {
-        event.preventDefault();
-      }}
-      onClick={() => {
-        onSelect(item);
-      }}
-    >
-      <ComposerCommandItemIcon item={item} resolvedTheme={resolvedTheme} isActive={isActive} />
-      <div className="min-w-0 flex flex-1 items-center gap-3">
-        <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-            {item.type === "slash-command" || item.type === "provider-native-command"
-              ? commandMenuTitle(item)
-              : item.label}
-          </span>
-          {secondaryText ? (
-            <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>
-          ) : null}
-        </div>
-        {trailingMeta ? (
-          <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/42">
-            {trailingMeta}
-          </span>
-        ) : null}
-      </div>
-    </CommandItem>
-  );
-});

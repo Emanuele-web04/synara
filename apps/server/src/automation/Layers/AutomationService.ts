@@ -2636,6 +2636,55 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateHeartbeatTarget(definition);
       });
 
+    const validateDedicatedProviderUpdate = (
+      current: AutomationDefinition,
+      updated: AutomationDefinition,
+    ) =>
+      Effect.gen(function* () {
+        if (
+          !automationOwnsItsThread(current.mode) ||
+          !automationOwnsItsThread(updated.mode) ||
+          current.modelSelection.provider === updated.modelSelection.provider
+        ) {
+          return;
+        }
+        // The first run may already be opening its task before targetThreadId is
+        // attached. Do not change its provider while that dispatch is in flight.
+        const activeRuns = yield* automationRepository
+          .listActiveRunsForDefinition({ automationId: current.id })
+          .pipe(Effect.mapError(toServiceError("Failed to load active automation runs.")));
+        if (activeRuns.length > 0) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "A dedicated automation cannot change providers while a run is active.",
+            }),
+          );
+        }
+        if (current.targetThreadId === null) return;
+        const threadOption = yield* projectionSnapshotQuery
+          .getThreadShellById(current.targetThreadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load the dedicated automation task.")));
+        if (Option.isNone(threadOption)) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message:
+                "The dedicated automation's task was not found. Create a new automation to use another provider.",
+            }),
+          );
+        }
+        const thread = threadOption.value;
+        const boundProvider =
+          thread.session?.providerName ??
+          (thread.latestTurn !== null ? thread.modelSelection.provider : undefined);
+        if (boundProvider !== undefined && boundProvider !== updated.modelSelection.provider) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: `This dedicated automation continues a task bound to "${boundProvider}". Keep that provider or create a new automation.`,
+            }),
+          );
+        }
+      });
+
     const saveDefinitionUpdate = (
       input: AutomationUpdateInput,
       attempt: number,
@@ -2652,6 +2701,7 @@ export const AutomationServiceLive = Layer.effect(
         const now = nextDefinitionUpdatedAt(current.updatedAt);
         const updated = mergeDefinitionUpdate(current, input, now, jitterContextFor(current.id));
         yield* validateDefinitionUpdate(updated, now);
+        yield* validateDedicatedProviderUpdate(current, updated);
         const savedOption = yield* automationRepository
           .saveDefinition({ definition: updated, expectedUpdatedAt: current.updatedAt })
           .pipe(Effect.mapError(toServiceError("Failed to update automation.")));
