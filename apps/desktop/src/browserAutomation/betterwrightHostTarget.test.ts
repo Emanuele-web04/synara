@@ -130,13 +130,12 @@ describe("synaraHostTarget", () => {
     expect(contents.session.setProxy).toHaveBeenCalledTimes(1);
     gate.resolve();
     await rotating;
-    expect(contents.session.setProxy).toHaveBeenNthCalledWith(2, { mode: "system" });
     expect(contents.session.setProxy).toHaveBeenLastCalledWith({
       mode: "fixed_servers",
       proxyRules: "socks5://127.0.0.1:10",
       proxyBypassRules: "<-loopback>",
     });
-    expect(contents.session.closeAllConnections).toHaveBeenCalledTimes(3);
+    expect(contents.session.closeAllConnections).toHaveBeenCalledTimes(2);
     await target.revokeAll();
   });
 
@@ -151,6 +150,63 @@ describe("synaraHostTarget", () => {
     const next = synaraHostTarget(contents);
     await next.connect({ proxyUrl: "socks5://127.0.0.1:11" });
     await next.revokeAll();
+  });
+
+  it("retains its session turn through rotation while another tab is queued", async () => {
+    mocks.openConnection.mockImplementation(async () => fakeConnection({}));
+    const target = synaraHostTarget(contents);
+    await target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const sibling = synaraHostTarget(contents);
+    let siblingConnected = false;
+    const queued = sibling.connect({ proxyUrl: "socks5://127.0.0.1:11" }).then(() => {
+      siblingConnected = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const rotating = target.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    await vi.waitFor(() => expect(mocks.openConnection).toHaveBeenCalledTimes(2));
+    expect(siblingConnected).toBe(false);
+    await rotating;
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({
+      mode: "fixed_servers",
+      proxyRules: "socks5://127.0.0.1:10",
+      proxyBypassRules: "<-loopback>",
+    });
+    await target.revokeAll();
+    await queued;
+    expect(siblingConnected).toBe(true);
+    await sibling.revokeAll();
+  });
+
+  it.each(["failure", "abort"])("releases a queued sibling after rotation %s", async (failure) => {
+    mocks.openConnection.mockImplementation(async () => fakeConnection({}));
+    const target = synaraHostTarget(contents);
+    await target.connect({ proxyUrl: "socks5://127.0.0.1:9" });
+    const sibling = synaraHostTarget(contents);
+    const queued = sibling.connect({ proxyUrl: "socks5://127.0.0.1:11" });
+    const gate = deferred<void>();
+    vi.mocked(contents.session.setProxy).mockImplementationOnce(async () => {
+      await gate.promise;
+      if (failure === "failure") throw new Error("rotation failed");
+    });
+    const rotating = target.connect({ proxyUrl: "socks5://127.0.0.1:10" });
+    const rejected = expect(rotating).rejects.toThrow(
+      failure === "abort" ? "interrupted" : "rotation failed",
+    );
+    await vi.waitFor(() => expect(contents.session.setProxy).toHaveBeenCalledTimes(2));
+    const revoked = failure === "abort" ? target.revokeAll() : undefined;
+    gate.resolve();
+    await rejected;
+    await revoked;
+    await queued;
+    expect(mocks.openConnection).toHaveBeenCalledTimes(2);
+    expect(contents.session.setProxy).toHaveBeenNthCalledWith(3, { mode: "system" });
+    await target.revokeAll();
+    expect(contents.session.setProxy).toHaveBeenLastCalledWith({
+      mode: "fixed_servers",
+      proxyRules: "socks5://127.0.0.1:11",
+      proxyBypassRules: "<-loopback>",
+    });
+    await sibling.revokeAll();
   });
 
   it("revokes during proxy setup before opening a transport", async () => {

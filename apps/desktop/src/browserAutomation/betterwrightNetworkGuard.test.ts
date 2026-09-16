@@ -173,4 +173,27 @@ describe("BetterwrightNetworkGuard", () => {
     expect(setProxy).toHaveBeenNthCalledWith(3, { mode: "system" });
     await next.release();
   });
+
+  it("drains replacement before releasing its turn and refuses stale replacements", async () => {
+    const { browserSession, setProxy, closeAllConnections } = fixture();
+    const guard = getBetterwrightNetworkGuard(browserSession);
+    const first = await guard.attach("socks5://127.0.0.1:4321");
+    const gate = deferred<void>();
+    closeAllConnections.mockReturnValueOnce(gate.promise);
+    const replacing = first.replace("socks5://127.0.0.1:4322");
+    await vi.waitFor(() => expect(setProxy).toHaveBeenCalledTimes(2));
+    const releasing = first.release();
+    expect(first.closed).toBe(true);
+    const queued = guard.attach("socks5://127.0.0.1:4323");
+    await expect(first.replace("socks5://127.0.0.1:4324")).rejects.toThrow("closed");
+    expect(setProxy).toHaveBeenCalledTimes(2);
+    gate.resolve();
+    await replacing;
+    await releasing;
+    const next = await queued;
+    expect(setProxy).toHaveBeenNthCalledWith(3, { mode: "system" });
+    await expect(first.replace("socks5://127.0.0.1:4324")).rejects.toThrow("closed");
+    expect(next.closed).toBe(false);
+    await next.release();
+  });
 });

@@ -2,6 +2,8 @@ import type { Session } from "electron";
 
 export interface BetterwrightNetworkGuardLease {
   readonly closed: boolean;
+  /** The caller must drain its old transports before replacing the worker proxy. */
+  replace(proxyUrl: string, signal?: AbortSignal): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -34,6 +36,7 @@ export class BetterwrightNetworkGuard {
         get closed() {
           return lease.closed;
         },
+        replace: (proxyUrl, signal) => lease.replace(proxyUrl, signal),
         release: () => {
           const restoring = lease.release();
           // A failed restore keeps ownership reserved. The next turn must
@@ -63,6 +66,46 @@ export class BetterwrightNetworkGuard {
     }
     const owner: ProxyOwnership = { failed: false };
     this.owner = owner;
+    await this.install(owner, proxyUrl, signal);
+    const guard = this;
+    let changing = Promise.resolve();
+    let releasing: Promise<void> | undefined;
+    const closed = () =>
+      guard.owner !== owner ||
+      owner.failed ||
+      owner.restoring !== undefined ||
+      releasing !== undefined;
+    return {
+      get closed() {
+        return closed();
+      },
+      replace: (proxyUrl, signal) => {
+        if (closed()) return Promise.reject(new Error("Browser session lease is closed."));
+        const replacing = changing.then(() => {
+          if (guard.owner !== owner || owner.failed)
+            throw new Error("Browser session lease is closed.");
+          signal?.throwIfAborted();
+          return this.install(owner, proxyUrl, signal);
+        });
+        changing = replacing.catch(() => {});
+        return replacing;
+      },
+      release: () => {
+        releasing ??= changing
+          .then(() => this.restore(owner))
+          .finally(() => {
+            releasing = undefined;
+          });
+        return releasing;
+      },
+    };
+  }
+
+  private async install(
+    owner: ProxyOwnership,
+    proxyUrl: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     try {
       await this.browserSession.setProxy({
         mode: "fixed_servers",
@@ -84,13 +127,6 @@ export class BetterwrightNetworkGuard {
       }
       throw error;
     }
-    const guard = this;
-    return {
-      get closed() {
-        return guard.owner !== owner || owner.failed || owner.restoring !== undefined;
-      },
-      release: () => this.restore(owner),
-    };
   }
 
   private restore(owner: ProxyOwnership): Promise<void> {

@@ -221,6 +221,9 @@ async function smoke() {
     assert.equal(await workerFetch(`${blockedUrl}/service-worker`), "denied");
     assert.equal(blockedRequests, 0, "Guarded traffic reached the denied server");
 
+    const siblingRun = siblingBrowser.run("return await page.title()", { automaticUI: false });
+    await siblingQueued.promise;
+    assert.equal(siblingConnected, false, "Concurrent tab bypassed the session queue");
     // A closed transport causes the actual client to replace its worker. The
     // new worker supplies a new SOCKS proxy; the same host target must adopt it.
     await leases[0]!.close();
@@ -238,9 +241,7 @@ async function smoke() {
     );
     await assert.rejects(session.fetch(`${blockedUrl}/after-rotation`, { cache: "no-store" }));
     assert.equal(blockedRequests, 0);
-    const siblingRun = siblingBrowser.run("return await page.title()", { automaticUI: false });
-    await siblingQueued.promise;
-    assert.equal(siblingConnected, false, "Concurrent tab bypassed the session queue");
+    assert.equal(siblingConnected, false, "Rotation surrendered the current run's session turn");
     await target.revokeAll(false);
     await browser.close();
     const siblingResult = await siblingRun;

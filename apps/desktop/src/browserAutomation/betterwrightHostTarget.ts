@@ -79,28 +79,29 @@ export function synaraHostTarget(
       const result = connecting.then(async () => {
         if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
         assertAvailable();
-        await changeProxy(async () => {
-          assertAvailable();
-          if (
-            networkGuardLease &&
-            (networkGuardLease.lease.closed || networkGuardLease.proxyUrl !== proxyUrl)
-          ) {
-            await drainConnections(false);
-            await releaseProxy();
-          }
-          assertAvailable();
-          if (!networkGuardLease) {
-            networkGuardLease = {
-              proxyUrl,
-              lease: await networkGuard.attach(proxyUrl, leaseSignal),
-            };
-          }
-        }).catch((error) => {
-          assertAvailable();
-          throw error;
-        });
         let opening: Promise<OpenedConnection> | undefined;
         try {
+          await changeProxy(async () => {
+            assertAvailable();
+            if (networkGuardLease?.lease.closed) {
+              await drainConnections(false);
+              await releaseProxy();
+            } else if (networkGuardLease && networkGuardLease.proxyUrl !== proxyUrl) {
+              await drainConnections(false);
+              assertAvailable();
+              // Rotation belongs to the same run. Keep its session turn so a
+              // queued sibling cannot take over between worker generations.
+              await networkGuardLease.lease.replace(proxyUrl, leaseSignal);
+              networkGuardLease.proxyUrl = proxyUrl;
+            }
+            assertAvailable();
+            if (!networkGuardLease) {
+              networkGuardLease = {
+                proxyUrl,
+                lease: await networkGuard.attach(proxyUrl, leaseSignal),
+              };
+            }
+          });
           assertAvailable();
           opening = openBetterwrightConnection(
             contents,
@@ -124,10 +125,11 @@ export function synaraHostTarget(
             close: () => closeConnection(connection, false),
           };
         } catch (error) {
-          // An unsuccessful open must not strand the shared session's proxy.
+          // Failed setup, rotation, or open must not strand the session's turn.
           await changeProxy(async () => {
             if (connections.size === 0) await releaseProxy();
           });
+          assertAvailable();
           throw error;
         } finally {
           if (opening) pending.delete(opening);
