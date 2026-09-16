@@ -58,6 +58,14 @@ Use the existing retry helper. Do not change the public API. Run only the focuse
 
 When the question reveals a wrong assumption, correct the assumption before allowing the provider to continue.
 
+## Recover expired questions
+
+Pending Claude questions and draft answers can be restored after navigation or restart. If the provider session has expired, Synara shows an expired-question notice instead of submitting answers to a dead request. Choose **Restore answers** to put the saved answers into the composer, review them, then send them as a new message. **Dismiss** removes that recovery draft. Restoring alone does not send anything.
+
+## Session restart and context loss
+
+Transcript rail indicators distinguish a provider session restart from context loss or compaction. The task and checkout can remain intact while provider-native context changes. Inspect the indicator and the latest instruction before continuing; scrolling to earlier messages does not restore a lost native session.
+
 ## Turn was interrupted
 
 An interrupted turn may have already changed files or started commands.

@@ -71,19 +71,29 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
     [props.renderSideBySide, props.resolvedTheme],
   );
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+  // Keep live edits inside Pierre; refresh React's view on reload, layout or theme changes.
+  const content = useMemo(
+    () => (
+      <FileDiff
+        key={layout}
+        fileDiff={fileDiff}
+        options={options}
+        edit={!(props.readOnly ?? false)}
+        editorOptions={editorOptions}
+      />
+    ),
+    [layout, fileDiff, options, props.readOnly, editorOptions],
+  );
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-auto" onKeyDownCapture={saveKeyDownHandler}>
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      onKeyDownCapture={saveKeyDownHandler}
+    >
       <CodeEditBoundary>
         {/* diffStyle is effectively mount-time config on FileDiff, so a layout
             switch must remount the instance (same treatment as the diff panel). */}
-        <FileDiff
-          key={layout}
-          fileDiff={fileDiff}
-          options={options}
-          edit={!(props.readOnly ?? false)}
-          editorOptions={editorOptions}
-        />
+        {content}
       </CodeEditBoundary>
     </div>
   );

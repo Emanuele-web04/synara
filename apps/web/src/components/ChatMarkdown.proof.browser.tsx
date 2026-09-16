@@ -1,4 +1,5 @@
 import "../index.css";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -23,16 +24,19 @@ vi.mock("../lib/localImageUrls", async (importOriginal) => ({
 it("renders completion proof inline with expand and download controls", async () => {
   await page.viewport(1000, 800);
   const onImageExpand = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const mounted = await render(
-    <div style={{ width: 600 }}>
-      <ChatMarkdown
-        cwd="/workspace"
-        text={
-          "## Completion report\n\nVerified the saved result.\n\n![Saved result](/private/generated_images/browser-proof/thread/result.png)\n\nUntested: production billing."
-        }
-        onImageExpand={onImageExpand}
-      />
-    </div>,
+    <QueryClientProvider client={queryClient}>
+      <div style={{ width: 600 }}>
+        <ChatMarkdown
+          cwd="/workspace"
+          text={
+            "## Completion report\n\nVerified the saved result.\n\n![Saved result](/private/generated_images/browser-proof/thread/result.png)\n\nUntested: production billing."
+          }
+          onImageExpand={onImageExpand}
+        />
+      </div>
+    </QueryClientProvider>,
   );
   try {
     const image = mounted.getByRole("img", { name: "Saved result" });
@@ -51,5 +55,6 @@ it("renders completion proof inline with expand and download controls", async ()
     await expect.element(mounted.getByText("Untested: production billing.")).toBeVisible();
   } finally {
     await mounted.unmount();
+    queryClient.clear();
   }
 });
