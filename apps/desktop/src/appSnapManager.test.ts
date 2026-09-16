@@ -1040,9 +1040,8 @@ describe("AppSnap window picker requests", () => {
       );
       const capture = await capturing;
       expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
-      // The manager resolves the request before unlinking the staged file, so
-      // wait for the post-settlement cleanup instead of racing it.
-      await vi.waitFor(() => expect(FS.existsSync(capturePath)).toBe(false));
+      // The durable capture resolves before asynchronous helper-file cleanup.
+      await expect.poll(() => FS.existsSync(capturePath)).toBe(false);
       expect(await manager.listPendingCaptures()).toHaveLength(1);
       await manager.acknowledgeCapture(capture.id);
       expect(await manager.listPendingCaptures()).toHaveLength(0);

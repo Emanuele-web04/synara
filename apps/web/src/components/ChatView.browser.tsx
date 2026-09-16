@@ -12,6 +12,7 @@ import {
   type AutomationDefinition,
   CheckpointRef,
   DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -78,6 +79,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -2930,6 +2932,78 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([false, true])(
+    "flushes editor changes before sending and preserves the prompt on failure=%s",
+    async (failSave) => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotWithLongAssistantResponse(),
+      });
+      let unsubscribe = () => {};
+      try {
+        let finish!: () => void;
+        const writeFile = vi.fn(
+          () =>
+            new Promise<{ relativePath: string; version: string }>((resolve, reject) => {
+              finish = () =>
+                failSave
+                  ? reject(new Error("Editor write failed"))
+                  : resolve({ relativePath: "file.ts", version: "sha256:saved" });
+            }),
+        );
+        const api = readNativeApi()!;
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: { ...api, projects: { ...api.projects, writeFile } },
+        });
+        const session = getWorkspaceEditorSession(
+          mounted.router.options.context.queryClient,
+          "/repo/project",
+          "file.ts",
+        );
+        unsubscribe = session.subscribe(() => undefined);
+        session.load({
+          relativePath: "file.ts",
+          contents: "original",
+          version: "sha256:initial",
+          encoding: "utf8",
+          lineEnding: "lf",
+          truncated: false,
+        });
+        session.change("editor draft");
+        const prompt = "use the saved editor changes";
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+        const turnStarts = () =>
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              (request.command as { type?: string } | undefined)?.type === "thread.turn.start",
+          );
+        const before = turnStarts().length;
+        (await waitForSendButton()).click();
+        await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+        expect(turnStarts()).toHaveLength(before);
+        finish();
+        if (failSave) {
+          await vi.waitFor(() =>
+            expect(document.body.textContent).toContain("Could not save editor changes"),
+          );
+          expect(turnStarts()).toHaveLength(before);
+          expect(session.getSnapshot().value).toBe("editor draft");
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
+        } else {
+          await vi.waitFor(() => expect(turnStarts()).toHaveLength(before + 1));
+          expect(session.dirty).toBe(false);
+        }
+      } finally {
+        unsubscribe();
+        restoreNativeApi();
+        await mounted.cleanup();
+      }
+    },
+  );
+
   // Leaving a thread you just sent in and coming back must not replay the
   // send-time anchor slide: the transcript is remounted with no scroll history,
   // so replaying it means bootstrapping at the top of the conversation and then
@@ -3952,23 +4026,20 @@ describe("ChatView transcript geometry (full app)", () => {
           container.tabIndex = 0;
           container.focus();
           expect(document.activeElement).toBe(container);
-          const initialTop = container.scrollTop;
-          await userEvent.keyboard(`{${keyboardKey}}`);
-          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop - 1));
-          // A cancelled list jump can emit scrollend before native key scrolling
-          // finishes. Wait for an actual quiet viewport before recording its text.
-          let lastTop = container.scrollTop;
-          let stableSince = performance.now();
-          await vi.waitFor(
-            () => {
-              if (container.scrollTop !== lastTop) {
-                lastTop = container.scrollTop;
-                stableSince = performance.now();
-              }
-              expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
-            },
-            { timeout: 3_000, interval: 20 },
-          );
+          // Streaming can advance while the browser input command is in transit.
+          // Compare against the offset at keydown, when the gesture takes ownership.
+          let initialTop: number | null = null;
+          const captureInitialTop = (event: KeyboardEvent) => {
+            if (event.key === keyboardKey) initialTop = container.scrollTop;
+          };
+          container.addEventListener("keydown", captureInitialTop, { capture: true });
+          try {
+            await userEvent.keyboard(`{${keyboardKey}}`);
+          } finally {
+            container.removeEventListener("keydown", captureInitialTop, { capture: true });
+          }
+          expect(initialTop).not.toBeNull();
+          await vi.waitFor(() => expect(container.scrollTop).toBeLessThan(initialTop! - 1));
         } else if (action === "find") {
           await dispatchConfiguredShortcutWhenReady(window, { key: "f" });
           await page.getByLabelText("Find in thread").fill("assistant filler 0");
@@ -3990,6 +4061,20 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
+        // Native wheel and key scrolling may continue after the input command
+        // resolves. Record the reader position only once the viewport is quiet.
+        let lastTop = container.scrollTop;
+        let stableSince = performance.now();
+        await vi.waitFor(
+          () => {
+            if (container.scrollTop !== lastTop) {
+              lastTop = container.scrollTop;
+              stableSince = performance.now();
+            }
+            expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+          },
+          { timeout: 3_000, interval: 20 },
+        );
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
@@ -5261,7 +5346,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(
           useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
             .codex,
-        ).toMatchObject({ provider: "codex", model: "gpt-6-astra" });
+        ).toMatchObject({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
       });
       expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
 
@@ -9172,7 +9257,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("enables plan mode from the composer extras menu", async () => {
+  it("enables plan mode from the composer extras panel", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -9183,8 +9268,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Mode").click();
-      await page.getByRole("menuitemradio", { name: "Plan" }).click();
+      await page.getByText("Turn plan mode on").click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
@@ -9195,6 +9279,68 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["extras panel", "edit button", "edit command"])(
+    "sets a literal control-word goal from the %s",
+    async (entryPoint) => {
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-literal-goal-test" as MessageId,
+        targetText: "literal goal test",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: [{ ...snapshot.threads[0]!, goal: "clear" }],
+        },
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi();
+
+      try {
+        if (entryPoint === "edit button") {
+          await page.getByRole("button", { name: "Edit goal" }).click();
+        } else {
+          const prompt = entryPoint === "extras panel" ? "clear" : "/goal edit";
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+          const composerEditor = await waitForComposerEditor();
+          await vi.waitFor(() =>
+            expect(composerEditor.textContent ?? "").toContain(
+              entryPoint === "extras panel" ? "clear" : "edit",
+            ),
+          );
+          if (entryPoint === "extras panel") {
+            await page.getByLabelText("Composer extras").click();
+            await page.getByText("Set a goal to keep pursuing").click();
+          } else {
+            (await waitForSendButton()).click();
+          }
+        }
+        await vi.waitFor(() =>
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "/goal -- clear",
+          ),
+        );
+        const sendButton = await waitForSendButton();
+        sendButton.click();
+
+        await vi.waitFor(() => {
+          const request = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              request.command.type === "thread.meta.update" &&
+              "goal" in request.command,
+          );
+          expect(request?.command).toMatchObject({ type: "thread.meta.update", goal: "clear" });
+        });
+      } finally {
+        restoreNativeApi();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("activates Debug with /debug and returns to Default from the badge and /default", async () => {
     const mounted = await mountChatView({

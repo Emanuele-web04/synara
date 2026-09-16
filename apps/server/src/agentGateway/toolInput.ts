@@ -127,6 +127,23 @@ export function parseProviderKind(raw: string): ProviderKind {
   );
 }
 
+/**
+ * Read an exact `{ provider, model, options? }` target argument. Unknown option
+ * keys are preserved so `resolveAgentGatewayTarget` rejects them instead of the
+ * decoder silently dropping a typo.
+ */
+export function readModelSelectionArg(
+  args: Record<string, unknown>,
+  name: string,
+): ModelSelection | undefined {
+  const raw = readRecordArg(args, name);
+  if (raw === undefined) return undefined;
+  const provider = parseProviderKind(readStringArg(raw, "provider", { required: true })!);
+  const model = readStringArg(raw, "model", { required: true })!;
+  const options = readRecordArg(raw, "options");
+  return { provider, model, ...(options !== undefined ? { options } : {}) } as ModelSelection;
+}
+
 export function buildModelSelection(
   provider: ProviderKind,
   model: string | undefined,

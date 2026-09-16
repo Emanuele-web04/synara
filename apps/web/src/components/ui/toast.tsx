@@ -83,6 +83,13 @@ const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
   "absolute w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-2xl [--notification-fg:var(--popover-foreground)] [-webkit-app-region:no-drag]",
 );
 
+// Toast actions are ghost buttons on the notification foreground. They keep the
+// toast body's UI font size and family instead of the smaller `xs` button text.
+const TOAST_ACTION_BUTTON_SIZE = "xs";
+const TOAST_ACTION_BUTTON_VARIANT = "ghost";
+const TOAST_ACTION_BUTTON_CLASS_NAME =
+  "self-start rounded-md px-2 font-sans font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--notification-fg)]/80 sm:text-[length:var(--app-font-size-ui,12px)] [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35";
+
 const ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME =
   "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)]/35 disabled:pointer-events-none disabled:opacity-55";
 
@@ -247,17 +254,17 @@ function ToastActions({
   if (!actionProps && !copyText && !secondaryActionProps) return null;
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+    <div className="-ms-2 mt-1.5 flex flex-wrap items-center gap-0.5">
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
-          className="self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20"
+          className={TOAST_ACTION_BUTTON_CLASS_NAME}
           onClick={() => {
             copyToClipboard(copyText, undefined);
           }}
-          size="xs"
+          size={TOAST_ACTION_BUTTON_SIZE}
           title={isCopied ? "Copied error message" : "Copy error message"}
-          variant="outline"
+          variant={TOAST_ACTION_BUTTON_VARIANT}
         >
           {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
           <span>{isCopied ? "Copied" : "Copy"}</span>
@@ -267,8 +274,11 @@ function ToastActions({
         <Toast.Action
           {...actionProps}
           className={cn(
-            buttonVariants({ size: "xs", variant: "outline" }),
-            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
+            buttonVariants({
+              size: TOAST_ACTION_BUTTON_SIZE,
+              variant: TOAST_ACTION_BUTTON_VARIANT,
+            }),
+            TOAST_ACTION_BUTTON_CLASS_NAME,
             actionProps.className,
           )}
           data-slot="toast-action"
@@ -279,12 +289,9 @@ function ToastActions({
       {secondaryActionProps && (
         <Button
           {...secondaryActionProps}
-          className={cn(
-            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
-            secondaryActionProps.className,
-          )}
-          size={secondaryActionProps.size ?? "xs"}
-          variant={secondaryActionProps.variant ?? "outline"}
+          className={cn(TOAST_ACTION_BUTTON_CLASS_NAME, secondaryActionProps.className)}
+          size={TOAST_ACTION_BUTTON_SIZE}
+          variant={TOAST_ACTION_BUTTON_VARIANT}
         />
       )}
     </div>
@@ -432,7 +439,7 @@ function ToastSurface({
               "gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal",
               compactContextual ? "items-start py-2" : "items-center",
             )
-          : "items-start gap-2 px-3.5 py-3 pr-10 text-sm",
+          : "items-start gap-2 px-3.5 py-3 pr-10 text-[length:var(--app-font-size-ui,12px)] leading-normal",
         hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
       )}
     >

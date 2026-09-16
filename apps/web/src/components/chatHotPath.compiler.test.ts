@@ -170,6 +170,7 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   // The composer surface: these three render or re-render on keystrokes while a
   // picker or the slash-command menu is open.
   { relativePath: "chat/ComposerCommandMenu.tsx", allowedBailoutReasons: [] },
+  { relativePath: "chat/ComposerMenuPanel.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/TraitsPicker.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ProjectPicker.tsx", allowedBailoutReasons: [] },
   // Not chat-specific, but rendered inside every message row and sidebar row.

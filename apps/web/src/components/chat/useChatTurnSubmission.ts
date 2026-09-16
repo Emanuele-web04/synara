@@ -1,3 +1,4 @@
+import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { useCallback } from "react";
 import {
   filterPromptProviderMentionReferences,
@@ -254,6 +255,19 @@ export function useChatTurnSubmission({
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current
       ) {
+        return false;
+      }
+      sendPreflightInFlightRef.current = true;
+      const editorSaved = await flushWorkspaceEditors(
+        queryClient,
+        threadWorkspaceCwd ?? chatWorkspaceRoot,
+      ).catch(() => false);
+      sendPreflightInFlightRef.current = false;
+      if (!editorSaved) {
+        setThreadError(
+          threadId,
+          "Could not save editor changes. Resolve the save error before sending; your prompt and file draft are preserved.",
+        );
         return false;
       }
       if (!queuedTurn) {
