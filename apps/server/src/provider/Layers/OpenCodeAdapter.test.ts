@@ -80,6 +80,7 @@ function createMockOpenCodeRuntime(options?: {
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>;
   readonly serverExit?: Effect.Effect<number>;
+  readonly serverPassword?: string;
   readonly sessionCreateError?: Error;
   readonly sessionUpdate?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly scopeCloseDefect?: boolean;
@@ -233,6 +234,7 @@ function createMockOpenCodeRuntime(options?: {
           url: input.serverUrl ?? "http://127.0.0.1:4099",
           exitCode: options?.serverExit ?? null,
           external: Boolean(input.serverUrl),
+          ...(options?.serverPassword ? { serverPassword: options.serverPassword } : {}),
         };
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
@@ -545,6 +547,23 @@ describe("normalizeOpenCodeTokenUsage", () => {
 
 describe("OpenCode host policy delivery", () => {
   const modelSelection = { provider: "opencode", model: "openai/gpt-5" } as const;
+
+  it("passes the managed server password to the SDK client", async () => {
+    const runtime = createMockOpenCodeRuntime({ serverPassword: "managed-server-password" });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-managed-server-auth"),
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.createClientCalls[0]?.serverPassword).toBe("managed-server-password");
+  });
 
   it("injects the host policy exactly once for a new native session", async () => {
     const runtime = createMockOpenCodeRuntime();
