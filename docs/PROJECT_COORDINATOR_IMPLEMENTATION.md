@@ -30,14 +30,15 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 ## Commits
 
 - `3bad29eecfb842e387a35f46c53c13f9eff9e82e` Add Project Coordinator domain, panel, and bounded wakes.
+- `22e624222` Record Project Coordinator commit in the implementation ledger.
+- `2369e560d` Repair Project Coordinator security and product gaps.
 
 ## Checks
 
-- `packages/shared` `src/projectAgent.test.ts` passed
-- `packages/contracts` `src/projectAgent.test.ts`, `src/automation.test.ts`, `src/ws.test.ts` passed
-- `apps/web` auxiliary panel + ChatView.logic + disclosureMotion passed
-- `apps/server` principal, schedule, ProjectAgentRepository, Migrations, AutomationRepository, ProviderTextGeneration passed
-- Did not run `bun fmt`, `bun lint`, or `bun typecheck`
+- `apps/server` principal, digest, lifecycle, ProjectAgentRepository, Migrations, AgentGateway (73) passed
+- `packages/contracts` projectAgent + ws passed
+- `apps/web` auxiliary panel, ChatView.logic, projectInstructionsStore passed
+- Did not run `bun fmt`, `bun lint`, `bun typecheck`, or isolated preview
 
 ## Remaining requirements
 
