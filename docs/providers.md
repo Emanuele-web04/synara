@@ -120,7 +120,7 @@ transcript file size and base64 image size are not model token counts.
 
 When Claude has more than 100,000 context tokens and available evidence indicates an expired cache,
 Synara holds the next message before delivering it to the runtime. The composer lets you continue
-with the full history or cancel that send. The held message and attachments survive reconnects and
+with the full history, compact first when supported, or cancel that send. The held message and attachments survive reconnects and
 server restarts; cancelling keeps the message in the conversation. An unresolved request blocks
 automatic queue promotion for that task, while other tasks can continue.
 Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
@@ -130,6 +130,18 @@ This check also covers long pauses in an existing process. It uses saved observa
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
 imported sessions without timing evidence remain unknown, so a warning cannot be guaranteed for
 them. The check makes no model request to keep a cache warm or measure its state.
+
+The context popover offers **Compact now** when the installed runtime supports `/compact` and the
+task is idle. This uses Claude's native summarization with the current model and settings. It can
+reduce the history sent after a long pause; it also processes the existing history once, so running
+it after the cache expires can itself consume substantial usage. Automatic compaction and the
+selected context threshold remain under the existing Claude settings.
+
+**Compact, then send** keeps the held message separate from `/compact`. Synara releases it only
+after a matching native compaction boundary and successful completion. Failure or interruption
+keeps the message on hold. If delivery is uncertain, Synara does not automatically repeat the send.
+See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
+boundaries and remaining live validation.
 
 ## Switching providers
 
