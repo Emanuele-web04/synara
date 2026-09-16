@@ -29,6 +29,45 @@ function makeActivity(
 }
 
 describe("contextWindow", () => {
+  it("preserves validated Claude cache evidence from the latest usage snapshot", () => {
+    const claudeCache = {
+      observedAt: "2026-03-23T00:00:00.000Z",
+      state: "unknown",
+      source: "request-usage",
+      contextTokens: 887_036,
+      lastRequest: { messageId: "request-1", cacheCreationInputTokens: 887_036 },
+    };
+    const derive = (value: OrchestrationThreadActivity["payload"] | undefined) =>
+      deriveLatestContextWindowState([
+        makeActivity("cache", "context-window.updated", {
+          usedTokens: 887_036,
+          ...(value === undefined ? {} : { claudeCache: value }),
+        }),
+      ]).snapshot;
+    expect(derive(claudeCache)?.claudeCache).toEqual(claudeCache);
+    expect(derive(undefined)?.claudeCache).toBeNull();
+    expect(derive({ ...claudeCache, state: "warm" })?.claudeCache).toBeNull();
+    expect(derive({ ...claudeCache, contextTokens: -1 })?.claudeCache).toBeNull();
+  });
+
+  it("withholds old Claude processed totals while preserving context and other providers", () => {
+    for (const provider of ["claudeAgent", "codex"]) {
+      const payload = { provider, usedTokens: 100, totalProcessedTokens: 400 };
+      const legacy = deriveLatestContextWindowState([
+        makeActivity("legacy", "context-window.updated", payload),
+      ]).snapshot;
+      expect(legacy?.usedTokens).toBe(100);
+      expect(legacy?.totalProcessedTokens).toBe(provider === "claudeAgent" ? null : 400);
+      const corrected = deriveLatestContextWindowState([
+        makeActivity("corrected", "context-window.updated", {
+          ...payload,
+          tokenAccountingVersion: 1,
+        }),
+      ]).snapshot;
+      expect(corrected?.totalProcessedTokens).toBe(400);
+    }
+  });
+
   it("derives the latest valid context window snapshot", () => {
     const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {

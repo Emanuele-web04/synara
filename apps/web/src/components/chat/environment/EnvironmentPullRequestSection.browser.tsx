@@ -7,6 +7,7 @@
 import "../../../index.css";
 
 import {
+  ProjectId,
   ThreadId,
   type GitPullRequestSnapshotResult,
   type GitResolvedPullRequest,
@@ -20,16 +21,21 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
+import { deferred } from "~/lib/pullRequestReactQuery.testUtils";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
-const { getGitStatus, getPullRequestSnapshot } = vi.hoisted(() => ({
-  getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
-  getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
-}));
+const { getGitStatus, getPullRequestSnapshot, getPullRequestDetail, runPullRequestAction } =
+  vi.hoisted(() => ({
+    getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
+    getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+    getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
+    runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
+  }));
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
+    pullRequests: { detail: getPullRequestDetail, action: runPullRequestAction },
   }),
 }));
 
@@ -104,15 +110,19 @@ function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comm
   return queryClient;
 }
 
-function section(queryClient: QueryClient, onClose = vi.fn(), enabled = true) {
+function section(
+  queryClient: QueryClient,
+  onClose = vi.fn(),
+  options: { enabled?: boolean; projectId?: ProjectId } = {},
+) {
   return (
     <QueryClientProvider client={queryClient}>
       <EnvironmentPullRequestSection
         gitCwd={cwd}
-        enabled={enabled}
+        enabled={options.enabled ?? true}
         activeThreadId={threadId}
-        // No project: Merge/Status stay hidden and View PR falls back to the URL handler.
-        projectId={null}
+        // Link-only tests omit a project; status tests exercise the real mutation.
+        projectId={options.projectId ?? null}
         configuredRepositories={[{ nameWithOwner: "example/synara" }]}
         onOpenUrl={vi.fn()}
         onClose={onClose}
@@ -147,11 +157,62 @@ describe("EnvironmentPullRequestSection", () => {
     useComposerDraftStore.getState().clearDraftThread(threadId);
   });
 
+  it.each(["ready", "draft"] as const)(
+    "shows %s immediately while GitHub is pending and restores the menu on failure",
+    async (action) => {
+      const queryClient = createQueryClient();
+      const projectId = ProjectId.makeUnsafe("project-pr-status");
+      const initialPr = { ...pullRequest, isDraft: action === "ready" };
+      const statusKey = gitQueryKeys.status(cwd);
+      const snapshotKey = gitPullRequestSnapshotQueryOptions({
+        cwd,
+        reference: pullRequest.url,
+      }).queryKey;
+      queryClient.setQueryData<GitStatusResult>(statusKey, (current) =>
+        current ? { ...current, pr: initialPr } : current,
+      );
+      queryClient.setQueryData<GitPullRequestSnapshotResult>(snapshotKey, (current) =>
+        current ? { ...current, pullRequest: initialPr } : current,
+      );
+      getGitStatus.mockResolvedValue(queryClient.getQueryData<GitStatusResult>(statusKey)!);
+      getPullRequestSnapshot.mockResolvedValue(
+        queryClient.getQueryData<GitPullRequestSnapshotResult>(snapshotKey)!,
+      );
+      // Status changes do not depend on the separate merge-capability read finishing.
+      getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+      const request = deferred<Awaited<ReturnType<NativeApi["pullRequests"]["action"]>>>();
+      runPullRequestAction.mockReturnValue(request.promise);
+      await render(section(queryClient, vi.fn(), { projectId }));
+
+      await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+      await page.getByRole("menuitem", { name: /^Status/ }).hover();
+      const targetLabel = action === "ready" ? "Ready for review" : "Draft";
+      const originalLabel = action === "ready" ? "Draft" : "Ready for review";
+      await page.getByRole("menuitemradio", { name: targetLabel, exact: true }).click();
+
+      await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+      expect(runPullRequestAction).toHaveBeenCalledWith({
+        projectId,
+        repository: "example/synara",
+        number: 321,
+        action,
+      });
+      await expect
+        .element(page.getByRole("menuitem", { name: `Status ${targetLabel}`, exact: true }))
+        .toBeVisible();
+
+      request.reject(new Error("GitHub rejected the status change"));
+      await expect
+        .element(page.getByRole("menuitem", { name: `Status ${originalLabel}`, exact: true }))
+        .toBeVisible();
+    },
+  );
+
   it("refreshes an old missing PR when the mounted panel opens", async () => {
     const queryClient = createQueryClient();
     const status = queryClient.getQueryData<GitStatusResult>(gitQueryKeys.status(cwd))!;
     getGitStatus.mockResolvedValue(status);
-    const view = await render(section(queryClient, vi.fn(), false));
+    const view = await render(section(queryClient, vi.fn(), { enabled: false }));
     queryClient.setQueryData(
       gitQueryKeys.status(cwd),
       { ...status, pr: null },

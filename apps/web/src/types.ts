@@ -12,7 +12,7 @@ import type {
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
   PinnedMessage,
-  ThreadMarker,
+  PendingClaudeCacheReview,
   ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -117,6 +117,7 @@ export interface ChatMessage {
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   dispatchOrigin?: MessageDispatchOrigin;
+  startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;
@@ -247,7 +248,6 @@ export interface Thread extends ThreadWorkspaceState {
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;
@@ -267,6 +267,9 @@ export interface Thread extends ThreadWorkspaceState {
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  /** Client projection cursor shared by shell and detail cache-review updates. */
+  claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
@@ -296,7 +299,6 @@ export interface ThreadShell extends ThreadWorkspaceState {
   // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
   // from the previous shell rather than clobbering with `undefined`.
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;
@@ -313,6 +315,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;

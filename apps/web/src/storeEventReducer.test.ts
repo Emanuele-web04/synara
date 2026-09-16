@@ -11,13 +11,14 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
+  type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
+  applyShellEvent,
   syncServerShellSnapshot,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
@@ -37,6 +38,103 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store event reducer", () => {
+  it("projects durable cache review transitions and clears them without touching the draft message", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("held-message");
+    const review: PendingClaudeCacheReview = {
+      reviewId: "cache-review-1",
+      messageId,
+      sourceEventSequence: 8,
+      assessment: {
+        observedAt: "2026-09-16T10:00:00.000Z",
+        contextTokens: 800_000,
+        state: "likely-expired",
+        source: "session-start",
+      },
+      status: "pending",
+      createdAt: "2026-09-16T10:00:00.000Z",
+    };
+    const initial = makeState(
+      makeThread({
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            text: "Continue the task",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-09-16T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const pendingEvent = makeDomainEvent("thread.claude-cache-set", {
+      threadId,
+      review,
+      updatedAt: "2026-09-16T10:00:00.000Z",
+    });
+    let state = applyOrchestrationEvents(initial, [pendingEvent]);
+    expect(state.threadShellById?.[threadId]?.claudeCacheReview).toEqual(review);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toEqual(review);
+    expect(applyOrchestrationEvents(state, [pendingEvent])).toBe(state);
+
+    let sequence = pendingEvent.sequence;
+    for (const status of ["responding", "compacting", "failed", "uncertain"] as const) {
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.claude-cache-set",
+          {
+            threadId,
+            review: { ...review, status },
+            updatedAt: "2026-09-16T10:01:00.000Z",
+          },
+          { sequence: ++sequence },
+        ),
+      ]);
+      expect(threadsOf(state)[0]?.claudeCacheReview?.status).toBe(status);
+    }
+
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.claude-cache-set",
+        {
+          threadId,
+          review: null,
+          updatedAt: "2026-09-16T10:02:00.000Z",
+        },
+        { sequence: ++sequence },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    expect(state.messageByThreadId).toBe(initial.messageByThreadId);
+    expect(threadsOf(state)[0]?.messages[0]?.text).toBe("Continue the task");
+
+    const shell = makeReadModelThread({ claudeCacheReview: null, updatedAt: review.createdAt });
+    state = applyShellEvent(state, { kind: "thread-upserted", thread: shell, sequence: 20 });
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.claude-cache-set",
+        {
+          threadId,
+          review,
+          updatedAt: review.createdAt,
+        },
+        { sequence: 19 },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = applyShellEvent(state, {
+      kind: "thread-upserted",
+      thread: { ...shell, claudeCacheReview: review },
+      sequence: 18,
+    });
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = syncServerThreadDetailHotPath(state, { ...shell, claudeCacheReview: review }, 19);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = syncServerThreadDetailHotPath(state, { ...shell, claudeCacheReview: review }, 21);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toEqual(review);
+  });
+
   it("hydrates and removes Spaces while clearing matching project assignments", () => {
     const spaceId = SpaceId.makeUnsafe("space-work");
     let state = applyOrchestrationEvents(makeState(makeThread()), [
@@ -80,6 +178,7 @@ describe("store event reducer", () => {
         text: "Use @linear",
         attachments: [],
         mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        startsNewTurn: true,
         turnId: null,
         streaming: false,
         source: "native",
@@ -91,6 +190,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
+    expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
   });
 
   it("updates thread error and marks the running latest turn failed from session-set events", () => {
@@ -825,84 +925,6 @@ describe("store event reducer", () => {
         label: "Follow up",
         done: true,
         pinnedAt: "2026-02-27T00:03:00.000Z",
-      },
-    ]);
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
-  });
-
-  it("applies live thread marker operation events without replacing the whole list", () => {
-    const initialState = makeState(makeThread());
-    const markerId = ThreadMarkerId.makeUnsafe("marker-op-1");
-    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-op-2");
-    const messageId = MessageId.makeUnsafe("assistant-marker-op");
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: markerId,
-          messageId,
-          startOffset: 6,
-          endOffset: 20,
-          selectedText: "important text",
-          style: "highlight",
-          color: "yellow",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:00.000Z",
-          updatedAt: "2026-02-27T00:03:00.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:00.000Z",
-      }),
-      makeDomainEvent("thread.marker-added", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        marker: {
-          id: secondMarkerId,
-          messageId,
-          startOffset: 30,
-          endOffset: 39,
-          selectedText: "underline",
-          style: "underline",
-          color: "blue",
-          label: null,
-          done: false,
-          createdAt: "2026-02-27T00:03:05.000Z",
-          updatedAt: "2026-02-27T00:03:05.000Z",
-        },
-        updatedAt: "2026-02-27T00:03:05.000Z",
-      }),
-      makeDomainEvent("thread.marker-done-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        done: true,
-        updatedAt: "2026-02-27T00:03:10.000Z",
-      }),
-      makeDomainEvent("thread.marker-label-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId,
-        label: "Follow up",
-        updatedAt: "2026-02-27T00:03:15.000Z",
-      }),
-      makeDomainEvent("thread.marker-removed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        markerId: secondMarkerId,
-        updatedAt: "2026-02-27T00:03:20.000Z",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.threadMarkers).toEqual([
-      {
-        id: markerId,
-        messageId,
-        startOffset: 6,
-        endOffset: 20,
-        selectedText: "important text",
-        style: "highlight",
-        color: "yellow",
-        label: "Follow up",
-        done: true,
-        createdAt: "2026-02-27T00:03:00.000Z",
-        updatedAt: "2026-02-27T00:03:15.000Z",
       },
     ]);
     expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");

@@ -9,6 +9,7 @@
  */
 import type {
   ApprovalRequestId,
+  ClaudeCacheObservation,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
   ProviderForkThreadInput,
@@ -233,6 +234,11 @@ export interface ProviderAdapterShape<TError> {
    * Trigger provider-native context compaction for a thread when supported.
    */
   readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /** Read bounded native/local cache evidence without delivering a model prompt. */
+  readonly getClaudeCacheObservation?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ClaudeCacheObservation | undefined, TError>;
 
   /**
    * Fork one provider thread into another persisted thread cursor when supported.

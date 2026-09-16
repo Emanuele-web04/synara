@@ -9,13 +9,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@synara/shared/threadMarkers";
-import { isStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -187,6 +181,10 @@ const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.deleted",
+  "thread.archived",
+  "thread.session-stop-requested",
+  "thread.claude-cache-response-requested",
   "thread.turn-start-requested",
   "thread.session-set",
   "thread.turn-diff-completed",
@@ -588,7 +586,6 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             latestTurnId: null,
             handoff: event.payload.handoff,
             pinnedMessages: null,
-            threadMarkers: null,
             notes: null,
             goal: null,
             goalStartedAt: null,
@@ -697,9 +694,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.pinnedMessages !== undefined
                 ? { pinnedMessages: event.payload.pinnedMessages }
                 : {}),
-              ...(event.payload.threadMarkers !== undefined
-                ? { threadMarkers: event.payload.threadMarkers }
-                : {}),
+
               ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
               ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
               ...(event.payload.goalStartedAt !== undefined
@@ -752,41 +747,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
           }));
 
-        case "thread.marker-added":
+        case "thread.claude-cache-set":
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
-            threadMarkers: addThreadMarker(thread.threadMarkers, event.payload.marker),
-            updatedAt: event.payload.updatedAt,
-          }));
-
-        case "thread.marker-removed":
-          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
-            ...thread,
-            threadMarkers: removeThreadMarker(thread.threadMarkers, event.payload.markerId),
-            updatedAt: event.payload.updatedAt,
-          }));
-
-        case "thread.marker-done-set":
-          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
-            ...thread,
-            threadMarkers: setThreadMarkerDone(
-              thread.threadMarkers,
-              event.payload.markerId,
-              event.payload.done,
-              event.payload.updatedAt,
-            ),
-            updatedAt: event.payload.updatedAt,
-          }));
-
-        case "thread.marker-label-set":
-          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
-            ...thread,
-            threadMarkers: setThreadMarkerLabel(
-              thread.threadMarkers,
-              event.payload.markerId,
-              event.payload.label,
-              event.payload.updatedAt,
-            ),
+            claudeCacheReview: event.payload.review,
             updatedAt: event.payload.updatedAt,
           }));
 
@@ -1072,6 +1036,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.dispatchOrigin !== undefined
               ? { dispatchOrigin: event.payload.dispatchOrigin }
               : {}),
+            ...(event.payload.startsNewTurn !== undefined
+              ? { startsNewTurn: event.payload.startsNewTurn }
+              : {}),
             isStreaming: event.payload.streaming,
             source: event.payload.source,
             sequence: Option.isSome(existingMessage)
@@ -1312,6 +1279,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.deleted":
+        case "thread.archived":
+        case "thread.session-stop-requested":
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        case "thread.claude-cache-response-requested":
+          if (event.payload.decision === "cancel") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
+          return;
+
         case "thread.turn-start-requested": {
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
@@ -1729,9 +1711,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               // while every actual response hit a dead provider.
               if (
                 existingRow.value.status === "confirmed" ||
-                !isStalePendingRequestFailureDetail(
-                  payloadNonEmptyString(activity.payload, "detail") ?? undefined,
-                )
+                !createStalePendingInteractionMatcher([activity])(existingRow.value)
               ) {
                 return;
               }

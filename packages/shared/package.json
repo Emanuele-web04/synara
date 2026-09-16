@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./claudeCache": {
+      "types": "./src/claudeCache.ts",
+      "import": "./src/claudeCache.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"
@@ -175,10 +179,6 @@
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
       "import": "./src/pinnedMessages.ts"
-    },
-    "./threadMarkers": {
-      "types": "./src/threadMarkers.ts",
-      "import": "./src/threadMarkers.ts"
     },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",

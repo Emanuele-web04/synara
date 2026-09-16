@@ -36,6 +36,7 @@ import {
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
@@ -84,6 +85,7 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadPullRequest,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
@@ -93,6 +95,7 @@ import {
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -2969,6 +2972,7 @@ export default function Sidebar() {
       const handoffItems = handoffTargets.map((provider, index) => ({
         id: `handoff:${provider}`,
         label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         separatorBefore: index === 0,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
@@ -2978,28 +2982,57 @@ export default function Sidebar() {
       });
       const clicked = await api.contextMenu.show(
         [
-          { id: "rename", label: "Rename thread" },
-          { id: "toggle-pin", label: pinActionLabel("thread", isPinned) },
+          { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
+          {
+            id: "toggle-pin",
+            label: pinActionLabel("thread", isPinned),
+            icon: THREAD_CONTEXT_MENU_ICONS.pin,
+          },
           ...(threadStatus?.dismissible
-            ? [{ id: "clear-notification", label: "Clear notification" }]
+            ? [
+                {
+                  id: "clear-notification",
+                  label: "Clear notification",
+                  icon: THREAD_CONTEXT_MENU_ICONS.clearNotification,
+                },
+              ]
             : []),
-          { id: "mark-unread", label: "Mark unread" },
+          { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
           ...handoffItems,
-          { id: "copy-path", label: "Copy Path", separatorBefore: true },
+          {
+            id: "copy-path",
+            label: "Copy Path",
+            icon: THREAD_CONTEXT_MENU_ICONS.copy,
+            separatorBefore: true,
+          },
           ...(threadWorkspacePath
-            ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
+            ? [
+                {
+                  id: "open-path-in-terminal",
+                  label: "Open Path in Terminal",
+                  icon: THREAD_CONTEXT_MENU_ICONS.openInTerminal,
+                },
+              ]
             : []),
-          { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
           // no sidebar or Archived-panel row to restore it from.
           ...(thread.parentThreadId
             ? []
-            : [{ id: "archive", label: "Archive", separatorBefore: true }]),
+            : [
+                {
+                  id: "archive",
+                  label: "Archive",
+                  icon: THREAD_CONTEXT_MENU_ICONS.archive,
+                  separatorBefore: true,
+                },
+              ]),
           {
             id: "delete",
             label: "Delete",
+            icon: THREAD_CONTEXT_MENU_ICONS.delete,
             destructive: true,
             ...(thread.parentThreadId ? { separatorBefore: true } : {}),
           },
@@ -3174,9 +3207,18 @@ export default function Sidebar() {
 
       const clicked = await api.contextMenu.show(
         [
-          { id: "mark-unread", label: `Mark unread (${count})` },
-          { id: "archive", label: `Archive (${count})` },
-          { id: "delete", label: `Delete (${count})`, destructive: true },
+          {
+            id: "mark-unread",
+            label: `Mark unread (${count})`,
+            icon: THREAD_CONTEXT_MENU_ICONS.markUnread,
+          },
+          { id: "archive", label: `Archive (${count})`, icon: THREAD_CONTEXT_MENU_ICONS.archive },
+          {
+            id: "delete",
+            label: `Delete (${count})`,
+            icon: THREAD_CONTEXT_MENU_ICONS.delete,
+            destructive: true,
+          },
         ],
         position,
       );
@@ -3305,6 +3347,33 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
+  // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
+  // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
+  const openThreadPullRequest = useCallback(
+    (
+      event: MouseEvent<HTMLElement>,
+      thread: SidebarThreadSummary,
+      pr: OrchestrationThreadPullRequest,
+    ) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+      if (event.metaKey || event.ctrlKey || event.button === 1 || !repository) {
+        openPrLink(event, pr.url);
+        return;
+      }
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activateThreadFromSidebarIntent(thread.id);
+      openRightDockPane(thread.id, {
+        kind: "pullRequest",
+        pullRequestProjectId: thread.projectId,
+        pullRequestRepository: repository,
+        pullRequestNumber: pr.number,
+        pullRequestInitialTab: "summary",
+      });
+    },
+    [activateThreadFromSidebarIntent, openPrLink, openRightDockPane],
+  );
 
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
@@ -6099,6 +6168,7 @@ export default function Sidebar() {
                     threadsHydrated={threadsHydrated}
                     resolveThreadStatus={resolveThreadStatusForSidebar}
                     onOpenThread={activateThreadFromSidebarIntent}
+                    onOpenThreadPullRequest={openThreadPullRequest}
                     onSetThreadSettled={setThreadSettledWithToast}
                     onToggleThreadPinned={toggleThreadPinned}
                     onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}

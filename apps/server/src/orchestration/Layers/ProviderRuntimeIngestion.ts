@@ -2,6 +2,7 @@ import {
   type AssistantDeliveryMode,
   CommandId,
   EventId,
+  isToolLifecycleItemType,
   MessageId,
   type OrchestrationCheckpointFile,
   type OrchestrationEvent,
@@ -334,7 +335,7 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     case "item.updated":
     case "item.completed": {
       const itemType = event.payload.itemType;
-      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+      return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
     case "user-input.requested":
@@ -1858,11 +1859,10 @@ const make = Effect.gen(function* () {
     now: string,
   ) =>
     Effect.gen(function* () {
-      const rows = yield* pendingInteractions.listByThreadId({ threadId });
+      const rows = yield* pendingInteractions.listUnsettled({ threadId });
       for (const row of rows) {
-        // `uncertain` rows were already reported as unanswerable; re-reporting
-        // on every session start would duplicate the failure activity.
-        if (row.status === "confirmed" || row.status === "uncertain") continue;
+        // An uncertain delivery is not proof that its callback was invalidated.
+        if (row.status === "uncertain" && row.interactionKind === "approval") continue;
         const isApproval = row.interactionKind === "approval";
         const requestKind = isApproval ? ("approval" as const) : ("user-input" as const);
         const commandId = providerCommandId(event, `stale-pending-${requestKind}`, row.requestId);

@@ -19,6 +19,7 @@ import type { Project, Thread } from "../types";
 import type { ComposerTrigger } from "../composer-logic";
 import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
 import {
+  buildGoalSlashCommandPrompt,
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,
   getAvailableComposerSlashCommands,
@@ -45,6 +46,8 @@ import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useStore } from "../store";
+import { getThreadFromState } from "../threadDerivation";
 import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
 import {
   buildDraftThreadRenameCreateInput,
@@ -366,7 +369,7 @@ export function useComposerSlashCommands(input: {
       }
       if (action.action === "edit") {
         const currentGoal = activeThread?.goal?.trim() ?? "";
-        editorActions.setComposerPromptValue(`/goal ${currentGoal}`);
+        editorActions.setComposerPromptValue(buildGoalSlashCommandPrompt(currentGoal));
         editorActions.scheduleComposerFocus();
         return;
       }
@@ -555,6 +558,7 @@ export function useComposerSlashCommands(input: {
             project: activeProject,
             sourceThread: activeThread,
             selectedModelSelection: sidechatModelSelection,
+            runtimeMode,
             initialPrompt,
             openSidechat: (sidechatThreadId) => {
               useRightDockStore.getState().openPane(activeThread.id, {
@@ -569,6 +573,10 @@ export function useComposerSlashCommands(input: {
             api,
             threadId: sidechatThreadId,
             selectedModelSelection: sidechatModelSelection,
+            runtimeMode:
+              useComposerDraftStore.getState().draftsByThreadId[sidechatThreadId]?.runtimeMode ??
+              getThreadFromState(useStore.getState(), sidechatThreadId)?.runtimeMode ??
+              runtimeMode,
             prompt,
           }),
         onCreationResult: (result) => {
@@ -596,7 +604,14 @@ export function useComposerSlashCommands(input: {
         },
       });
     },
-    [activeProject, activeThread, isServerThread, selectedModelSelection, syncServerShellSnapshot],
+    [
+      activeProject,
+      activeThread,
+      isServerThread,
+      runtimeMode,
+      selectedModelSelection,
+      syncServerShellSnapshot,
+    ],
   );
 
   // Publish a stable host capability. Composer drafts, attachments, and modes only

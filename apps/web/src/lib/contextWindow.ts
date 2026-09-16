@@ -1,4 +1,16 @@
-import type { OrchestrationThreadActivity, ThreadTokenUsageSnapshot } from "@synara/contracts";
+import {
+  ClaudeCacheObservation,
+  type OrchestrationThreadActivity,
+  type ThreadTokenUsageSnapshot,
+} from "@synara/contracts";
+import { Schema } from "effect";
+
+const decodeClaudeCacheObservation = Schema.decodeUnknownOption(ClaudeCacheObservation);
+
+function readClaudeCacheObservation(value: unknown): ClaudeCacheObservation | null {
+  const decoded = decodeClaudeCacheObservation(value);
+  return decoded._tag === "Some" ? decoded.value : null;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -105,9 +117,16 @@ function deriveLatestUsageContextWindowState(
 
     return {
       snapshot: {
+        claudeCache: readClaudeCacheObservation(payload?.claudeCache),
         usedTokens,
         usedPercent: payloadUsedPercent,
-        totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
+        // Older Claude totals counted completed content blocks repeatedly.
+        // Keep the context meter, but withhold an unverifiable lifetime counter.
+        totalProcessedTokens:
+          payload?.provider === "claudeAgent" && payload.tokenAccountingVersion !== 1
+            ? null
+            : asFiniteNumber(payload?.totalProcessedTokens),
+        tokenAccountingVersion: payload?.tokenAccountingVersion === 1 ? 1 : null,
         maxTokens,
         remainingTokens,
         usedPercentage,
@@ -184,9 +203,11 @@ export function deriveLatestContextWindowState(
 
   return {
     snapshot: {
+      claudeCache: usageSnapshot?.claudeCache ?? null,
       usedTokens,
       usedPercent: usageSnapshot?.usedPercent ?? null,
       totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
+      tokenAccountingVersion: usageSnapshot?.tokenAccountingVersion ?? null,
       maxTokens,
       remainingTokens,
       usedPercentage,
@@ -224,6 +245,7 @@ export function deriveSelectedContextWindowSnapshot(
   }
 
   return {
+    claudeCache: null,
     usedTokens: 0,
     usedPercent: null,
     totalProcessedTokens: null,

@@ -12,6 +12,7 @@ import {
   getRenderablePatch,
   hasUneditableGitMode,
   resolveDiffCopyText,
+  PARTIAL_DIFF_COPY_NOTICE,
   resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
   resolveFileDiffPrevPath,
@@ -170,6 +171,12 @@ describe("resolveDiffCopyText", () => {
     ].join("\n");
 
     expect(resolveDiffCopyText(patch)).toBe(patch);
+  });
+
+  it("marks truncated clipboard content as a partial diff", () => {
+    const patch = "diff --git a/a.ts b/a.ts\n+partial  ";
+
+    expect(resolveDiffCopyText(patch, true)).toBe(`${patch}\n\n${PARTIAL_DIFF_COPY_NOTICE}\n`);
   });
 
   it("does not expose empty or missing patches as copyable", () => {

@@ -65,7 +65,7 @@ function footerTooltipLabel(shortcut: KeybindingShortcut): string {
 }
 
 function EntryIcon(props: { entry: RecentViewDisplayEntry }) {
-  const className = "size-[18px]";
+  const className = "size-3.5";
 
   switch (props.entry.icon.kind) {
     case "terminal":
@@ -100,9 +100,14 @@ export function RecentViewSwitcher(props: {
         role="listbox"
         aria-label="Recent views"
         aria-activedescendant={`recent-view-switcher-${selectedIndex}`}
-        className="w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border/70 bg-popover/95 text-popover-foreground shadow-2xl shadow-black/30 backdrop-blur-xl"
+        // Same skin as the ⌘K / ⌘P palettes (ui/command popup): squircle 2xl surface,
+        // settings-scale type, 30px single-line rows with the zinc highlight.
+        className="palette-surface w-[min(32rem,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] text-[var(--color-text-foreground)] shadow-2xl shadow-black/30 backdrop-blur-xl"
       >
-        <div className="flex flex-col gap-0.5 p-1.5">
+        <div className="flex flex-col p-1.5">
+          <div className="px-2.5 pt-1.5 pb-1 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+            Recent views
+          </div>
           {props.entries.map((entry, index) => {
             const selected = index === selectedIndex;
             return (
@@ -112,41 +117,43 @@ export function RecentViewSwitcher(props: {
                 role="option"
                 aria-selected={selected}
                 className={cn(
-                  "flex h-14 items-center gap-3 rounded-lg px-2.5 transition-colors",
+                  "palette-row flex min-h-[30px] items-center gap-3 rounded-[20px] px-2.5 transition-colors",
                   selected
-                    ? "bg-[var(--color-background-button-secondary-hover)] text-[var(--color-text-foreground)]"
-                    : "text-foreground/80",
+                    ? "bg-zinc-500/8 text-foreground dark:bg-zinc-400/10"
+                    : "text-foreground",
                 )}
               >
-                <div className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                <div className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
                   <EntryIcon entry={entry} />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium leading-5">{entry.title}</span>
-                    {entry.isCurrent ? (
-                      <span className="shrink-0 rounded-full border border-border/60 bg-muted/70 px-1.5 py-px text-[10px] font-medium leading-4 text-muted-foreground">
-                        Current
-                      </span>
+                <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]">
+                  {entry.title}
+                </span>
+                {entry.subtitle ? (
+                  <span className="max-w-[40%] shrink-0 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/70">
+                    {entry.subtitle}
+                  </span>
+                ) : null}
+                {entry.isCurrent ? (
+                  <span className="shrink-0 rounded-full bg-muted px-1.5 text-[length:var(--app-font-size-ui-2xs,9px)] leading-4 text-muted-foreground">
+                    Current
+                  </span>
+                ) : null}
+                {entry.isSplit || entry.isPinned ? (
+                  <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+                    {entry.isSplit ? (
+                      <PanelLeftIcon className="size-3.5" aria-label="Split view" />
+                    ) : null}
+                    {entry.isPinned ? (
+                      <PinFilledIcon className="size-3.5" aria-label="Pinned" />
                     ) : null}
                   </div>
-                  <div className="truncate text-xs leading-4 text-muted-foreground">
-                    {entry.subtitle}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-                  {entry.isSplit ? (
-                    <PanelLeftIcon className="size-3.5" aria-label="Split view" />
-                  ) : null}
-                  {entry.isPinned ? (
-                    <PinFilledIcon className="size-3.5" aria-label="Pinned" />
-                  ) : null}
-                </div>
+                ) : null}
               </div>
             );
           })}
         </div>
-        <div className="flex items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between gap-3 px-3.5 pt-0.5 pb-2 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
           <span className="shrink-0">
             {props.entries.length} recent {props.entries.length === 1 ? "view" : "views"}
           </span>
@@ -156,7 +163,9 @@ export function RecentViewSwitcher(props: {
                 <TooltipTrigger
                   render={
                     <span className="pointer-events-auto inline-flex cursor-default">
-                      <Kbd>{footerKeyLabel(shortcut)}</Kbd>
+                      <Kbd className="h-[17px] rounded-md px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/80">
+                        {footerKeyLabel(shortcut)}
+                      </Kbd>
                     </span>
                   }
                 />

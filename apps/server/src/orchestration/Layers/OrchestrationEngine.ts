@@ -65,7 +65,7 @@ import {
   type OrchestrationCommandQueues,
   takeNextOrchestrationCommand,
   tryAdmitOrchestrationCommand,
-  usesReservedCommandAdmission,
+  isQuiescingCommandAdmissible,
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
@@ -179,9 +179,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     normal: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
     wake: yield* Queue.unbounded<void>(),
   } satisfies OrchestrationCommandQueues<CommandEnvelope>;
-  const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
+  const eventPubSub = yield* PubSub.sliding<OrchestrationEvent>(
     ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
   );
+  const eventPublicationLock = yield* Semaphore.make(1);
+  let lastPublishedSequence = 0;
   const initiallyIdle = yield* Deferred.make<void>();
   yield* Deferred.succeed(initiallyIdle, undefined).pipe(Effect.orDie);
   const engineAdmissionState = yield* Ref.make<EngineAdmissionState>({
@@ -204,12 +206,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   > | null>(null);
   const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
-  // Committed events are durable before they reach this boundary. Once
-  // publication starts, a dispatch deadline must not interrupt it and leave
-  // live consumers behind the durable log. Bounded PubSub backpressure is
-  // therefore lossless; engine scope close shuts the bus to release it.
+  // Reactors can dispatch commands while consuming these events. Waiting for
+  // a slow subscriber here would deadlock the single command worker. Keep a
+  // bounded live window; subscribers recover overflow from the durable log.
   const publishCommittedEvent = (event: OrchestrationEvent) =>
-    Effect.uninterruptible(PubSub.publish(eventPubSub, event)).pipe(Effect.asVoid);
+    eventPublicationLock
+      .withPermits(1)(
+        PubSub.publish(eventPubSub, event).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              lastPublishedSequence = Math.max(lastPublishedSequence, event.sequence);
+            }),
+          ),
+        ),
+      )
+      .pipe(Effect.uninterruptible);
 
   const makeCommandTimeoutError = (command: OrchestrationCommand) =>
     new OrchestrationCommandTimeoutError({
@@ -530,6 +541,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.handoff.create":
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
+      case "thread.claude-cache.set":
+        return command.hold
+          ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
+          : Effect.succeed(commandReadModel);
       case "thread.turn.start":
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
@@ -807,6 +822,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
             detail: `Thread '${command.threadId}' title changed before the conditional update.`,
+          });
+        }
+      }
+
+      if (command.type === "thread.claude-cache.set" && command.hold) {
+        // Admission runs in the command worker, so a stop cannot slip between
+        // this durable fence and the atomic review/session events below.
+        const cancellation = yield* Stream.runHead(
+          eventStore.readThreadEventsFromSequence(
+            command.threadId,
+            command.hold.sourceEventSequence,
+            1,
+            commandReadModel.snapshotSequence,
+            [
+              "thread.session-stop-requested",
+              "thread.archived",
+              "thread.deleted",
+              "thread.sidechat-expired",
+              "thread.conversation-rolled-back",
+            ],
+          ),
+        ).pipe(
+          Effect.mapError(() =>
+            makeCommandInternalError(command, "Could not verify Claude cache hold authorization."),
+          ),
+        );
+        if (Option.isSome(cancellation)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Command produced no events.",
           });
         }
       }
@@ -1099,6 +1144,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   yield* projectionPipeline.bootstrap;
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+  lastPublishedSequence = yield* eventStore.getHighWaterSequence();
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
     const outstanding = Math.max(0, current.outstanding - 1);
@@ -1265,9 +1311,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
   const getThreadTitleHighWaterSequence = (threadId: string) =>
     eventStore.getThreadTitleHighWaterSequence(threadId);
-  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
-    eventPubSub,
-  ).pipe(Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))));
+  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
+    eventPublicationLock.withPermits(1)(
+      Effect.gen(function* () {
+        // Capture the cursor atomically with attachment, so a publication cannot
+        // fall between the live subscription and its initial replay boundary.
+        const subscription = yield* PubSub.subscribe(eventPubSub);
+        let cursor = lastPublishedSequence;
+        return Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
+          Stream.flatMap((event) => {
+            if (event.sequence <= cursor) return Stream.empty;
+            const gap =
+              event.sequence > cursor + 1
+                ? eventStore
+                    .readFromSequence(cursor, Number.MAX_SAFE_INTEGER, event.sequence - 1)
+                    .pipe(Stream.orDie)
+                : Stream.empty;
+            return Stream.concat(gap, Stream.succeed(event)).pipe(
+              Stream.tap((delivered) =>
+                Effect.sync(() => {
+                  cursor = delivered.sequence;
+                }),
+              ),
+            );
+          }),
+        );
+      }),
+    );
 
   // Compatibility bridge for older tests and out-of-tree callers. Production
   // code should use ProjectionSnapshotQuery directly instead of depending on
@@ -1294,7 +1364,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (
             current.phase === "draining" ||
             current.phase === "stopped" ||
-            (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
+            (current.phase === "quiescing" && !isQuiescingCommandAdmissible(command.type))
           ) {
             return [{ accepted: false, reason: "stopped" as const }, current] as const;
           }

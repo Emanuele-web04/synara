@@ -22,6 +22,7 @@ import {
   getDefaultModel,
   getModelCapabilities,
   getModelOptions,
+  humanizeModelSlug,
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
@@ -29,6 +30,7 @@ import {
   normalizeClaudeModelOptions,
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
+  normalizeModelDisplayName,
   normalizeModelSlug,
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
@@ -174,6 +176,11 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
     expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
     expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("swe", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("opus", "devin")).toBe("claude-opus-4-8");
+    expect(normalizeModelSlug("sonnet", "devin")).toBe("claude-sonnet-5");
+    expect(normalizeModelSlug("fable", "devin")).toBe("claude-fable-5");
+    expect(normalizeModelSlug("gpt", "devin")).toBe("gpt");
   });
 });
 
@@ -754,6 +761,25 @@ describe("formatModelDisplayName", () => {
   it("restores known model-family casing while humanizing non-GPT slugs", () => {
     expect(formatModelDisplayName("glm-5.3-flash")).toBe("GLM 5.3 Flash");
     expect(formatModelDisplayName("deepseek-v4-flash")).toBe("DeepSeek V4 Flash");
+    expect(formatModelDisplayName("swe-2")).toBe("SWE 2");
+    expect(formatModelDisplayName("swe-1-7-lightning")).toBe("SWE 1.7 Lightning");
+    expect(formatModelDisplayName("minimax-m3")).toBe("MiniMax M3");
+    expect(formatModelDisplayName("openai-gpt-5")).toBe("OpenAI GPT-5");
+  });
+
+  it("rejoins version fragments split on dashes", () => {
+    expect(formatModelDisplayName("swe-1-8")).toBe("SWE 1.8");
+    expect(formatModelDisplayName("claude-opus-4-9")).toBe("Claude Opus 4.9");
+    expect(formatModelDisplayName("kimi-k2-6")).toBe("Kimi K2.6");
+    expect(formatModelDisplayName("gpt-5-7-sol")).toBe("GPT-5.7 Sol");
+    expect(formatModelDisplayName("deepseek-v4-1-flash")).toBe("DeepSeek V4.1 Flash");
+  });
+
+  it("keeps provider date and build suffixes separate", () => {
+    expect(formatModelDisplayName("grok-code-fast-1-0825")).toBe("Grok Code Fast 1 0825");
+    expect(formatModelDisplayName("deepseek-v4-flash-0731")).toBe("DeepSeek V4 Flash 0731");
+    expect(formatModelDisplayName("claude-opus-4-9-20260715")).toBe("Claude Opus 4.9 20260715");
+    expect(humanizeModelSlug("claude-opus-4-5-20251101")).toBe("Claude Opus 4.5 20251101");
   });
 
   it("humanizes model tokens that match inherited object properties", () => {
@@ -763,6 +789,42 @@ describe("formatModelDisplayName", () => {
 
   it("leaves non-GPT custom slugs unchanged", () => {
     expect(formatModelDisplayName("custom/internal-model")).toBe("custom/internal-model");
+  });
+});
+
+describe("normalizeModelDisplayName", () => {
+  it("restores canonical brand casing and separators for known families", () => {
+    expect(normalizeModelDisplayName("SWE-1.7 Lightning")).toBe("SWE 1.7 Lightning");
+    expect(normalizeModelDisplayName("Swe 1.7")).toBe("SWE 1.7");
+    expect(normalizeModelDisplayName("SWE-2")).toBe("SWE 2");
+    expect(normalizeModelDisplayName("GLM-5.3-Flash")).toBe("GLM 5.3 Flash");
+    expect(normalizeModelDisplayName("Deepseek V4 Flash")).toBe("DeepSeek V4 Flash");
+    expect(normalizeModelDisplayName("MiniMax-M2.5-Free")).toBe("MiniMax M2.5 Free");
+  });
+
+  it("keeps the GPT version hyphen", () => {
+    expect(normalizeModelDisplayName("GPT-5.3-Codex")).toBe("GPT-5.3 Codex");
+    expect(normalizeModelDisplayName("GPT-5.6 Sol")).toBe("GPT-5.6 Sol");
+  });
+
+  it("rejoins digit fragments into versions", () => {
+    expect(normalizeModelDisplayName("Swe 1 6")).toBe("SWE 1.6");
+    expect(normalizeModelDisplayName("Claude Opus 4 8")).toBe("Claude Opus 4.8");
+    expect(normalizeModelDisplayName("Claude Opus 4 9 20260715")).toBe("Claude Opus 4.9 20260715");
+  });
+
+  it("leaves already-canonical and unknown names unchanged", () => {
+    expect(normalizeModelDisplayName("Claude Opus 5")).toBe("Claude Opus 5");
+    expect(normalizeModelDisplayName("Kimi K3")).toBe("Kimi K3");
+    expect(normalizeModelDisplayName("Adaptive")).toBe("Adaptive");
+    expect(normalizeModelDisplayName("MyModel")).toBe("MyModel");
+    expect(normalizeModelDisplayName("K2P6")).toBe("K2P6");
+    expect(normalizeModelDisplayName("Custom model")).toBe("Custom model");
+    expect(normalizeModelDisplayName("Default (recommended)")).toBe("Default (recommended)");
+  });
+
+  it("keeps a parenthesized tail verbatim", () => {
+    expect(normalizeModelDisplayName("GLM-5.2 (beta)")).toBe("GLM 5.2 (beta)");
   });
 });
 

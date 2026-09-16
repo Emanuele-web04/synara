@@ -189,6 +189,13 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   readonly sessionScope: Scope.Closeable;
 }
 
+function serverPasswordForOpenCodeClient(
+  server: OpenCodeServerConnection,
+  configuredServerPassword: string | undefined,
+): string | undefined {
+  return server.external ? configuredServerPassword : server.serverPassword;
+}
+
 function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
   context.gatewaySessionLease?.release();
   delete context.gatewaySessionLease;
@@ -200,13 +207,16 @@ const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(functio
   readonly displayName: string;
   readonly connection: AgentGatewaySessionLease["connection"];
 }) {
-  const result = yield* runOpenCodeSdk("mcp.add", () =>
-    input.client.mcp.add({
-      directory: input.directory,
-      name: SYNARA_MCP_SERVER_NAME,
-      config: buildOpenCodeMcpServer(input.connection),
-    }),
-  );
+  const result = yield* runOpenCodeSdk("mcp.add", (signal) =>
+    input.client.mcp.add(
+      {
+        directory: input.directory,
+        name: SYNARA_MCP_SERVER_NAME,
+        config: buildOpenCodeMcpServer(input.connection),
+      },
+      { signal },
+    ),
+  ).pipe(Effect.timeout("10 seconds"));
   const status = result.data?.[SYNARA_MCP_SERVER_NAME];
   if (status?.status === "connected") {
     return;
@@ -3395,11 +3405,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       ...(experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                       ...(poolIsolationKey ? { poolIsolationKey } : {}),
                     });
+                    const clientServerPassword = serverPasswordForOpenCodeClient(
+                      server,
+                      serverPassword,
+                    );
                     const client = openCodeRuntime.createOpenCodeSdkClient({
                       baseUrl: server.url,
                       directory,
                       cliSpec: adapterConfig.cliSpec,
-                      ...(server.external && serverPassword ? { serverPassword } : {}),
+                      ...(clientServerPassword ? { serverPassword: clientServerPassword } : {}),
                     });
                     let gatewayControlAvailable = false;
                     if (agentGatewayConnection) {
@@ -3474,17 +3488,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                                 ),
                           ),
                         );
-                    const loadModelContextLimits = openCodeRuntime
-                      .loadOpenCodeInventory(client)
-                      .pipe(
-                        Effect.map(buildOpenCodeModelContextLimitMap),
-                        Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
-                      );
-                    // Session creation and metadata discovery are independent once the server is up.
-                    const [openCodeSessionId, modelContextLimitBySlug] = yield* Effect.all(
-                      [createSessionId, loadModelContextLimits],
-                      { concurrency: "unbounded" },
+                    const modelContextLimitBySlug = new Map<string, number>();
+                    // Context metadata is optional. A slow discovery endpoint
+                    // must not hold a usable session behind the startup deadline.
+                    yield* openCodeRuntime.loadOpenCodeInventory(client).pipe(
+                      Effect.map(buildOpenCodeModelContextLimitMap),
+                      Effect.timeoutOption("10 seconds"),
+                      Effect.map(Option.getOrElse(() => new Map<string, number>())),
+                      Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
+                      Effect.tap((limits) =>
+                        Effect.sync(() => {
+                          for (const [slug, limit] of limits) {
+                            modelContextLimitBySlug.set(slug, limit);
+                          }
+                        }),
+                      ),
+                      Effect.forkIn(sessionScope),
                     );
+                    const openCodeSessionId = yield* createSessionId;
 
                     return {
                       sessionScope,
@@ -4067,6 +4088,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               baseUrl: server.url,
               directory,
               cliSpec: adapterConfig.cliSpec,
+              ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
             });
             const session = yield* runOpenCodeSdk("session.get", () =>
               client.session.get({
@@ -4201,11 +4223,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     ...(serverUrl ? { serverUrl } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
+                const clientServerPassword = serverPasswordForOpenCodeClient(
+                  server,
+                  serverPassword,
+                );
                 return openCodeRuntime.createOpenCodeSdkClient({
                   baseUrl: server.url,
                   directory: sourceDirectory,
                   cliSpec: adapterConfig.cliSpec,
-                  ...(server.external && serverPassword ? { serverPassword } : {}),
+                  ...(clientServerPassword ? { serverPassword: clientServerPassword } : {}),
                 });
               }),
             );
@@ -4294,11 +4320,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ...(input.experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                 })
                 .pipe(Effect.mapError(toAdapterRequestError));
+              const clientServerPassword = serverPasswordForOpenCodeClient(server, serverPassword);
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
                 directory: input.cwd?.trim() || serverConfig.cwd,
                 cliSpec: adapterConfig.cliSpec,
-                ...(server.external && serverPassword ? { serverPassword } : {}),
+                ...(clientServerPassword ? { serverPassword: clientServerPassword } : {}),
               });
               return yield* fn({ client });
             }),

@@ -1,4 +1,4 @@
-import { EditProvider, type CreateEditor } from "@pierre/diffs/react";
+import { EditProvider, Virtualizer, type CreateEditor } from "@pierre/diffs/react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { PanelStateMessage } from "../chat/PanelStateMessage";
@@ -54,5 +54,10 @@ export function CodeEditBoundary(props: { children: ReactNode }) {
       </PanelStateMessage>
     );
   }
-  return <EditProvider createEditor={createEditor}>{props.children}</EditProvider>;
+  // Limit the DOM rebuilt by line insertions to rows near the viewport.
+  return (
+    <Virtualizer className="min-h-0 flex-1 overflow-auto">
+      <EditProvider createEditor={createEditor}>{props.children}</EditProvider>
+    </Virtualizer>
+  );
 }

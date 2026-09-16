@@ -109,8 +109,11 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    claudeCacheReview: thread.claudeCacheReview ?? null,
+    ...(thread.claudeCacheReviewSequence !== undefined
+      ? { claudeCacheReviewSequence: thread.claudeCacheReviewSequence }
+      : {}),
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
-    ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
     ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
     ...(thread.goal !== undefined ? { goal: thread.goal } : {}),
     ...(thread.goalStartedAt !== undefined ? { goalStartedAt: thread.goalStartedAt } : {}),
@@ -580,6 +583,7 @@ function writeThreadShellProjection(
 function rebuildThreadShellRecords(
   state: AppState,
   snapshotThreads: readonly OrchestrationShellSnapshot["threads"][number][],
+  snapshotSequence: number,
 ): {
   threadShellById: Record<ThreadId, ThreadShell>;
   threadSessionById: Record<ThreadId, ThreadSession | null>;
@@ -594,7 +598,14 @@ function rebuildThreadShellRecords(
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
 
   for (const thread of snapshotThreads) {
-    const next = normalizeThreadShellSnapshot(thread, getThreadFromState(state, thread.id));
+    const previousThread = getThreadFromState(state, thread.id);
+    const next = normalizeThreadShellSnapshot(
+      thread,
+      previousThread,
+      thread.claudeCacheReview != null || previousThread?.claudeCacheReviewSequence !== undefined
+        ? snapshotSequence
+        : undefined,
+    );
     const threadId = next.shell.id;
 
     threadShellById[threadId] = resolveShellEntry(previousShellById[threadId], next.shell);
@@ -1280,7 +1291,7 @@ export function syncServerShellSnapshot(
   const normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
-    ...rebuildThreadShellRecords(state, snapshotThreads),
+    ...rebuildThreadShellRecords(state, snapshotThreads, snapshot.snapshotSequence),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
@@ -1332,17 +1343,18 @@ function syncServerThreadDetailWithOptions(
   thread: ReadModelThread,
   options?: {
     updateSidebarSummary?: boolean;
+    snapshotSequence?: number;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
   const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread)
+    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
     : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
         state,
-        normalizeThreadFromReadModel(nextThreadDetail, previousThread),
+        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence),
         previousThread,
       ),
       thread.id,
@@ -1365,14 +1377,21 @@ export function syncServerThreadDetail(state: AppState, thread: ReadModelThread)
   return syncServerThreadDetailWithOptions(state, thread);
 }
 
-export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModelThread): AppState {
+export function syncServerThreadDetailHotPath(
+  state: AppState,
+  thread: ReadModelThread,
+  snapshotSequence?: number,
+): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
     state.deletedThreadIdsById?.[thread.id] !== undefined
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, { updateSidebarSummary: false });
+  return syncServerThreadDetailWithOptions(state, thread, {
+    updateSidebarSummary: false,
+    ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
+  });
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1396,7 +1415,11 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
       }
       const nextState = writeThreadShellProjection(
         state,
-        normalizeThreadShellSnapshot(event.thread, getThreadFromState(state, event.thread.id)),
+        normalizeThreadShellSnapshot(
+          event.thread,
+          getThreadFromState(state, event.thread.id),
+          event.sequence,
+        ),
       );
       return commitThreadProjection(nextState, event.thread.id);
     }
@@ -1444,7 +1467,13 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     )
     .map((thread) => {
       const existing = getThreadFromState(state, thread.id);
-      return normalizeThreadFromReadModel(thread, existing);
+      return normalizeThreadFromReadModel(
+        thread,
+        existing,
+        thread.claudeCacheReview != null || existing?.claudeCacheReviewSequence !== undefined
+          ? readModel.snapshotSequence
+          : undefined,
+      );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
   // This full resync (including the "Repair local state" action) replaces

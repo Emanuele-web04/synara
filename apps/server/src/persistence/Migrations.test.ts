@@ -302,6 +302,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -354,6 +358,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 98, name: "MigrateKiloToOpenCode" },
           { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
           { migration_id: 100, name: "MessageTextChunks" },
+          { migration_id: 101, name: "RemoveTranscriptMarkers" },
+          { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
+          { migration_id: 103, name: "ClaudeTokenAccounting" },
+          { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -447,6 +455,10 @@ agentGatewayRetentionLegacyLayer(
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -542,6 +554,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -578,6 +594,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
         ],
       );
 
@@ -668,6 +688,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [98, "MigrateKiloToOpenCode"],
         [99, "InvalidateProjectionThreadsCursor"],
         [100, "MessageTextChunks"],
+        [101, "RemoveTranscriptMarkers"],
+        [102, "ProjectionThreadMessagesTurnBoundary"],
+        [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -700,6 +724,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [98, "MigrateKiloToOpenCode"],
           [99, "InvalidateProjectionThreadsCursor"],
           [100, "MessageTextChunks"],
+          [101, "RemoveTranscriptMarkers"],
+          [102, "ProjectionThreadMessagesTurnBoundary"],
+          [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

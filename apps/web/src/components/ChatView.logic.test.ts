@@ -1,11 +1,13 @@
 import {
   CheckpointRef,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type PendingClaudeCacheReview,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -2137,6 +2139,49 @@ describe("runWorktreeCreationFlow", () => {
   });
 });
 
+describe("Claude cache review dispatch acknowledgement", () => {
+  it.each([
+    { expectedId: "held-message", reviewedId: "held-message", acknowledged: true },
+    { expectedId: "new-message", reviewedId: "old-message", acknowledged: false },
+    { expectedId: null, reviewedId: "held-message", acknowledged: false },
+  ])(
+    "only acknowledges the exact held message ($expectedId / $reviewedId)",
+    ({ expectedId, reviewedId, acknowledged }) => {
+      const localDispatch = createLocalDispatchSnapshot(
+        undefined,
+        expectedId === null
+          ? undefined
+          : { expectedUserMessageId: MessageId.makeUnsafe(expectedId) },
+      );
+      const claudeCacheReview: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe(reviewedId),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      };
+      const input = {
+        localDispatch,
+        claudeCacheReview,
+        phase: "ready" as const,
+        latestTurn: null,
+        session: null,
+        messages: [],
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      };
+      expect(hasServerAcknowledgedLocalDispatch(input)).toBe(acknowledged);
+      expect(hasLiveTurnTakenOver(input)).toBe(acknowledged);
+    },
+  );
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
@@ -2990,7 +3035,7 @@ describe("resolveDraftFallbackModelSelection", () => {
         projectDefault: null,
         settingsDefaultProvider: "pi",
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 
   it("uses the settings provider default model when no project default exists", () => {

@@ -1,3 +1,4 @@
+import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
@@ -11,6 +12,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { BrowserVaultDialog } from "~/components/BrowserVault";
 import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
@@ -39,6 +41,7 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
+import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
@@ -313,13 +316,17 @@ function RootRouteView() {
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
           <EventRouter />
+          <EditorDirtyRouteGuard />
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <BrowserVaultDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <AppSnapWelcomeDialog />
+          <SafariAccessOnboarding>
+            <AppSnapWelcomeDialog />
+          </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
@@ -1928,7 +1935,7 @@ function EventRouter() {
         // turn, the resync belongs to the turn that requested it, and the new turn must
         // still get its own.
         const catchupEntryBeforeApply = resolveThreadCatchupBackoff(threadId);
-        syncServerThreadDetailHotPath(snapshot.thread);
+        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
@@ -2093,7 +2100,7 @@ function EventRouter() {
           clearThreadDetailResumeCursor(threadId);
           return;
         }
-        syncServerThreadDetailHotPath(item.snapshot.thread);
+        syncServerThreadDetailHotPath(item.snapshot.thread, item.snapshot.snapshotSequence);
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
         // fence first would leave resume bookkeeping vouching for detail that
