@@ -822,6 +822,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
       }
 
+      if (command.type === "thread.claude-cache.set" && command.hold) {
+        // Admission runs in the command worker, so a stop cannot slip between
+        // this durable fence and the atomic review/session events below.
+        const cancellation = yield* Stream.runHead(
+          eventStore.readThreadEventsFromSequence(
+            command.threadId,
+            command.hold.sourceEventSequence,
+            1,
+            commandReadModel.snapshotSequence,
+            [
+              "thread.session-stop-requested",
+              "thread.archived",
+              "thread.deleted",
+              "thread.sidechat-expired",
+              "thread.conversation-rolled-back",
+            ],
+          ),
+        ).pipe(
+          Effect.mapError(() =>
+            makeCommandInternalError(command, "Could not verify Claude cache hold authorization."),
+          ),
+        );
+        if (Option.isSome(cancellation)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Command produced no events.",
+          });
+        }
+      }
+
       const deciderReadModel = yield* buildDeciderReadModel(command);
       const eventBase = yield* decideOrchestrationCommand({
         command,
