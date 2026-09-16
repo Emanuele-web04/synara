@@ -59,7 +59,7 @@ const BACKEND_DISPLAY_NAMES: Record<string, string> = {
   [COMPUTER_HYPRLAND_BACKEND]: "Hyprland plugin",
   [COMPUTER_NESTED_KWIN_BACKEND]: "Isolated agent desktop (nested KWin)",
   [COMPUTER_MAC_BACKEND]: "macOS desktop",
-  cua: "macOS desktop · Cua 0.24.0",
+  cua: "macOS desktop · Cua 0.28.2",
   fake: "Test backend",
 };
 

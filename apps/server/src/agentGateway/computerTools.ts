@@ -2810,6 +2810,6 @@ function windowListCompletenessNote(dialect: ComputerAgentDialect): string {
 
 function dragLimitNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Cua 0.24.0 requires foreground delivery for dragging on macOS, covered by the active Computer task's consent. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
+    ? "Cua 0.28.2 requires foreground delivery for dragging on macOS, covered by the active Computer task's consent. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
     : "This desktop injects the drag at screen coordinates, so it works for anything the pointer can sweep — selecting text, moving a slider — but cross-application drag-and-drop and dragging a window by its titlebar are handled by the compositor and may not follow. Check the result with computer_screenshot rather than assuming the drop landed.";
 }

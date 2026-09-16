@@ -102,7 +102,7 @@ function cuaKey(value: string): string {
   const key = value.toLowerCase();
   if (key === "insert")
     throw new CuaActionError(
-      "Cua 0.24.0 has no Insert key mapping on macOS.",
+      "Cua 0.28.2 has no Insert key mapping on macOS.",
       "not-dispatched",
       "unsupported_operation",
     );
@@ -1023,7 +1023,7 @@ export class CuaComputerBackend implements ComputerBackend {
   ): Promise<ComputerBackendActionResult> {
     if (desktopDeliveryMode() !== "foreground")
       throw new CuaActionError(
-        "Cua 0.24.0 cannot drag in the background on macOS. Use foreground delivery within the authorized Computer task.",
+        "Cua 0.28.2 cannot drag in the background on macOS. Use foreground delivery within the authorized Computer task.",
         "not-dispatched",
         "foreground_required",
       );
@@ -1088,7 +1088,7 @@ export class CuaComputerBackend implements ComputerBackend {
       );
     if (modifiers?.length)
       throw new CuaActionError(
-        "Cua 0.24.0 does not support modified scroll on macOS.",
+        "Cua 0.28.2 does not support modified scroll on macOS.",
         "not-dispatched",
         "unsupported_operation",
       );
