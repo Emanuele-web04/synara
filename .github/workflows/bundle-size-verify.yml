@@ -1,0 +1,88 @@
+name: Verify production bundle size
+
+on:
+  push:
+    branches: [perf/bundle-size-081dbbc9]
+    paths: [.github/workflows/bundle-size-verify.yml]
+  workflow_dispatch:
+    inputs:
+      build_version:
+        description: Version embedded in the measured artifacts
+        required: true
+        default: "0.8.4"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            target: dmg
+            arch: arm64
+            node: 24.20.0
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+            node: 24.19.0
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+            node: 24.20.0
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+            node: 24.20.0
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+      AUDIT_VERSION: ${{ inputs.build_version || '0.8.4' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install frozen release build dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/size-evidence"
+          bun run dist:desktop:artifact -- --platform '${{ matrix.platform }}' --target '${{ matrix.target }}' --arch '${{ matrix.arch }}' --build-version "$AUDIT_VERSION" --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-artifacts" 2>&1 | tee "$RUNNER_TEMP/size-evidence/build.log"
+      - name: Measure installed files and download archives
+        shell: bash
+        run: |
+          node .github/scripts/measure-bundle-size.mjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/size-evidence" '${{ matrix.platform }}' > "$RUNNER_TEMP/size-evidence/measurement.log"
+      - name: Verify packaged imports and isolated desktop startup
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version "$AUDIT_VERSION" 2>&1 | tee "$RUNNER_TEMP/size-evidence/startup.log"
+      - name: Retain measured source
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/size-evidence/source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bundle-after-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/size-evidence
+          retention-days: 14
+          if-no-files-found: warn

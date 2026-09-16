@@ -13,6 +13,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import { listFiles, pruneProductionPublicAssets } from "./build-utils/public-assets";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -24,80 +25,23 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
-const CENTRAL_ICON_DIR = "central-icons-reversed";
-const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
-
-async function listFiles(root: string): Promise<string[]> {
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const result: string[] = [];
-  for (const entry of entries) {
-    const entryPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      result.push(...(await listFiles(entryPath)));
-    } else if (entry.isFile()) {
-      result.push(entryPath);
-    }
-  }
-  return result;
-}
-
-// Finds literal icon basenames in source, then prunes the copied public icon set after build.
-function centralIconPrunePlugin(): Plugin {
+// Prune public assets before generating compressed sidecars.
+function productionPublicAssetPlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
   return {
-    name: "synara-central-icon-prune",
+    name: "synara-production-public-assets",
     apply: "build",
     configResolved(config) {
       resolvedRoot = config.root;
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
-    async closeBundle() {
-      const publicIconDir = path.join(resolvedRoot, "public", CENTRAL_ICON_DIR);
-      const distIconDir = path.join(resolvedOutDir, CENTRAL_ICON_DIR);
-      const iconFiles = await fs.readdir(publicIconDir).catch(() => []);
-      const availableIcons = new Set(
-        iconFiles
-          .filter((name) => name.endsWith(".svg"))
-          .map((name) => name.slice(0, -".svg".length)),
-      );
-      if (availableIcons.size === 0) return;
-
-      const sourceFiles = (await listFiles(path.join(resolvedRoot, "src"))).filter((file) =>
-        SOURCE_EXTENSIONS.has(path.extname(file)),
-      );
-      const requiredIcons = new Set<string>();
-      const literalPattern = /["'`]([a-z0-9][a-z0-9-]*)["'`]/g;
-      for (const sourceFile of sourceFiles) {
-        const source = await fs.readFile(sourceFile, "utf8").catch(() => "");
-        for (const match of source.matchAll(literalPattern)) {
-          const iconName = match[1];
-          if (
-            iconName &&
-            CENTRAL_ICON_NAME_PATTERN.test(iconName) &&
-            availableIcons.has(iconName)
-          ) {
-            requiredIcons.add(iconName);
-          }
-        }
-      }
-
-      if (requiredIcons.size === 0) return;
-      const copiedIconFiles = await fs.readdir(distIconDir).catch(() => []);
-      let removedCount = 0;
-      await Promise.all(
-        copiedIconFiles.map(async (fileName) => {
-          if (!fileName.endsWith(".svg")) return;
-          const iconName = fileName.slice(0, -".svg".length);
-          if (requiredIcons.has(iconName)) return;
-          removedCount += 1;
-          await fs.rm(path.join(distIconDir, fileName), { force: true });
-        }),
-      );
-      console.info(
-        `[central-icons] kept ${requiredIcons.size}/${availableIcons.size} referenced SVGs, pruned ${removedCount}.`,
-      );
+    closeBundle: {
+      sequential: true,
+      async handler(error) {
+        if (error) return;
+        await pruneProductionPublicAssets(resolvedRoot, resolvedOutDir);
+      },
     },
   };
 }
@@ -123,61 +67,65 @@ function precompressPlugin(): Plugin {
     configResolved(config) {
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
-    async closeBundle() {
-      const files = (await listFiles(resolvedOutDir)).filter((file) =>
-        PRECOMPRESS_EXTENSIONS.has(path.extname(file)),
-      );
-      // A sidecar whose source shrank below threshold or stopped compressing
-      // smaller must be removed, not just skipped: emptyOutDir protects full
-      // builds, but partial/watch builds would otherwise serve a stale
-      // compressed body under a current filename.
-      const removeStale = (sidecarPath: string) => fs.rm(sidecarPath, { force: true });
-      // Write to a temp file and rename: a watch-build server reading a
-      // sidecar mid-write would otherwise get a truncated compressed stream.
-      // Rename is atomic within a directory, so readers see either the old
-      // sidecar or the complete new one.
-      let tempSequence = 0;
-      const writeSidecarAtomically = async (sidecarPath: string, data: Buffer) => {
-        // Unique per write so concurrent builds against one outDir cannot
-        // clobber each other's staging file.
-        tempSequence += 1;
-        const tempPath = `${sidecarPath}.${process.pid}.${tempSequence}.tmp`;
-        await fs.writeFile(tempPath, data);
-        await fs.rename(tempPath, sidecarPath);
-      };
-      let sidecarCount = 0;
-      await Promise.all(
-        files.map(async (file) => {
-          const source = await fs.readFile(file);
-          if (source.byteLength < PRECOMPRESS_MIN_BYTES) {
-            await Promise.all([removeStale(`${file}.gz`), removeStale(`${file}.br`)]);
-            return;
-          }
-          // Max-quality brotli on thousands of small files dominates plugin
-          // wall-clock; below 16 KiB quality 9 is byte-for-byte competitive.
-          const brotliQuality =
-            source.byteLength < 16 * 1024 ? 9 : zlib.constants.BROTLI_MAX_QUALITY;
-          const [gzipped, brotlied] = await Promise.all([
-            gzip(source, { level: zlib.constants.Z_BEST_COMPRESSION }),
-            brotliCompress(source, {
-              params: {
-                [zlib.constants.BROTLI_PARAM_QUALITY]: brotliQuality,
-                [zlib.constants.BROTLI_PARAM_SIZE_HINT]: source.byteLength,
-              },
-            }),
-          ]);
-          await Promise.all([
-            gzipped.byteLength < source.byteLength
-              ? writeSidecarAtomically(`${file}.gz`, gzipped)
-              : removeStale(`${file}.gz`),
-            brotlied.byteLength < source.byteLength
-              ? writeSidecarAtomically(`${file}.br`, brotlied)
-              : removeStale(`${file}.br`),
-          ]);
-          sidecarCount += 1;
-        }),
-      );
-      console.info(`[precompress] emitted gzip+brotli sidecars for ${sidecarCount} files.`);
+    closeBundle: {
+      sequential: true,
+      async handler(error) {
+        if (error) return;
+        const files = (await listFiles(resolvedOutDir)).filter((file) =>
+          PRECOMPRESS_EXTENSIONS.has(path.extname(file)),
+        );
+        // A sidecar whose source shrank below threshold or stopped compressing
+        // smaller must be removed, not just skipped: emptyOutDir protects full
+        // builds, but partial/watch builds would otherwise serve a stale
+        // compressed body under a current filename.
+        const removeStale = (sidecarPath: string) => fs.rm(sidecarPath, { force: true });
+        // Write to a temp file and rename: a watch-build server reading a
+        // sidecar mid-write would otherwise get a truncated compressed stream.
+        // Rename is atomic within a directory, so readers see either the old
+        // sidecar or the complete new one.
+        let tempSequence = 0;
+        const writeSidecarAtomically = async (sidecarPath: string, data: Buffer) => {
+          // Unique per write so concurrent builds against one outDir cannot
+          // clobber each other's staging file.
+          tempSequence += 1;
+          const tempPath = `${sidecarPath}.${process.pid}.${tempSequence}.tmp`;
+          await fs.writeFile(tempPath, data);
+          await fs.rename(tempPath, sidecarPath);
+        };
+        let sidecarCount = 0;
+        await Promise.all(
+          files.map(async (file) => {
+            const source = await fs.readFile(file);
+            if (source.byteLength < PRECOMPRESS_MIN_BYTES) {
+              await Promise.all([removeStale(`${file}.gz`), removeStale(`${file}.br`)]);
+              return;
+            }
+            // Max-quality brotli on thousands of small files dominates plugin
+            // wall-clock; below 16 KiB quality 9 is byte-for-byte competitive.
+            const brotliQuality =
+              source.byteLength < 16 * 1024 ? 9 : zlib.constants.BROTLI_MAX_QUALITY;
+            const [gzipped, brotlied] = await Promise.all([
+              gzip(source, { level: zlib.constants.Z_BEST_COMPRESSION }),
+              brotliCompress(source, {
+                params: {
+                  [zlib.constants.BROTLI_PARAM_QUALITY]: brotliQuality,
+                  [zlib.constants.BROTLI_PARAM_SIZE_HINT]: source.byteLength,
+                },
+              }),
+            ]);
+            await Promise.all([
+              gzipped.byteLength < source.byteLength
+                ? writeSidecarAtomically(`${file}.gz`, gzipped)
+                : removeStale(`${file}.gz`),
+              brotlied.byteLength < source.byteLength
+                ? writeSidecarAtomically(`${file}.br`, brotlied)
+                : removeStale(`${file}.br`),
+            ]);
+            sidecarCount += 1;
+          }),
+        );
+        console.info(`[precompress] emitted gzip+brotli sidecars for ${sidecarCount} files.`);
+      },
     },
   };
 }
@@ -198,7 +146,7 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
     tailwindcss(),
-    centralIconPrunePlugin(),
+    productionPublicAssetPlugin(),
     precompressPlugin(),
   ],
   optimizeDeps: {
