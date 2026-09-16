@@ -2486,18 +2486,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'full-access', NULL, NULL, '2026-07-23T09:59:00.000Z'
           )
       `;
-      // The thread/session lifecycle timestamps are old, but the latest
-      // assistant message is still advancing. Reconciliation must use this
-      // existing hot-path timestamp without rewriting projection_threads.
+      // The thread/session lifecycle timestamps are old, but the active turn's
+      // assistant message is still advancing. A newer concurrent turn already
+      // settled and has the higher message sequence, so reconciliation must
+      // scope activity to in-flight turns instead of picking the latest row.
       yield* sql`
         INSERT INTO projection_thread_messages (
           thread_id, message_id, turn_id, role, text, is_streaming, source,
           sequence, created_at, updated_at
-        ) VALUES (
-          'thread-stale-running', 'message-still-streaming', 'turn-stale',
-          'assistant', '', 1, 'provider', 100,
-          '2026-07-23T00:00:00.000Z', '2026-07-23T09:30:00.000Z'
-        )
+        ) VALUES
+          (
+            'thread-stale-running', 'message-still-streaming', 'turn-stale',
+            'assistant', '', 1, 'provider', 100,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T09:30:00.000Z'
+          ),
+          (
+            'thread-stale-running', 'message-newer-settled-turn', 'turn-newer-settled',
+            'assistant', 'done', 0, 'provider', 101,
+            '2026-07-23T08:00:00.000Z', '2026-07-23T08:30:00.000Z'
+          )
       `;
       yield* sql`
         INSERT INTO provider_session_runtime (

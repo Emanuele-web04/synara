@@ -1166,7 +1166,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ) {
               // The pump gate lets a stale terminal event through only when it
               // can safely settle the thread: no current generation exists, the
-              // binding owns no active turn, or the event still names that turn.
+              // binding still belongs to the event generation, or the event
+              // names the binding's active turn.
               // Mirror that acceptance here, otherwise the accepted event is
               // journaled and published but the durable binding keeps the dead
               // lifecycle state forever.
@@ -1174,7 +1175,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const staleTerminalSettlesThread =
                 isTerminalRuntimeEvent(event) &&
                 (lifecycle.currentGeneration(event.threadId) === undefined ||
-                  boundActiveTurnId === undefined ||
+                  binding.lifecycleGeneration === event.lifecycleGeneration ||
                   (event.turnId !== undefined && boundActiveTurnId === String(event.turnId)));
               if (!staleTerminalSettlesThread) {
                 return;
@@ -1344,8 +1345,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // A stale terminal event is safe to let through when either:
             //  - no current generation exists (nothing newer can be corrupted
             //    by settling the old session's state), or
-            //  - the current binding has no active turn (there is no newer turn
-            //    whose lifecycle the old terminal event could clobber), or
+            //  - the persisted binding still belongs to the event generation
+            //    (the lifecycle rotated before its durable state caught up), or
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
@@ -1364,9 +1365,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               });
             }
             if (currentGeneration !== undefined) {
-              // A newer generation exists: accept the stale terminal event when
-              // the binding owns no turn, or when the event still names its
-              // active turn. A different active turn remains authoritative.
+              // A newer generation exists: accept the stale terminal event only
+              // when the binding still belongs to that generation or the event
+              // names its active turn. An idle replacement binding is newer
+              // state too and must not be retired by an old exit/error.
               return directory.getBinding(event.threadId).pipe(
                 Effect.flatMap((maybeBinding) => {
                   const binding = Option.getOrUndefined(maybeBinding);
@@ -1375,7 +1377,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     : undefined;
                   const canSettleBinding =
                     binding !== undefined &&
-                    (boundActiveTurnId === undefined ||
+                    (binding.lifecycleGeneration === event.lifecycleGeneration ||
                       (event.turnId !== undefined && boundActiveTurnId === String(event.turnId)));
                   if (!canSettleBinding) {
                     return Effect.logWarning("provider.session.stale_generation_event_ignored", {

@@ -25,9 +25,10 @@ export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
  * Absolute upper bound on a single turn. Past this the turn is settled even
  * when the live runtime still claims to be running, because every other signal
  * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. `thread.updatedAt` advances on
- * every appended message, so a legitimately long-running turn keeps resetting
- * this clock and is never affected.
+ * can be absent when a provider wedges mid-turn. Reconciliation loads
+ * `thread.updatedAt` with the latest message activity for the projected
+ * in-flight turn, so a legitimately long-running turn keeps resetting this
+ * clock and is never affected by unrelated concurrent messages.
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
@@ -133,9 +134,9 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
 }
 
 function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  // The later of the session lifecycle timestamp and the thread timestamp:
-  // `thread.updatedAt` advances on every appended message, so a turn that is
-  // actively streaming output never counts as stale even though its session
+  // The later of the session lifecycle timestamp and the reconciliation shell
+  // timestamp. The shell opts into message activity for projected in-flight
+  // turns, so active streaming does not count as stale even though the session
   // row only moves on lifecycle transitions.
   const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
   const threadObservedAt = Date.parse(thread.updatedAt);

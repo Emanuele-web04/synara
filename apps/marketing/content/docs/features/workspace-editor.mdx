@@ -1,0 +1,40 @@
+---
+title: Workspace editor & diffs
+description: Edit workspace files with autosave, recover conflicts, compare Git revisions, and review changes beside the task.
+---
+
+The Explorer, file previews, and diff panel operate on the active task's checkout. Confirm **Local** or **Worktree** and the branch before editing or reviewing files.
+
+## Edit and save
+
+Open a file from the Explorer, a workspace search result, or a file link. The in-app editor provides syntax highlighting and line numbers, with a numbered plain-text editor for Explorer files larger than 250,000 characters or 1,000 lines. The editor type stays stable while the document is open. Read-only previews explain why editing is unavailable.
+
+Changes autosave after a 400 ms pause. **Saving...**, **Unsaved changes**, and **Saved** reflect the current buffer and write state. **Save** or `mod+s` saves immediately; the shortcut can be remapped in keybindings. Undo, redo, and reload controls remain available.
+
+Switching files, closing an editor, or navigating to another task first attempts to save pending edits. If a save fails, Synara keeps the draft and blocks navigation that would leave it behind. A browser reload or close can show an unsaved-changes warning while a dirty buffer remains. A retained draft is not a guarantee of recovery after a process crash, so resolve visible errors before quitting.
+
+## Resolve a save conflict
+
+Background file changes refresh clean previews but do not silently replace unsaved edits. If the file on disk changed since your buffer was read, autosave stops and shows a conflict.
+
+- **Reload from disk** loads the current file; confirm discarding unsaved changes when prompted.
+- When offered by the editor, **Overwrite** explicitly writes your buffer over the conflicting disk version.
+- For another save error, fix its cause and choose **Save** to retry.
+
+Autosave does not repeatedly retry a failed write or automatically overwrite a conflict. Check the other writer or task before deciding which version to keep.
+
+## Choose a diff scope
+
+Press `mod+d` to open the diff panel. The scope picker separates repository changes from the last-turn view. Use **Compare with** to choose another branch or recent commit, or enter a branch, tag, or commit explicitly.
+
+Choose **Split diff** or **Stacked diff** in Diff options; the layout remains saved across app restarts. The same menu offers word wrap, whitespace filtering, and change markers. File navigation and the jump menu help narrow a large review.
+
+Use **Next change** / **Previous change**, or `alt+↓` / `alt+↑` outside the terminal, to move through changes. Line blame is available in repository scopes whose line numbers map to the working tree or HEAD. It is omitted for staged, unstaged, and checkpoint-based turn diffs; absence of blame there is intentional.
+
+Open the changed file in the in-app editor when a review needs a correction. Editor saves and external file changes refresh Git status and relevant diff views. Review the refreshed result before committing it.
+
+## Recognize partial diffs
+
+An oversized working-tree patch displays a **Partial diff** warning instead of failing the whole view. Some files or changes may be missing. The displayed patch and statistics are not proof that you have reviewed the complete change set; inspect the remaining files in Git or an external editor before approving or shipping.
+
+Continue with [Pull requests](/docs/workflows/pull-requests) for remote review and [Organize & navigate](/docs/features/organize) for source search and document previews.

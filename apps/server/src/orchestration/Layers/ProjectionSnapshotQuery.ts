@@ -206,6 +206,10 @@ const ThreadTurnLookupInput = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
 });
+const ThreadMessageActivityLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
+});
 const ThreadMessagesByThreadLookupInput = Schema.Struct({
   threadId: ThreadId,
   maxMessages: Schema.NullOr(Schema.Number),
@@ -1020,11 +1024,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               threads.updated_at,
               COALESCE(
                 (
-                  SELECT messages.updated_at
+                  SELECT MAX(messages.updated_at)
                   FROM projection_thread_messages AS messages
                   WHERE messages.thread_id = threads.thread_id
-                  ORDER BY messages.sequence DESC, messages.message_id DESC
-                  LIMIT 1
+                    AND (
+                      (
+                        sessions.active_turn_id IS NOT NULL
+                        AND messages.turn_id = sessions.active_turn_id
+                      )
+                      OR (
+                        json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
+                        AND messages.turn_id = json_extract(
+                          runtime.runtime_payload_json,
+                          '$.activeTurnId'
+                        )
+                      )
+                      OR (
+                        latest_turn.state = 'running'
+                        AND messages.turn_id = latest_turn.turn_id
+                      )
+                    )
                 ),
                 threads.updated_at
               )
@@ -1058,8 +1077,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT thread_id AS "threadId"
         FROM in_flight
         -- The message projection already advances on every assistant delta.
-        -- Reading its latest causal row keeps streaming off the reconciliation
-        -- hot path without restoring a second per-delta thread-shell write.
+        -- Read activity only from turns that still appear in flight: a newer
+        -- settled message can have a higher sequence while an older concurrent
+        -- turn continues streaming.
         WHERE observed_at <= ${updatedBefore}
         ORDER BY observed_at ASC, thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
@@ -1651,15 +1671,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const getLatestThreadMessageActivityRow = SqlSchema.findOneOption({
-    Request: ThreadIdLookupInput,
+    Request: ThreadMessageActivityLookupInput,
     Result: ProjectionThreadActivityTimestampRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, turnIds }) =>
       sql`
-        SELECT updated_at AS "updatedAt"
+        SELECT MAX(updated_at) AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
-        ORDER BY sequence DESC, message_id DESC
-        LIMIT 1
+          AND turn_id IN (
+            SELECT value
+            FROM json_each(${JSON.stringify(turnIds)})
+          )
+        HAVING MAX(updated_at) IS NOT NULL
       `,
   });
 
@@ -2901,7 +2924,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             return Option.none<OrchestrationThreadShell>();
           }
 
-          const [latestTurnRow, sessionRow, latestMessageActivityRow] = yield* Effect.all([
+          const [latestTurnRow, sessionRow] = yield* Effect.all([
             getLatestTurnRowByThread({ threadId }).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
@@ -2918,8 +2941,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            options?.includeLatestMessageActivity === true
-              ? getLatestThreadMessageActivityRow({ threadId }).pipe(
+          ]);
+
+          const latestTurn = Option.match(latestTurnRow, {
+            onNone: () => null,
+            onSome: (row) => toProjectedLatestTurn(row),
+          });
+          const session = Option.match(sessionRow, {
+            onNone: () => null,
+            onSome: (row) => toProjectedSession(row),
+          });
+          const inFlightTurnIds = Array.from(
+            new Set(
+              [
+                session?.activeTurnId ?? null,
+                latestTurn?.state === "running" ? latestTurn.turnId : null,
+              ].filter((turnId): turnId is TurnId => turnId !== null),
+            ),
+          );
+          const latestMessageActivityRow =
+            options?.includeLatestMessageActivity === true && inFlightTurnIds.length > 0
+              ? yield* getLatestThreadMessageActivityRow({
+                  threadId,
+                  turnIds: inFlightTurnIds,
+                }).pipe(
                   Effect.mapError(
                     toPersistenceSqlOrDecodeError(
                       "ProjectionSnapshotQuery.getThreadShellById:getLatestMessageActivity:query",
@@ -2927,19 +2972,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     ),
                   ),
                 )
-              : Effect.succeed(Option.none()),
-          ]);
+              : Option.none();
 
           const thread = toProjectedThreadShellFromStoredSummary({
             threadRow: threadRow.value,
-            latestTurn: Option.match(latestTurnRow, {
-              onNone: () => null,
-              onSome: (row) => toProjectedLatestTurn(row),
-            }),
-            session: Option.match(sessionRow, {
-              onNone: () => null,
-              onSome: (row) => toProjectedSession(row),
-            }),
+            latestTurn,
+            session,
           });
           return Option.some(
             Option.match(latestMessageActivityRow, {

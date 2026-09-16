@@ -424,17 +424,26 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
   return "invalid";
 }
 
+/** Prefilled objectives are literal even when they match a `/goal` control word. */
+export function buildGoalSlashCommandPrompt(goal: string): string {
+  return `/goal -- ${goal.trim()}`;
+}
+
 export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction {
-  const goal = args.trim();
+  const trimmed = args.trim();
+  const literal = /^--(?:\s|$)/.test(trimmed);
+  const goal = literal ? trimmed.slice(2).trim() : trimmed;
   if (!goal) {
     return { action: "show" };
   }
-  const control = goal.toLowerCase();
-  if (control === "clear") {
-    return { action: "clear" };
-  }
-  if (control === "pause" || control === "resume" || control === "edit") {
-    return { action: control };
+  if (!literal) {
+    const control = goal.toLowerCase();
+    if (control === "clear") {
+      return { action: "clear" };
+    }
+    if (control === "pause" || control === "resume" || control === "edit") {
+      return { action: control };
+    }
   }
   if (goal.length > THREAD_GOAL_MAX_CHARS) {
     return { action: "too-long" };
