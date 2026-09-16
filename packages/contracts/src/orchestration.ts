@@ -12,6 +12,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { ClaudeCacheObservation } from "./claudeCache";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -764,7 +765,20 @@ export const OrchestrationPendingInteraction = Schema.Struct({
 });
 export type OrchestrationPendingInteraction = typeof OrchestrationPendingInteraction.Type;
 
+export const PendingClaudeCacheReview = Schema.Struct({
+  reviewId: TrimmedNonEmptyString,
+  messageId: MessageId,
+  sourceEventSequence: PositiveInt,
+  assessment: ClaudeCacheObservation,
+  status: Schema.Literals(["pending", "responding", "compacting", "failed", "uncertain"]),
+  compactionTurnId: Schema.optional(TurnId),
+  error: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type PendingClaudeCacheReview = typeof PendingClaudeCacheReview.Type;
+
 export const OrchestrationThread = Schema.Struct({
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -856,6 +870,7 @@ export const OrchestrationThread = Schema.Struct({
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
