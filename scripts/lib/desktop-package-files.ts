@@ -42,7 +42,6 @@ export function desktopPackageFiles(input: DesktopPackageFilesInput): string[] {
     "!node_modules/**/*.{d.mts,d.cts,tsbuildinfo}",
     // Native rebuilds happen before the files filter. Keep prebuilds, binaries,
     // helpers and licenses; only omit the upstream native source and test code.
-    "!node_modules/node-pty/src/**",
     "!node_modules/node-pty/deps/winpty/src/**",
     "!node_modules/node-pty/lib/*.test.js",
     "!node_modules/node-pty/build/**/obj/**",
@@ -58,6 +57,8 @@ export function desktopPackageFiles(input: DesktopPackageFilesInput): string[] {
     );
   if (!dependencySourcemaps) {
     files.push("!node_modules/**/*.map");
+    // node-pty's emitted JS maps reference the original TypeScript in src/.
+    files.push("!node_modules/node-pty/src/**");
     files.push(
       ...COMPILED_DEPENDENCY_SOURCE_TREES.map(
         (name) => `!node_modules/${name}/src/**/*.{ts,tsx,mts,cts}`,

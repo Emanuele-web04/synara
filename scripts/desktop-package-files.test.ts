@@ -35,6 +35,24 @@ describe("desktopPackageFiles", () => {
     const files = desktopPackageFiles({ platform: "mac", dependencySourcemaps: true });
     assert.ok(!files.includes("!node_modules/**/*.map"));
     assert.ok(!files.includes("!node_modules/effect/src/**/*.{ts,tsx,mts,cts}"));
+    const exclusions = files
+      .filter((pattern) => pattern.startsWith("!"))
+      .map((pattern) => pattern.slice(1));
+    // lib/terminal.js.map references ../src/terminal.ts without sourcesContent.
+    for (const diagnosticFile of [
+      "node_modules/node-pty/lib/terminal.js.map",
+      "node_modules/node-pty/src/terminal.ts",
+    ]) {
+      assert.ok(
+        !exclusions.some((pattern) => matchesGlob(diagnosticFile, pattern)),
+        diagnosticFile,
+      );
+    }
+    assert.ok(
+      desktopPackageFiles({ platform: "mac", dependencySourcemaps: false }).includes(
+        "!node_modules/node-pty/src/**",
+      ),
+    );
   });
 
   it("removes only the unusable SDK fallback on known glibc Linux hosts", () => {
