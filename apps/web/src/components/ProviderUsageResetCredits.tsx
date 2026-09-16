@@ -1,147 +1,167 @@
-// FILE: ProviderUsageResetCredits.tsx
-// Purpose: Shared Codex "Banked resets" section for Settings and compact usage popovers.
-// Lists pending rate-limit reset credits with expiry and a confirm-gated action per row.
-
-import type { CodexResetCreditOutcome, ServerCodexResetCredit } from "@synara/contracts";
+// Shared confirm-gated Codex resets in settings and usage popovers.
+import type {
+  CodexResetCreditOutcome,
+  ServerCodexResetCredit,
+  ServerCodexResetCredits,
+  ServerConsumeCodexResetCreditInput,
+} from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
-import { showConfirmDialogFallback } from "~/confirmDialogFallback";
-import { readNativeApi } from "~/nativeApi";
-import { consumeCodexResetCredit, serverQueryKeys } from "~/lib/serverReactQuery";
 import { toastManager } from "~/components/ui/toast";
+import { showConfirmDialogFallback } from "~/confirmDialogFallback";
+import {
+  finishCodexResetAttempt,
+  prepareCodexResetAttempt,
+  readCodexResetAttempt,
+} from "~/lib/codexResetAttempt";
+import { consumeCodexResetCredit, serverQueryKeys } from "~/lib/serverReactQuery";
+import { readNativeApi } from "~/nativeApi";
 
 function formatExpiry(expiresAt: string | undefined, now: number): string {
   if (!expiresAt) return "No expiry listed";
   const ms = Date.parse(expiresAt) - now;
-  if (!Number.isFinite(ms) || ms <= 0) return "Expires now";
+  if (!Number.isFinite(ms) || ms <= 0) return "Expired";
   const mins = Math.floor(ms / 60_000);
   if (mins < 60) return `Expires in ${mins}m`;
   const hours = Math.floor(mins / 60);
-  if (hours < 48) {
-    const rem = mins % 60;
-    return rem > 0 ? `Expires in ${hours}h ${rem}m` : `Expires in ${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `Expires in ${days}d ${remHours}h` : `Expires in ${days}d`;
+  if (hours < 48) return `Expires in ${hours}h ${mins % 60}m`;
+  return `Expires in ${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 export function ProviderUsageResetCredits({
-  credits,
-  availableCount,
+  resetCredits,
   surface = "settings",
 }: {
-  credits: ReadonlyArray<ServerCodexResetCredit>;
-  availableCount: number;
+  resetCredits: ServerCodexResetCredits;
   surface?: "settings" | "popover";
 }) {
+  const { accountId, availableCount, canUse, credits } = resetCredits;
   const queryClient = useQueryClient();
-  const [confirmingCreditId, setConfirmingCreditId] = useState<string | null>(null);
+  const locked = useRef(false);
+  const [confirming, setConfirming] = useState(false);
+  let pendingAttempt: ServerConsumeCodexResetCreditInput | null = null;
+  let storageUnavailable = false;
+  try {
+    pendingAttempt = accountId ? readCodexResetAttempt(accountId) : null;
+  } catch {
+    storageUnavailable = true;
+  }
   const consumeMutation = useMutation({
-    mutationFn: (creditId: string) => consumeCodexResetCredit({ creditId }),
-    onSuccess: (result) => {
+    mutationFn: consumeCodexResetCredit,
+    onSuccess: (result, attempt) => {
+      // Every recognized outcome completes the attempt, even if the subsequent usage read fails.
+      try {
+        finishCodexResetAttempt(attempt);
+      } catch {
+        /* Retaining the same key remains safe. */
+      }
       const messages: Record<CodexResetCreditOutcome, string> = {
         reset: "Codex limits reset.",
-        nothingToReset: "Nothing to reset right now.",
+        nothingToReset: "Codex limits do not need a reset right now.",
         noCredit: "No banked resets available.",
         alreadyRedeemed: "That reset was already used.",
       };
       toastManager.add({
-        type: result.outcome === "reset" ? "success" : "error",
+        type:
+          result.outcome === "reset" || result.outcome === "alreadyRedeemed" ? "success" : "info",
         title: messages[result.outcome],
-      });
-      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
-    },
-    onError: (error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not use this reset",
-        description: error instanceof Error ? error.message : "The reset request failed.",
       });
     },
   });
-  const now = Date.now();
-  const confirmAndConsume = async (credit: ServerCodexResetCredit, label: string) => {
-    if (consumeMutation.isPending || confirmingCreditId !== null) return;
-    setConfirmingCreditId(credit.id);
+  const confirmAndConsume = async (creditId?: string) => {
+    if (!accountId || locked.current) return;
+    locked.current = true;
+    setConfirming(true);
     try {
       const api = readNativeApi();
-      const confirmationMessage = [
-        `Use Codex reset?`,
-        "This immediately resets Codex limits and cannot be undone.",
-      ].join("\n");
+      const message =
+        "Use one Codex reset?\nThis spends one banked reset and cannot be undone. Synara will check your current account and usage first.";
       const confirmed = api
-        ? await api.dialogs.confirm(confirmationMessage)
-        : await showConfirmDialogFallback(confirmationMessage);
-      if (confirmed) consumeMutation.mutate(credit.id);
+        ? await api.dialogs.confirm(message)
+        : await showConfirmDialogFallback(message);
+      if (confirmed)
+        await consumeMutation.mutateAsync(prepareCodexResetAttempt(accountId, creditId));
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Reset result not confirmed",
+        description:
+          error instanceof Error ? error.message : "Retry this reset to check the same attempt.",
+      });
     } finally {
-      setConfirmingCreditId(null);
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
+      locked.current = false;
+      setConfirming(false);
     }
   };
-  const busy = consumeMutation.isPending || confirmingCreditId !== null;
-  const classes = surface === "popover"
-    ? {
-        section: "space-y-0.5 border-t border-[color:var(--color-border)] pt-2",
-        row: "flex items-center justify-between gap-2 text-[length:var(--app-font-size-chat-meta,10px)] leading-tight",
-        label: "font-medium text-foreground",
-        value: "text-right tabular-nums text-muted-foreground",
-        subtitle: "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight text-muted-foreground/80",
-        list: "mt-1.5 space-y-1.5",
-      }
-    : {
-        section: "space-y-0.5 border-t border-[color:var(--color-border)] pt-3",
-        row: "flex items-center justify-between gap-2 text-xs",
-        label: "font-medium text-foreground",
-        value: "text-right tabular-nums text-muted-foreground",
-        subtitle: "text-[11px] text-muted-foreground/80",
-        list: "mt-1.5 space-y-1.5",
-      };
-
-  if (availableCount <= 0) return null;
-
+  if (availableCount <= 0 && !pendingAttempt) return null;
+  const now = Date.now();
+  const availableCredits = (credits ?? []).filter(
+    (credit) =>
+      credit.status === "available" && (!credit.expiresAt || Date.parse(credit.expiresAt) > now),
+  );
+  const rows: Array<ServerCodexResetCredit | undefined> = [...availableCredits];
+  if (pendingAttempt && !rows.some((credit) => credit?.id === pendingAttempt.creditId)) {
+    rows.unshift(pendingAttempt.creditId ? { id: pendingAttempt.creditId } : undefined);
+  } else if (credits === undefined && availableCount > 0) rows.push(undefined);
+  const busy = consumeMutation.isPending || confirming;
+  const compact = surface === "popover";
+  const rowClass = `flex items-center justify-between gap-2 ${compact ? "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight" : "text-xs"}`;
+  const subtitleClass = compact
+    ? "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight text-muted-foreground/80"
+    : "text-[11px] text-muted-foreground/80";
   return (
-    <div className={classes.section}>
-      <div className={classes.row}>
-        <span className={classes.label}>Banked resets</span>
-        <span className={classes.value}>{`${availableCount} available`}</span>
+    <div
+      className={`space-y-0.5 border-t border-[color:var(--color-border)] ${compact ? "pt-2" : "pt-3"}`}
+    >
+      <div className={rowClass}>
+        <span className="font-medium text-foreground">Banked resets</span>
+        <span className="text-right tabular-nums text-muted-foreground">
+          {availableCount} available
+        </span>
       </div>
-      <p className={classes.subtitle}>
-        Using one resets Codex limits immediately.
+      <p className={subtitleClass}>
+        {pendingAttempt
+          ? "A previous reset is unconfirmed. Retry checks the same attempt."
+          : "Use when your 5-hour or weekly limit has 10% or less remaining."}
       </p>
-
-      {credits.length > 0 ? (
-        <div className={classes.list}>
-          {credits.map((credit, index) => {
-            const isPending = consumeMutation.isPending && consumeMutation.variables === credit.id;
-            const isConfirming = confirmingCreditId === credit.id;
+      {rows.length > 0 ? (
+        <div className="mt-1.5 space-y-1.5">
+          {rows.map((credit, index) => {
+            const isRetry = pendingAttempt !== null && pendingAttempt.creditId === credit?.id;
             return (
-              <div key={credit.id}>
-                <div className={classes.row}>
-                  <span className={classes.label}>Reset {index + 1}</span>
+              <div key={credit?.id ?? "next-available"}>
+                <div className={rowClass}>
+                  <span className="font-medium text-foreground">
+                    {credit ? `Reset ${index + 1}` : "Next available reset"}
+                  </span>
                   <Button
                     size="xs"
                     variant="outline"
                     className="shrink-0"
-                    disabled={busy}
-                    onClick={() => void confirmAndConsume(credit, `Reset ${index + 1}`)}
+                    disabled={
+                      busy ||
+                      storageUnavailable ||
+                      !accountId ||
+                      (!isRetry && (canUse !== true || pendingAttempt !== null))
+                    }
+                    onClick={() => void confirmAndConsume(credit?.id)}
                   >
-                    {isPending || isConfirming ? "Applying…" : "Use reset"}
+                    {busy ? "Applying…" : isRetry ? "Retry reset" : "Use reset"}
                   </Button>
                 </div>
-                <div
-                  className={`${classes.subtitle} tabular-nums`}
-                  title={credit.expiresAt ?? undefined}
-                >
-                  {formatExpiry(credit.expiresAt, now)}
-                </div>
+                {credit ? (
+                  <div className={`${subtitleClass} tabular-nums`} title={credit.expiresAt}>
+                    {formatExpiry(credit.expiresAt, now)}
+                  </div>
+                ) : null}
               </div>
             );
           })}
         </div>
       ) : null}
-
     </div>
   );
 }

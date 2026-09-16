@@ -162,6 +162,8 @@ export const ServerCodexResetCredit = Schema.Struct({
 export type ServerCodexResetCredit = typeof ServerCodexResetCredit.Type;
 
 export const ServerCodexResetCredits = Schema.Struct({
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  canUse: Schema.optional(Schema.Boolean),
   availableCount: NonNegativeInt,
   credits: Schema.optional(Schema.Array(ServerCodexResetCredit)),
 });
@@ -176,6 +178,8 @@ export const CodexResetCreditOutcome = Schema.Literals([
 export type CodexResetCreditOutcome = typeof CodexResetCreditOutcome.Type;
 
 export const ServerConsumeCodexResetCreditInput = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  idempotencyKey: TrimmedNonEmptyString,
   creditId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerConsumeCodexResetCreditInput = typeof ServerConsumeCodexResetCreditInput.Type;

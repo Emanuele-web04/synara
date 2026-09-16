@@ -289,17 +289,20 @@ export const consumeCodexResetCreditEffect = Effect.fn(function* (
   const serverSettings = yield* ServerSettingsService;
   const settings = yield* serverSettings.getSettings;
   const outcome = yield* Effect.tryPromise({
-    try: () =>
-      consumeCodexResetCredit({
-        binaryPath: settings.providers.codex.binaryPath,
-        env: buildProviderChildEnvironment({ provider: "codex", baseEnv: process.env }),
-        cwd: serverConfig.homeDir,
-        ...(input.creditId ? { creditId: input.creditId } : {}),
-      }),
+    try: async () => {
+      try {
+        return await consumeCodexResetCredit({
+          binaryPath: settings.providers.codex.binaryPath,
+          env: buildProviderChildEnvironment({ provider: "codex", baseEnv: process.env }),
+          cwd: serverConfig.homeDir,
+          ...input,
+        });
+      } finally {
+        // A lost reply may still have spent the reset. Never retain pre-attempt quota data.
+        invalidateProviderUsageSnapshots(["codex"]);
+      }
+    },
     catch: (cause) => cause,
   });
-  if (outcome === "reset") {
-    invalidateProviderUsageSnapshots(["codex"]);
-  }
   return { outcome } as ServerConsumeCodexResetCreditResult;
 });

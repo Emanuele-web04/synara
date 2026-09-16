@@ -480,6 +480,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
       // same snapshot cache TTL, never throws, and resolves to "not reported" when absent.
       const resetCredits = await fetchCodexResetCredits({
         binaryPath: ctx.codexBinaryPath,
+        expectedAccountId: state.accountId,
         env: ctx.env,
         cwd: ctx.homeDir,
       });

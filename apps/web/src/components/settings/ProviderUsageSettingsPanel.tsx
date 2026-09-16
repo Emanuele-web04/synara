@@ -113,12 +113,7 @@ function ProviderUsageCard({
               <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}
             {hasResetCredits && resetCredits ? (
-              <ProviderUsageResetCredits
-                credits={(resetCredits.credits ?? []).filter(
-                  (credit) => credit.status === "available" || credit.status === undefined,
-                )}
-                availableCount={resetCredits.availableCount}
-              />
+              <ProviderUsageResetCredits resetCredits={resetCredits} />
             ) : null}
             {usageLines.length > 0 ? (
               <ProviderUsageLineList

@@ -58,8 +58,7 @@ export function ProviderUsagePanelContent(props: {
       <ProviderUsageLimitRows rows={visibleRows} surface="popover" />
       {props.resetCredits ? (
         <ProviderUsageResetCredits
-          availableCount={props.resetCredits.availableCount}
-          credits={props.resetCredits.credits ?? []}
+          resetCredits={props.resetCredits}
           surface={props.resetCreditsSurface ?? "popover"}
         />
       ) : null}

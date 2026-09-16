@@ -311,7 +311,7 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
-export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput = {}) {
+export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
   const api = ensureNativeApi();
   return api.server.consumeCodexResetCredit(input);
 }
