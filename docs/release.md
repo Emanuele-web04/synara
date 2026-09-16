@@ -117,7 +117,10 @@ notarization, and updater settings remain controlled by the existing release flo
 The Dmgly layout lives in `scripts/lib/desktop-platform-build-config.ts` and uses
 `apps/desktop/resources/dmgly/assets/dmg-background.png`. The packaging script
 copies this resources directory into its staging app, keeping the background path
-valid there. The supplied 642×406 PNG is a 1× background with its text and arrow
+valid there. `scripts/lib/desktop-runtime-resources.ts` excludes the `dmgly`
+directory from the runtime resource copy on every platform, so installer artwork
+and the reference icon stay out of the installed app and update ZIP. The supplied
+642×406 PNG is a 1× background with its text and arrow
 already baked in. Do not add duplicate text or arrows. It has no baked label
 backgrounds. The exported `app-icon.png` is retained alongside it as a reference;
 the app continues to use the existing production ICNS generation pipeline.
