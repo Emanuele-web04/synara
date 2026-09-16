@@ -180,6 +180,7 @@ function ThreadToastVisibleAutoDismiss({
     let startedAtMs: number | null = null;
     let timeoutId: number | null = null;
     let closed = false;
+    let disposed = false;
 
     const clearTimer = () => {
       if (timeoutId === null) return;
@@ -224,6 +225,9 @@ function ThreadToastVisibleAutoDismiss({
     };
 
     const syncTimer = () => {
+      // Focus events settle in a microtask, possibly after this effect was
+      // cleaned up by navigation or an in-flight Undo changing `paused`.
+      if (disposed) return;
       const shouldRun = shouldRunVisibleToastAutoDismiss({
         paused,
         documentVisible: document.visibilityState === "visible",
@@ -248,6 +252,7 @@ function ThreadToastVisibleAutoDismiss({
     window.addEventListener("blur", syncTimer);
 
     return () => {
+      disposed = true;
       document.removeEventListener("visibilitychange", syncTimer);
       document.removeEventListener("focusin", syncTimerAfterFocusChange);
       document.removeEventListener("focusout", syncTimerAfterFocusChange);
