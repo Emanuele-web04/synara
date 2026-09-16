@@ -462,6 +462,8 @@ Print one representation: \`text(r.structuredContent ?? r)\`; errors may only ha
 
 ${BROWSER_SCRIPT_API_GUIDANCE} Use \`human.type\`, \`human.scroll\` and \`page.keyboard\` for other input. Native helpers: \`webmcp\`, \`webagents\`, \`controls\`, \`overlays\`, \`site\`, \`media\`. No separate snapshot/click/type/wait/evaluate tools exist.
 
+For long or virtualized histories, prefer site requests, WebAgents, or WebMCP. Otherwise extract structured bounded batches, preserve text/link/image/GIF order, deduplicate stable identities, persist each batch, and return a resumable checkpoint. Claim start/end only when observed.
+
 Do not search or filter \`ALL_TOOLS\` for browser discovery. Do not rediscover tools after a model switch. Only if an exact tool is unavailable, look up that name and print no unrelated catalogue.
 
 ${BROWSER_SCRIPT_BATCH_GUIDANCE} Return promptly. Use dedicated tools for tab lifecycle, screenshots and authorized workspace uploads.

@@ -5,10 +5,9 @@
 //             state, useComputerImageStream, ComputerPanel.logic helpers.
 //
 // View-only: the card is a pure scaled replica of the driven content — no
-// header, no status text, no badges. Presence is the live indicator. Expand
-// and close live in a hover/focus-reveal cluster (the composer's stop stays
-// the always-visible safety net); expand opens the detailed right-dock
-// Computer pane and the card returns when that pane closes. It mounts wherever the owning thread's transcript is on
+// header, no status text, no badges. Presence is the live indicator. Close
+// lives in a hover/focus-reveal cluster (the composer's stop stays the
+// always-visible safety net). It mounts wherever the owning thread's transcript is on
 // screen and self-hides when that thread has no live preview session. Size is
 // dynamic: the card fits the space its slot offers while keeping the live
 // content's aspect, never a fixed box.
@@ -25,7 +24,7 @@ import { selectThreadComputerState, useComputerStateStore } from "../../computer
 import { useComputerDesktopControl } from "../../hooks/useComputerDesktopControl";
 import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSeed";
 import { disclosurePopClassName } from "../../lib/disclosureMotion";
-import { PanelExpandIcon, XIcon } from "../../lib/icons";
+import { XIcon } from "../../lib/icons";
 import { cn } from "../../lib/utils";
 import {
   computerCanvasLabel,
@@ -55,13 +54,6 @@ const SLOT_BOTTOM_RESERVE_PX = 120;
 
 export function ComputerPreviewPopover(props: {
   readonly threadId: ThreadId;
-  /** Opens the detailed Computer surface for this thread (the dock pane path). */
-  readonly onExpand: () => void;
-  /**
-   * The dock already shows this thread's Computer pane. Mirrors the floating
-   * browser's rule: the ambient surface yields instead of doubling the stream.
-   */
-  readonly dockComputerPaneVisible?: boolean | undefined;
   /**
    * Rail budget: the widest the card may grow, set by the host ChatView from
    * the gutter it freed via content inset. Defaults to the size cap;
@@ -78,14 +70,13 @@ export function ComputerPreviewPopover(props: {
   // The "Open automatically" preference now governs the ambient preview, which
   // is what replaced the pane's auto-open. Manual opens are unaffected.
   const { settings } = useAppSettings();
-  if (!settings.autoOpenComputerPane || session === undefined || props.dockComputerPaneVisible) {
+  if (!settings.autoOpenComputerPane || session === undefined) {
     return null;
   }
   return (
     <ComputerPreviewPopoverCard
       threadId={props.threadId}
       session={session}
-      onExpand={props.onExpand}
       maxWidthPx={props.maxWidthPx}
       size={props.size ?? "compact"}
     />
@@ -95,7 +86,6 @@ export function ComputerPreviewPopover(props: {
 function ComputerPreviewPopoverCard(props: {
   readonly threadId: ThreadId;
   readonly session: ComputerPreviewSession;
-  readonly onExpand: () => void;
   readonly maxWidthPx?: number | undefined;
   readonly size?: ComputerPreviewCardSize | undefined;
 }) {
@@ -323,22 +313,8 @@ function ComputerPreviewPopoverCard(props: {
           </div>
         ) : null}
         <div className="pointer-events-none absolute inset-0">
-          <div className="absolute top-2 right-2 translate-y-1 opacity-0 transition-all duration-200 ease-out group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none pointer-coarse:translate-y-0 pointer-coarse:opacity-100">
+          <div className="absolute top-2 right-2 translate-y-1 opacity-0 transition-[opacity,transform] duration-200 ease-out group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none pointer-coarse:translate-y-0 pointer-coarse:opacity-100">
             <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/20 bg-gradient-to-b from-white/25 via-white/10 to-white/[0.06] p-1 shadow-[inset_0_1px_0_rgb(255_255_255/0.28),0_8px_24px_-8px_rgb(0_0_0/0.45)] backdrop-blur-md backdrop-saturate-150">
-              <button
-                type="button"
-                onClick={() => {
-                  // The dock pane takes over while open: the popover yields
-                  // via dockComputerPaneVisible and returns when the pane
-                  // closes, so the session must NOT hide for the task here.
-                  props.onExpand();
-                }}
-                title="Open the Computer pane"
-                aria-label="Open the Computer pane"
-                className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
-              >
-                <PanelExpandIcon className="size-4" />
-              </button>
               <button
                 type="button"
                 onClick={() => hidePreviewForTask(threadId)}

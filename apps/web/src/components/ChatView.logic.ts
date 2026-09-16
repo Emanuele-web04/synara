@@ -73,6 +73,20 @@ export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
+export function canApplyComposerFocus(input: {
+  readonly windowHasFocus: boolean;
+  readonly secondaryChromeReady: boolean;
+  readonly editorAvailable: boolean;
+  readonly editorDisabled: boolean;
+}): boolean {
+  return (
+    input.windowHasFocus &&
+    input.secondaryChromeReady &&
+    input.editorAvailable &&
+    !input.editorDisabled
+  );
+}
+
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
   // A changes card can merge several turns; one Undo reverts all of them, so the

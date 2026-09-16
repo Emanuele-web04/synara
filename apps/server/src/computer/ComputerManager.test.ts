@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ComputerWindow, ThreadComputerState } from "@synara/contracts";
+import type { ComputerUiNode, ComputerWindow, ThreadComputerState } from "@synara/contracts";
 import { decodeComputerFrame } from "@synara/shared/computerFrame";
 
 import {
@@ -23,7 +23,10 @@ class RecordingSink implements FrameSink {
   isOpen = (): boolean => this.open;
 }
 
-function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+function deferred(): {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+} {
   let resolve = () => {};
   const promise = new Promise<void>((complete) => {
     resolve = complete;
@@ -60,9 +63,47 @@ function coveredCalculatorWindows(): readonly ComputerWindow[] {
   ];
 }
 
+function semanticTextRoot(windowIds: readonly string[]): ComputerUiNode {
+  return {
+    role: "desktop",
+    label: null,
+    value: null,
+    description: "Semantic text test desktop",
+    frame: { x: 0, y: 0, width: 1_920, height: 1_080 },
+    activationPoint: null,
+    onScreen: true,
+    windowId: null,
+    children: windowIds.map((windowId, index) => ({
+      role: "AXWindow",
+      label: `Window ${index + 1}`,
+      value: null,
+      description: null,
+      frame: { x: index * 400, y: 0, width: 360, height: 300 },
+      activationPoint: null,
+      onScreen: true,
+      windowId,
+      children: [
+        {
+          role: "AXTextArea",
+          label: null,
+          value: "",
+          description: null,
+          frame: { x: index * 400 + 20, y: 40, width: 320, height: 220 },
+          activationPoint: { x: index * 400 + 180, y: 150 },
+          onScreen: true,
+          windowId,
+          children: [],
+        },
+      ],
+    })),
+  };
+}
+
 describe("ComputerManager and FakeComputerBackend", () => {
   it("publishes thread snapshots, activity transitions, and backend window events", async () => {
-    const backend = new FakeComputerBackend({ now: () => "2026-08-15T00:00:00.000Z" });
+    const backend = new FakeComputerBackend({
+      now: () => "2026-08-15T00:00:00.000Z",
+    });
     const manager = new ComputerManager({ backend });
     const events: Array<{ type: string; state?: { agentActive: boolean } }> = [];
     manager.onEvent((event) => {
@@ -80,12 +121,18 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // window list stays empty until something really asks for the backend.
     expect(initial.windows).toEqual([]);
     expect(backend.calls.map((call) => call.method)).toEqual(["probeAvailability"]);
-    expect(initial.availability).toEqual({ kind: "available", backend: "fake" });
+    expect(initial.availability).toEqual({
+      kind: "available",
+      backend: "fake",
+    });
 
     const result = await manager.withAgentActivity("thread-1", async () => {
       const active = events.findLast((event) => event.type === "computer.thread-state");
       expect(active?.state?.agentActive).toBe(true);
-      return await manager.click("thread-1", { label: "Calculate", role: "button" });
+      return await manager.click("thread-1", {
+        label: "Calculate",
+        role: "button",
+      });
     });
     expect(result.point).toEqual({ x: 1_180, y: 228 });
     expect(
@@ -133,7 +180,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "reconnecting",
       consecutiveFailures: 1,
       reconnects: 0,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: {
+        message: "The backend vanished",
+        at: "2026-08-16T10:00:00.000Z",
+      },
       captureAvailable: false,
     });
 
@@ -158,13 +208,22 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "connected",
       consecutiveFailures: 0,
       reconnects: 1,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: {
+        message: "The backend vanished",
+        at: "2026-08-16T10:00:00.000Z",
+      },
       captureAvailable: true,
     });
 
     const recovered = await manager.getThreadState("thread-a");
-    expect(recovered.availability).toEqual({ kind: "available", backend: "fake" });
-    expect(recovered.health).toMatchObject({ status: "connected", reconnects: 1 });
+    expect(recovered.availability).toEqual({
+      kind: "available",
+      backend: "fake",
+    });
+    expect(recovered.health).toMatchObject({
+      status: "connected",
+      reconnects: 1,
+    });
 
     await manager.dispose();
   });
@@ -193,7 +252,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "reconnecting",
       consecutiveFailures: 2,
       reconnects: 1,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: {
+        message: "The backend vanished",
+        at: "2026-08-16T10:00:00.000Z",
+      },
       captureAvailable: false,
     });
     const degraded = await manager.getStatus();
@@ -262,9 +324,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
       agentDialect: "macos" as const,
       supportsAction: (_target: unknown, action: string) => action === "AXPress",
     });
-    const press = vi
-      .spyOn(backend, "performAction")
-      .mockResolvedValue({ effect: "dispatched-unknown", verified: "unverifiable" });
+    const press = vi.spyOn(backend, "performAction").mockResolvedValue({
+      effect: "dispatched-unknown",
+      verified: "unverifiable",
+    });
     const manager = new ComputerManager({ backend });
     await manager.click("thread-1", { label: "Calculate", role: "button" });
     expect(press).toHaveBeenCalledTimes(1);
@@ -276,7 +339,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     );
     expect(press).toHaveBeenCalledTimes(2);
     expect(backend.callsFor("click")).toHaveLength(0);
-    await manager.doubleClick("thread-1", { label: "Calculate", role: "button" });
+    await manager.doubleClick("thread-1", {
+      label: "Calculate",
+      role: "button",
+    });
     await manager.click("thread-1", { label: "Calculate", role: "button" }, ["shift"]);
     expect(press).toHaveBeenCalledTimes(2);
     expect(backend.callsFor("doubleClick")).toHaveLength(1);
@@ -299,17 +365,25 @@ describe("ComputerManager and FakeComputerBackend", () => {
           ...state,
           root: {
             ...state.root,
-            children: state.root.children.map((child) => ({ ...child, children: [] })),
+            children: state.root.children.map((child) => ({
+              ...child,
+              children: [],
+            })),
           },
         };
       }
       return state;
     });
 
-    const result = await manager.click("thread-1", { label: "Calculate", role: "button" });
+    const result = await manager.click("thread-1", {
+      label: "Calculate",
+      role: "button",
+    });
     expect(result.point).toEqual({ x: 1_180, y: 228 });
     expect(calls).toBe(2);
-    expect(backend.callsFor("getState")[0]?.args[0]).toMatchObject({ reuseRecentTree: true });
+    expect(backend.callsFor("getState")[0]?.args[0]).toMatchObject({
+      reuseRecentTree: true,
+    });
     expect(backend.callsFor("getState")[1]?.args[0]).not.toMatchObject({
       reuseRecentTree: true,
     });
@@ -339,7 +413,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
     await expect(
       manager.performAction("thread-1", { label: "Calculate", role: "button" }, "activate"),
-    ).resolves.toMatchObject({ action: "computer_perform_action", point: { x: 1_180, y: 228 } });
+    ).resolves.toMatchObject({
+      action: "computer_perform_action",
+      point: { x: 1_180, y: 228 },
+    });
 
     await expect(manager.click("thread-1", { x: 1_920, y: 1_080 })).rejects.toMatchObject({
       code: "computer_target_offscreen",
@@ -354,7 +431,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // every node in scope and dumping the whole tree as an ambiguity refusal.
     await expect(
       manager.scroll("thread-1", { windowId: "fake-calculator" }, 0, 300),
-    ).resolves.toMatchObject({ action: "computer_scroll", point: { x: 1_260, y: 430 } });
+    ).resolves.toMatchObject({
+      action: "computer_scroll",
+      point: { x: 1_260, y: 430 },
+    });
     await expect(manager.setValue("thread-1", {}, "468")).rejects.toMatchObject({
       code: "computer_target_invalid",
     });
@@ -366,22 +446,33 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 
   it("reveals a hover target without changing keyboard aim", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     const manager = new ComputerManager({ backend });
     // An untargeted move takes the lease first, so the hover below runs with
     // control already held and must not clear the pinned focus again.
     await manager.moveCursor("thread-1", { x: 100, y: 100 });
     const cleared = backend.callsFor("clearFocusWindow").length;
-    await manager.moveCursor("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" });
+    await manager.moveCursor("thread-1", {
+      x: 1_100,
+      y: 200,
+      windowId: "fake-calculator",
+    });
     expect(backend.callsFor("raiseWindow").at(-1)?.args).toEqual(["fake-calculator"]);
     expect(backend.callsFor("focusWindow")).toHaveLength(0);
     expect(backend.callsFor("clearFocusWindow")).toHaveLength(cleared);
-    expect(backend.callsFor("moveCursor").at(-1)?.args[0]).toEqual({ x: 1_100, y: 200 });
+    expect(backend.callsFor("moveCursor").at(-1)?.args[0]).toEqual({
+      x: 1_100,
+      y: 200,
+    });
     await manager.dispose();
   });
 
   it("raises a target window before focusing it and scopes a coordinate click to it", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     const manager = new ComputerManager({ backend });
 
     await manager.click("thread-1", { label: "Calculate", role: "button" });
@@ -401,7 +492,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     expect(scoped.point).toEqual({ x: 1_100, y: 200 });
     expect(backend.callsFor("raiseWindow").at(-1)?.args).toEqual(["fake-calculator"]);
     expect(backend.callsFor("focusWindow").at(-1)?.args).toEqual(["fake-calculator"]);
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1_100, y: 200 });
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+      x: 1_100,
+      y: 200,
+    });
     // The coordinate is authoritative, so no accessibility tree is read for it.
     expect(backend.callsFor("getState")).toHaveLength(perceptionCalls);
 
@@ -412,7 +506,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     ).rejects.toMatchObject({ code: "computer_target_offscreen" });
     await expect(
       manager.click("thread-1", { x: 40, y: 40, windowId: "gone" }),
-    ).rejects.toMatchObject({ code: "computer_target_not_found", notFound: true });
+    ).rejects.toMatchObject({
+      code: "computer_target_not_found",
+      notFound: true,
+    });
 
     await manager.dispose();
   });
@@ -432,12 +529,20 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 
   it("refuses a covered target the desktop cannot raise, and clicks it once it can", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     (backend as unknown as { raiseWindow?: undefined }).raiseWindow = undefined;
     const manager = new ComputerManager({ backend });
 
-    const covered = manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" });
-    await expect(covered).rejects.toMatchObject({ code: "computer_target_occluded" });
+    const covered = manager.click("thread-1", {
+      x: 1_100,
+      y: 200,
+      windowId: "fake-calculator",
+    });
+    await expect(covered).rejects.toMatchObject({
+      code: "computer_target_occluded",
+    });
     // The refusal has to name what is in the way, or the model has nothing to
     // act on but a retry.
     await expect(covered).rejects.toThrow(/Browser/);
@@ -455,31 +560,49 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // raise, so it goes through.
     await expect(
       manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-browser" }),
-    ).resolves.toMatchObject({ point: { x: 1_100, y: 200 }, windowId: "fake-browser" });
+    ).resolves.toMatchObject({
+      point: { x: 1_100, y: 200 },
+      windowId: "fake-browser",
+    });
 
     await manager.dispose();
   });
 
   it("refuses a covered target when the raise itself fails", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     const manager = new ComputerManager({ backend });
     backend.failNext("raiseWindow", new Error("plugin has no raiseWindow"));
 
     await expect(
-      manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" }),
+      manager.click("thread-1", {
+        x: 1_100,
+        y: 200,
+        windowId: "fake-calculator",
+      }),
     ).rejects.toThrow(/plugin has no raiseWindow/);
     expect(backend.callsFor("click")).toHaveLength(0);
 
     // The next call raises normally and is not held against the target.
     await expect(
-      manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" }),
-    ).resolves.toMatchObject({ point: { x: 1_100, y: 200 }, windowId: "fake-calculator" });
+      manager.click("thread-1", {
+        x: 1_100,
+        y: 200,
+        windowId: "fake-calculator",
+      }),
+    ).resolves.toMatchObject({
+      point: { x: 1_100, y: 200 },
+      windowId: "fake-calculator",
+    });
 
     await manager.dispose();
   });
 
   it("routes keyboard input to a named window and leaves focus alone without one", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
 
     await expect(manager.typeText("thread-1", "12", "fake-calculator")).resolves.toMatchObject({
@@ -517,7 +640,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 
   it("explains a scoped injection the desktop refused, and passes other failures through", async () => {
-    const backend = new FakeComputerBackend({ windows: coveredCalculatorWindows() });
+    const backend = new FakeComputerBackend({
+      windows: coveredCalculatorWindows(),
+    });
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
 
     // A refusal means nothing was delivered, so the caller has to be told that
@@ -529,8 +654,14 @@ describe("ComputerManager and FakeComputerBackend", () => {
         rejectedOperation: "pressButton",
       }),
     );
-    const refused = manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" });
-    await expect(refused).rejects.toMatchObject({ code: "computer_target_refused" });
+    const refused = manager.click("thread-1", {
+      x: 1_100,
+      y: 200,
+      windowId: "fake-calculator",
+    });
+    await expect(refused).rejects.toMatchObject({
+      code: "computer_target_refused",
+    });
     await expect(refused).rejects.toThrow(/no input was sent/);
     await expect(refused).rejects.toThrow(/label instead of a coordinate/);
 
@@ -549,7 +680,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // happened when it may well have.
     backend.failNext("click", new ComputerBackendError("session bus disconnected"));
     await expect(
-      manager.click("thread-1", { x: 1_100, y: 200, windowId: "fake-calculator" }),
+      manager.click("thread-1", {
+        x: 1_100,
+        y: 200,
+        windowId: "fake-calculator",
+      }),
     ).rejects.toThrow(/session bus disconnected/);
 
     await manager.dispose();
@@ -716,7 +851,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("re-surfaces the pane for an evicted owner without waiting for its release", async () => {
     const backend = new FakeComputerBackend();
     let nowMs = 0;
-    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const manager = new ComputerManager({
+      backend,
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
     const openRequests: string[] = [];
     manager.onEvent((event) => {
       if (event.type === "computer.open-pane-requested") openRequests.push(event.threadId);
@@ -750,7 +889,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
       return decisions.shift() ?? true;
     });
     const admit = (app: string) =>
-      manager.admitDrivenApp("thread-1", app, { signal: new AbortController().signal });
+      manager.admitDrivenApp("thread-1", app, {
+        signal: new AbortController().signal,
+      });
     try {
       // The first app records free; the prompt surface is not consulted.
       await admit("kcalc");
@@ -840,7 +981,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // display, and the client gates the actual opening on its auto-open
     // preference — emitting costs a pref-off user nothing.
     const backend = new FakeComputerBackend({
-      capabilities: { ...new FakeComputerBackend().capabilities(), visibleDesktop: true },
+      capabilities: {
+        ...new FakeComputerBackend().capabilities(),
+        visibleDesktop: true,
+      },
     });
     const manager = new ComputerManager({ backend });
     const openRequests: string[] = [];
@@ -893,8 +1037,12 @@ describe("ComputerManager and FakeComputerBackend", () => {
 
     // Watching is safe while someone else drives, so nothing read-only is gated
     // — including the blocked thread's own state.
-    await expect(manager.listWindows()).resolves.toMatchObject({ computerId: backend.computerId });
-    await expect(manager.getState({})).resolves.toMatchObject({ computerId: backend.computerId });
+    await expect(manager.listWindows()).resolves.toMatchObject({
+      computerId: backend.computerId,
+    });
+    await expect(manager.getState({})).resolves.toMatchObject({
+      computerId: backend.computerId,
+    });
     await expect(manager.getScreenSize()).resolves.toMatchObject({
       computerId: backend.computerId,
     });
@@ -922,6 +1070,62 @@ describe("ComputerManager and FakeComputerBackend", () => {
       false,
     );
 
+    await manager.dispose();
+  });
+
+  it("allows different threads to overlap exact-window semantic text", async () => {
+    const release = deferred();
+    let active = 0;
+    let peak = 0;
+    const windowIds = ["editor-a", "editor-b"];
+    const windows = windowIds.map(
+      (id, index): ComputerWindow => ({
+        id,
+        title: `Editor ${index + 1}`,
+        bounds: { x: index * 400, y: 0, width: 360, height: 300 },
+        focused: false,
+        minimized: false,
+        visible: true,
+      }),
+    );
+    const backend = Object.assign(
+      new FakeComputerBackend({
+        windows,
+        root: semanticTextRoot(windowIds),
+      }),
+      {
+        focusNeutralSemanticText: true,
+        typeText: async () => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await release.promise;
+          active -= 1;
+          return {};
+        },
+      },
+    );
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+
+    const first = manager.withAgentActivity(
+      "thread-a",
+      () => manager.typeText("thread-a", "alpha", "editor-a"),
+      undefined,
+      "turn-a",
+      "editor-a",
+    );
+    const second = manager.withAgentActivity(
+      "thread-b",
+      () => manager.typeText("thread-b", "bravo", "editor-b"),
+      undefined,
+      "turn-b",
+      "editor-b",
+    );
+    await vi.waitFor(() => expect(peak).toBe(2));
+    release.resolve();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(backend.callsFor("clearFocusWindow")).toHaveLength(0);
+    expect(backend.callsFor("focusWindow")).toHaveLength(0);
     await manager.dispose();
   });
 
@@ -1171,7 +1375,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("clears an evicted owner's turn stamp along with its stale lease", async () => {
     const backend = new FakeComputerBackend();
     let nowMs = 0;
-    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const manager = new ComputerManager({
+      backend,
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
     await manager.getThreadState("thread-a");
     await manager.getThreadState("thread-b");
 
@@ -1271,7 +1479,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("expires an idle lease as a backstop, but never one whose owner is still acting", async () => {
     const backend = new FakeComputerBackend();
     let nowMs = 0;
-    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const manager = new ComputerManager({
+      backend,
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
     await manager.getThreadState("thread-a");
 
     await manager.click("thread-a", { x: 10, y: 10 });
@@ -1314,10 +1526,17 @@ describe("ComputerManager and FakeComputerBackend", () => {
    */
   it("counts an agent's in-flight call even when no panel ever asked about it", async () => {
     const backend = new FakeComputerBackend({
-      capabilities: { ...new FakeComputerBackend().capabilities(), visibleDesktop: true },
+      capabilities: {
+        ...new FakeComputerBackend().capabilities(),
+        visibleDesktop: true,
+      },
     });
     let nowMs = 0;
-    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const manager = new ComputerManager({
+      backend,
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
 
     const started = deferred();
     const finish = deferred();
@@ -1353,7 +1572,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
    */
   it("coalesces a burst of window changes into a single publish pass", async () => {
     const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, windowsPublishDebounceMs: 5 });
+    const manager = new ComputerManager({
+      backend,
+      windowsPublishDebounceMs: 5,
+    });
     // The churn this coalesces comes from a live backend, which by definition
     // something has already used. Engaging before either thread exists keeps the
     // republish that engagement triggers out of the count below.
@@ -1391,7 +1613,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("lets one thread keep driving across a long think, and keeps perception free", async () => {
     const backend = new FakeComputerBackend();
     let nowMs = 0;
-    const manager = new ComputerManager({ backend, now: () => nowMs, leaseIdleMs: 1_000 });
+    const manager = new ComputerManager({
+      backend,
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
 
     await manager.click("thread-a", { x: 10, y: 10 });
     // Nobody else asked for the desktop while the model thought, so the owner
@@ -1543,7 +1769,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("returns perception payloads with optional text and screenshot", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
-    const state = await manager.getState({ includeScreenshot: true, includeText: true });
+    const state = await manager.getState({
+      includeScreenshot: true,
+      includeText: true,
+    });
 
     expect(state.screenshot?.mimeType).toBe("image/png");
     expect(state.screenshot?.bytesBase64.length).toBeGreaterThan(0);
@@ -1672,7 +1901,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // the agent's explicit target, and the old fallback answered with a
     // workspace-wide downscale too small to read. The action's own
     // coordinates name the window it touched, so that window is the picture.
-    const observed = await manager.captureActionScreenshot(undefined, { x: 1_100, y: 200 });
+    const observed = await manager.captureActionScreenshot(undefined, {
+      x: 1_100,
+      y: 200,
+    });
     expect(observed !== undefined && "windowId" in observed ? observed.windowId : undefined).toBe(
       "fake-calculator",
     );
@@ -1684,7 +1916,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
 
     // A point over bare desktop identifies no window; the agent-focus step
     // still answers (the fake terminal holds the agent's focus by default).
-    const desktop = await manager.captureActionScreenshot(undefined, { x: 1_800, y: 1_000 });
+    const desktop = await manager.captureActionScreenshot(undefined, {
+      x: 1_800,
+      y: 1_000,
+    });
     expect(desktop !== undefined && "windowId" in desktop ? desktop.windowId : undefined).toBe(
       "fake-terminal",
     );
@@ -1717,7 +1952,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     ];
 
     backend.emitWindowsChanged(overlapping(true));
-    const observed = await manager.captureActionScreenshot(undefined, { x: 400, y: 300 });
+    const observed = await manager.captureActionScreenshot(undefined, {
+      x: 400,
+      y: 300,
+    });
     expect(observed !== undefined && "windowId" in observed ? observed.windowId : undefined).toBe(
       "over",
     );
@@ -1725,7 +1963,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // The same overlap with no stacking order: a guess could photograph a
     // window the action never touched, so the workspace fallback answers.
     backend.emitWindowsChanged(overlapping(false));
-    const widened = await manager.captureActionScreenshot(undefined, { x: 400, y: 300 });
+    const widened = await manager.captureActionScreenshot(undefined, {
+      x: 400,
+      y: 300,
+    });
     expect(widened !== undefined && "windowId" in widened ? widened.windowId : undefined).toBe(
       undefined,
     );
@@ -1744,7 +1985,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // window closed in the race. The caller never named it, so the answer is
     // the ordinary focus fallback, not targetWindowClosed and not an error.
     backend.failNext("captureScreenshot");
-    const observed = await manager.captureActionScreenshot(undefined, { x: 1_100, y: 200 });
+    const observed = await manager.captureActionScreenshot(undefined, {
+      x: 1_100,
+      y: 200,
+    });
     expect(observed !== undefined && "windowId" in observed ? observed.windowId : undefined).toBe(
       "fake-terminal",
     );
@@ -1982,7 +2226,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
     const { backend, manager } = calibratedScrollFixture([336, 64]);
 
     await manager.click("thread-1", { x: 1_100, y: 200 });
-    const result = await manager.scrollCalibrated("thread-1", null, 0, 400, { observe: true });
+    const result = await manager.scrollCalibrated("thread-1", null, 0, 400, {
+      observe: true,
+    });
 
     // The focus really was cleared; the window came from the cursor position.
     expect(backend.callsFor("clearFocusWindow").length).toBeGreaterThan(0);
@@ -2077,7 +2323,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
   it("keeps the correction but takes no captures when the caller wants no observation", async () => {
     const { backend, manager } = calibratedScrollFixture([336, 64]);
 
-    await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, { observe: true });
+    await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+      observe: true,
+    });
     // Three on the probing first scroll: before, after the probe, after the rest.
     expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
 
@@ -2095,7 +2343,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
 
   it("never re-gears the pane's own scroll, whatever the agent learned", async () => {
     const { backend, manager } = calibratedScrollFixture([336, 64]);
-    await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, { observe: true });
+    await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+      observe: true,
+    });
     const capturesAfterLearning = backend.callsFor("captureScreenshot").length;
 
     // The human is watching the result and closing the loop themselves; a
@@ -2135,7 +2385,10 @@ it("holds refused input until a scoped observation establishes readiness", async
       this.attempts += 1;
       if (!this.ready)
         throw new ComputerBackendError("Return to the target window.", {
-          inputPause: { windowId: "fake-calculator", message: "Return to the target window." },
+          inputPause: {
+            windowId: "fake-calculator",
+            message: "Return to the target window.",
+          },
         });
       return super.typeText(text);
     }
@@ -2196,7 +2449,10 @@ it("assigns a newer version to each refreshed thread snapshot", async () => {
   const initial = await manager.getThreadState("refreshed");
   backend.setAvailability({ kind: "backend-unavailable", message: "Paused" });
   const refreshed = await manager.getThreadState("refreshed");
-  expect(refreshed.availability).toEqual({ kind: "backend-unavailable", message: "Paused" });
+  expect(refreshed.availability).toEqual({
+    kind: "backend-unavailable",
+    message: "Paused",
+  });
   expect(refreshed.version).toBeGreaterThan(initial.version);
   await manager.dispose();
 });
@@ -2251,7 +2507,9 @@ it("pauses calibrated scrolling before any second input or launch and preserves 
     return scroll(...args);
   };
   await expect(
-    manager.scrollCalibrated("paused", { windowId: "fake-calculator" }, 0, 40, { observe: false }),
+    manager.scrollCalibrated("paused", { windowId: "fake-calculator" }, 0, 40, {
+      observe: false,
+    }),
   ).rejects.toHaveProperty("inputPause");
   await manager.releaseDesktopControl("paused");
   for (let i = 0; i < 260; i += 1) await manager.getThreadState(`other-${i}`);
@@ -2339,7 +2597,10 @@ it("keeps a pause when the thread is re-armed while its readiness probe is in fl
     override async typeText(text: string) {
       if (!this.ready)
         throw new ComputerBackendError("Return to the target window.", {
-          inputPause: { windowId: "fake-calculator", message: "Return to the target window." },
+          inputPause: {
+            windowId: "fake-calculator",
+            message: "Return to the target window.",
+          },
         });
       return super.typeText(text);
     }
@@ -2554,7 +2815,9 @@ describe("ComputerManager foregroundWithRestore", () => {
       expect(result.note).toEqual(expect.stringContaining("nothing was restored"));
       expect(foregroundRaisedIds(backend)).toEqual(["hidden-calculator"]);
       expect(actions).toHaveLength(1);
-      expect(actions[0]).toMatchObject({ restoreStatus: "frontmost-unobservable" });
+      expect(actions[0]).toMatchObject({
+        restoreStatus: "frontmost-unobservable",
+      });
       expect(actions[0]).not.toHaveProperty("restoredWindowId");
     } finally {
       await manager.dispose();

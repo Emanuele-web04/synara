@@ -206,6 +206,7 @@ import {
   appendVoiceTranscriptToPrompt,
   buildLocalDraftThread,
   buildThreadBreadcrumbs,
+  canApplyComposerFocus,
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
   hasFileUndoSettled,
@@ -491,9 +492,6 @@ interface ChatViewProps {
    * reserves gutter space for it so it never covers the transcript. Absent
    * in editor-rail and dock-sidechat views, which keep no preview.
    */
-  onExpandComputerPreview?: () => void;
-  /** The right dock already shows this thread's Computer pane: yield. */
-  dockComputerPaneVisible?: boolean | undefined;
 }
 
 // Builds an ephemeral transcript bubble for the conversational automation-setup
@@ -519,8 +517,6 @@ export default function ChatView({
   viewModeAction: viewModeActionProp,
   onChangeThreadInSplitPane,
   onCloseThreadPane,
-  onExpandComputerPreview,
-  dockComputerPaneVisible,
 }: ChatViewProps) {
   // Prop defaults are resolved here instead of in the destructuring pattern: an
   // AssignmentPattern in the parameter list makes React Compiler bail out (silently —
@@ -839,7 +835,7 @@ export default function ChatView({
     [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
-  // Invocation needs the current revocation generation even before the Computer pane opens.
+  // Invocation needs the current revocation generation before the preview appears.
   useThreadComputerStateSeed(threadId);
   const computerAvailability = useThreadComputerAvailability(threadId);
   const computerControlGeneration =
@@ -2398,9 +2394,18 @@ export default function ChatView({
   const focusComposer = useCallback(() => {
     // Secondary chrome is deferred during thread switches; replay focus once it
     // mounts. A disabled editor (dispatch connecting, pending approval) cannot
-    // take focus either, so keep the request pending until it re-enables.
+    // take focus either. Never ask the renderer to focus while another app owns
+    // the desktop; on macOS that can activate Synara and switch Spaces.
     const editor = composerEditorRef.current;
-    if (!secondaryChromeReady || !editor || isComposerEditorDisabled) {
+    if (
+      !editor ||
+      !canApplyComposerFocus({
+        windowHasFocus: document.hasFocus(),
+        secondaryChromeReady,
+        editorAvailable: true,
+        editorDisabled: isComposerEditorDisabled,
+      })
+    ) {
       pendingComposerFocusRef.current = true;
       return;
     }
@@ -2451,6 +2456,18 @@ export default function ChatView({
       window.cancelAnimationFrame(frame);
     };
   }, [pendingComposerFocusRef, focusComposer, secondaryChromeReady, secondaryChromeThreadId]);
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (!pendingComposerFocusRef.current) return;
+      window.requestAnimationFrame(() => {
+        focusComposer();
+      });
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
   const handleModelPickerOpenChange = useCallback(
     (open: boolean) => {
@@ -4997,7 +5014,6 @@ export default function ChatView({
   const previewReservesInset =
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
-    !dockComputerPaneVisible &&
     previewSession?.phase === "live" &&
     previewLayout?.hasFrame === true;
   const previewInsetPx = previewReservesInset
@@ -5963,13 +5979,11 @@ export default function ChatView({
               open={environmentPanelVisible}
               variant={environmentOverlayVariant}
               railBottom={
-                onExpandComputerPreview && previewSession ? (
+                previewSession ? (
                   <AmbientRailSlot envOpen={environmentPanelVisible}>
                     <ComputerPreviewPopover
                       key={threadId}
                       threadId={threadId}
-                      onExpand={onExpandComputerPreview}
-                      dockComputerPaneVisible={dockComputerPaneVisible}
                       maxWidthPx={previewBudgetPx}
                       size={settings.computerPreviewSize === "large" ? "large" : "compact"}
                     />

@@ -5,8 +5,7 @@
 // Depends on: contracts types only (pure)
 //
 // The popover is the ambient computer surface: it appears inside the chat of
-// the thread whose agent is driving the desktop, and the right-dock Computer
-// pane stays the detailed surface opened on demand. Phases, not booleans:
+// the thread whose agent is driving the desktop. Phases, not booleans:
 //
 //   armed           a surface request or a drive turn started; the owning
 //                   thread may not be on screen yet.
@@ -16,9 +15,8 @@
 //                   and re-arms on the next turn or lease.
 //   ended           the drive turn ended (lease released, agent idle).
 //
-// Per-thread memory mirrors the pane rule: a session arms on the owning thread
-// whether or not it is visible, so background agent work never steals the chat
-// the user is reading.
+// Per-thread memory arms a session on the owning thread whether or not it is
+// visible, so background agent work never steals the chat the user is reading.
 
 import type { ThreadComputerState, ThreadId } from "@synara/contracts";
 

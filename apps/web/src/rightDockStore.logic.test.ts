@@ -21,7 +21,6 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
     expect([...RIGHT_DOCK_PANE_KINDS]).toEqual([
       "browser",
       "device",
-      "computer",
       "diff",
       "explorer",
       "file",
@@ -43,7 +42,7 @@ describe("isRightDockPaneKind", () => {
   it("accepts the known pane kinds", () => {
     for (const kind of [
       "browser",
-      "computer",
+      "device",
       "diff",
       "explorer",
       "file",

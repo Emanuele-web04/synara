@@ -350,7 +350,7 @@ export const AppSettingsSchema = Schema.Struct({
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
-  // Open the Computer pane automatically when an agent starts driving the desktop.
+  // Show the in-chat Computer preview when an agent starts driving the desktop.
   autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
   // In-chat computer preview footprint. Compact is the default: a small
   // glanceable card that reserves a narrow gutter. Large restores the

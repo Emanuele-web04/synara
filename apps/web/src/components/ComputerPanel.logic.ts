@@ -206,11 +206,8 @@ export function computerControlReadiness(
  * Whether the desktop this backend drives is the one the user is looking at.
  *
  * The distinction decides real UI, not just wording. On a shared desktop the
- * server never asks Synara to open a Computer pane — the actions are already
- * happening on the screen in front of the user, and
- * `ComputerManager.surfacePaneForAgent` returns early — so the "Open
- * automatically" preference controls nothing, and the pane's interactive mode
- * would be a second cursor fighting the user's own on their real machine.
+ * preview describes the same screen the user already sees, so Synara avoids
+ * presenting it as a separate remote desktop.
  */
 export function computerBackendIsVisibleDesktop(
   state: Pick<ComputerStatusResult, "capabilities"> | undefined,

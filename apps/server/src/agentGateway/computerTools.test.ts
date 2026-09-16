@@ -146,7 +146,9 @@ function windowIdDescription(byName: ToolsByName, tool: string): string {
 describe("agent gateway computer tools", () => {
   it("bounds active tool context and directs deferred discovery to the next small set", async () => {
     const { tools, manager } = await setup(
-      Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
+      Object.assign(new FakeComputerBackend(), {
+        agentDialect: "macos" as const,
+      }),
     );
     const definitions = tools.map((tool) => tool.definition);
     // The catalog grew by two tools (computer_paste, computer_run) whose value
@@ -219,7 +221,9 @@ describe("agent gateway computer tools", () => {
 
   it("covers routine foreground delivery with the active task consent on macOS", async () => {
     const { byName } = await setup(
-      Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
+      Object.assign(new FakeComputerBackend(), {
+        agentDialect: "macos" as const,
+      }),
     );
     const notes = computerToolInstructions();
     expect(notes).toContain("covered by the active task's Computer consent");
@@ -238,7 +242,9 @@ describe("agent gateway computer tools", () => {
     expect(windowIdDescription(byName, "computer_get_state")).toContain("any requested screenshot");
     const capture = byName.get("computer_screenshot")?.definition;
     expect(capture?.description).toContain("Rectangular region capture is unavailable");
-    const captureSchema = capture?.inputSchema as { properties: Record<string, unknown> };
+    const captureSchema = capture?.inputSchema as {
+      properties: Record<string, unknown>;
+    };
     expect(Object.keys(captureSchema.properties).sort()).toEqual(["max_dimension", "window_id"]);
   });
 
@@ -375,10 +381,14 @@ describe("agent gateway computer tools", () => {
     backend.emitWindowsChanged([...windows, { ...windows[0]!, id: "same-app-second-window" }]);
     const { call, manager } = await setup(backend);
     try {
-      const all = resultJson(await call("computer_list_windows", {})) as { windows: unknown[] };
+      const all = resultJson(await call("computer_list_windows", {})) as {
+        windows: unknown[];
+      };
       expect(all.windows).toHaveLength(windows.length + 1);
       const filtered = resultJson(
-        await call("computer_list_windows", { app: windows[0]!.appName!.toUpperCase() }),
+        await call("computer_list_windows", {
+          app: windows[0]!.appName!.toUpperCase(),
+        }),
       ) as { windows: { id: string }[]; availability: unknown };
       expect(filtered.windows.map((window) => window.id)).toEqual([
         windows[0]!.id,
@@ -388,6 +398,39 @@ describe("agent gateway computer tools", () => {
       expect(resultJson(await call("computer_list_windows", { app: "missing-app" }))).toMatchObject(
         { windows: [] },
       );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refreshes Computer routing guidance per thread without repeating every call", async () => {
+    const { call, manager } = await setup();
+    try {
+      const guided: boolean[] = [];
+      for (let index = 0; index < 11; index += 1) {
+        const result = resultJson(await call("computer_list_windows", {})) as {
+          toolGuidance?: string;
+        };
+        guided.push(result.toolGuidance?.includes("Computer routing reminder") === true);
+      }
+      expect(guided).toEqual([
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+      ]);
+      expect(
+        resultJson(await call("computer_list_windows", {}, undefined, "other-thread")),
+      ).toMatchObject({
+        toolGuidance: expect.stringContaining("Computer routing reminder"),
+      });
     } finally {
       await manager.dispose();
     }
@@ -559,7 +602,10 @@ describe("agent gateway computer tools", () => {
     backend.getState = async (options) => ({
       ...(await originalState(options)),
       screenshot: {
-        ...(await backend.captureScreenshot({ kind: "window", windowId: "fake-calculator" })),
+        ...(await backend.captureScreenshot({
+          kind: "window",
+          windowId: "fake-calculator",
+        })),
         windowId: "fake-calculator",
       },
     });
@@ -568,7 +614,9 @@ describe("agent gateway computer tools", () => {
       window_id: "fake-calculator",
       include_screenshot: true,
     });
-    expect(resultJson(observed)).toMatchObject({ screenshot: { windowId: "fake-calculator" } });
+    expect(resultJson(observed)).toMatchObject({
+      screenshot: { windowId: "fake-calculator" },
+    });
     const mismatched = await call("computer_click", {
       window_id: "fake-editor",
       x: 5,
@@ -577,14 +625,23 @@ describe("agent gateway computer tools", () => {
     });
     expect(mismatched.isError).toBe(true);
     expect(backend.callsFor("click")).toHaveLength(0);
-    const clicked = await call("computer_click", { x: 5, y: 5, include_screenshot: false });
+    const clicked = await call("computer_click", {
+      x: 5,
+      y: 5,
+      include_screenshot: false,
+    });
     expect(clicked.isError).not.toBe(true);
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1_055, y: 125 });
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+      x: 1_055,
+      y: 125,
+    });
   });
 
   it("zooms into a window and reads the next coordinates in that window's pixels", async () => {
     const { backend, call, see } = await setup();
-    const result = await call("computer_screenshot", { window_id: "fake-calculator" });
+    const result = await call("computer_screenshot", {
+      window_id: "fake-calculator",
+    });
 
     expect(result.isError).not.toBe(true);
     expect(result.content.map((entry) => entry.type)).toEqual(["text", "image"]);
@@ -615,11 +672,18 @@ describe("agent gateway computer tools", () => {
     // clicks here skip their observation so the zoom stays the frame; an
     // observation would become the next frame, as the observation test pins.)
     await call("computer_click", { x: 5, y: 5, include_screenshot: false });
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1_055, y: 125 });
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+      x: 1_055,
+      y: 125,
+    });
 
     // A point past the picture's edge is refused rather than landing on
     // whatever the desktop has next to the window.
-    const outside = await call("computer_click", { x: 500, y: 10, include_screenshot: false });
+    const outside = await call("computer_click", {
+      x: 500,
+      y: 10,
+      include_screenshot: false,
+    });
     expect(outside.isError).toBe(true);
     expect(resultJson(outside)).toMatchObject({
       error: {
@@ -638,7 +702,10 @@ describe("agent gateway computer tools", () => {
       screenshot_id: "shot-1",
       include_screenshot: false,
     });
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1_055, y: 125 });
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+      x: 1_055,
+      y: 125,
+    });
     await call("computer_click", { x: 5, y: 5, include_screenshot: false });
     // Back in the workspace frame, whose 1536-wide picture covers 1920 desktop
     // points: five screenshot pixels are six desktop points, and the server is
@@ -646,7 +713,11 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 6, y: 6 });
 
     // An id this conversation was never given is refused, naming the ones it has.
-    const unknown = await call("computer_click", { x: 5, y: 5, screenshot_id: "shot-9" });
+    const unknown = await call("computer_click", {
+      x: 5,
+      y: 5,
+      screenshot_id: "shot-9",
+    });
     expect(resultJson(unknown)).toMatchObject({
       error: {
         code: "computer_target_not_found",
@@ -674,7 +745,10 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("scroll")).toHaveLength(0);
 
     // A label needs no picture: it is resolved from the accessibility tree.
-    const byLabel = await call("computer_click", { label: "Calculate", role: "button" });
+    const byLabel = await call("computer_click", {
+      label: "Calculate",
+      role: "button",
+    });
     expect(byLabel.isError).not.toBe(true);
     expect(backend.callsFor("click")).toHaveLength(1);
   });
@@ -685,7 +759,9 @@ describe("agent gateway computer tools", () => {
 
     // Thread B never looked, so thread A's picture is not its frame.
     const blind = await call("computer_click", { x: 1, y: 1 }, undefined, "thread-b");
-    expect(resultJson(blind)).toMatchObject({ error: { code: "computer_target_invalid" } });
+    expect(resultJson(blind)).toMatchObject({
+      error: { code: "computer_target_invalid" },
+    });
   });
 
   it("zooms into a region and maps points and scroll distances through its scale", async () => {
@@ -726,18 +802,36 @@ describe("agent gateway computer tools", () => {
     // action skips its observation so the zoom stays the frame under test.)
     const skip = { include_screenshot: false };
     await call("computer_click", { x: 100, y: 100, ...skip });
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1_250, y: 320 });
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+      x: 1_250,
+      y: 320,
+    });
     // A scroll distance is in the same pixels as the point, so 40 pixels of a
     // half-scale picture is 80 pixels of content.
-    await call("computer_scroll", { x: 100, y: 100, delta_x: 0, delta_y: 40, ...skip });
+    await call("computer_scroll", {
+      x: 100,
+      y: 100,
+      delta_x: 0,
+      delta_y: 40,
+      ...skip,
+    });
     expect(backend.callsFor("scroll").at(-1)?.args).toEqual([{ x: 1_250, y: 320 }, 0, 80]);
-    await call("computer_drag", { from: { x: 0, y: 0 }, to: { x: 100, y: 100 }, ...skip });
+    await call("computer_drag", {
+      from: { x: 0, y: 0 },
+      to: { x: 100, y: 100 },
+      ...skip,
+    });
     expect(backend.callsFor("drag").at(-1)?.args.slice(0, 2)).toEqual([
       { x: 1_050, y: 120 },
       { x: 1_250, y: 320 },
     ]);
     // Zooming again is measured in the zoomed picture, and clipped to it.
-    await call("computer_screenshot", { x: 100, y: 300, width: 200, height: 200 });
+    await call("computer_screenshot", {
+      x: 100,
+      y: 300,
+      width: 200,
+      height: 200,
+    });
     expect(backend.callsFor("captureScreenshot").at(-1)?.args[0]).toEqual({
       kind: "region",
       region: { x: 1_250, y: 720, width: 200, height: 200 },
@@ -747,17 +841,35 @@ describe("agent gateway computer tools", () => {
   it("refuses an ambiguous or incomplete screenshot request without capturing", async () => {
     const { backend, call } = await setup();
 
-    const both = await call("computer_screenshot", { window_id: "fake-calculator", x: 0 });
+    const both = await call("computer_screenshot", {
+      window_id: "fake-calculator",
+      x: 0,
+    });
     expect(both.isError).toBe(true);
-    expect(both.content[0]).toMatchObject({ text: expect.stringContaining("never both") });
+    expect(both.content[0]).toMatchObject({
+      text: expect.stringContaining("never both"),
+    });
 
-    const partial = await call("computer_screenshot", { x: 10, y: 20, width: 30 });
+    const partial = await call("computer_screenshot", {
+      x: 10,
+      y: 20,
+      width: 30,
+    });
     expect(partial.isError).toBe(true);
-    expect(partial.content[0]).toMatchObject({ text: expect.stringContaining("height") });
+    expect(partial.content[0]).toMatchObject({
+      text: expect.stringContaining("height"),
+    });
 
-    const empty = await call("computer_screenshot", { x: 10, y: 20, width: 0, height: 30 });
+    const empty = await call("computer_screenshot", {
+      x: 10,
+      y: 20,
+      width: 0,
+      height: 30,
+    });
     expect(empty.isError).toBe(true);
-    expect(empty.content[0]).toMatchObject({ text: expect.stringContaining("greater than zero") });
+    expect(empty.content[0]).toMatchObject({
+      text: expect.stringContaining("greater than zero"),
+    });
 
     expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
   });
@@ -791,7 +903,9 @@ describe("agent gateway computer tools", () => {
       new Error("org.synara.ComputerUse.Error.CaptureFailed: window not visible"),
     );
 
-    const result = await call("computer_screenshot", { window_id: "fake-calculator" });
+    const result = await call("computer_screenshot", {
+      window_id: "fake-calculator",
+    });
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
       text: expect.stringContaining("window not visible"),
@@ -816,7 +930,10 @@ describe("agent gateway computer tools", () => {
 
   it("passes a clamped pointer landing point back to the caller", async () => {
     const backend = new FakeComputerBackend();
-    backend.click = async (point) => ({ point, clampedTo: { x: point.x, y: 1_080 } });
+    backend.click = async (point) => ({
+      point,
+      clampedTo: { x: point.x, y: 1_080 },
+    });
     const { call, see } = await setup(backend);
     await see();
 
@@ -920,7 +1037,10 @@ describe("agent gateway computer tools", () => {
 
   it("skips the post-action screenshot when the model opts out", async () => {
     const { backend, call } = await setup();
-    const result = await call("computer_type_text", { text: "hi", include_screenshot: false });
+    const result = await call("computer_type_text", {
+      text: "hi",
+      include_screenshot: false,
+    });
 
     expect(result.isError).not.toBe(true);
     expect(result.content.map((entry) => entry.type)).toEqual(["text"]);
@@ -948,17 +1068,80 @@ describe("agent gateway computer tools", () => {
     });
 
     // The camel-case spelling works here for the same reason it does on targets.
-    const typed = await call("computer_type_text", { text: "hi", windowId: "fake-terminal" });
+    const typed = await call("computer_type_text", {
+      text: "hi",
+      windowId: "fake-terminal",
+    });
     expect(typed.isError).not.toBe(true);
     expect(backend.callsFor("focusWindow").at(-1)?.args).toEqual(["fake-terminal"]);
     expect(backend.callsFor("typeText").at(-1)?.args).toEqual(["hi"]);
 
-    const pressed = await call("computer_press_key", { key: "enter", window_id: "gone" });
+    const pressed = await call("computer_press_key", {
+      key: "enter",
+      window_id: "gone",
+    });
     expect(pressed.isError).toBe(true);
     expect(resultJson(pressed)).toMatchObject({
       error: { code: "computer_target_not_found" },
     });
     expect(backend.callsFor("pressKey")).toHaveLength(0);
+  });
+
+  it("uses exact semantic text input without focusing the target window", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      focusNeutralSemanticText: true,
+    });
+    const { call, manager } = await setup(backend);
+    const semanticText = vi.spyOn(manager, "typeTextAt");
+    try {
+      const typed = await call("computer_type_text", {
+        text: "42",
+        label: "Display",
+        role: "text-field",
+        window_id: "fake-calculator",
+        include_screenshot: false,
+      });
+
+      expect(typed.isError).not.toBe(true);
+      expect(semanticText).toHaveBeenCalledWith(
+        THREAD,
+        "42",
+        expect.objectContaining({
+          label: "Display",
+          role: "text-field",
+          windowId: "fake-calculator",
+        }),
+      );
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+      expect(backend.callsFor("typeText").at(-1)?.args[0]).toBe("42");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("uses the sole writable control for exact-window text without a label", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      focusNeutralSemanticText: true,
+    });
+    const { call, manager } = await setup(backend);
+    const semanticText = vi.spyOn(manager, "typeTextAt");
+    try {
+      const typed = await call("computer_type_text", {
+        text: "42",
+        window_id: "fake-calculator",
+        include_screenshot: false,
+      });
+
+      expect(typed.isError).not.toBe(true);
+      expect(semanticText).toHaveBeenCalledWith(THREAD, "42", {
+        windowId: "fake-calculator",
+      });
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("zooms the post-action screenshot to the window under an untargeted action's point", async () => {
@@ -968,7 +1151,12 @@ describe("agent gateway computer tools", () => {
     // The regression this pins: an untargeted scroll used to come back with a
     // workspace-wide downscale too small to read, and the model scroll-hunted
     // blind. The window under the scroll's own coordinates is the picture.
-    const result = await call("computer_scroll", { x: 1_100, y: 200, delta_x: 0, delta_y: 300 });
+    const result = await call("computer_scroll", {
+      x: 1_100,
+      y: 200,
+      delta_x: 0,
+      delta_y: 300,
+    });
     expect(result.isError).not.toBe(true);
     expect(result.content.map((entry) => entry.type)).toEqual(["text", "image"]);
     expect(resultJson(result)).toMatchObject({
@@ -1019,7 +1207,10 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("captureScreenshot")).toHaveLength(2);
 
     // A different window is a different picture, however identical its pixels.
-    const other = await call("computer_press_key", { key: "enter", window_id: "fake-calculator" });
+    const other = await call("computer_press_key", {
+      key: "enter",
+      window_id: "fake-calculator",
+    });
     expect(other.content.map((entry) => entry.type)).toEqual(["text", "image"]);
   });
 
@@ -1122,12 +1313,18 @@ describe("agent gateway computer tools", () => {
 
   it("resolves semantic actions from a fresh snapshot and reports backend calls", async () => {
     const { backend, call } = await setup();
-    const result = await call("computer_click", { label: "Calculate", role: "button" });
+    const result = await call("computer_click", {
+      label: "Calculate",
+      role: "button",
+    });
     expect(result.isError).not.toBe(true);
     expect(backend.callsFor("click")).toHaveLength(1);
     expect(backend.callsFor("click")[0]?.args[0]).toEqual({ x: 1_180, y: 228 });
 
-    const setValue = await call("computer_set_value", { label: "Display", value: "468" });
+    const setValue = await call("computer_set_value", {
+      label: "Display",
+      value: "468",
+    });
     expect(setValue.isError).not.toBe(true);
     expect(backend.callsFor("setValue")).toHaveLength(1);
   });
@@ -1141,7 +1338,10 @@ describe("agent gateway computer tools", () => {
       expect(backend.callsFor("typeText").at(-1)?.args).toEqual([text]);
     }
 
-    const emptyValue = await call("computer_set_value", { label: "Display", value: "" });
+    const emptyValue = await call("computer_set_value", {
+      label: "Display",
+      value: "",
+    });
     expect(emptyValue.isError).not.toBe(true);
     expect(backend.callsFor("setValue").at(-1)?.args.at(-1)).toBe("");
   });
@@ -1198,7 +1398,10 @@ describe("agent gateway computer tools", () => {
     });
 
     expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("scroll").at(-1)?.args[0]).toEqual({ x: 250, y: 400 });
+    expect(backend.callsFor("scroll").at(-1)?.args[0]).toEqual({
+      x: 250,
+      y: 400,
+    });
   });
 
   it("refuses invalid targets with structured candidate data", async () => {
@@ -1215,9 +1418,14 @@ describe("agent gateway computer tools", () => {
     const { backend, call } = await setup();
 
     const empty = await call("computer_read_clipboard", {});
-    expect(resultJson(empty)).toMatchObject({ action: "computer_read_clipboard", value: "" });
+    expect(resultJson(empty)).toMatchObject({
+      action: "computer_read_clipboard",
+      value: "",
+    });
 
-    const write = await call("computer_write_clipboard", { text: "  copied\ntext  " });
+    const write = await call("computer_write_clipboard", {
+      text: "  copied\ntext  ",
+    });
     expect(write.isError).not.toBe(true);
     expect(backend.callsFor("writeClipboard").at(-1)?.args).toEqual(["  copied\ntext  "]);
 
@@ -1306,14 +1514,22 @@ describe("agent gateway computer tools", () => {
       expect(first.isError).not.toBe(true);
       const firstText =
         first.content.find((entry) => entry.type === "text")?.type === "text"
-          ? (first.content.find((entry) => entry.type === "text") as { text: string }).text
+          ? (
+              first.content.find((entry) => entry.type === "text") as {
+                text: string;
+              }
+            ).text
           : "";
       expect(firstText).toContain("Computer control ON");
       const second = await call("computer_press_key", { key: "enter" });
       expect(second.isError).not.toBe(true);
       const secondText =
         second.content.find((entry) => entry.type === "text")?.type === "text"
-          ? (second.content.find((entry) => entry.type === "text") as { text: string }).text
+          ? (
+              second.content.find((entry) => entry.type === "text") as {
+                text: string;
+              }
+            ).text
           : "";
       expect(secondText).not.toContain("Computer control ON");
     } finally {
@@ -1452,7 +1668,12 @@ describe("agent gateway computer tools", () => {
     await see();
     const seen = backend.callsFor("captureScreenshot").length;
 
-    const result = await call("computer_scroll", { x: 1_100, y: 200, delta_x: 0, delta_y: 300 });
+    const result = await call("computer_scroll", {
+      x: 1_100,
+      y: 200,
+      delta_x: 0,
+      delta_y: 300,
+    });
 
     expect(result.isError).not.toBe(true);
     expect(result.content.map((entry) => entry.type)).toEqual(["text", "image"]);
@@ -1580,7 +1801,10 @@ describe("agent gateway computer tools", () => {
 
     // The schema bound is advisory — nothing validates MCP arguments against it
     // — so the request is clamped here too.
-    await call("computer_screenshot", { window_id: "fake-terminal", max_dimension: 8_000 });
+    await call("computer_screenshot", {
+      window_id: "fake-terminal",
+      max_dimension: 8_000,
+    });
     expect(backend.callsFor("captureScreenshot").at(-1)?.args[0]).toEqual({
       kind: "window",
       windowId: "fake-terminal",
@@ -1604,8 +1828,12 @@ describe("agent gateway computer tools", () => {
 
       // Clamped rather than refused: the intent is clear and only the scale is
       // wrong, and an unclamped wait stalls the whole turn behind a sleep.
-      const clamped = await call("computer_wait", { duration_ms: 60 * 60 * 1_000 });
-      expect(resultJson(clamped)).toMatchObject({ waitedMs: COMPUTER_WAIT_MAX_MS });
+      const clamped = await call("computer_wait", {
+        duration_ms: 60 * 60 * 1_000,
+      });
+      expect(resultJson(clamped)).toMatchObject({
+        waitedMs: COMPUTER_WAIT_MAX_MS,
+      });
       const negative = await call("computer_wait", { duration_ms: -5 });
       expect(resultJson(negative)).toMatchObject({ waitedMs: 0 });
     },
@@ -1618,7 +1846,12 @@ describe("agent gateway computer tools", () => {
     const { backend, call, see } = await setup();
     await see();
 
-    await call("computer_click", { x: 40, y: 40, modifiers: ["shift"], include_screenshot: false });
+    await call("computer_click", {
+      x: 40,
+      y: 40,
+      modifiers: ["shift"],
+      include_screenshot: false,
+    });
     expect(backend.callsFor("click").at(-1)?.args).toEqual([{ x: 50, y: 50 }, ["shift"]]);
 
     await call("computer_scroll", {
@@ -1631,15 +1864,25 @@ describe("agent gateway computer tools", () => {
     });
     expect(backend.callsFor("scroll").at(-1)?.args).toEqual([{ x: 50, y: 50 }, 0, 10, ["ctrl"]]);
 
-    const refused = await call("computer_click", { x: 40, y: 40, modifiers: ["hyper"] });
+    const refused = await call("computer_click", {
+      x: 40,
+      y: 40,
+      modifiers: ["hyper"],
+    });
     expect(refused.isError).toBe(true);
-    expect(refused.content[0]).toMatchObject({ text: expect.stringContaining("hyper") });
+    expect(refused.content[0]).toMatchObject({
+      text: expect.stringContaining("hyper"),
+    });
   });
 
   it("sends a triple click as one gesture, and refuses where it cannot be one", async () => {
     const { backend, call, see } = await setup();
     await see();
-    await call("computer_triple_click", { x: 40, y: 40, include_screenshot: false });
+    await call("computer_triple_click", {
+      x: 40,
+      y: 40,
+      include_screenshot: false,
+    });
     expect(backend.callsFor("tripleClick")).toHaveLength(1);
     expect(backend.callsFor("click")).toHaveLength(0);
 
@@ -1651,7 +1894,10 @@ describe("agent gateway computer tools", () => {
     }) as FakeComputerBackend;
     const limited = await setup(without);
     await limited.see();
-    const refused = await limited.call("computer_triple_click", { x: 40, y: 40 });
+    const refused = await limited.call("computer_triple_click", {
+      x: 40,
+      y: 40,
+    });
     expect(refused.isError).toBe(true);
     expect(refused.content[0]).toMatchObject({
       text: expect.stringContaining("cannot send a triple click"),
@@ -1667,7 +1913,10 @@ describe("agent gateway computer tools", () => {
     const { call } = await setup(backend);
 
     // Establishes the terminal's capture as what this thread has already seen.
-    const first = await call("computer_press_key", { key: "enter", window_id: "fake-terminal" });
+    const first = await call("computer_press_key", {
+      key: "enter",
+      window_id: "fake-terminal",
+    });
     expect(first.content.map((entry) => entry.type)).toEqual(["text", "image"]);
 
     const before = await backend.listWindows();
@@ -1687,18 +1936,29 @@ describe("agent gateway computer tools", () => {
       return {};
     };
 
-    const opened = await call("computer_press_key", { key: "enter", window_id: "fake-terminal" });
+    const opened = await call("computer_press_key", {
+      key: "enter",
+      window_id: "fake-terminal",
+    });
     expect(opened.isError).not.toBe(true);
-    expect(resultJson(opened)).toMatchObject({ screenshot: { windowId: "fake-dialog" } });
+    expect(resultJson(opened)).toMatchObject({
+      screenshot: { windowId: "fake-dialog" },
+    });
     expect(opened.content.map((entry) => entry.type)).toEqual(["text", "image"]);
   });
 
   it("says an unchanged frame is unsettled rather than asserting the action missed", async () => {
     const { call } = await setup();
-    await call("computer_press_key", { key: "enter", window_id: "fake-terminal" });
+    await call("computer_press_key", {
+      key: "enter",
+      window_id: "fake-terminal",
+    });
     // Nothing opened, so there is no new window to photograph instead and the
     // identical picture is genuinely all there is to report.
-    const quiet = await call("computer_press_key", { key: "enter", window_id: "fake-terminal" });
+    const quiet = await call("computer_press_key", {
+      key: "enter",
+      window_id: "fake-terminal",
+    });
     expect(resultJson(quiet)).toMatchObject({
       screenshotUnchanged: true,
       note: expect.stringContaining("does not prove the action missed"),
@@ -1732,7 +1992,9 @@ describe("agent gateway computer tools", () => {
     ).toBe(true);
 
     const none = resultJson(
-      await call("computer_get_state", { label_contains: "no control is called this" }),
+      await call("computer_get_state", {
+        label_contains: "no control is called this",
+      }),
     ) as { elements: unknown[]; elementsTruncated?: boolean };
     expect(none.elements).toEqual([]);
     expect(none.elementsTruncated).toBeUndefined();
@@ -1749,7 +2011,9 @@ describe("agent gateway computer tools", () => {
     const approval = vi.fn(async () => true);
     const { call } = await setup(backend, approval);
 
-    const result = await call("computer_activate_window", { window_id: "fake-terminal" });
+    const result = await call("computer_activate_window", {
+      window_id: "fake-terminal",
+    });
     expect(approval).toHaveBeenCalledWith(
       "computer_activate_window",
       expect.objectContaining({ delivery_mode: "foreground" }),
@@ -1763,7 +2027,9 @@ describe("agent gateway computer tools", () => {
       windowId: "fake-terminal",
     });
 
-    const missing = await call("computer_activate_window", { window_id: "no-such-window" });
+    const missing = await call("computer_activate_window", {
+      window_id: "no-such-window",
+    });
     expect(missing.isError).toBe(true);
 
     // A desktop with no stacking control says so rather than reporting a move
@@ -1773,7 +2039,9 @@ describe("agent gateway computer tools", () => {
         property === "raiseWindow" ? undefined : Reflect.get(target, property, receiver),
     }) as FakeComputerBackend;
     const plain = await setup(without, approval);
-    const refused = await plain.call("computer_activate_window", { window_id: "fake-terminal" });
+    const refused = await plain.call("computer_activate_window", {
+      window_id: "fake-terminal",
+    });
     expect(refused.isError).toBe(true);
     expect(refused.content[0]).toMatchObject({
       text: expect.stringContaining("cannot bring a window forward"),
@@ -1797,7 +2065,9 @@ describe("agent gateway computer tools", () => {
     );
 
     const mac = await setup(
-      Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const }),
+      Object.assign(new FakeComputerBackend(), {
+        agentDialect: "macos" as const,
+      }),
     );
     const macHotkey = mac.byName.get("computer_hotkey")?.definition.description ?? "";
     expect(macHotkey).toContain("exactly one other key");
@@ -1828,7 +2098,9 @@ describe("agent gateway computer tools", () => {
     const { call } = await setup();
     const refused = await call("computer_click", { label: "Calculate " });
     expect(refused.isError).toBe(true);
-    expect(resultJson(refused)).toMatchObject({ error: { code: "computer_target_not_found" } });
+    expect(resultJson(refused)).toMatchObject({
+      error: { code: "computer_target_not_found" },
+    });
     const found = await call("computer_click", { label: "Calculate" });
     expect(found.isError).not.toBe(true);
   });
@@ -1842,7 +2114,11 @@ describe("agent gateway computer tools", () => {
       to: { x: 2, y: 2 },
       duration_ms: 1e9,
     });
-    await call("computer_drag", { from: { x: 1, y: 1 }, to: { x: 2, y: 2 }, duration_ms: -5 });
+    await call("computer_drag", {
+      from: { x: 1, y: 1 },
+      to: { x: 2, y: 2 },
+      duration_ms: -5,
+    });
 
     const durations = backend.callsFor("drag").map((entry) => entry.args[2]);
     expect(durations).toEqual([30_000, 0]);
@@ -1850,7 +2126,10 @@ describe("agent gateway computer tools", () => {
       properties: { duration_ms: { maximum: number; minimum: number } };
     };
     // The clamp is the schema's own bound, not a second opinion about it.
-    expect(schema.properties.duration_ms).toMatchObject({ maximum: 30_000, minimum: 0 });
+    expect(schema.properties.duration_ms).toMatchObject({
+      maximum: 30_000,
+      minimum: 0,
+    });
   });
 });
 
@@ -1873,7 +2152,9 @@ describe("agent gateway computer setup prompts", () => {
 
   it("prompts for setup when the desktop withheld an OS permission", async () => {
     const { result, setupPrompts } = await readFailingWith(
-      new ComputerBackendError("Screen Recording is not granted.", { setupRequired: true }),
+      new ComputerBackendError("Screen Recording is not granted.", {
+        setupRequired: true,
+      }),
     );
     expect(result.isError).toBe(true);
     expect(setupPrompts).toEqual(["computer_list_windows"]);
@@ -1881,7 +2162,9 @@ describe("agent gateway computer setup prompts", () => {
 
   it("prompts for setup when the permission failure arrived wrapped", async () => {
     const wrapped = new Error("the desktop refused", {
-      cause: new ComputerBackendError("Accessibility is not granted.", { setupRequired: true }),
+      cause: new ComputerBackendError("Accessibility is not granted.", {
+        setupRequired: true,
+      }),
     });
     const { setupPrompts } = await readFailingWith(wrapped);
     expect(setupPrompts).toEqual(["computer_list_windows"]);
@@ -1947,7 +2230,11 @@ describe("agent gateway computer setup prompts", () => {
 
     expect(result.isError).not.toBe(true);
     expect(prompts).toEqual([
-      { toolName: "computer_list_windows", missing: ["accessibility"], buildSignature: "signed" },
+      {
+        toolName: "computer_list_windows",
+        missing: ["accessibility"],
+        buildSignature: "signed",
+      },
     ]);
     // The model is told a setup card is in front of the user — not how macOS
     // privacy works, and not to walk them through System Settings over the top
@@ -1999,7 +2286,11 @@ describe("agent gateway computer setup prompts", () => {
     });
 
     expect(prompts).toEqual([
-      { toolName: "computer_list_windows", missing: ["screenRecording"], buildSignature: "adhoc" },
+      {
+        toolName: "computer_list_windows",
+        missing: ["screenRecording"],
+        buildSignature: "adhoc",
+      },
     ]);
   });
 
@@ -2007,7 +2298,9 @@ describe("agent gateway computer setup prompts", () => {
     const backend = Object.assign(new FakeComputerBackend(), {
       listWindows: () =>
         Promise.reject(
-          new ComputerBackendError("The helper refused: -32000.", { setupRequired: true }),
+          new ComputerBackendError("The helper refused: -32000.", {
+            setupRequired: true,
+          }),
         ),
       missingPermissions: () => Promise.resolve(["screenRecording"] as const),
     });
@@ -2072,7 +2365,9 @@ describe("agent gateway computer setup prompts", () => {
 
     // And a failure, which used to hand back the backend's sentence alone.
     backend.failNext("captureScreenshot");
-    const failed = await run("computer_screenshot", { window_id: "fake-terminal" });
+    const failed = await run("computer_screenshot", {
+      window_id: "fake-terminal",
+    });
     expect(failed.isError).toBe(true);
     const text = failed.content.find((entry) => entry.type === "text");
     expect(text?.type === "text" ? text.text : "").toContain("setup card");
@@ -2111,16 +2406,25 @@ describe("screenshot delivery consistency", () => {
   it("refreshes screenshot coordinates when an unchanged window moves", async () => {
     const { backend, manager, call } = await setup();
     try {
-      await call("computer_press_key", { key: "enter", window_id: "fake-calculator" });
+      await call("computer_press_key", {
+        key: "enter",
+        window_id: "fake-calculator",
+      });
       const windows = await backend.listWindows();
       backend.emitWindowsChanged(
         windows.map((w) =>
           w.id === "fake-calculator" ? { ...w, bounds: { ...w.bounds!, x: 600 } } : w,
         ),
       );
-      await call("computer_press_key", { key: "enter", window_id: "fake-calculator" });
+      await call("computer_press_key", {
+        key: "enter",
+        window_id: "fake-calculator",
+      });
       await call("computer_click", { x: 5, y: 5, include_screenshot: false });
-      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 605, y: 125 });
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({
+        x: 605,
+        y: 125,
+      });
     } finally {
       await manager.dispose();
     }
@@ -2128,7 +2432,10 @@ describe("screenshot delivery consistency", () => {
   it("returns the action window after an intervening workspace screenshot", async () => {
     const { manager, call, see } = await setup();
     try {
-      await call("computer_press_key", { key: "enter", window_id: "fake-calculator" });
+      await call("computer_press_key", {
+        key: "enter",
+        window_id: "fake-calculator",
+      });
       await see();
       const repeat = await call("computer_press_key", {
         key: "enter",
@@ -2253,7 +2560,10 @@ it("waits for a live label and returns its window screenshot in the same call", 
   expect(backend.callsFor("getState")).toHaveLength(1);
   expect(backend.callsFor("click")).toHaveLength(0);
   expect(backend.callsFor("raiseWindow")).toHaveLength(0);
-  const invalid = await call("computer_wait", { duration_ms: 0, label: "Display" });
+  const invalid = await call("computer_wait", {
+    duration_ms: 0,
+    label: "Display",
+  });
   expect(invalid.isError).toBe(true);
 });
 
@@ -2277,7 +2587,10 @@ it("can wait for the next label on an action without replaying input", async () 
 
 it("does not substitute a new window from another process for the target screenshot", async () => {
   const backend = new FakeComputerBackend();
-  const before = (await backend.listWindows()).map((window) => ({ ...window, pid: 10 }));
+  const before = (await backend.listWindows()).map((window) => ({
+    ...window,
+    pid: 10,
+  }));
   backend.emitWindowsChanged(before);
   const { call } = await setup(backend);
   backend.pressKey = async () => {
@@ -2287,14 +2600,23 @@ it("does not substitute a new window from another process for the target screens
     ]);
     return {};
   };
-  const result = await call("computer_press_key", { key: "enter", window_id: "fake-terminal" });
-  expect(resultJson(result)).toMatchObject({ screenshot: { windowId: "fake-terminal" } });
+  const result = await call("computer_press_key", {
+    key: "enter",
+    window_id: "fake-terminal",
+  });
+  expect(resultJson(result)).toMatchObject({
+    screenshot: { windowId: "fake-terminal" },
+  });
 });
 
 it("limits large scrolls to overlapping views across screenshot scale changes", async () => {
   const { backend, call } = await setup();
   const first = resultJson(await call("computer_screenshot", { window_id: "fake-terminal" })) as {
-    screenshot: { region: { width: number; height: number }; width: number; height: number };
+    screenshot: {
+      region: { width: number; height: number };
+      width: number;
+      height: number;
+    };
   };
   for (const distance of [1500, 700, -1400]) {
     const result = resultJson(
@@ -2303,7 +2625,9 @@ it("limits large scrolls to overlapping views across screenshot scale changes", 
         delta_x: 0,
         delta_y: distance,
       }),
-    ) as { scroll: { requested: { deltaY: number }; limitedTo: { deltaY: number } } };
+    ) as {
+      scroll: { requested: { deltaY: number }; limitedTo: { deltaY: number } };
+    };
     expect(result.scroll.limitedTo.deltaY).toBe(
       (Math.sign(distance) * first.screenshot.region.height) / 2,
     );
@@ -2345,7 +2669,9 @@ it("inherits an omitted scroll target from the screenshot rather than the old ke
   const { backend, manager, call } = await setup();
   try {
     await manager.typeText(undefined, "human", "fake-terminal");
-    const shot = await call("computer_screenshot", { window_id: "fake-calculator" });
+    const shot = await call("computer_screenshot", {
+      window_id: "fake-calculator",
+    });
     expect(shot.isError).not.toBe(true);
     const result = await call("computer_scroll", {
       delta_x: 0,
@@ -2403,7 +2729,9 @@ describe("computer_activate_window foreground restore", () => {
     try {
       // No delivery_mode arg: the call defaults to background, yet activation
       // is a foreground excursion within the task's approval.
-      const result = await call("computer_activate_window", { window_id: "fake-calculator" });
+      const result = await call("computer_activate_window", {
+        window_id: "fake-calculator",
+      });
       expect(result.isError).not.toBe(true);
       expect(approval).toHaveBeenCalledWith(
         "computer_activate_window",
@@ -2431,7 +2759,9 @@ describe("computer_activate_window foreground restore", () => {
     const approval = vi.fn(async () => false);
     const { call, manager } = await setup(backend, approval);
     try {
-      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      const refused = await call("computer_activate_window", {
+        window_id: "fake-calculator",
+      });
       expect(refused.isError).toBe(true);
       expect(backend.callsFor("raiseWindow")).toHaveLength(0);
       expect(backend.callsFor("focusWindow")).toHaveLength(0);
@@ -2477,7 +2807,12 @@ describe("computer_run", () => {
       });
       expect(result.isError).not.toBe(true);
       const payload = resultJson(result) as {
-        steps: { step: number; type: string; ok: boolean; result?: Record<string, unknown> }[];
+        steps: {
+          step: number;
+          type: string;
+          ok: boolean;
+          result?: Record<string, unknown>;
+        }[];
         completed: number;
         stopped: boolean;
         state: { elements: { label: string }[] };
@@ -2556,7 +2891,10 @@ describe("computer_run", () => {
     const { backend, manager, call } = await setup();
     try {
       const result = await call("computer_run", {
-        steps: Array.from({ length: 26 }, () => ({ type: "press_key", key: "enter" })),
+        steps: Array.from({ length: 26 }, () => ({
+          type: "press_key",
+          key: "enter",
+        })),
       });
       expect(result.isError).toBe(true);
       expect(backend.callsFor("pressKey")).toHaveLength(0);
@@ -2626,13 +2964,28 @@ describe("computer_run", () => {
     try {
       const result = await call("computer_run", {
         steps: [
-          { type: "wait", duration_ms: 5_000, label: "Display", window_id: "fake-calculator" },
-          { type: "set_value", label: "Display", window_id: "fake-calculator", value: "42" },
+          {
+            type: "wait",
+            duration_ms: 5_000,
+            label: "Display",
+            window_id: "fake-calculator",
+          },
+          {
+            type: "set_value",
+            label: "Display",
+            window_id: "fake-calculator",
+            value: "42",
+          },
         ],
       });
       expect(result.isError).not.toBe(true);
-      const payload = resultJson(result) as { steps: { ok: boolean; result?: unknown }[] };
-      expect(payload.steps[0]).toMatchObject({ ok: true, result: { status: "ready" } });
+      const payload = resultJson(result) as {
+        steps: { ok: boolean; result?: unknown }[];
+      };
+      expect(payload.steps[0]).toMatchObject({
+        ok: true,
+        result: { status: "ready" },
+      });
       expect(payload.steps[1]).toMatchObject({ ok: true });
       expect(backend.callsFor("setValue")).toHaveLength(1);
     } finally {
@@ -2652,7 +3005,12 @@ describe("computer_run", () => {
     try {
       const result = await call("computer_run", {
         steps: [
-          { type: "wait", duration_ms: 2_000, label: "Display", window_id: "fake-calculator" },
+          {
+            type: "wait",
+            duration_ms: 2_000,
+            label: "Display",
+            window_id: "fake-calculator",
+          },
         ],
       });
       expect(result.isError).not.toBe(true);
@@ -2722,11 +3080,17 @@ describe("computer_run", () => {
       const result = await call("computer_run", {
         steps: [
           { type: "click", label: "Display", window_id: "fake-calculator" },
-          { type: "paste", text: "long agent payload", window_id: "fake-calculator" },
+          {
+            type: "paste",
+            text: "long agent payload",
+            window_id: "fake-calculator",
+          },
         ],
       });
       expect(result.isError).not.toBe(true);
-      const payload = resultJson(result) as { steps: { result?: Record<string, unknown> }[] };
+      const payload = resultJson(result) as {
+        steps: { result?: Record<string, unknown> }[];
+      };
       expect(payload.steps[1]?.result).toMatchObject({
         action: "computer_paste",
         clipboardRestored: true,
@@ -2769,7 +3133,9 @@ describe("computer_paste", () => {
   });
 
   it("uses the Command chord on a macOS backend", async () => {
-    const backend = Object.assign(new FakeComputerBackend(), { agentDialect: "macos" as const });
+    const backend = Object.assign(new FakeComputerBackend(), {
+      agentDialect: "macos" as const,
+    });
     const { call, manager } = await setup(backend);
     try {
       const result = await call("computer_paste", {
@@ -2809,9 +3175,16 @@ describe("computer_get_state diff", () => {
     const { manager, call } = await setup();
     try {
       const baseline = resultJson(
-        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
+        await call("computer_get_state", {
+          window_id: "fake-calculator",
+          diff: true,
+        }),
       ) as {
-        elementChanges: { added: { label: string }[]; removed: unknown[]; changed: unknown[] };
+        elementChanges: {
+          added: { label: string }[];
+          removed: unknown[];
+          changed: unknown[];
+        };
       };
       expect(baseline.elementChanges.added.map((item) => item.label).sort()).toEqual([
         "Calculate",
@@ -2827,10 +3200,17 @@ describe("computer_get_state diff", () => {
         include_screenshot: false,
       });
       const diff = resultJson(
-        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
+        await call("computer_get_state", {
+          window_id: "fake-calculator",
+          diff: true,
+        }),
       ) as {
         elements?: unknown;
-        elementChanges: { added: unknown[]; removed: unknown[]; changed: unknown[] };
+        elementChanges: {
+          added: unknown[];
+          removed: unknown[];
+          changed: unknown[];
+        };
       };
       expect(diff.elements).toBeUndefined();
       expect(diff.elementChanges).toEqual({
@@ -2848,9 +3228,22 @@ describe("computer_get_state diff", () => {
       });
       // And a steady third read reports nothing at all.
       const steady = resultJson(
-        await call("computer_get_state", { window_id: "fake-calculator", diff: true }),
-      ) as { elementChanges: { added: unknown[]; removed: unknown[]; changed: unknown[] } };
-      expect(steady.elementChanges).toEqual({ added: [], removed: [], changed: [] });
+        await call("computer_get_state", {
+          window_id: "fake-calculator",
+          diff: true,
+        }),
+      ) as {
+        elementChanges: {
+          added: unknown[];
+          removed: unknown[];
+          changed: unknown[];
+        };
+      };
+      expect(steady.elementChanges).toEqual({
+        added: [],
+        removed: [],
+        changed: [],
+      });
     } finally {
       await manager.dispose();
     }

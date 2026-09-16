@@ -359,7 +359,7 @@ function SettingsRouteView() {
       ? ["Computer control"]
       : []),
     ...(settings.autoOpenComputerPane !== defaults.autoOpenComputerPane
-      ? ["Computer pane auto-open"]
+      ? ["Computer preview auto-open"]
       : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]

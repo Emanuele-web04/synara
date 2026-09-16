@@ -65,6 +65,7 @@ import {
   computerTargetCandidates,
   resolveComputerPoint,
   resolveComputerSemanticTarget,
+  resolveComputerUniqueTextTarget,
   resolveComputerWindowTarget,
 } from "./uiTreeTargeting.ts";
 import { describeComputerUiTree } from "./uiTreeText.ts";
@@ -76,17 +77,19 @@ export const COMPUTER_FRAME_SOCKET_BUDGET_BYTES = 2 * 1024 * 1024;
 /**
  * Crash backstop for the desktop lease, not the normal release path.
  *
- * There is one desktop, one cursor and one keyboard focus, so exactly one
- * thread may drive it at a time. Ownership is released the moment the owner's
- * turn ends (`releaseDesktopControl`, driven by the provider runtime's
- * terminal turn and session events), because a takeover mid-turn corrupts the
- * owner: its drag is teleported, its typing is retargeted. Idle expiry only
- * covers the case where that signal never arrives — a provider process that
- * died without a terminal event — and so is deliberately long: a model can
- * think for minutes between two tool calls, and expiring under a live turn is
- * the failure this whole mechanism exists to prevent. Five minutes matches the
- * KWin plugin's own session idle timeout, the point past which the desktop
- * session is being torn down anyway.
+ * There is one desktop, one cursor and one focused keyboard stream, so exactly
+ * one thread may drive those shared resources at a time. Exact semantic text
+ * mutations are exempt: they address independently verified accessibility
+ * elements and never use that shared focus stream. Ownership is released the
+ * moment the owner's turn ends (`releaseDesktopControl`, driven by the provider
+ * runtime's terminal turn and session events), because a takeover mid-turn
+ * corrupts the owner: its drag is teleported, its typing is retargeted. Idle
+ * expiry only covers the case where that signal never arrives — a provider
+ * process that died without a terminal event — and so is deliberately long: a
+ * model can think for minutes between two tool calls, and expiring under a live
+ * turn is the failure this whole mechanism exists to prevent. Five minutes
+ * matches the KWin plugin's own session idle timeout, the point past which the
+ * desktop session is being torn down anyway.
  */
 export const COMPUTER_LEASE_IDLE_MS = 300_000;
 
@@ -220,7 +223,9 @@ interface ResolvedPointTarget {
  * actions name a window without one, and with no point there is nothing an
  * occlusion check could be about.
  */
-type PreparedTarget = Omit<ResolvedPointTarget, "point"> & { readonly point?: ComputerPoint };
+type PreparedTarget = Omit<ResolvedPointTarget, "point"> & {
+  readonly point?: ComputerPoint;
+};
 
 /** A capture plus which window it covers, when it covers one at all. */
 export interface ComputerCapturedWindow {
@@ -245,8 +250,9 @@ export class ComputerLeaseError extends ComputerBackendError {
 
   constructor() {
     super(
-      "The computer is currently controlled by another conversation; try again when it is free. " +
-        "Reading the desktop (windows, state, screenshots) still works while it is held.",
+      "The shared pointer and focused keyboard are controlled by another conversation; " +
+        "try again when it is free. Reading the desktop still works, and exact-window " +
+        "focus-neutral semantic text can proceed independently.",
       { retryable: true },
     );
     this.name = "ComputerLeaseError";
@@ -332,6 +338,10 @@ export class ComputerManager {
     return this.backend.agentDialect ?? "linux";
   }
 
+  get supportsFocusNeutralSemanticText(): boolean {
+    return this.backend.focusNeutralSemanticText === true;
+  }
+
   /**
    * Read live rather than cached at construction: a backend that re-probes or
    * provisions may upgrade a capability when its missing piece appears (a
@@ -393,7 +403,10 @@ export class ComputerManager {
           this.backend.getScreenSize(),
         ]);
         this.physicalState = { availability, windows, screenSize };
-      } else this.physicalState = { availability: await this.backend.probeAvailability() };
+      } else
+        this.physicalState = {
+          availability: await this.backend.probeAvailability(),
+        };
     })()
       .catch((error) => {
         this.physicalFailure = clampComputerMessage(
@@ -695,7 +708,10 @@ export class ComputerManager {
         if (event.type === "windows-changed") {
           this.lastKnownWindowIds = windowIdSet(event.windows);
           for (const state of this.threads.values()) state.windows = event.windows;
-          this.emit({ type: "computer.windows-changed", windows: event.windows });
+          this.emit({
+            type: "computer.windows-changed",
+            windows: event.windows,
+          });
           this.scheduleWindowsPublish();
         } else if (event.type === "health-changed") {
           this.backendHealth = event.health;
@@ -898,7 +914,10 @@ export class ComputerManager {
       ...(inputPause ? { inputPause } : {}),
     };
     if (options.includeText !== true || !withAvailability.root) return withAvailability;
-    return { ...withAvailability, text: describeComputerUiTree(withAvailability.root) };
+    return {
+      ...withAvailability,
+      text: describeComputerUiTree(withAvailability.root),
+    };
   }
 
   /** Zoomed capture of one window or desktop region, with its pixel mapping. */
@@ -935,7 +954,12 @@ export class ComputerManager {
     return {
       screenshot: await this.backend.captureScreenshot({
         kind: "region",
-        region: { x: 0, y: 0, width: screenSize.width, height: screenSize.height },
+        region: {
+          x: 0,
+          y: 0,
+          width: screenSize.width,
+          height: screenSize.height,
+        },
         ...limit,
       }),
     };
@@ -1217,7 +1241,10 @@ export class ComputerManager {
           code: "computer_target_not_found",
           message: "No exact window is available at this point.",
         });
-      const image = await this.backend.captureScreenshot({ kind: "window", windowId: window.id });
+      const image = await this.backend.captureScreenshot({
+        kind: "window",
+        windowId: window.id,
+      });
       return action({
         ...point,
         windowId: window.id,
@@ -1420,10 +1447,16 @@ export class ComputerManager {
       let restore: ForegroundRestoreInfo;
       let note: string | undefined;
       if (previousId === null) {
-        restore = { restoredWindowId: null, restoreStatus: "frontmost-unobservable" };
+        restore = {
+          restoredWindowId: null,
+          restoreStatus: "frontmost-unobservable",
+        };
         note = "No frontmost window was observable before activation, so nothing was restored.";
       } else if (previousId === windowId) {
-        restore = { restoredWindowId: null, restoreStatus: "already-frontmost" };
+        restore = {
+          restoredWindowId: null,
+          restoreStatus: "already-frontmost",
+        };
       } else {
         try {
           assertDesktopOperationActive();
@@ -1431,7 +1464,10 @@ export class ComputerManager {
           await this.backend.focusWindow?.(previousId);
           restore = { restoredWindowId: previousId, restoreStatus: "restored" };
         } catch {
-          restore = { restoredWindowId: previousId, restoreStatus: "restore-missed" };
+          restore = {
+            restoredWindowId: previousId,
+            restoreStatus: "restore-missed",
+          };
           note =
             `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
             `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
@@ -1540,7 +1576,9 @@ export class ComputerManager {
       ...(restore.restoredWindowId !== null ? { restoredWindowId: restore.restoredWindowId } : {}),
       restoreStatus: restore.restoreStatus,
       ...(note !== undefined
-        ? { message: clampComputerMessage(note, "The foreground window could not be restored.") }
+        ? {
+            message: clampComputerMessage(note, "The foreground window could not be restored."),
+          }
         : {}),
     } as ComputerEvent);
   }
@@ -1773,7 +1811,9 @@ export class ComputerManager {
             ...(traveledY === undefined ? {} : { traveledY: round2(traveledY) }),
             ...(observedWindowId === undefined || this.backend.agentDialect === "macos"
               ? {}
-              : { gearing: round2(this.scrollGearing.gearing(observedWindowId)) }),
+              : {
+                  gearing: round2(this.scrollGearing.gearing(observedWindowId)),
+                }),
           },
         },
         ...(after ? { observation: after } : {}),
@@ -1822,7 +1862,10 @@ export class ComputerManager {
       });
     }
     return {
-      point: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+      point: {
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+      },
       windowId,
     };
   }
@@ -1847,7 +1890,10 @@ export class ComputerManager {
     windowId: string | undefined,
     from: ComputerCapturedWindow,
     injectedY: number,
-  ): Promise<{ readonly capture?: ComputerCapturedWindow; readonly traveled?: number }> {
+  ): Promise<{
+    readonly capture?: ComputerCapturedWindow;
+    readonly traveled?: number;
+  }> {
     if (this.actionSettleMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.actionSettleMs));
     }
@@ -1951,11 +1997,36 @@ export class ComputerManager {
     text: string,
     windowId?: string,
   ): Promise<ComputerActionResult> {
+    if (this.supportsFocusNeutralSemanticText && windowId) {
+      return this.typeTextAt(threadId, text, { windowId });
+    }
     return this.withDesktopControl(threadId, async () => {
       await this.prepareKeyboardTarget(windowId);
       assertDesktopOperationActive();
       const result = await this.backend.typeText(text, windowId);
       return this.actionResult(threadId, "computer_type_text", undefined, result, windowId);
+    });
+  }
+
+  async typeTextAt(
+    threadId: string | undefined,
+    text: string,
+    target: ComputerTarget,
+  ): Promise<ComputerActionResult> {
+    if (!this.supportsFocusNeutralSemanticText) {
+      throw new ComputerBackendError(
+        "This computer backend cannot guarantee focus-neutral semantic text input.",
+      );
+    }
+    if (!target.windowId) {
+      throw new ComputerBackendError("Focus-neutral text input requires an exact target window.");
+    }
+    const windowId = target.windowId;
+    return this.withBackgroundWindowControl(threadId, windowId, async () => {
+      const resolved = await this.resolveSemanticTarget(target, true);
+      assertDesktopOperationActive();
+      const result = await this.backend.typeText(text, windowId, resolved);
+      return this.actionResult(threadId, "computer_type_text", resolved.point, result, windowId);
     });
   }
 
@@ -2009,7 +2080,9 @@ export class ComputerManager {
           `The desktop clipboard holds ${value.length} characters of text, more than the ${COMPUTER_TEXT_MAX_LENGTH} this tool returns.`,
         );
       }
-      return this.actionResult(threadId, "computer_read_clipboard", undefined, { value });
+      return this.actionResult(threadId, "computer_read_clipboard", undefined, {
+        value,
+      });
     });
   }
 
@@ -2135,6 +2208,7 @@ export class ComputerManager {
     action: () => Promise<A>,
     signal?: AbortSignal,
     turnId?: string,
+    operationKey?: string,
   ): Promise<A> {
     assertDesktopOperationAdmission();
     let authority = this.authorityRevocations.get(threadId);
@@ -2149,7 +2223,7 @@ export class ComputerManager {
       this.authorityRevocations.set(threadId, authority);
     }
     const admissionSignal = signal ? AbortSignal.any([signal, authority.signal]) : authority.signal;
-    return this.operations.run(async () => {
+    const execute = async (): Promise<A> => {
       if (this.controlDisabled(threadId) || this.suspendedThreads.has(threadId))
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
@@ -2208,7 +2282,48 @@ export class ComputerManager {
           this.agentCallsInFlight.set(owner, remaining);
         }
       }
-    }, admissionSignal);
+    };
+    return operationKey
+      ? this.operations.runScoped(operationKey, execute, admissionSignal)
+      : this.operations.run(execute, admissionSignal);
+  }
+
+  private withBackgroundWindowControl<A>(
+    threadId: string | undefined,
+    windowId: string,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    assertDesktopOperationAdmission();
+    const owner = agentThreadId(threadId);
+    return this.operations.runScoped(windowId, async () => {
+      if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
+        throw new ComputerBackendError(
+          "Computer control was revoked for this conversation; no input was dispatched.",
+        );
+      }
+      const pausedState = owner ? this.threads.get(owner) : undefined;
+      if (pausedState?.inputPause) {
+        throw new ComputerBackendError(pausedState.inputPause.message, {
+          inputPause: pausedState.inputPause,
+        });
+      }
+      this.engageBackend();
+      try {
+        return await action();
+      } catch (error) {
+        if (
+          owner &&
+          !this.disposed &&
+          !this.suspendedThreads.has(owner) &&
+          error instanceof ComputerBackendError &&
+          error.inputPause
+        ) {
+          this.threadRuntime(owner).inputPause = error.inputPause;
+          this.publishCached(owner);
+        }
+        throw error;
+      }
+    });
   }
 
   /**
@@ -2699,7 +2814,10 @@ export class ComputerManager {
         throw error;
       }
       const state = await this.backend
-        .getState({ includeTree: true, ...(target.windowId ? { windowId: target.windowId } : {}) })
+        .getState({
+          includeTree: true,
+          ...(target.windowId ? { windowId: target.windowId } : {}),
+        })
         .catch(() => undefined);
       throw new ComputerTargetError({
         code: error.code,
@@ -2869,12 +2987,16 @@ export class ComputerManager {
     return windowsCoveringPoint(windows, windowId, point);
   }
 
-  private async resolveSemanticTarget(target: ComputerTarget): Promise<ComputerResolvedTarget> {
+  private async resolveSemanticTarget(
+    target: ComputerTarget,
+    allowUniqueTextTarget = false,
+  ): Promise<ComputerResolvedTarget> {
+    const unnamedTarget = target.label === undefined && target.role === undefined;
     // Without a label or role the query matches every control in scope, and
     // the ambiguity refusal that follows would dump the whole tree at the
     // caller. Refuse up front, before paying for the accessibility walk, with
     // what is actually missing.
-    if (target.label === undefined && target.role === undefined) {
+    if (unnamedTarget && (!allowUniqueTextTarget || !target.windowId)) {
       throw new ComputerTargetError({
         code: "computer_target_invalid",
         message:
@@ -2895,8 +3017,14 @@ export class ComputerManager {
         notFound: true,
       });
     }
+    const resolve = (root: NonNullable<ComputerState["root"]>): ComputerResolvedTarget => ({
+      target,
+      ...(unnamedTarget
+        ? resolveComputerUniqueTextTarget(root, target.windowId!, allowUniqueTextTarget)
+        : resolveComputerSemanticTarget(root, target, allowUniqueTextTarget)),
+    });
     try {
-      return { target, ...resolveComputerSemanticTarget(state.root, target) };
+      return resolve(state.root);
     } catch (error) {
       // A tree served from the recent cache can miss a control that only just
       // appeared. Pay for one fresh walk before declaring it absent; on a
@@ -2908,7 +3036,7 @@ export class ComputerManager {
           ...(target.windowId ? { windowId: target.windowId } : {}),
         });
         try {
-          if (state.root) return { target, ...resolveComputerSemanticTarget(state.root, target) };
+          if (state.root) return resolve(state.root);
         } catch (freshError) {
           // The miss is confirmed against fresh state; report its candidates.
           if (freshError instanceof ComputerTargetError) error = freshError;
@@ -3113,7 +3241,10 @@ export class ComputerManager {
     if (this.disposed) return;
     for (const [threadId, state] of this.threads) {
       state.version = ++this.nextStateVersion;
-      this.emit({ type: "computer.thread-state", state: this.threadSnapshot(threadId, state) });
+      this.emit({
+        type: "computer.thread-state",
+        state: this.threadSnapshot(threadId, state),
+      });
     }
   }
 
@@ -3199,7 +3330,10 @@ export class ComputerManager {
     if (this.backendHealth.status === "connected" || availability.kind !== "available") {
       return availability;
     }
-    return { kind: "backend-unavailable", message: healthUnavailableMessage(this.backendHealth) };
+    return {
+      kind: "backend-unavailable",
+      message: healthUnavailableMessage(this.backendHealth),
+    };
   }
 
   private isStreamWanted(epoch: number): boolean {

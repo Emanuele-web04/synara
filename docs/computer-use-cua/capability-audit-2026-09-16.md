@@ -1,0 +1,38 @@
+# Cua capability audit — 2026-09-16
+
+This audit compares the pinned Cua Driver `0.24.0` surface with Synara's provider tools, backend, desktop host, and packaged runtime. “Not agent-facing” is intentional where exposing a raw native operation would bypass Synara's exact-target, approval, cancellation, or observation contracts.
+
+## Coverage
+
+| Cua capability                                                                     | Synara use                                                                                       | Contract                                                                                                                                                           |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Desktop/window state, screen size, window listing, screenshots, Accessibility tree | `computer_get_state`, `computer_list_windows`, `computer_get_screen_size`, `computer_screenshot` | Read-only observations retain PID, window ID, geometry, Space membership, and screenshot freshness. Off-Space pixels are never presented as live grounding.        |
+| Click variants, cursor move, drag, scroll                                          | Matching `computer_*` actions                                                                    | Screenshot coordinates are converted through a registered frame and revalidated against the exact window. Pointer input remains active-Space-only.                 |
+| Text, key press, hotkey                                                            | `computer_type_text`, `computer_press_key`, `computer_hotkey`                                    | Exact semantic text can use focus-neutral Accessibility insertion. Generic keyboard input remains active-Space-only and never falls back after uncertain delivery. |
+| Accessibility value/action                                                         | `computer_set_value`, `computer_perform_action`                                                  | Fresh label/role resolution is required. Ambiguous targets are refused. `AXPress` and value mutation never fall back to synthetic input.                           |
+| Clipboard                                                                          | `computer_read_clipboard`, `computer_write_clipboard`, `computer_paste`                          | Clipboard reads and writes are approval-gated. Paste restores the user's previous text and does not prove delivery from pixels alone.                              |
+| App launch and window activation                                                   | `computer_launch_app`, `computer_activate_window`                                                | Activation is foreground-only and approval-gated. Synara restores the previously frontmost window after the excursion.                                             |
+| Input readiness and permissions                                                    | Desktop host provisioning and setup flow                                                         | Passive checks do not request grants. Missing Accessibility or Screen Recording raises one setup path; input fails closed.                                         |
+| Sessions and cancellation                                                          | `CuaDriverHost`, `DesktopOperationQueue`, `ComputerManager`                                      | Native sessions are internal lifecycle machinery. Turn cancellation closes admission, drains held input, and blocks unsafe replacement.                            |
+| Cursor configuration and recording state                                           | Ambient preview/runtime internals                                                                | Synara owns the user-facing preview and recording lifecycle instead of exposing competing native controls to providers.                                            |
+| Browser tools                                                                      | Separate `browser_*` surface                                                                     | Synara's integrated browser is controlled through structured browser tools, not desktop pixels. Computer Use remains the native-app and OS fallback.               |
+
+## Deliberately constrained native tools
+
+| Native tool                                                    | Decision                                                                                                                                                                                       |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invoke_menu`                                                  | Not agent-facing. A safe version needs exact menu ownership, approval semantics, effect reporting, and platform tests; raw exposure would bypass current semantic targeting.                   |
+| `set_window_frame`                                             | Not agent-facing. Window layout mutation needs a cross-platform contract, bounds policy, and explicit user-visible approval before it can be added safely.                                     |
+| `verify_state`                                                 | Not agent-facing. Synara already performs scoped post-action observation and conditional waits. A second verifier would need one authoritative effect contract to avoid contradictory results. |
+| Raw `start_session`, `end_session`, `list_sessions`            | Internal only. Provider threads must not control native session ownership or outlive the gateway turn.                                                                                         |
+| Raw `start_recording`, `stop_recording`, `get_recording_state` | Internal only. Provider-controlled recording would conflict with Synara's preview privacy and lifecycle policy.                                                                                |
+
+## Agent routing
+
+Browser and Computer tools now refresh concise routing guidance on first use and every ten uses per thread. The counters are bounded and least-recently-used entries are evicted. Browser guidance prefers WebMCP, WebAgents, site requests, and structured DOM extraction before screenshots. It also defines a resumable bounded-batch strategy for long virtualized histories, including ordered text, links, images, GIFs, progress, deduplication, and explicit completeness limits.
+
+Computer guidance requires observation before action, exact window IDs, semantic labels before coordinates, focus-neutral text only with a proven writable Accessibility target, foreground delivery only when activation is necessary, and no use of off-Space pixels as live evidence.
+
+## Remaining certification boundary
+
+The source and focused contract suites cover the routing, exact-target, concurrency, cancellation, Space, and freshness policies. Final claims about three simultaneous real-app targets, human foreground focus, and off-Space semantic input require a freshly packaged revision-14 application with newly granted macOS permissions. The canonical Cua macOS harness additionally requires its documented SIP-disabled Lume maintainer environment and signing keychain; local smoke evidence is not a substitute.

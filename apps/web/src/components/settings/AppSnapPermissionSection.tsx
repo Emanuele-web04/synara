@@ -1,7 +1,7 @@
 // FILE: AppSnapPermissionSection.tsx
 // Purpose: The single guided macOS permission checklist — per-pane Grant buttons that deep-link
 //          System Settings, run the floating GrantCoach, and poll until the grant lands. Shared
-//          by the AppSnap panel (Input Monitoring + Screen Recording) and the Computer panel
+//          by AppSnap (Input Monitoring + Screen Recording) and Computer control
 //          (Accessibility + Screen Recording).
 // Layer: Settings UI component
 
@@ -45,7 +45,7 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
 ];
 
 /**
- * The Computer panel's rows: the two grants desktop control can ask for. Input
+ * The Computer control rows: the two grants desktop control can ask for. Input
  * Monitoring is deliberately absent — the release chord it would power is a
  * compositor-plugin feature that only exists on the Linux backends. The
  * matching kind list lives in `@synara/shared/computerGrants`.

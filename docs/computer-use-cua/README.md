@@ -4,7 +4,7 @@ This worktree implements a single macOS backend using the pinned `cua-driver` ex
 
 **Status: selected improvements from refreshed PRs #822/#1010 are integrated, and the requested full repository checks pass.** See the [final checks and comparison](final-checks-and-comparison.md) and [integration record](integration-refresh.md). The earlier native revision 1 passed the owned background/foreground fixtures and the real Codex/provider-to-approval-card-to-native click path: 19 assertions passed, with two expected multiwindow keyboard refusals and a 307.84 MiB driver peak. Those results belong to that recorded artifact; they do not qualify a later native revision automatically. The cooperative cleanup and bounded cursor mailbox remain in the implementation. Simultaneous human input, wider application coverage and the production host lifecycle remain unqualified. [qualification.md](qualification.md) preserves the revision 1 evidence and its limits.
 
-The [initial completion audit](completion-audit.md) maps the revision 1 requirements to its evidence. Its historical test counts overlap and are not a repository-wide total. Current refresh checks are listed separately in [integration-refresh.md](integration-refresh.md).
+The [initial completion audit](completion-audit.md) maps the revision 1 requirements to its evidence. Its historical test counts overlap and are not a repository-wide total. Current refresh checks are listed separately in [integration-refresh.md](integration-refresh.md). The [2026-09-16 capability audit](capability-audit-2026-09-16.md) maps the complete pinned Cua tool surface to Synara's current agent, backend, and lifecycle contracts, including deliberately unexposed native operations.
 
 ## Provenance
 

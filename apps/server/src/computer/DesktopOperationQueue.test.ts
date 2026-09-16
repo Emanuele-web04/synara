@@ -100,6 +100,90 @@ describe("DesktopOperationQueue", () => {
     await queue.close();
   });
 
+  it("runs independent scoped targets concurrently and orders the same target", async () => {
+    const queue = new DesktopOperationQueue();
+    const releaseA = deferred();
+    const releaseB = deferred();
+    const enteredA = deferred();
+    const enteredB = deferred();
+    const events: string[] = [];
+
+    const firstA = queue.runScoped("window-a", async () => {
+      events.push("a1");
+      enteredA.resolve();
+      await releaseA.promise;
+    });
+    const secondA = queue.runScoped("window-a", async () => {
+      events.push("a2");
+    });
+    const firstB = queue.runScoped("window-b", async () => {
+      events.push("b1");
+      enteredB.resolve();
+      await releaseB.promise;
+    });
+
+    await Promise.all([enteredA.promise, enteredB.promise]);
+    expect(events).toEqual(["a1", "b1"]);
+    releaseA.resolve();
+    await firstA;
+    await secondA;
+    expect(events).toEqual(["a1", "b1", "a2"]);
+    releaseB.resolve();
+    await firstB;
+    await queue.close();
+  });
+
+  it("keeps exclusive work ahead of later scoped admissions", async () => {
+    const queue = new DesktopOperationQueue();
+    const releaseScoped = deferred();
+    const enteredScoped = deferred();
+    const events: string[] = [];
+    const scoped = queue.runScoped("window-a", async () => {
+      events.push("scoped");
+      enteredScoped.resolve();
+      await releaseScoped.promise;
+    });
+    await enteredScoped.promise;
+
+    const exclusive = queue.run(async () => {
+      events.push("exclusive");
+    });
+    const laterScoped = queue.runScoped("window-b", async () => {
+      events.push("later scoped");
+    });
+    await Promise.resolve();
+    expect(events).toEqual(["scoped"]);
+
+    releaseScoped.resolve();
+    await Promise.all([scoped, exclusive, laterScoped]);
+    expect(events).toEqual(["scoped", "exclusive", "later scoped"]);
+    await queue.close();
+  });
+
+  it("does not let exclusive work overtake an earlier same-target operation", async () => {
+    const queue = new DesktopOperationQueue();
+    const releaseFirst = deferred();
+    const enteredFirst = deferred();
+    const events: string[] = [];
+    const first = queue.runScoped("window-a", async () => {
+      events.push("first");
+      enteredFirst.resolve();
+      await releaseFirst.promise;
+    });
+    await enteredFirst.promise;
+    const second = queue.runScoped("window-a", async () => {
+      events.push("second");
+    });
+    const exclusive = queue.run(async () => {
+      events.push("exclusive");
+    });
+
+    releaseFirst.resolve();
+    await Promise.all([first, second, exclusive]);
+    expect(events).toEqual(["first", "second", "exclusive"]);
+    await queue.close();
+  });
+
   it("bounds the backlog and drains active input before closing", async () => {
     const queue = new DesktopOperationQueue();
     const held = deferred();

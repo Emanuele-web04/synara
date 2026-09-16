@@ -89,7 +89,6 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
-  LazyComputerPanel,
   LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
@@ -375,13 +374,6 @@ export function SingleChatSurface(props: {
       diffFilePath: filePath ?? null,
     });
   };
-  // The popover's expand is a user-initiated pane open, so it hydrates the
-  // dock pane immediately like every other explicit open.
-  const handleExpandComputerPreview = () => {
-    requestImmediateDockHydration("computer");
-    openPane(props.threadId, { kind: "computer" });
-  };
-
   // Stable identities: these feed memoized result rows in the search palette,
   // so recreating them per render would defeat the rows' React.memo bailout.
   const handleOpenWorkspaceSearchFile = useCallback(
@@ -750,12 +742,6 @@ export function SingleChatSurface(props: {
           }
         : null,
   });
-  // `computer.open-pane-requested` no longer routes to the dock: the event
-  // bridge arms the owning thread's preview session, and the ChatView rail
-  // honors it once that thread is on screen.
-  // The dock Computer pane still opens from the preview's expand control or
-  // the dock menu (handleAddDockPane / handleExpandComputerPreview).
-
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
   // Sidechat tab labels only need thread titles, so subscribe to the coarse
@@ -926,19 +912,6 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
             <LazyDevicePanel
-              mode="sidebar"
-              threadId={props.threadId}
-              onClosePanel={() => closePane(props.threadId, pane.id)}
-              runtimeMode={context.runtimeMode}
-              isVisible={context.isVisible}
-              onRequestLive={requestActiveDockPaneLive}
-            />
-          </Suspense>
-        );
-      case "computer":
-        return (
-          <Suspense fallback={<PanelStateMessage>Loading computer...</PanelStateMessage>}>
-            <LazyComputerPanel
               mode="sidebar"
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}
@@ -1241,8 +1214,6 @@ export function SingleChatSurface(props: {
               onOpenTurnDiff={handleOpenTurnDiff}
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
-              onExpandComputerPreview={handleExpandComputerPreview}
-              dockComputerPaneVisible={dockState.open && activePane?.kind === "computer"}
               viewModeAction={{
                 label: "Editor view",
                 active: false,

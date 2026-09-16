@@ -5,6 +5,7 @@ import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { randomBytes } from "node:crypto";
+import type { ComputerUiNode } from "@synara/contracts";
 import { cuaRequest, CUA_ACTION_TOOLS, type CuaReply } from "@synara/shared/cuaDriverProtocol";
 import { CuaDriverHost } from "../cuaDriverHost";
 import {
@@ -34,7 +35,7 @@ app.setName("Synara Cua Fixture");
 app.on("window-all-closed", () => undefined);
 const nonce = `Synara Cua Fixture ${process.pid}`;
 const report: Record<string, unknown> = {
-  fixtureRevision: 10,
+  fixtureRevision: 11,
   fixture: nonce,
   pid: process.pid,
   runtime: process.versions,
@@ -56,6 +57,14 @@ const measured = async <T>(name: string, run: () => Promise<T>) => {
     (report.measurements as unknown[]).push({ name, milliseconds: performance.now() - started });
   }
 };
+const findNode = (root: ComputerUiNode | undefined, label: string): ComputerUiNode | undefined => {
+  if (root?.role === "AXTextField" && root.label === label) return root;
+  for (const child of root?.children ?? []) {
+    const found = findNode(child, label);
+    if (found) return found;
+  }
+  return undefined;
+};
 async function main() {
   await mkdir(directory!, { recursive: true });
   report.nativeBuild = JSON.parse(
@@ -75,16 +84,28 @@ async function main() {
   });
   const sibling = new BrowserWindow({
     title: `${nonce} B`,
-    width: 320,
+    width: 420,
     height: 220,
-    x: 760,
-    y: 100,
+    x: 700,
+    y: 80,
+    show: false,
+  });
+  const third = new BrowserWindow({
+    title: `${nonce} C`,
+    width: 420,
+    height: 220,
+    x: 700,
+    y: 330,
     show: false,
   });
   const html = `<!doctype html><title>${nonce} A</title><style>body{font:18px system-ui;padding:24px}button,input{font:20px system-ui;margin:14px;padding:12px}</style><h1>Synara controlled fixture</h1><button id="counter">Click counter: 0</button><input id="text" aria-label="Fixture text" value="abc"><p id="state"></p><script>const {ipcRenderer}=require('electron'); let clicks=0,changes=0; const button=document.querySelector('#counter'),input=document.querySelector('#text'); function emit(){const value={clicks,text:input.value,changes};document.querySelector('#state').textContent=JSON.stringify(value);ipcRenderer.send('fixture-state',value)} button.onclick=()=>{clicks++;button.textContent='Click counter: '+clicks;emit()};input.oninput=()=>{changes++;emit()};emit();</script>`;
   await first.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-  await sibling.loadURL(`data:text/html,<title>${nonce} B</title><h1>Sibling fixture</h1>`);
+  const targetHtml = (label: "B" | "C") =>
+    `<!doctype html><title>${nonce} ${label}</title><style>body{font:18px system-ui;padding:24px}input{font:20px system-ui;padding:12px;width:90%}</style><h1>Background target ${label}</h1><input id="text" aria-label="Fixture text ${label}" value=""><p>Exact semantic target ${label}</p>`;
+  await sibling.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(targetHtml("B"))}`);
+  await third.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(targetHtml("C"))}`);
   sibling.showInactive();
+  third.showInactive();
   first.webContents.on("will-navigate", (event) => event.preventDefault());
   first.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const capability = randomBytes(32).toString("base64url");
@@ -167,11 +188,22 @@ async function main() {
   const other = windows.filter(
     (window) => window.pid === process.pid && window.title === `${nonce} B`,
   );
-  if (exact.length !== 1 || other.length !== 1)
+  const thirdWindow = windows.filter(
+    (window) => window.pid === process.pid && window.title === `${nonce} C`,
+  );
+  if (exact.length !== 1 || other.length !== 1 || thirdWindow.length !== 1)
     throw new Error("Fixture window identity/isolation verification failed; no input permitted.");
   const window = exact[0]!;
   captureTargets.add(window.id);
-  report.target = { id: window.id, pid: window.pid, title: window.title, siblingId: other[0]!.id };
+  captureTargets.add(other[0]!.id);
+  captureTargets.add(thirdWindow[0]!.id);
+  report.target = {
+    id: window.id,
+    pid: window.pid,
+    title: window.title,
+    siblingId: other[0]!.id,
+    thirdId: thirdWindow[0]!.id,
+  };
   const observation = await measured("window-observation", () =>
     backend!.getState({ windowId: window.id, includeTree: true, includeScreenshot: true }),
   );
@@ -224,9 +256,109 @@ async function main() {
       appState: { ...state },
     });
   }
+  const semanticWindows = [
+    { browser: first, window, label: "Fixture text", text: "agent-a-background" },
+    { browser: sibling, window: other[0]!, label: "Fixture text B", text: "agent-b-background" },
+    {
+      browser: third,
+      window: thirdWindow[0]!,
+      label: "Fixture text C",
+      text: "agent-c-background",
+    },
+  ];
+  const semanticTargets = await Promise.all(
+    semanticWindows.map(async (target) => {
+      await target.browser.webContents.executeJavaScript(
+        "(()=>{const input=document.querySelector('#text');input.value='';input.setSelectionRange(0,0)})()",
+      );
+      const observed = await backend!.getState({
+        windowId: target.window.id,
+        includeTree: true,
+      });
+      const node = findNode(observed.root, target.label);
+      if (!node?.activationPoint)
+        throw new Error(`Exact semantic fixture target ${target.label} is unavailable.`);
+      return {
+        ...target,
+        resolved: {
+          target: { windowId: target.window.id, label: target.label },
+          node,
+          point: node.activationPoint,
+        },
+      };
+    }),
+  );
+  const sentinel = new BrowserWindow({
+    title: `${nonce} Focus Guard`,
+    width: 520,
+    height: 180,
+    x: 100,
+    y: 540,
+  });
+  await sentinel.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(
+      `<!doctype html><title>${nonce} Focus Guard</title><style>body{font:22px system-ui;padding:24px}</style><h1>Foreground focus guard</h1><p>The traffic lights must stay active while A, B and C receive text.</p>`,
+    )}`,
+  );
+  sentinel.focus();
+  await pause(300);
+  const focusSamples: Array<number | null> = [];
+  const sampleFocus = () => focusSamples.push(BrowserWindow.getFocusedWindow()?.id ?? null);
+  sampleFocus();
+  const focusSampler = setInterval(sampleFocus, 1);
+  let semanticResults: unknown[] = [];
+  let semanticError: unknown;
+  const spans: Array<{ label: string; started: number; finished: number }> = [];
+  try {
+    semanticResults = await Promise.all(
+      semanticTargets.map(async (target) => {
+        const started = performance.now();
+        try {
+          return await backend!.typeText(target.text, target.window.id, target.resolved);
+        } finally {
+          spans.push({ label: target.label, started, finished: performance.now() });
+        }
+      }),
+    );
+  } catch (error) {
+    semanticError = error;
+  } finally {
+    clearInterval(focusSampler);
+    sampleFocus();
+  }
+  const semanticValues = await Promise.all(
+    semanticTargets.map((target) =>
+      target.browser.webContents.executeJavaScript("document.querySelector('#text').value"),
+    ),
+  );
+  const overlap =
+    spans.length === semanticTargets.length &&
+    Math.max(...spans.map((span) => span.started)) <
+      Math.min(...spans.map((span) => span.finished));
+  cases.push({
+    name: "three-window-focus-neutral-semantic-text",
+    status:
+      !semanticError &&
+      semanticValues.every((value, index) => value === semanticTargets[index]!.text) &&
+      focusSamples.length > 1 &&
+      focusSamples.every((id) => id === sentinel.id) &&
+      overlap
+        ? "passed"
+        : "failed",
+    results: semanticResults,
+    error: semanticError ? String(semanticError) : undefined,
+    expected: semanticTargets.map((target) => target.text),
+    actual: semanticValues,
+    sentinelWindowId: sentinel.id,
+    focusSamples,
+    spans,
+    overlap,
+  });
   // Removing the sibling changes the admission condition. This is a distinct
   // single-window case, never an automatic foreground replay of the refusal.
   sibling.close();
+  third.close();
+  sentinel.close();
   await pause(300);
   await first.webContents.executeJavaScript(
     "document.querySelector('#text').focus();document.querySelector('#text').select()",
@@ -287,9 +419,7 @@ async function main() {
   const semanticState = await measured("semantic-observation", () =>
     backend!.getState({ windowId: window.id, includeTree: true, includeScreenshot: true }),
   );
-  const textNode = semanticState.root?.children?.find(
-    (node) => node.role === "AXTextField" && node.label === "Fixture text",
-  );
+  const textNode = findNode(semanticState.root, "Fixture text");
   if (textNode?.activationPoint) {
     try {
       const result = await measured("set-value", () =>

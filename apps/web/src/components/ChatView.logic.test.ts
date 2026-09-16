@@ -20,6 +20,7 @@ import {
   appendVoiceTranscriptToPrompt,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
+  canApplyComposerFocus,
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
@@ -87,6 +88,57 @@ import {
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("composer focus admission", () => {
+  it("never focuses a composer while another app owns the window focus", () => {
+    expect(
+      canApplyComposerFocus({
+        windowHasFocus: false,
+        secondaryChromeReady: true,
+        editorAvailable: true,
+        editorDisabled: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("waits for every local focus precondition", () => {
+    expect(
+      canApplyComposerFocus({
+        windowHasFocus: true,
+        secondaryChromeReady: false,
+        editorAvailable: true,
+        editorDisabled: false,
+      }),
+    ).toBe(false);
+    expect(
+      canApplyComposerFocus({
+        windowHasFocus: true,
+        secondaryChromeReady: true,
+        editorAvailable: false,
+        editorDisabled: false,
+      }),
+    ).toBe(false);
+    expect(
+      canApplyComposerFocus({
+        windowHasFocus: true,
+        secondaryChromeReady: true,
+        editorAvailable: true,
+        editorDisabled: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows focus only in the foreground ready editor", () => {
+    expect(
+      canApplyComposerFocus({
+        windowHasFocus: true,
+        secondaryChromeReady: true,
+        editorAvailable: true,
+        editorDisabled: false,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("composer strip work-log derivation", () => {
   it("reuses the active derivation unless a subagent view needs its parent source", () => {

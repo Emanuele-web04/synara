@@ -6,7 +6,7 @@ import { addWsTransportStateListener } from "~/wsTransportEvents";
 import { useComputerStateStore } from "../computerStateStore";
 
 // Push events never carry a full snapshot, so every surface that renders
-// computer availability (the Computer pane, the composer's computer-control
+// computer availability (the ambient preview and the composer's computer-control
 // toggle) seeds the store with one getThreadState on mount and re-seeds on
 // transport reopen.
 export function useThreadComputerStateSeed(threadId: ThreadId): void {

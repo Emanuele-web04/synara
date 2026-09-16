@@ -145,7 +145,6 @@ function render(input?: {
     <QueryClientProvider client={queryClient}>
       <ComputerPreviewPopover
         threadId={THREAD_ID}
-        onExpand={vi.fn()}
         size={input?.size}
         maxWidthPx={input?.maxWidthPx}
       />
@@ -185,7 +184,7 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("960 / 600");
     // Compact is the default footprint: small and glanceable.
     expect(markup).toContain("width:288px");
-    expect(markup).toContain("Open the Computer pane");
+    expect(markup).not.toContain("Open the Computer pane");
     expect(markup).toContain("Hide the computer preview for the rest of this task");
   });
 
@@ -216,12 +215,12 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("opacity-100");
   });
 
-  it("offers exactly expand and close: stopping lives in the composer", () => {
+  it("offers only close: the pane is disabled and stopping lives in the composer", () => {
     const markup = render({
       session: session("live"),
       state: threadState({ agentActive: true }),
     });
-    expect(markup).toContain("Open the Computer pane");
+    expect(markup).not.toContain("Open the Computer pane");
     expect(markup).toContain("Hide the computer preview for the rest of this task");
     expect(markup).not.toContain("Stop the agent controlling");
   });

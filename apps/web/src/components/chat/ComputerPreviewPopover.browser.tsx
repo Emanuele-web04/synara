@@ -65,14 +65,14 @@ it("keeps a background session armed until the thread is viewed, then goes live"
   // No surface mounted: the session waits armed instead of going live.
   expect(session()?.phase).toBe("armed");
 
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={vi.fn()} />);
+  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
   await expect.poll(() => session()?.phase).toBe("live");
   await screen.unmount();
 });
 
 it("hides for the rest of the task when closed", async () => {
   useComputerPreviewStore.getState().requestPreviewSurface(threadId);
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={vi.fn()} />);
+  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
   await expect.poll(() => session()?.phase).toBe("live");
 
   await screen.getByRole("button", { name: "Hide the computer preview", exact: false }).click();
@@ -80,24 +80,21 @@ it("hides for the rest of the task when closed", async () => {
   await screen.unmount();
 });
 
-it("routes expand to the dock pane path and keeps the session live", async () => {
-  const onExpand = vi.fn();
+it("does not expose the disabled Computer pane", async () => {
   useComputerPreviewStore.getState().requestPreviewSurface(threadId);
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={onExpand} />);
+  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
   await expect.poll(() => session()?.phase).toBe("live");
 
-  await screen.getByRole("button", { name: "Open the Computer pane", exact: true }).click();
-  expect(onExpand).toHaveBeenCalledTimes(1);
-  // The popover yields to the open dock pane via dockComputerPaneVisible and
-  // returns when the pane closes: expanding must not hide for the task.
-  await expect.poll(() => session()?.phase).toBe("live");
+  await expect
+    .element(screen.getByRole("button", { name: "Open the Computer pane", exact: true }))
+    .not.toBeInTheDocument();
   await screen.unmount();
 });
 
 it("leaves stopping to the composer: no stop control on the card", async () => {
   fixture.agentActive = true;
   useComputerPreviewStore.getState().requestPreviewSurface(threadId);
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} onExpand={vi.fn()} />);
+  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
   await expect.poll(() => session()?.phase).toBe("live");
 
   await expect

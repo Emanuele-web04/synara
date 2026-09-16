@@ -23,7 +23,7 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
-import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
+import { finalizeSignedMacDmg, rebuildUnsignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import {
   RELEASE_LOCKFILE_PATH,
@@ -1166,6 +1166,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac") {
     yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+  }
+
+  if (options.platform === "mac" && options.target === "dmg" && !options.signed) {
+    yield* Effect.log("[desktop-artifact] Rebuilding unsigned macOS DMG from the final app...");
+    yield* Effect.try({
+      try: () =>
+        rebuildUnsignedMacDmg({
+          stageDistDir,
+          productName: desktopPackageJson.productName ?? "Synara",
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Unsigned macOS DMG finalization failed.",
+          cause,
+        }),
+    });
   }
 
   if (options.platform === "mac" && options.target === "dmg" && options.signed) {

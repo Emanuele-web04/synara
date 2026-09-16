@@ -64,6 +64,39 @@ the AppKit run loop forever — an immortal orphan with a dead serve loop,
 a live socket, and a ghost overlay. `catch_unwind` around `run_serve_cmd`
 keeps the panic text on stderr while exit(0) still terminates the process.
 
+Revision 10 adds exact semantic-only text delivery. A retained accessibility
+element token can receive text without activating its application or posting
+process-scoped keyboard events; unavailable or unverifiable semantic insertion
+is refused instead of falling back. Process-scoped native mutations remain
+exclusive, while semantic mutations to different exact windows may overlap and
+same-window mutations remain ordered.
+
+Revision 11 makes exact semantic text visibly progressive and concurrently
+admissible. Each exact target retains its own native input lease while the
+generation gate validates every active target before character-paced AX
+requests. Different exact windows can visibly receive text together; an
+exclusive or process-scoped action cannot overlap them. Cancellation after a
+submitted character reports observed partial delivery or an uncertain effect
+instead of claiming that nothing happened.
+
+Revision 12 rejects a second concurrent native semantic lease for the same
+exact PID and window. Synara already orders same-window requests in the server;
+the native check preserves that isolation for direct or separate clients while
+continuing to admit independent exact windows concurrently.
+
+Revision 13 keeps exact semantic text admitted when its retained accessibility
+element moves to another macOS Space. The native gate requires unchanged
+WindowServer ownership, nonempty stable Space membership, exact AX ancestry and
+positive geometry before every character. Active-Space changes still cancel
+pointer, synthetic keyboard and foreground actions, but do not cancel a stable
+semantic lease. Off-Space pixels are labelled freshness-unverified and cannot
+be used as live grounding without switching Spaces.
+
+Revision 14 reports the exact layer-0 window's Space metadata from
+`get_window_state`. The state tool now uses the same Space-aware WindowServer
+lookup as input admission, while retaining the any-layer fallback needed to
+identify unsupported accessory surfaces.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event

@@ -35,6 +35,7 @@ function fixture() {
   let captureWindowId = 20;
   let capturePid = 10;
   let captureFrameValid = true;
+  let captureFrameFreshness = "captured_current_space";
   let visible = true;
   let ready: Record<string, unknown> = { ready: true, pid: 10, window_id: 20 };
   let afterCapture: (() => void) | undefined;
@@ -125,6 +126,7 @@ function fixture() {
           window_id: captureWindowId,
           window_bounds: bounds,
           screenshot_frame_valid: captureFrameValid,
+          screenshot_frame_freshness: captureFrameFreshness,
           elements,
         },
         content: [{ type: "image", mimeType: "image/png", data: header.toString("base64") }],
@@ -168,6 +170,9 @@ function fixture() {
     },
     invalidateCapture: () => {
       captureFrameValid = false;
+    },
+    markOffSpaceCaptureUnverified: () => {
+      captureFrameFreshness = "unverified_off_space";
     },
     actionResult: (value: Record<string, unknown>) => {
       actionResult = value;
@@ -273,6 +278,74 @@ describe("Cua native boundary", () => {
       effect: "not-dispatched",
     });
     expect(f.calls.filter((c) => c.name === "set_value")).toHaveLength(1);
+  });
+
+  it("uses semantic-only text delivery for an exact live control", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+
+    await f.backend.typeText("hello", "cua:10:20", target);
+    expect(f.calls.find((call) => call.name === "type_text")?.args).toMatchObject({
+      text: "hello",
+      pid: 10,
+      window_id: 20,
+      element_token: "message-token",
+      semantic_only: true,
+    });
+    expect(f.calls.find((call) => call.name === "type_text")?.args).not.toHaveProperty(
+      "force_synthetic",
+    );
+
+    await f.backend.typeText("keyboard", "cua:10:20");
+    expect(f.calls.filter((call) => call.name === "type_text")[1]?.args).toMatchObject({
+      text: "keyboard",
+      force_synthetic: true,
+    });
+  });
+
+  it("keeps retained semantic text available after its exact window moves off-Space", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    f.setVisible(false);
+
+    await expect(f.backend.typeText("hello", "cua:10:20", target)).resolves.toMatchObject({
+      windowId: "cua:10:20",
+    });
+    expect(f.calls.findLast((call) => call.name === "type_text")?.args).toMatchObject({
+      pid: 10,
+      window_id: 20,
+      text: "hello",
+      element_token: "message-token",
+      semantic_only: true,
+    });
   });
 
   it("serves internal target resolution from a recent tree instead of walking again", async () => {
@@ -949,6 +1022,25 @@ describe("Cua hardening", () => {
     // Input is unaffected: targeting data survived the preview failure.
     await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
     await f.backend.dispose();
+  });
+  it("pauses off-Space pixels instead of presenting freshness-unverified capture as live", async () => {
+    const f = fixture();
+    f.markOffSpaceCaptureUnverified();
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+      includeScreenshot: true,
+    });
+    expect(state.screenshot).toBeUndefined();
+    expect(state.previewNote).toContain("another macOS Space");
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+    await expect(
+      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
+    ).rejects.toMatchObject({
+      code: "off_space_capture_unverified",
+      effect: "not-dispatched",
+    });
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
   });
   it("clears window grounding when the owning task ends", async () => {
     const f = fixture();

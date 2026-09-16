@@ -109,13 +109,14 @@ export function resolveComputerPoint(
 export function resolveComputerSemanticTarget(
   root: ComputerUiNode,
   target: ComputerTarget,
+  allowOffscreen = false,
 ): ComputerTargetMatch {
   const match = resolveUiTreeTarget({
     pool: flattenUiTree(root, childrenOf).filter((node) => matchesWindow(node, target.windowId)),
     query: { label: target.label, role: target.role },
     spec: computerTargetSpec(target),
   });
-  if (!match.onScreen) {
+  if (!match.onScreen && !allowOffscreen) {
     throw new ComputerTargetError({
       code: "computer_target_offscreen",
       message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
@@ -123,6 +124,52 @@ export function resolveComputerSemanticTarget(
     });
   }
   return { node: match.node, point: activationPointForNode(match.node) };
+}
+
+const SEMANTIC_TEXT_ROLES = new Set([
+  "AXTextField",
+  "AXTextArea",
+  "AXSearchField",
+  "AXSecureTextField",
+  "entry",
+  "text field",
+  "text-field",
+  "search field",
+  "text area",
+  "textarea",
+]);
+
+export function resolveComputerUniqueTextTarget(
+  root: ComputerUiNode,
+  windowId: string,
+  allowOffscreen = false,
+): ComputerTargetMatch {
+  const candidates = flattenUiTree(root, childrenOf).filter(
+    (node) =>
+      node.windowId === windowId &&
+      (allowOffscreen || node.onScreen) &&
+      node.editable !== false &&
+      (node.editable === true || SEMANTIC_TEXT_ROLES.has(node.role)),
+  );
+  if (candidates.length === 0) {
+    throw new ComputerTargetError({
+      code: "computer_target_not_found",
+      message: `Window ${JSON.stringify(windowId)} has no ${allowOffscreen ? "" : "visible "}writable text control. Observe it and pass the exact label and role.`,
+      candidates: candidateDescriptions(
+        flattenUiTree(root, childrenOf).filter((node) => node.windowId === windowId),
+      ),
+      notFound: true,
+    });
+  }
+  if (candidates.length > 1) {
+    throw new ComputerTargetError({
+      code: "computer_target_ambiguous",
+      message: `Window ${JSON.stringify(windowId)} has more than one ${allowOffscreen ? "" : "visible "}writable text control. Pass the exact label and role.`,
+      candidates: candidateDescriptions(candidates),
+    });
+  }
+  const node = candidates[0]!;
+  return { node, point: activationPointForNode(node) };
 }
 
 /**
@@ -352,7 +399,12 @@ export function actionableElements(
     for (const child of node.children) walk(child);
   };
   walk(root);
-  return { items, complete: omitted === 0 && !sourceIncomplete, omitted, sourceIncomplete };
+  return {
+    items,
+    complete: omitted === 0 && !sourceIncomplete,
+    omitted,
+    sourceIncomplete,
+  };
 }
 
 /**

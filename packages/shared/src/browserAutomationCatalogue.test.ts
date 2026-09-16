@@ -148,6 +148,11 @@ describe("browser automation catalogue projection", () => {
     expect(batch.description).toContain(
       "snapshot diffs and aria refs do not persist between calls",
     );
+    expect(batch.description).toContain(
+      "{items:[{id,text,links,media}],checkpoint,progress,boundary}",
+    );
+    expect(batch.description).toContain("persist each batch before continuing");
+    expect(batch.description).toContain("Boundary is start/end only when observed");
   });
 
   it("keeps the provider-facing tool catalogue below its context budget", () => {

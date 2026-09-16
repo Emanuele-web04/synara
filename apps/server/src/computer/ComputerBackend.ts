@@ -445,7 +445,16 @@ export interface ComputerBackend {
     windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerBackendActionResult | void>;
-  typeText(text: string, windowId?: string): Promise<ComputerBackendActionResult | void>;
+  /**
+   * Whether an exact semantic text target can be mutated without process
+   * activation or process-scoped keyboard delivery.
+   */
+  readonly focusNeutralSemanticText?: boolean;
+  typeText(
+    text: string,
+    windowId?: string,
+    target?: ComputerResolvedTarget,
+  ): Promise<ComputerBackendActionResult | void>;
   pressKey(key: string, windowId?: string): Promise<ComputerBackendActionResult | void>;
   hotkey(keys: readonly string[], windowId?: string): Promise<ComputerBackendActionResult | void>;
   /**

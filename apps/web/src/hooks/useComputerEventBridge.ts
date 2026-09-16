@@ -8,10 +8,8 @@
 // open-pane signal is a WebSocket push and this works in a plain browser tab as
 // well as the desktop app.
 //
-// `computer.open-pane-requested` no longer opens the dock pane: it arms the
-// owning thread's preview session instead. The in-chat popover is the ambient
-// surface; the dock Computer pane still opens from the popover's expand control
-// or the dock menu.
+// `computer.open-pane-requested` arms the owning thread's preview session.
+// The in-chat popover is the only Computer surface.
 
 import { useEffect } from "react";
 

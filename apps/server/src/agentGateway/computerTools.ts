@@ -80,6 +80,7 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
+import { ToolGuidanceCadence } from "./toolGuidanceCadence.ts";
 
 /** Compact only Computer result JSON; preserve every value and other tool families. */
 function mcpToolResultJson(value: unknown): McpToolCallResult {
@@ -95,6 +96,9 @@ export const COMPUTER_CONTROL_CAPABILITY = "computer:control" as const;
  */
 export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
   "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
+
+const COMPUTER_TOOL_REFRESH_GUIDANCE =
+  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer semantic labels and roles over screenshot coordinates. Exact background text is focus-neutral only when Cua proves one writable Accessibility target. Use foreground delivery only when activation is necessary, never replay uncertain delivery, and treat off-Space pixels as non-live.";
 
 /**
  * Re-exported so a caller reaching for the computer family's gate finds it, and
@@ -229,7 +233,7 @@ const WINDOW_FOCUS_NOTE =
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  'Pass window_id or use the last aimed window; hover does not aim keys. See "Aiming the keyboard".';
+  'Pass window_id or use the last aimed window; hover does not aim keys. Exact-window text uses the sole writable control without activation; pass its label and optional role when several exist. See "Aiming the keyboard".';
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
@@ -255,6 +259,21 @@ function keyboardTargetProperty(): Record<string, unknown> {
       type: "string",
       description:
         "Exact target window from computer_list_windows; does not activate it. Screenshot is scoped to it.",
+    },
+  };
+}
+
+function textTargetProperty(): Record<string, unknown> {
+  return {
+    ...keyboardTargetProperty(),
+    label: {
+      type: "string",
+      description:
+        "Exact writable control label from computer_get_state. With window_id, computer_type_text uses semantic insertion without activating the app.",
+    },
+    role: {
+      type: "string",
+      description: "Optional accessible role used to disambiguate the text control label.",
     },
   };
 }
@@ -313,7 +332,10 @@ const TARGET_PROPERTIES = {
     description:
       "Exact accessible label from computer_get_state; matched verbatim, including leading and trailing spaces, against fresh state.",
   },
-  role: { type: "string", description: "Optional accessible role used to disambiguate a label." },
+  role: {
+    type: "string",
+    description: "Optional accessible role used to disambiguate a label.",
+  },
 } as const;
 
 /** Pointer targeting reveals the same window the input will reach. */
@@ -348,7 +370,11 @@ function approvalUnavailableResult(name: string): McpToolCallResult {
 function leaseErrorResult(error: ComputerLeaseError): McpToolCallResult {
   return {
     ...mcpToolResultJson({
-      error: { code: error.code, message: error.message, retryable: error.retryable },
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+      },
     }),
     isError: true,
   };
@@ -685,7 +711,12 @@ function withSetupNote(value: unknown, signal: ComputerSetupSignal | undefined):
   return {
     ...(value as Record<string, unknown>),
     ...(availability?.kind === "permission-required"
-      ? { availability: { kind: availability.kind, missing: availability.missing } }
+      ? {
+          availability: {
+            kind: availability.kind,
+            missing: availability.missing,
+          },
+        }
       : {}),
     setupRequired: computerSetupToolNote(signal),
   };
@@ -710,7 +741,10 @@ function withSetupNoteOnResult(
   const note = computerSetupToolNote(signal);
   const index = result.content.findIndex((entry) => entry.type === "text");
   if (index === -1) {
-    return { ...result, content: [...result.content, { type: "text", text: note }] };
+    return {
+      ...result,
+      content: [...result.content, { type: "text", text: note }],
+    };
   }
   const part = result.content[index];
   if (part?.type !== "text") return result;
@@ -727,7 +761,10 @@ function withSetupNoteOnResult(
 function withDisclosureOnResult(result: McpToolCallResult, disclosure: string): McpToolCallResult {
   const index = result.content.findIndex((entry) => entry.type === "text");
   if (index === -1) {
-    return { ...result, content: [...result.content, { type: "text", text: disclosure }] };
+    return {
+      ...result,
+      content: [...result.content, { type: "text", text: disclosure }],
+    };
   }
   const part = result.content[index];
   if (part?.type !== "text") return result;
@@ -737,7 +774,10 @@ function withDisclosureOnResult(result: McpToolCallResult, disclosure: string): 
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       content[index] = {
         type: "text",
-        text: JSON.stringify({ ...(parsed as Record<string, unknown>), disclosure }),
+        text: JSON.stringify({
+          ...(parsed as Record<string, unknown>),
+          disclosure,
+        }),
       };
       return { ...result, content };
     }
@@ -759,7 +799,36 @@ function withSetupNoteInText(text: string, note: string): string {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return `${text}\n\n${note}`;
   }
-  return JSON.stringify({ ...(parsed as Record<string, unknown>), setupRequired: note });
+  return JSON.stringify({
+    ...(parsed as Record<string, unknown>),
+    setupRequired: note,
+  });
+}
+
+function withGuidanceOnResult(
+  result: McpToolCallResult,
+  guidance: string | undefined,
+): McpToolCallResult {
+  if (guidance === undefined) return result;
+  const content = [...result.content];
+  const index = content.findIndex((part) => part.type === "text");
+  if (index < 0) return { ...result, content: [{ type: "text", text: guidance }, ...content] };
+  const part = content[index]!;
+  if (part.type !== "text") return result;
+  try {
+    const value: unknown = JSON.parse(part.text);
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      content[index] = {
+        type: "text",
+        text: JSON.stringify({ ...(value as Record<string, unknown>), toolGuidance: guidance }),
+      };
+      return { ...result, content };
+    }
+  } catch {
+    // Non-JSON result text keeps its original shape and receives the reminder inline.
+  }
+  content[index] = { type: "text", text: `${guidance}\n${part.text}` };
+  return { ...result, content };
 }
 
 export function makeAgentGatewayComputerTools(
@@ -811,6 +880,7 @@ export function makeAgentGatewayComputerTools(
 
   /** Apps whose guidance note a thread has already been shown. */
   const appHintsSeen = new Set<string>();
+  const guidanceCadence = new ToolGuidanceCadence(10, 256);
 
   const digestScopeKey = (
     threadId: string,
@@ -984,8 +1054,11 @@ export function makeAgentGatewayComputerTools(
       name: string,
       run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
     ) =>
-    (args: Record<string, unknown>, context: ToolContext) =>
-      Effect.tryPromise({
+    (args: Record<string, unknown>, context: ToolContext) => {
+      const guidance = guidanceCadence.shouldRefresh(context.callerThreadId)
+        ? COMPUTER_TOOL_REFRESH_GUIDANCE
+        : undefined;
+      return Effect.tryPromise({
         try: async (abortSignal) => {
           if (
             computerToolRequiresApproval(name) &&
@@ -995,7 +1068,10 @@ export function makeAgentGatewayComputerTools(
               name === "computer_activate_window")
           ) {
             if (!options.authorizeAction)
-              return { result: approvalUnavailableResult(name), signal: undefined };
+              return {
+                result: approvalUnavailableResult(name),
+                signal: undefined,
+              };
             if (
               !(await options.authorizeAction(
                 name,
@@ -1100,6 +1176,12 @@ export function makeAgentGatewayComputerTools(
                   },
                   abortSignal,
                   context.callerTurnId ?? undefined,
+                  name === "computer_type_text" &&
+                    args.delivery_mode !== "foreground" &&
+                    manager.supportsFocusNeutralSemanticText &&
+                    readWindowIdArg(args) !== undefined
+                    ? readWindowIdArg(args)
+                    : undefined,
                 );
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
@@ -1144,7 +1226,11 @@ export function makeAgentGatewayComputerTools(
             error instanceof ComputerBackendError && error.inputPause
               ? {
                   ...mcpToolResultJson({
-                    error: { code: "computer_input_paused", ...error.inputPause, retryable: false },
+                    error: {
+                      code: "computer_input_paused",
+                      ...error.inputPause,
+                      retryable: false,
+                    },
                     ...(error instanceof CuaActionError
                       ? { effect: error.effect, retryAllowed: false }
                       : {}),
@@ -1185,7 +1271,9 @@ export function makeAgentGatewayComputerTools(
             }),
           );
         }),
+        Effect.map((result) => withGuidanceOnResult(result, guidance)),
       );
+    };
 
   const actionEntry = (
     name: string,
@@ -1358,6 +1446,7 @@ export function makeAgentGatewayComputerTools(
       : 'With no arguments it captures the window that currently has focus. Otherwise capture a single window by "window_id" from computer_list_windows, or a rectangle given as "x", "y", "width" and "height" in pixels of the screenshot you are zooming into (the most recent one, or the one named by screenshot_id); never pass both forms. Region capture is clipped to the desktop workspace.';
   const pointerTargetProperties = targetProperties();
   const keyboardTargetProperties = keyboardTargetProperty();
+  const textTargetProperties = textTargetProperty();
 
   const targetSchema = {
     type: "object",
@@ -1417,7 +1506,7 @@ export function makeAgentGatewayComputerTools(
     move_cursor: RUN_TARGET_FIELDS,
     drag: ["from", "to", "duration_ms"],
     scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers"],
-    type_text: ["text", "window_id", "windowId"],
+    type_text: ["text", "label", "role", "window_id", "windowId"],
     press_key: ["key", "window_id", "windowId"],
     hotkey: ["keys", "window_id", "windowId"],
     set_value: [...RUN_TARGET_FIELDS, "value"],
@@ -1509,7 +1598,11 @@ export function makeAgentGatewayComputerTools(
           ) {
             return {
               ...outcome.result,
-              scroll: { ...outcome.result.scroll, requested: delta, limitedTo: limited },
+              scroll: {
+                ...outcome.result.scroll,
+                requested: delta,
+                limitedTo: limited,
+              },
             };
           }
           return outcome.result;
@@ -1517,8 +1610,11 @@ export function makeAgentGatewayComputerTools(
       }
       case "type_text": {
         const text = readRequiredText(step);
-        const windowId = readWindowIdArg(step);
-        return () => manager.typeText(threadId, text, windowId);
+        const target = readTarget(step, context);
+        return () =>
+          target.label !== undefined || target.role !== undefined
+            ? manager.typeTextAt(threadId, text, target)
+            : manager.typeText(threadId, text, target.windowId);
       }
       case "press_key": {
         const key = readStringArg(step, "key", { required: true })!;
@@ -1551,7 +1647,11 @@ export function makeAgentGatewayComputerTools(
               'A "wait" step with "label" requires a nonempty label and "window_id".',
             );
           }
-          const target: ComputerTarget = { label, windowId, ...(role ? { role } : {}) };
+          const target: ComputerTarget = {
+            label,
+            windowId,
+            ...(role ? { role } : {}),
+          };
           return () =>
             waitForControl(
               () => manager.getState({ includeTree: true, windowId }),
@@ -1562,7 +1662,9 @@ export function makeAgentGatewayComputerTools(
         }
         return async () => {
           if (durationMs > 0)
-            await waitForComputer(durationMs, undefined, { signal: desktopOperationSignal() });
+            await waitForComputer(durationMs, undefined, {
+              signal: desktopOperationSignal(),
+            });
           return { waitedMs: durationMs };
         };
       }
@@ -1625,7 +1727,11 @@ export function makeAgentGatewayComputerTools(
               candidates: error.candidates,
             }
           : error instanceof ComputerLeaseError
-            ? { code: error.code, message: error.message, retryable: error.retryable }
+            ? {
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+              }
             : error instanceof ToolInputError
               ? { code: "invalid_step", message: error.message }
               : {
@@ -1715,7 +1821,12 @@ export function makeAgentGatewayComputerTools(
         await Effect.runPromise(context.assertCallerTurnActive(), {
           signal: desktopOperationSignal(),
         });
-        steps.push({ step: index, type: preparedStep.type, ok: false, error: runStepError(error) });
+        steps.push({
+          step: index,
+          type: preparedStep.type,
+          ok: false,
+          error: runStepError(error),
+        });
         stopped = true;
         break;
       }
@@ -1748,7 +1859,10 @@ export function makeAgentGatewayComputerTools(
                   ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
                   ...(elements.complete
                     ? {}
-                    : { elementsTruncated: true, elementsOmitted: elements.omitted }),
+                    : {
+                        elementsTruncated: true,
+                        elementsOmitted: elements.omitted,
+                      }),
                 }
               : {}),
           },
@@ -1794,11 +1908,17 @@ export function makeAgentGatewayComputerTools(
         inputSchema: {
           type: "object",
           properties: {
-            app: { type: "string", description: "Filter by exact appName, ignoring case." },
+            app: {
+              type: "string",
+              description: "Filter by exact appName, ignoring case.",
+            },
           },
           additionalProperties: false,
         },
-        annotations: { title: "List computer windows", ...READ_ONLY_TOOL_ANNOTATIONS },
+        annotations: {
+          title: "List computer windows",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
       },
       handler: handle("computer_list_windows", async (args) => {
         const app = readStringArg(args, "app")?.toLocaleLowerCase();
@@ -1851,7 +1971,10 @@ export function makeAgentGatewayComputerTools(
           },
           additionalProperties: false,
         },
-        annotations: { title: "Get computer state", ...READ_ONLY_TOOL_ANNOTATIONS },
+        annotations: {
+          title: "Get computer state",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
       },
       handler: handle("computer_get_state", async (args, context) => {
         // One perception read feeds both renderings: the elements digest always
@@ -1918,7 +2041,10 @@ export function makeAgentGatewayComputerTools(
                   // looking again and narrowing the query.
                   ...(elements.complete
                     ? {}
-                    : { elementsTruncated: true, elementsOmitted: elements.omitted }),
+                    : {
+                        elementsTruncated: true,
+                        elementsOmitted: elements.omitted,
+                      }),
                 }
             : {}),
           ...(appHint !== undefined ? { appHint } : {}),
@@ -1974,7 +2100,10 @@ export function makeAgentGatewayComputerTools(
           },
           additionalProperties: false,
         },
-        annotations: { title: "Capture computer screenshot", ...READ_ONLY_TOOL_ANNOTATIONS },
+        annotations: {
+          title: "Capture computer screenshot",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
       },
       handler: handle("computer_screenshot", async (args, context) => {
         const threadId = context.callerThreadId;
@@ -2004,8 +2133,15 @@ export function makeAgentGatewayComputerTools(
         name: "computer_get_screen_size",
         description:
           "Read the logical screen dimensions of the desktop workspace. Informational only: pointer tools take pixel coordinates in a screenshot, not screen coordinates.",
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        annotations: { title: "Get screen size", ...READ_ONLY_TOOL_ANNOTATIONS },
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Get screen size",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
       },
       handler: handle("computer_get_screen_size", async () => manager.getScreenSize()),
     },
@@ -2093,7 +2229,9 @@ export function makeAgentGatewayComputerTools(
           return deliverScreenshot(context.callerThreadId, result, screenshot, windowId);
         }
         if (durationMs > 0)
-          await waitForComputer(durationMs, undefined, { signal: desktopOperationSignal() });
+          await waitForComputer(durationMs, undefined, {
+            signal: desktopOperationSignal(),
+          });
         return { computerId: manager.computerId, waitedMs: durationMs };
       }),
     },
@@ -2103,7 +2241,11 @@ export function makeAgentGatewayComputerTools(
       definition: {
         name: "computer_read_clipboard",
         description: `Read the desktop clipboard as text, returned as "value". ${SHARED_CLIPBOARD_NOTE} It returns whatever was copied last by anyone, so it may hold something the user copied for their own purposes. An empty clipboard returns an empty string; a clipboard holding an image, other non-text content, or more than ${COMPUTER_TEXT_MAX_LENGTH} characters of text is an error.`,
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
         // Not READ_ONLY_TOOL_ANNOTATIONS: providers auto-approve on
         // readOnlyHint, and this read must go through approval — the clipboard
         // can hold something the human copied privately. It mutates nothing,
@@ -2185,7 +2327,12 @@ export function makeAgentGatewayComputerTools(
       // agent's own overlay is drawn. `readOnlyHint` stays false because
       // something on screen does move, so a provider that surfaces write tools
       // still shows it.
-      { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     ),
     observedActionEntry(
       "computer_drag",
@@ -2314,9 +2461,15 @@ export function makeAgentGatewayComputerTools(
           while (unchangedScrolls.size >= 256 && !unchangedScrolls.has(threadId))
             unchangedScrolls.delete(unchangedScrolls.keys().next().value!);
           if (current && current.windowId === resultWindow) {
-            unchangedScrolls.set(threadId, { windowId: resultWindow, count: current.count + 1 });
+            unchangedScrolls.set(threadId, {
+              windowId: resultWindow,
+              count: current.count + 1,
+            });
           } else {
-            unchangedScrolls.set(threadId, { windowId: resultWindow, count: 1 });
+            unchangedScrolls.set(threadId, {
+              windowId: resultWindow,
+              count: 1,
+            });
           }
         } else {
           unchangedScrolls.delete(threadId);
@@ -2329,7 +2482,11 @@ export function makeAgentGatewayComputerTools(
             ...outcome,
             result: {
               ...outcome.result,
-              scroll: { ...outcome.result.scroll, requested: delta, limitedTo: limited },
+              scroll: {
+                ...outcome.result.scroll,
+                requested: delta,
+                limitedTo: limited,
+              },
             },
           };
         }
@@ -2343,14 +2500,21 @@ export function makeAgentGatewayComputerTools(
       {
         type: "object",
         properties: {
-          text: { type: "string", description: "The exact text to insert at the caret." },
-          ...keyboardTargetProperties,
+          text: {
+            type: "string",
+            description: "The exact text to insert at the caret.",
+          },
+          ...textTargetProperties,
         },
         required: ["text"],
         additionalProperties: false,
       },
-      async (args, context) =>
-        manager.typeText(context.callerThreadId, readRequiredText(args), readWindowIdArg(args)),
+      async (args, context) => {
+        const target = readTarget(args, context);
+        return target.label !== undefined || target.role !== undefined
+          ? manager.typeTextAt(context.callerThreadId, readRequiredText(args), target)
+          : manager.typeText(context.callerThreadId, readRequiredText(args), target.windowId);
+      },
     ),
     observedActionEntry(
       "computer_press_key",
@@ -2418,7 +2582,10 @@ export function makeAgentGatewayComputerTools(
       {
         type: "object",
         properties: {
-          text: { type: "string", description: "The exact text to paste at the caret." },
+          text: {
+            type: "string",
+            description: "The exact text to paste at the caret.",
+          },
           ...keyboardTargetProperties,
         },
         required: ["text"],
@@ -2458,7 +2625,10 @@ export function makeAgentGatewayComputerTools(
         type: "object",
         properties: {
           ...pointerTargetProperties,
-          value: { type: "string", description: "The control's complete new value." },
+          value: {
+            type: "string",
+            description: "The control's complete new value.",
+          },
         },
         required: ["value"],
         additionalProperties: false,
@@ -2537,7 +2707,10 @@ export function makeAgentGatewayComputerTools(
                   maxItems: COMPUTER_HOTKEY_MAX_KEYS,
                 },
                 value: { type: "string" },
-                action: { type: "string", enum: [...semanticActionNames(dialect)] },
+                action: {
+                  type: "string",
+                  enum: [...semanticActionNames(dialect)],
+                },
                 app: { type: "string" },
                 arguments: { type: "array", items: { type: "string" } },
                 wait_for_window: { type: "boolean" },

@@ -38,8 +38,8 @@ export interface SettingsSearchEntry {
 export interface SettingsSearchContext {
   /**
    * The desktop backend drives the screen the user is already looking at, so
-   * Synara never opens a Computer pane on an agent's behalf and the setting that
-   * would control it does nothing. True only once the status is known.
+   * the preview describes the same visible desktop. True only once the status
+   * is known.
    */
   readonly computerBackendIsVisibleDesktop: boolean;
 }
@@ -315,10 +315,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "computer",
     title: "Open automatically",
     keywords:
-      "Open the Computer pane the first time an agent acts on the desktop in a chat. auto open dock computer use",
-    // The pane auto-open row shows on every backend now: on the visible
-    // desktop the pane renders stills only, and watching the agent's captured
-    // view inside the app is the point of the preview.
+      "Show the in-chat Computer preview the first time an agent acts on the desktop. auto open computer use",
     applies: () => true,
   },
   {

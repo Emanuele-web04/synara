@@ -10,6 +10,7 @@ import {
   diffActionableElements,
   resolveComputerPoint,
   resolveComputerSemanticTarget,
+  resolveComputerUniqueTextTarget,
   type ComputerActionableElement,
 } from "./uiTreeTargeting.ts";
 
@@ -25,6 +26,7 @@ function node(partial: Partial<ComputerUiNode> & { readonly role: string }): Com
     activationPoint: partial.activationPoint ?? null,
     onScreen: partial.onScreen ?? true,
     windowId: partial.windowId ?? null,
+    ...(partial.editable === undefined ? {} : { editable: partial.editable }),
     ...(partial.truncated === undefined ? {} : { truncated: partial.truncated }),
     children: partial.children ?? [],
   };
@@ -69,7 +71,10 @@ describe("resolving a coordinate target", () => {
   const screen = { width: 1_920, height: 1_080, scale: 1 };
 
   it("takes a point that is on the screen", () => {
-    expect(resolveComputerPoint({ x: 10, y: 20 }, screen)).toEqual({ x: 10, y: 20 });
+    expect(resolveComputerPoint({ x: 10, y: 20 }, screen)).toEqual({
+      x: 10,
+      y: 20,
+    });
   });
 
   it("refuses half a coordinate and a coordinate past the edge", () => {
@@ -82,13 +87,19 @@ describe("resolving a coordinate target", () => {
 
 describe("resolving a labelled desktop target", () => {
   it("returns the control's own activation point when it has one", () => {
-    const match = resolveComputerSemanticTarget(DESKTOP, { label: "Save", role: "push button" });
+    const match = resolveComputerSemanticTarget(DESKTOP, {
+      label: "Save",
+      role: "push button",
+    });
     expect(match.point).toEqual({ x: 140, y: 215 });
     expect(match.node.windowId).toBe("editor");
   });
 
   it("falls back to the frame centre for a control with no activation point", () => {
-    const plain = node({ role: "x", frame: { x: 10, y: 20, width: 100, height: 40 } });
+    const plain = node({
+      role: "x",
+      frame: { x: 10, y: 20, width: 100, height: 40 },
+    });
     expect(activationPointForNode(plain)).toEqual({ x: 60, y: 40 });
   });
 
@@ -167,6 +178,81 @@ describe("resolving a labelled desktop target", () => {
     const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "Hidden" }));
     expect(error.code).toBe("computer_target_offscreen");
     expect(error.candidates).toHaveLength(1);
+    expect(resolveComputerSemanticTarget(desktop, { label: "Hidden" }, true).node.label).toBe(
+      "Hidden",
+    );
+  });
+});
+
+describe("resolving the sole writable text control in a window", () => {
+  it("selects an unlabelled native text area without guessing across windows", () => {
+    const editor = node({
+      role: "AXTextArea",
+      windowId: windowId("editor"),
+      frame: { x: 20, y: 40, width: 300, height: 200 },
+    });
+    const desktop = node({
+      role: "desktop",
+      children: [
+        editor,
+        node({ role: "AXTextArea", windowId: windowId("other") }),
+        node({ role: "AXButton", label: "Save", windowId: windowId("editor") }),
+      ],
+    });
+
+    expect(resolveComputerUniqueTextTarget(desktop, "editor").node).toBe(editor);
+  });
+
+  it("refuses multiple writable controls and names each candidate", () => {
+    const desktop = node({
+      role: "desktop",
+      children: [
+        node({
+          role: "AXTextField",
+          label: "Title",
+          windowId: windowId("editor"),
+        }),
+        node({
+          role: "AXTextArea",
+          label: "Body",
+          windowId: windowId("editor"),
+        }),
+      ],
+    });
+
+    const error = thrown(() => resolveComputerUniqueTextTarget(desktop, "editor"));
+    expect(error.code).toBe("computer_target_ambiguous");
+    expect(error.candidates.map((candidate) => candidate.label)).toEqual(["Title", "Body"]);
+  });
+
+  it("does not select a text-shaped control explicitly marked read-only", () => {
+    const desktop = node({
+      role: "desktop",
+      children: [
+        node({
+          role: "AXTextArea",
+          label: "Transcript",
+          editable: false,
+          windowId: windowId("editor"),
+        }),
+      ],
+    });
+
+    const error = thrown(() => resolveComputerUniqueTextTarget(desktop, "editor"));
+    expect(error.code).toBe("computer_target_not_found");
+  });
+
+  it("can retain an exact writable control after its window leaves the active Space", () => {
+    const editor = node({
+      role: "AXTextArea",
+      label: "Body",
+      windowId: windowId("editor"),
+      onScreen: false,
+    });
+    const desktop = node({ role: "desktop", children: [editor] });
+
+    expect(resolveComputerUniqueTextTarget(desktop, "editor", true).node).toBe(editor);
+    expect(() => resolveComputerUniqueTextTarget(desktop, "editor")).toThrow(ComputerTargetError);
   });
 });
 
@@ -232,10 +318,19 @@ describe("actionableElements", () => {
           label: "Reload",
           windowId: windowId("browser"),
           children: [
-            node({ role: "entry", label: "Email", value: "", windowId: windowId("browser") }),
+            node({
+              role: "entry",
+              label: "Email",
+              value: "",
+              windowId: windowId("browser"),
+            }),
           ],
         }),
-        node({ role: "heading", label: "Settings", windowId: windowId("browser") }),
+        node({
+          role: "heading",
+          label: "Settings",
+          windowId: windowId("browser"),
+        }),
       ],
     });
 
@@ -245,7 +340,12 @@ describe("actionableElements", () => {
       omitted: 0,
       items: [
         { role: "push button", label: "Reload", windowId: windowId("browser") },
-        { role: "entry", label: "Email", value: "", windowId: windowId("browser") },
+        {
+          role: "entry",
+          label: "Email",
+          value: "",
+          windowId: windowId("browser"),
+        },
       ],
     });
   });
@@ -255,14 +355,22 @@ describe("actionableElements", () => {
       role: "desktop",
       children: [
         node({ role: "push button", windowId: windowId("w") }),
-        node({ role: "text", label: "A paragraph of static text", windowId: windowId("w") }),
+        node({
+          role: "text",
+          label: "A paragraph of static text",
+          windowId: windowId("w"),
+        }),
         node({
           role: "check box",
           label: "Off screen",
           onScreen: false,
           windowId: windowId("w"),
         }),
-        node({ role: "check box", label: "Subscribed", windowId: windowId("w") }),
+        node({
+          role: "check box",
+          label: "Subscribed",
+          windowId: windowId("w"),
+        }),
       ],
     });
 
@@ -294,9 +402,21 @@ describe("actionableElements", () => {
     const desktop = node({
       role: "desktop",
       children: [
-        node({ role: "push button", label: "Save", windowId: windowId("editor") }),
-        node({ role: "push button", label: "Save", windowId: windowId("editor") }),
-        node({ role: "menu item", label: "Save", windowId: windowId("browser") }),
+        node({
+          role: "push button",
+          label: "Save",
+          windowId: windowId("editor"),
+        }),
+        node({
+          role: "push button",
+          label: "Save",
+          windowId: windowId("editor"),
+        }),
+        node({
+          role: "menu item",
+          label: "Save",
+          windowId: windowId("browser"),
+        }),
       ],
     });
 
@@ -333,7 +453,13 @@ describe("actionableElements", () => {
           role: "push button",
           label: `Button ${index}`,
           windowId: windowId("panel"),
-          children: [node({ role: "link", label: "child link", windowId: windowId("panel") })],
+          children: [
+            node({
+              role: "link",
+              label: "child link",
+              windowId: windowId("panel"),
+            }),
+          ],
         }),
       ),
     });
@@ -350,7 +476,11 @@ it("includes native macOS controls and reports a partial accessibility source", 
     truncated: true,
     children: [
       node({ role: "AXButton", label: "Save", windowId: windowId("native") }),
-      node({ role: "AXMenuBarItem", label: "File", windowId: windowId("native") }),
+      node({
+        role: "AXMenuBarItem",
+        label: "File",
+        windowId: windowId("native"),
+      }),
     ],
   });
   const result = actionableElements(tree);
@@ -451,7 +581,12 @@ describe("diffActionableElements", () => {
       },
     ]);
     expect(diffActionableElements(after, before).changed).toEqual([
-      { role: "push button", label: "Notes", windowId: windowId("editor"), was: "draft text" },
+      {
+        role: "push button",
+        label: "Notes",
+        windowId: windowId("editor"),
+        was: "draft text",
+      },
     ]);
   });
 });

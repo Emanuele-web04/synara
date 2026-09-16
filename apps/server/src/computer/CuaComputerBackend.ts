@@ -123,6 +123,7 @@ function cuaKey(value: string): string {
 /** The single macOS backend. Cua owns native actions; Synara owns admission,
  * session authority, explicit delivery policy and the provider result. */
 export class CuaComputerBackend implements ComputerBackend {
+  readonly focusNeutralSemanticText = true;
   readonly computerId = DEFAULT_COMPUTER_ID;
   readonly agentDialect = "macos" as const;
   private readonly endpoint: string | undefined;
@@ -613,6 +614,12 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   private screenshot(result: CuaToolResult, fallback?: ComputerRect): ComputerScreenshot {
     const data = result.structuredContent ?? {};
+    if (data.screenshot_frame_freshness === "unverified_off_space")
+      throw new CuaActionError(
+        "The exact window is on another macOS Space. Cua returned pixels, but their freshness cannot be proven without switching Spaces, so Synara will not present them as a live observation.",
+        "not-dispatched",
+        "off_space_capture_unverified",
+      );
     const image = result.content?.find(
       (c) => c.type === "image" && c.mimeType === "image/png" && c.data,
     );
@@ -692,7 +699,8 @@ export class CuaComputerBackend implements ComputerBackend {
       // Targeting failures above never reach here; anything failing past the
       // target produced no usable pixels, so health flips while the throw —
       // and any input verdict — stands exactly as before.
-      this.markCaptureFailed(error);
+      if (!(error instanceof CuaActionError) || error.code !== "off_space_capture_unverified")
+        this.markCaptureFailed(error);
       throw error;
     }
   }
@@ -821,7 +829,16 @@ export class CuaComputerBackend implements ComputerBackend {
     try {
       return { screenshot: { ...this.screenshot(result), windowId } };
     } catch (error) {
-      if (!(error instanceof CuaActionError) || error.code !== "capture_unavailable") throw error;
+      if (
+        !(error instanceof CuaActionError) ||
+        !["capture_unavailable", "off_space_capture_unverified"].includes(error.code ?? "")
+      )
+        throw error;
+      if (error.code === "off_space_capture_unverified")
+        return {
+          previewNote:
+            "This window is on another macOS Space. Its preview is paused because frame freshness cannot be proven without switching Spaces; exact retained semantic text may still continue.",
+        };
       this.markCaptureFailed(error);
       return {
         previewNote:
@@ -837,9 +854,14 @@ export class CuaComputerBackend implements ComputerBackend {
     preparedBounds?: ComputerRect,
   ): Promise<ComputerBackendActionResult> {
     const { pid, window_id, window, baseline } = await this.target(windowId);
-    if (!window.visible) {
+    const exactSemanticText =
+      name === "type_text" &&
+      args.semantic_only === true &&
+      desktopDeliveryMode() !== "foreground" &&
+      point === undefined;
+    if (!window.visible && !exactSemanticText) {
       const message =
-        "The target window is not on the current Space or not on screen. Call computer_activate_window to bring it forward, then read its fresh state before continuing.";
+        "The target window is not on the current Space or not on screen. Only an exact retained semantic text element may be mutated without activation; pointer, synthetic keyboard, and generic window actions require computer_activate_window followed by fresh state.";
       throw new CuaActionError(message, "not-dispatched", "target_not_on_active_space", {
         windowId: window.id,
         message,
@@ -1103,8 +1125,22 @@ export class CuaComputerBackend implements ComputerBackend {
       },
     };
   }
-  typeText(value: string, w?: string) {
-    return this.input("type_text", { text: value, force_synthetic: true }, w);
+  typeText(value: string, w?: string, target?: ComputerResolvedTarget) {
+    const token = target ? this.elementTokens.get(target.node) : undefined;
+    if (target && (!token || !target.node.windowId))
+      throw new CuaActionError(
+        "The AX text target is not bound to a live Cua token.",
+        "not-dispatched",
+        "stale_target",
+      );
+    return this.input(
+      "type_text",
+      {
+        text: value,
+        ...(token ? { element_token: token, semantic_only: true } : { force_synthetic: true }),
+      },
+      target?.node.windowId ?? w,
+    );
   }
   pressKey(key: string, w?: string) {
     return this.input("press_key", { key: cuaKey(key) }, w);
