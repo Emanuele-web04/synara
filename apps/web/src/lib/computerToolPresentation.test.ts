@@ -63,13 +63,13 @@ describe("computerToolName", () => {
 });
 
 describe("describeComputerToolCall", () => {
-  it("says verb, coordinate and window instead of the raw call", () => {
+  it("keeps coordinates in details while naming the target app", () => {
     const described = describeComputerToolCall({
       toolName: "mcp__synara__computer_click",
       args: { x: 812, y: 344, window_id: "win-7" },
       windows: [SAFARI],
     });
-    expect(described?.summary).toBe("Click at (812, 344) in Safari — Google");
+    expect(described?.summary).toBe("Click in Safari — Google");
   });
 
   it("drops a window id it cannot resolve rather than printing it", () => {
@@ -79,7 +79,7 @@ describe("describeComputerToolCall", () => {
       args: { x: 10, y: 20, window_id: "win-missing" },
       windows: [SAFARI],
     });
-    expect(described?.summary).toBe("Click at (10, 20)");
+    expect(described?.summary).toBe("Click");
     expect(described?.params.some((row) => row.name === "Window")).toBe(false);
   });
 
@@ -99,7 +99,7 @@ describe("describeComputerToolCall", () => {
     expect(
       describeComputerToolCall({ toolName: "computer_type_text", args: { text: "hello" } })
         ?.summary,
-    ).toBe("Type");
+    ).toBe("Type text");
     const clipboard = describeComputerToolCall({
       toolName: "computer_write_clipboard",
       args: { text: "secret" },
@@ -115,7 +115,7 @@ describe("describeComputerToolCall", () => {
     expect(
       describeComputerToolCall({ toolName: "computer_hotkey", args: { keys: ["cmd", "s"] } })
         ?.summary,
-    ).toBe("Press a shortcut cmd+s");
+    ).toBe("Press Command + S");
   });
 
   it("renders a coordinate pair as one row, because it is one fact", () => {
@@ -139,7 +139,7 @@ describe("describeComputerToolCall", () => {
         args: { window_id: "win-7" },
         windows: [SAFARI],
       })?.summary,
-    ).toBe("Activate a window in Safari — Google");
+    ).toBe("Switch to Safari — Google");
     expect(
       describeComputerToolCall({
         toolName: "computer_wait",
@@ -157,5 +157,33 @@ describe("describeComputerToolCall", () => {
 
   it("returns null for anything that is not a desktop tool", () => {
     expect(describeComputerToolCall({ toolName: "Bash", args: { command: "ls" } })).toBeNull();
+  });
+
+  it("describes app identifiers, fields, keys and waits in everyday language", () => {
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_launch_app",
+        args: { app: "com.apple.calculator" },
+      })?.summary,
+    ).toBe("Open Calculator");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_launch_app",
+        args: { app: "/Applications/Google Chrome.app" },
+      })?.summary,
+    ).toBe("Open Google Chrome");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_set_value",
+        args: { label: "Search", value: "private query" },
+      })?.summary,
+    ).toBe("Fill in “Search”");
+    expect(
+      describeComputerToolCall({ toolName: "computer_press_key", args: { key: "return" } })
+        ?.summary,
+    ).toBe("Press Enter");
+    expect(
+      describeComputerToolCall({ toolName: "computer_wait", args: { duration_ms: 500 } })?.summary,
+    ).toBe("Wait for 0.5 seconds");
   });
 });

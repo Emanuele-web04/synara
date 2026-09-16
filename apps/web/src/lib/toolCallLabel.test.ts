@@ -298,8 +298,8 @@ describe("isSynaraBrowserToolCall", () => {
 describe("deriveReadableToolTitle", () => {
   it.each([
     ["computer_click", "Click"],
-    ["computer_type_text", "Type"],
-    ["mcp__synara__computer_activate_window", "Activate a window"],
+    ["computer_type_text", "Type text"],
+    ["mcp__synara__computer_activate_window", "Switch windows"],
   ])("uses the curated Computer label for %s", (toolName, expected) => {
     expect(
       deriveReadableToolTitle({

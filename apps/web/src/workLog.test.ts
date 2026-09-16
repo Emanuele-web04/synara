@@ -1705,19 +1705,19 @@ describe("deriveWorkLogEntries", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "computer-item-arguments",
-          toolTitle: "Click at (12, 34) in Safari",
+          toolTitle: "Click in Safari",
         }),
         expect.objectContaining({
           id: "computer-item-input",
-          toolTitle: "Type on “Password” in Notes",
+          toolTitle: "Type in “Password” in Notes",
         }),
         expect.objectContaining({
           id: "computer-invocation-arguments",
-          toolTitle: "Activate a window in Finder",
+          toolTitle: "Switch to Finder",
         }),
         expect.objectContaining({
           id: "computer-historical-approval",
-          toolTitle: "Open an app Calculator",
+          toolTitle: "Open Calculator",
         }),
         expect.objectContaining({
           id: "computer-historical-param-rows",

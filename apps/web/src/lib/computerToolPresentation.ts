@@ -19,7 +19,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_screenshot: "Take a screenshot",
   computer_get_state: "Read the screen",
   computer_get_screen_size: "Measure the screen",
-  computer_list_windows: "List windows",
+  computer_list_windows: "Find open windows",
   computer_click: "Click",
   computer_double_click: "Double-click",
   computer_triple_click: "Triple-click",
@@ -27,13 +27,13 @@ export const COMPUTER_TOOL_TITLES = {
   computer_move_cursor: "Move the cursor",
   computer_drag: "Drag",
   computer_scroll: "Scroll",
-  computer_type_text: "Type",
+  computer_type_text: "Type text",
   computer_press_key: "Press a key",
   computer_hotkey: "Press a shortcut",
-  computer_set_value: "Set a field",
+  computer_set_value: "Fill in a field",
   computer_perform_action: "Activate a control",
   computer_launch_app: "Open an app",
-  computer_activate_window: "Activate a window",
+  computer_activate_window: "Switch windows",
   computer_wait: "Wait",
   computer_read_clipboard: "Read the clipboard",
   computer_write_clipboard: "Write to the clipboard",
@@ -72,7 +72,7 @@ export interface ComputerToolCallDescription {
 }
 
 /**
- * "Click at (812, 344) in Safari — Google".
+ * "Click on “Save” in Safari — Google".
  *
  * `windows` is the live window list, used only to turn an opaque `window_id`
  * into the app and title a person recognises. Without a match the id is dropped
@@ -87,36 +87,58 @@ export function describeComputerToolCall(input: {
   const tool = computerToolName(input.toolName);
   if (tool === null) return null;
   const args = input.args ?? {};
-  const verb = COMPUTER_TOOL_TITLES[tool];
+  let verb: string = COMPUTER_TOOL_TITLES[tool];
+  const app =
+    resolveWindow(args.window_id, input.windows) ??
+    appName(args.app_name ?? args.application ?? args.app);
+  if (tool === "computer_launch_app") {
+    const name = appName(args.app ?? args.name ?? args.bundle_id);
+    return {
+      tool,
+      summary: name ? `Open ${name}` : verb,
+      params: describeParams(tool, args, input.windows),
+    };
+  }
+  if (tool === "computer_activate_window" && app) {
+    return { tool, summary: `Switch to ${app}`, params: describeParams(tool, args, input.windows) };
+  }
+  if (tool === "computer_press_key" && readString(args.key)) verb = "Press";
+  if (tool === "computer_hotkey" && readStringArray(args.keys).length) verb = "Press";
+  if (tool === "computer_set_value" && readString(args.label)) verb = "Fill in";
+  if (tool === "computer_type_text" && readString(args.label)) verb = "Type";
   const where =
-    tool === "computer_launch_app"
-      ? ""
-      : tool === "computer_drag"
-        ? describeDragTarget(args, input.windows)
-        : describeTarget(args, input.windows, tool === "computer_wait" ? "for" : "on");
+    tool === "computer_drag"
+      ? describeDragTarget(args, input.windows)
+      : describeTarget(
+          args,
+          input.windows,
+          tool === "computer_wait"
+            ? "for"
+            : tool === "computer_type_text"
+              ? "in"
+              : tool === "computer_set_value"
+                ? ""
+                : "on",
+        );
   const what = describePayload(tool, args);
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
   return { tool, summary, params: describeParams(tool, args, input.windows) };
 }
 
-/** "at (812, 344) in Safari — Google", "on “Save” in Notes", or "". */
+/** Semantic targets belong in the summary; coordinates stay in the details. */
 function describeTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
-  labelPreposition: "on" | "for" = "on",
+  labelPreposition: "on" | "for" | "in" | "" = "on",
 ): string {
   const parts: string[] = [];
   const label = readString(args.label);
-  const x = readNumber(args.x);
-  const y = readNumber(args.y);
   if (label) {
-    parts.push(`${labelPreposition} “${label}”`);
-  } else if (x !== null && y !== null) {
-    parts.push(`at (${x}, ${y})`);
+    parts.push([labelPreposition, `“${truncate(label, 80)}”`].filter(Boolean).join(" "));
   }
   const window = resolveWindow(args.window_id, windows);
-  const app = readString(args.app_name) ?? readString(args.application) ?? readString(args.app);
+  const app = appName(args.app_name ?? args.application ?? args.app);
   if (window) {
     parts.push(`in ${window}`);
   } else if (app) {
@@ -151,11 +173,11 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   }
   if (tool === "computer_press_key") {
     const key = readString(args.key);
-    return key === null ? "" : `${key}`;
+    return key === null ? "" : keyName(key);
   }
   if (tool === "computer_hotkey") {
     const keys = readStringArray(args.keys);
-    return keys.length > 0 ? keys.join("+") : "";
+    return keys.map(keyName).join(" + ");
   }
   if (tool === "computer_scroll") {
     const dx = readNumber(args.delta_x) ?? 0;
@@ -164,18 +186,54 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
     if (dx !== 0) return dx > 0 ? "right" : "left";
     return "";
   }
-  if (tool === "computer_launch_app") {
-    const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
-    return app ?? "";
-  }
   if (tool === "computer_wait" && !readString(args.label)) {
     const durationMs = readNumber(args.duration_ms);
     if (durationMs === null) return "";
-    return durationMs >= 1_000 && durationMs % 1_000 === 0
-      ? `for ${durationMs / 1_000} ${durationMs === 1_000 ? "second" : "seconds"}`
-      : `for ${durationMs} ms`;
+    const seconds = durationMs / 1_000;
+    return `for ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
   }
   return "";
+}
+
+function appName(value: unknown): string | null {
+  const name = readString(value)?.trim();
+  if (!name) return null;
+  const basename = name
+    .split(/[\\/]/)
+    .at(-1)!
+    .replace(/\.app$/i, "");
+  const label = /^(?:[a-z][a-z0-9-]*\.){2,}/i.test(basename)
+    ? basename.split(".").at(-1)!
+    : basename;
+  return truncate(label.charAt(0).toUpperCase() + label.slice(1), 80);
+}
+
+const KEY_NAMES: Readonly<Record<string, string>> = {
+  cmd: "Command",
+  command: "Command",
+  super: "Super",
+  meta: "Meta",
+  ctrl: "Control",
+  control: "Control",
+  alt: "Alt",
+  option: "Option",
+  shift: "Shift",
+  return: "Enter",
+  enter: "Enter",
+  esc: "Escape",
+  escape: "Escape",
+  space: "Space",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+  arrowup: "Up arrow",
+  arrowdown: "Down arrow",
+  arrowleft: "Left arrow",
+  arrowright: "Right arrow",
+};
+
+function keyName(key: string): string {
+  return KEY_NAMES[key.toLowerCase()] ?? (key.length === 1 ? key.toUpperCase() : key);
 }
 
 /**
@@ -207,9 +265,9 @@ function describeParams(
     });
   }
   const key = readString(args.key);
-  if (key) rows.push({ name: "Key", value: key });
+  if (key) rows.push({ name: "Key", value: keyName(key) });
   const keys = readStringArray(args.keys);
-  if (keys.length > 0) rows.push({ name: "Shortcut", value: keys.join("+") });
+  if (keys.length > 0) rows.push({ name: "Shortcut", value: keys.map(keyName).join(" + ") });
   const dx = readNumber(args.delta_x);
   const dy = readNumber(args.delta_y);
   if (dx !== null || dy !== null) {
@@ -217,7 +275,7 @@ function describeParams(
   }
   const action = readString(args.action);
   if (action) rows.push({ name: "Action", value: action });
-  const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
+  const app = appName(args.app ?? args.name ?? args.bundle_id);
   if (app) rows.push({ name: "App", value: app });
   return rows;
 }
