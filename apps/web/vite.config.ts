@@ -196,7 +196,19 @@ export default defineConfig({
       // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
       parserOpts: { plugins: ["typescript", "jsx"] },
       presets: [reactCompilerPreset()],
-    }),
+    }).then((plugin) => ({
+      ...plugin,
+      // Large chat modules make the compiler expensive on cold loads and every
+      // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
+      // Keep production builds and browser tests compiled, with an opt-in for
+      // debugging compiler-specific behavior in the development app.
+      apply: ((_config, { command, mode }) =>
+        command === "build" ||
+        mode === "test" ||
+        /^(1|true)$/i.test(
+          process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
+        )) satisfies Plugin["apply"],
+    })),
     tailwindcss(),
     centralIconPrunePlugin(),
     precompressPlugin(),
