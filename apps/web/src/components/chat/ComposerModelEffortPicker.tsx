@@ -5,6 +5,7 @@
 //   toggle in its Effort header), shared menu primitives, and composer trait helpers.
 
 import {
+  PROVIDER_DISPLAY_NAMES,
   type ModelSlug,
   type ProviderAgentDescriptor,
   type ProviderKind,
@@ -13,23 +14,33 @@ import {
   type ServerProviderStatus,
   type ThreadId,
 } from "@synara/contracts";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import {
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  FastModeIcon,
+  SettingsIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import type { ComposerModelPreset } from "../../lib/composerModelPresets";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
-import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME,
+  COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
+import { ComposerModelPresetMenu } from "./ComposerModelPresetMenu";
+import { captureComposerModelPreset } from "./composerModelPresetSelection";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   getComposerTraitSelection,
   hasVisibleComposerTraitControls,
@@ -66,13 +77,20 @@ type ComposerModelEffortPickerProps = {
   // effort ladder as a stepped slider card with the model list behind its label.
   // Models without an effort ladder always fall back to the menu layout.
   effortControl?: ComposerEffortControl;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    preset?: ComposerModelPreset,
+  ) => void | Promise<boolean | void>;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
   threadId: ThreadId;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
+  runtimeModelsByProvider?: Partial<
+    Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor> | null>
+  >;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
@@ -84,14 +102,57 @@ type ComposerModelEffortPickerProps = {
   shortcutLabel?: string | null;
 };
 
-// Renders a single composer trigger that combines model selection, reasoning
-// effort, and the optional speed/fast-mode toggle. The primary menu hosts the
-// reasoning radio group (with fast mode as an icon toggle in its Effort
-// header); the model is reachable via a sub-menu so the footer stays compact.
+// One compact panel before and after chat startup: saved configurations first,
+// then the current model, reasoning and speed controls. The provider/catalog
+// replaces the panel's contents and continues to respect the session's provider lock.
 export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps) {
   const { onOpenChange, open } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [catalogPage, setCatalogPage] = useState<"configuration" | "providers" | ProviderKind>(
+    "configuration",
+  );
+  const focusNextPageRef = useRef(false);
+  const lastBrowsedProviderRef = useRef<ProviderKind | null>(null);
   const isMenuOpen = open ?? uncontrolledOpen;
+  const currentPage =
+    catalogPage === "configuration" ? catalogPage : (props.lockedProvider ?? catalogPage);
+  const navigateTo = (nextPage: typeof catalogPage) => {
+    focusNextPageRef.current = true;
+    setCatalogPage(nextPage);
+  };
+  const browseModels = () => navigateTo(props.lockedProvider ?? "providers");
+  const goBack = () =>
+    navigateTo(
+      currentPage !== "providers" && props.lockedProvider === null ? "providers" : "configuration",
+    );
+  const focusPage = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (!element || !focusNextPageRef.current) return;
+      focusNextPageRef.current = false;
+      // Let the menu register the new page's items before focusing one, so its
+      // roving index agrees with DOM focus on the very next arrow-key press.
+      const frame = requestAnimationFrame(() => {
+        const target =
+          currentPage === "configuration"
+            ? element.querySelector<HTMLElement>("[data-model-catalog-trigger]")
+            : (element.querySelector<HTMLElement>('input[type="search"]') ??
+              element.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]') ??
+              (lastBrowsedProviderRef.current
+                ? element.querySelector<HTMLElement>(
+                    `[data-browse-provider="${lastBrowsedProviderRef.current}"]`,
+                  )
+                : null) ??
+              element.querySelector<HTMLElement>("[data-current-provider]") ??
+              element.querySelector<HTMLElement>(
+                '[role="menuitemradio"], [data-browse-provider]',
+              ) ??
+              element.querySelector<HTMLElement>("[data-catalog-back]"));
+        target?.focus();
+      });
+      return () => cancelAnimationFrame(frame);
+    },
+    [currentPage],
+  );
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -131,16 +192,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
 
   const triggerStatusLabel = resolveComposerTraitStatusLabel(traitSelection);
   const showsFastBadge = showsComposerFastModeBadge(traitSelection);
-
-  const handleAfterModelSelection = () => {
-    setMenuOpen(false);
-    props.onSelectionCommitted?.();
-  };
-
-  const handleAfterTraitsSelection = () => {
-    setMenuOpen(false);
-    props.onSelectionCommitted?.();
-  };
 
   const hiddenTriggerTitle = [
     props.hideModelLabel ? modelLabel : null,
@@ -203,34 +254,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     </span>
   );
 
-  // Shared between the radio and slider layouts so both reach the same model list;
-  // each layout decides what a committed model selection closes.
-  const renderModelSubmenuPopup = (onAfterSelection: () => void) => (
-    <ComposerPickerMenuSubPopup
-      fixedWidth
-      className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
-    >
-      <ProviderModelMenuItems
-        provider={props.provider}
-        model={props.model}
-        lockedProvider={props.lockedProvider}
-        {...(props.providers ? { providers: props.providers } : {})}
-        modelOptionsByProvider={props.modelOptionsByProvider}
-        {...(props.loadingModelProviders
-          ? { loadingModelProviders: props.loadingModelProviders }
-          : {})}
-        {...(props.discoveryErrorsByProvider
-          ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
-          : {})}
-        {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-        {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-        {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-        onProviderModelChange={props.onProviderModelChange}
-        onAfterSelection={onAfterSelection}
-      />
-    </ComposerPickerMenuSubPopup>
-  );
-
   const traitsMenuContentProps = {
     provider: props.provider,
     threadId: props.threadId,
@@ -246,7 +269,23 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   return (
     <Menu
       open={isMenuOpen}
-      onOpenChange={(nextOpen) => {
+      // Page swaps and filtering move rows beneath a stationary pointer. Keep
+      // hover visual-only so it cannot take keyboard focus from the search field.
+      highlightItemOnHover={false}
+      onOpenChangeComplete={(nextOpen) => {
+        if (!nextOpen) {
+          setCatalogPage("configuration");
+          focusNextPageRef.current = false;
+          lastBrowsedProviderRef.current = null;
+        }
+      }}
+      onOpenChange={(nextOpen, eventDetails) => {
+        // Configuration rows update in place, leaving the save star reachable.
+        // Applying a preset closes explicitly after the asynchronous commit succeeds.
+        if (!nextOpen && eventDetails.reason === "item-press") {
+          eventDetails.cancel();
+          return;
+        }
         if (props.disabled) {
           setMenuOpen(false);
           return;
@@ -277,58 +316,163 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       <ComposerPickerMenuPopup
         align="end"
         side="top"
-        {...(usesEffortSlider
-          ? // Standard picker width; rounder shell so the slider reads as a card, not a menu.
-            { fixedWidth: true, className: "rounded-[1.25rem]" }
-          : { fixedWidth: true })}
-      >
-        {usesEffortSlider ? (
-          <>
-            <ComposerEffortSliderCard
-              provider={props.provider}
-              threadId={props.threadId}
-              model={props.model}
-              modelLabel={modelLabel}
-              {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
-              modelOptions={props.modelOptions}
-              prompt={props.prompt}
-              onPromptChange={props.onPromptChange}
-              renderModelSubmenuPopup={renderModelSubmenuPopup}
-            />
-            {hasSliderCompanionTraits ? (
-              <>
-                <MenuSeparator />
-                <TraitsMenuContent
-                  {...traitsMenuContentProps}
-                  excludeEffort
-                  onSelectionComplete={handleAfterTraitsSelection}
-                />
-              </>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {hasTraitsTopSection ? (
-              <TraitsMenuContent
-                {...traitsMenuContentProps}
-                onSelectionComplete={handleAfterTraitsSelection}
-              />
-            ) : null}
-
-            {hasTraitsTopSection ? <MenuSeparator /> : null}
-
-            <MenuSub>
-              <MenuSubTrigger>
-                <ProviderIcon
-                  aria-hidden="true"
-                  className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
-                />
-                <span className="truncate">{modelLabel}</span>
-              </MenuSubTrigger>
-              {renderModelSubmenuPopup(handleAfterModelSelection)}
-            </MenuSub>
-          </>
+        className={cn(
+          currentPage === "providers"
+            ? COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME
+            : COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME,
+          "rounded-[1.25rem]",
+          "[&_[role^=menuitem]:not([data-disabled]):hover]:bg-[var(--color-background-button-secondary-hover)]",
         )}
+        onKeyDownCapture={(event) => {
+          if (
+            currentPage !== "configuration" &&
+            (event.key === "Escape" ||
+              (event.key === "ArrowLeft" &&
+                !(
+                  event.target instanceof HTMLInputElement ||
+                  event.target instanceof HTMLTextAreaElement
+                )))
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            goBack();
+            return;
+          }
+          // This panel mixes menu rows and native form controls. Let Tab follow
+          // their DOM order instead of the menu's Shift+Tab-to-dismiss behavior.
+          if (event.key === "Tab") event.stopPropagation();
+        }}
+      >
+        <div key={currentPage} ref={focusPage}>
+          {currentPage !== "configuration" ? (
+            <>
+              <MenuItem
+                data-catalog-back=""
+                aria-label={
+                  currentPage === "providers" || props.lockedProvider !== null
+                    ? "Back to configuration"
+                    : "Back to providers"
+                }
+                className="text-muted-foreground"
+                closeOnClick={false}
+                onClick={goBack}
+              >
+                <ChevronLeftIcon aria-hidden="true" className="size-3.5" />
+                <span>
+                  {currentPage === "providers" ? "Providers" : PROVIDER_DISPLAY_NAMES[currentPage]}
+                </span>
+              </MenuItem>
+              <MenuSeparator />
+              <ProviderModelMenuItems
+                provider={props.provider}
+                model={props.model}
+                lockedProvider={props.lockedProvider}
+                {...(props.providers ? { providers: props.providers } : {})}
+                modelOptionsByProvider={props.modelOptionsByProvider}
+                {...(props.loadingModelProviders
+                  ? { loadingModelProviders: props.loadingModelProviders }
+                  : {})}
+                {...(props.discoveryErrorsByProvider
+                  ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
+                  : {})}
+                {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+                {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+                {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+                navigation={{
+                  provider: currentPage === "providers" ? null : currentPage,
+                  onProviderBrowse: (provider) => {
+                    lastBrowsedProviderRef.current = provider;
+                    navigateTo(provider);
+                  },
+                }}
+                onProviderModelChange={props.onProviderModelChange}
+                onAfterSelection={() => navigateTo("configuration")}
+              />
+            </>
+          ) : (
+            <ComposerModelPresetMenu
+              currentPreset={captureComposerModelPreset({
+                provider: props.provider,
+                model: props.model,
+                selection: traitSelection,
+              })}
+              modelLabel={modelLabel}
+              lockedProvider={props.lockedProvider}
+              providers={props.providers}
+              hiddenProviders={props.hiddenProviders}
+              modelOptionsByProvider={props.modelOptionsByProvider}
+              loadingModelProviders={props.loadingModelProviders}
+              runtimeModelsByProvider={
+                props.runtimeModelsByProvider ?? {
+                  [props.provider]:
+                    props.runtimeModels ?? (props.runtimeModel ? [props.runtimeModel] : []),
+                }
+              }
+              prompt={props.prompt}
+              onApply={(preset) =>
+                props.onProviderModelChange(preset.provider, preset.model, preset)
+              }
+              onApplied={() => {
+                setMenuOpen(false);
+                props.onSelectionCommitted?.();
+              }}
+            >
+              {usesEffortSlider ? (
+                <>
+                  <ComposerEffortSliderCard
+                    provider={props.provider}
+                    threadId={props.threadId}
+                    model={props.model}
+                    modelLabel={modelLabel}
+                    {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+                    modelOptions={props.modelOptions}
+                    prompt={props.prompt}
+                    onPromptChange={props.onPromptChange}
+                    onBrowseModels={browseModels}
+                  />
+                  {hasSliderCompanionTraits ? (
+                    <>
+                      <MenuSeparator />
+                      <TraitsMenuContent {...traitsMenuContentProps} excludeEffort />
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {hasTraitsTopSection ? <TraitsMenuContent {...traitsMenuContentProps} /> : null}
+
+                  {hasTraitsTopSection ? <MenuSeparator /> : null}
+
+                  <MenuItem
+                    data-model-catalog-trigger=""
+                    closeOnClick={false}
+                    className="data-highlighted:bg-transparent hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:bg-[var(--color-background-button-secondary-hover)]"
+                    onClick={browseModels}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        browseModels();
+                      }
+                    }}
+                  >
+                    <ProviderIcon
+                      aria-hidden="true"
+                      className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
+                    />
+                    <span className="truncate">{modelLabel}</span>
+                    <ChevronRightIcon aria-hidden="true" className="-me-0.5 shrink-0" />
+                  </MenuItem>
+                  {!hasTraitsTopSection && !props.loadingModelProviders?.[props.provider] ? (
+                    <p className="px-2 pt-1 text-[11px] text-muted-foreground/75">
+                      No adjustable settings for this model.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </ComposerModelPresetMenu>
+          )}
+        </div>
       </ComposerPickerMenuPopup>
     </Menu>
   );
