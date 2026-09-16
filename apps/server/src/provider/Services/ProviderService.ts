@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ClaudeCacheObservation,
   ProviderBackgroundTaskInput,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
@@ -72,6 +73,9 @@ export interface ProviderSessionStartOutcomeOptions {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly getClaudeCacheObservation?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;
   /**
    * Start a provider session.
    */

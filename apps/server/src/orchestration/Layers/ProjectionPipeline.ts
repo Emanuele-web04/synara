@@ -181,6 +181,9 @@ const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.archived",
+  "thread.session-stop-requested",
+  "thread.claude-cache-response-requested",
   "thread.turn-start-requested",
   "thread.session-set",
   "thread.turn-diff-completed",
@@ -743,6 +746,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
           }));
 
+        case "thread.claude-cache-set":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            claudeCacheReview: event.payload.review,
+            updatedAt: event.payload.updatedAt,
+          }));
+
         case "thread.runtime-mode-set":
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
@@ -1268,6 +1278,20 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.archived":
+        case "thread.session-stop-requested":
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        case "thread.claude-cache-response-requested":
+          if (event.payload.decision === "cancel") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
+          return;
+
         case "thread.turn-start-requested": {
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,

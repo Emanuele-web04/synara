@@ -4,6 +4,8 @@
 
 import {
   type ChatAttachment,
+  type ClaudeCacheObservation,
+  type PendingClaudeCacheReview,
   type CheckpointRef,
   CommandId,
   EventId,
@@ -56,6 +58,7 @@ import {
 } from "@synara/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { claudeSelectionRequiresRestart } from "@synara/shared/model";
+import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   formatProviderDeliveryBlockDetail,
@@ -381,6 +384,16 @@ function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvide
 
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+
+const sameClaudeCacheContext = (
+  left: ClaudeCacheObservation,
+  right: ClaudeCacheObservation,
+): boolean =>
+  left.nativeSessionId === right.nativeSessionId &&
+  left.lifecycleGeneration === right.lifecycleGeneration &&
+  left.model === right.model &&
+  left.contextTokens === right.contextTokens &&
+  left.lastResponseAt === right.lastResponseAt;
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -1975,6 +1988,26 @@ const make = Effect.gen(function* () {
     };
   });
 
+  const setClaudeCacheReview = (
+    threadId: ThreadId,
+    review: PendingClaudeCacheReview | null,
+    expectedReviewId: string | null,
+  ) =>
+    orchestrationEngine
+      .dispatch({
+        type: "thread.claude-cache.set",
+        commandId: serverCommandId("claude-cache-review"),
+        threadId,
+        review,
+        expectedReviewId,
+        createdAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+          error.detail === "Command produced no events." ? Effect.void : Effect.fail(error),
+        ),
+      );
+
   const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageId: string;
@@ -1990,6 +2023,11 @@ const make = Effect.gen(function* () {
     readonly dispatchMode?: "queue" | "steer";
     readonly turnKind?: "user" | "goal-continuation";
     readonly createdAt: string;
+    readonly cacheReviewSource?: Extract<
+      ProviderIntentEvent,
+      { type: "thread.turn-start-requested" }
+    >;
+    readonly acceptedCacheReview?: PendingClaudeCacheReview;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
@@ -2119,6 +2157,69 @@ const make = Effect.gen(function* () {
         ? { registerPriorTranscriptBootstrapOnFreshStart: true }
         : {}),
     });
+    if (activeSession.provider === "claudeAgent" && input.dispatchMode !== "steer") {
+      const latestThread = yield* resolveThread(input.threadId);
+      const pendingReview = latestThread?.claudeCacheReview;
+      if (pendingReview && pendingReview.reviewId !== input.acceptedCacheReview?.reviewId) return;
+      const observation = providerService.getClaudeCacheObservation
+        ? yield* providerService
+            .getClaudeCacheObservation(input.threadId)
+            .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        : undefined;
+      const assessment = assessClaudeCache(observation, Date.now());
+      if (
+        observation &&
+        assessment.requiresConfirmation &&
+        (!input.acceptedCacheReview ||
+          !sameClaudeCacheContext(input.acceptedCacheReview.assessment, observation))
+      ) {
+        if (input.cacheReviewSource) {
+          const createdAt = new Date().toISOString();
+          yield* setClaudeCacheReview(
+            input.threadId,
+            {
+              reviewId: `claude-cache:${input.cacheReviewSource.eventId}:${crypto.randomUUID()}`,
+              messageId: MessageId.makeUnsafe(input.messageId),
+              sourceEventSequence: input.cacheReviewSource.sequence,
+              assessment: { ...observation, state: assessment.state },
+              status: "pending",
+              createdAt,
+            },
+            pendingReview?.reviewId ?? null,
+          );
+        } else {
+          // Autonomous iterations have no user message to release. Pause the
+          // goal instead of silently spending a cold, large-context request.
+          yield* pauseActiveThreadGoal({
+            threadId: input.threadId,
+            expectedGoalStartedAt: thread.goalStartedAt ?? null,
+          });
+          yield* appendProviderFailureActivity({
+            threadId: input.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Goal paused for Claude cache review",
+            detail:
+              "Claude's large context is likely no longer cached. Send a message to review continuing.",
+            turnId: null,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        yield* setThreadSession({
+          threadId: input.threadId,
+          session: {
+            threadId: input.threadId,
+            runtimeMode: activeSession.runtimeMode,
+            providerName: activeSession.provider,
+            status: "ready",
+            lastError: null,
+            activeTurnId: null,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+    }
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
     }
@@ -2943,6 +3044,7 @@ const make = Effect.gen(function* () {
 
   const processTurnStartRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+    acceptedCacheReview?: PendingClaudeCacheReview,
   ) {
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.payload.threadId))?.id ?? event.payload.threadId;
@@ -3008,12 +3110,20 @@ const make = Effect.gen(function* () {
       });
     yield* Effect.gen(function* () {
       const key = turnStartKeyForEvent(event);
-      if (yield* hasHandledTurnStartRecently(key)) {
+      if (!acceptedCacheReview && (yield* hasHandledTurnStartRecently(key))) {
         return;
       }
 
       const thread = yield* resolveThread(event.payload.threadId);
       if (!thread || isExpiredSidechat(thread)) {
+        return;
+      }
+      if (
+        thread.claudeCacheReview &&
+        thread.claudeCacheReview.reviewId !== acceptedCacheReview?.reviewId
+      ) {
+        if (thread.claudeCacheReview.messageId !== event.payload.messageId)
+          yield* enqueueQueuedTurnStart(event);
         return;
       }
 
@@ -3148,6 +3258,8 @@ const make = Effect.gen(function* () {
       const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
 
       const startedTurn = yield* dispatchTurnForThread({
+        cacheReviewSource: event,
+        ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
         messageText: message.text,
@@ -3222,6 +3334,9 @@ const make = Effect.gen(function* () {
       if (startedTurn && isPendingQueuedDispatch) {
         yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
       }
+      if (startedTurn && acceptedCacheReview) {
+        yield* setClaudeCacheReview(event.payload.threadId, null, acceptedCacheReview.reviewId);
+      }
     }).pipe(
       Effect.onExit((exit) =>
         releaseOrphanedQueuedDispatchReservation(
@@ -3250,9 +3365,109 @@ const make = Effect.gen(function* () {
       orchestrationEngine.readEventsThrough(Math.max(0, eventSequence - 1), eventSequence),
     ).pipe(Effect.map((events) => Array.from(events)[0]));
 
+  const processClaudeCacheResponse = (
+    event: Extract<ProviderIntentEvent, { type: "thread.claude-cache-response-requested" }>,
+  ) =>
+    withProviderSessionLease(
+      event.payload.threadId,
+      Effect.gen(function* () {
+        const { threadId, review, decision } = event.payload;
+        const thread = yield* resolveThread(threadId);
+        if (
+          !thread ||
+          thread.deletedAt != null ||
+          thread.claudeCacheReview?.reviewId !== review.reviewId ||
+          thread.claudeCacheReview.status !== "responding"
+        )
+          return;
+        if (thread.archivedAt != null || isExpiredSidechat(thread)) {
+          yield* setClaudeCacheReview(
+            threadId,
+            {
+              ...review,
+              status: "failed",
+              error: "This task is unavailable. The saved message was not sent.",
+            },
+            review.reviewId,
+          );
+          return;
+        }
+        if (decision === "cancel") {
+          yield* setClaudeCacheReview(threadId, null, review.reviewId);
+          yield* drainQueuedTurnsForSession(threadId);
+          return;
+        }
+        if (decision === "compact") {
+          yield* setClaudeCacheReview(
+            threadId,
+            {
+              ...review,
+              status: "failed",
+              error:
+                "Compaction must complete before this message can be sent. Use Continue or cancel this send.",
+            },
+            review.reviewId,
+          );
+          return;
+        }
+        const source = yield* readOrchestrationEventAtSequence(review.sourceEventSequence);
+        if (
+          !source ||
+          source.type !== "thread.turn-start-requested" ||
+          source.payload.threadId !== threadId ||
+          source.payload.messageId !== review.messageId ||
+          (yield* hasLiveProviderTurn(threadId))
+        ) {
+          yield* setClaudeCacheReview(
+            threadId,
+            {
+              ...review,
+              status: "failed",
+              error: "The saved message is unavailable or Claude is busy. Nothing was sent.",
+            },
+            review.reviewId,
+          );
+          return;
+        }
+        yield* processTurnStartRequestedWithoutLease(source, review).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              const outcome = classifyProviderAttemptOutcome(Exit.failCause(cause));
+              const rejected = outcome._tag === "rejected";
+              yield* setClaudeCacheReview(
+                threadId,
+                {
+                  ...review,
+                  status: rejected ? "failed" : "uncertain",
+                  error: rejected
+                    ? Cause.pretty(cause)
+                    : `The send could not be confirmed and was not retried. ${Cause.pretty(cause)}`,
+                },
+                review.reviewId,
+              );
+              if (!rejected) return yield* Effect.die(new Error(Cause.pretty(cause)));
+            }),
+          ),
+        );
+        const remaining = (yield* resolveThread(threadId))?.claudeCacheReview;
+        if (remaining?.reviewId === review.reviewId && remaining.status === "responding") {
+          yield* setClaudeCacheReview(
+            threadId,
+            {
+              ...review,
+              status: "failed",
+              error: "The saved send could not start. Review the message and try again.",
+            },
+            review.reviewId,
+          );
+        }
+      }),
+    );
+
   // Promote the next queued message only after the active provider turn settles.
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    if ((yield* resolveThread(sessionThreadId))?.claudeCacheReview) return;
     if (
       drainingQueuedTurns.has(threadId) ||
       pendingQueuedDispatchBySessionThread.has(sessionThreadId)
@@ -3545,6 +3760,7 @@ const make = Effect.gen(function* () {
           thread.interactionMode === "plan" ||
           !activeThreadGoal(thread)?.trim() ||
           thread.goalPausedAt != null ||
+          thread.claudeCacheReview != null ||
           (thread.goalStartedAt ?? null) !== event.payload.goalStartedAt
         ) {
           blockedGoalContinuations.delete(event.payload.threadId);
@@ -4383,6 +4599,14 @@ const make = Effect.gen(function* () {
       }
     }
     for (const queuedThreadId of clearedQueuedThreadIds) {
+      const queuedThread = yield* resolveThread(queuedThreadId);
+      if (
+        queuedThread?.claudeCacheReview?.status === "pending" ||
+        queuedThread?.claudeCacheReview?.status === "failed" ||
+        queuedThread?.claudeCacheReview?.status === "responding"
+      ) {
+        yield* setClaudeCacheReview(queuedThreadId, null, queuedThread.claudeCacheReview.reviewId);
+      }
       yield* queuedTurnPromotions.cancelThread({
         threadId: queuedThreadId,
         updatedAt: input.createdAt,
@@ -4765,6 +4989,9 @@ const make = Effect.gen(function* () {
         case "thread.turn-start-requested":
           yield* processTurnStartRequested(event);
           return;
+        case "thread.claude-cache-response-requested":
+          yield* processClaudeCacheResponse(event);
+          return;
         case "thread.goal-continuation-requested":
           yield* processGoalContinuationRequested(event);
           return;
@@ -4960,6 +5187,16 @@ const make = Effect.gen(function* () {
         );
       }
       quarantinedThreads.add(input.event.payload.threadId);
+      if (input.event.type === "thread.claude-cache-response-requested") {
+        const review = (yield* resolveThread(input.event.payload.threadId))?.claudeCacheReview;
+        if (review?.reviewId === input.event.payload.review.reviewId) {
+          yield* setClaudeCacheReview(
+            input.event.payload.threadId,
+            { ...review, status: "uncertain", error: input.detail },
+            review.reviewId,
+          );
+        }
+      }
       yield* requireCursorAdvance(input.event);
     });
 
@@ -5083,6 +5320,26 @@ const make = Effect.gen(function* () {
             continue;
           }
           const expiredOwner = existing.value.claimOwner ?? "";
+          if (event.type === "thread.turn-start-requested") {
+            const review = (yield* resolveThread(threadId))?.claudeCacheReview;
+            // Persisting this review is the pre-enqueue boundary. A crash after
+            // parking the message must not quarantine a request we never sent.
+            if (
+              review?.sourceEventSequence === event.sequence &&
+              review.messageId === event.payload.messageId
+            ) {
+              const completed = yield* deliveryRepository.complete({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: event.sequence,
+                claimOwner: expiredOwner,
+                completedAt: new Date().toISOString(),
+              });
+              if (completed) {
+                yield* refreshCursor;
+                return;
+              }
+            }
+          }
           if (!isReplaySafeClaimedProviderIntent(event)) {
             yield* settleTerminalFailure({
               event,
@@ -5347,6 +5604,21 @@ const make = Effect.gen(function* () {
               reconciledAt,
             });
             if (Option.isNone(reconciled)) return null;
+
+            const reconciledEvent = yield* readProviderIntentEvent(input.eventSequence);
+            if (reconciledEvent.type === "thread.claude-cache-response-requested") {
+              const review = (yield* resolveThread(reconciledEvent.payload.threadId))
+                ?.claudeCacheReview;
+              if (review?.reviewId === reconciledEvent.payload.review.reviewId) {
+                yield* setClaudeCacheReview(
+                  reconciledEvent.payload.threadId,
+                  input.outcome === "safe_retry"
+                    ? { ...review, status: "responding", error: undefined }
+                    : null,
+                  review.reviewId,
+                );
+              }
+            }
 
             if (input.outcome === "safe_retry") {
               yield* resumeRetryableDelivery(input);

@@ -13,6 +13,7 @@ export type ProviderIntentEvent = Extract<
       | "thread.interaction-mode-set"
       | "thread.turn-queued"
       | "thread.turn-start-requested"
+      | "thread.claude-cache-response-requested"
       | "thread.goal-continuation-requested"
       | "thread.turn-interrupt-requested"
       | "thread.task-stop-requested"
@@ -35,6 +36,7 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.interaction-mode-set",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.claude-cache-response-requested",
   "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",

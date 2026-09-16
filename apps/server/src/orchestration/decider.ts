@@ -1376,7 +1376,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = nowIso();
-      return {
+      const deleteEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1389,6 +1389,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return thread.claudeCacheReview
+        ? [
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set" as const,
+              payload: { threadId: command.threadId, review: null, updatedAt: occurredAt },
+            },
+            deleteEvent,
+          ]
+        : deleteEvent;
     }
 
     case "thread.archive": {
@@ -1404,21 +1419,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
         .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
         .map((thread) => thread.id);
-      return [...subagentThreadIds, command.threadId].map(
-        (threadId): Omit<OrchestrationEvent, "sequence"> => ({
-          ...withEventBase({
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            occurredAt,
-            commandId: command.commandId,
-          }),
-          type: "thread.archived",
-          payload: {
-            threadId,
-            archivedAt: occurredAt,
-            updatedAt: occurredAt,
-          },
-        }),
+      return [...subagentThreadIds, command.threadId].flatMap(
+        (threadId): Array<Omit<OrchestrationEvent, "sequence">> => {
+          const review = readModel.threads.find(
+            (entry) => entry.id === threadId,
+          )?.claudeCacheReview;
+          const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+          if (review && review.status !== "compacting" && review.status !== "uncertain") {
+            events.push({
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: threadId,
+                occurredAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set",
+              payload: { threadId, review: null, updatedAt: occurredAt },
+            });
+          }
+          events.push({
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.archived",
+            payload: {
+              threadId,
+              archivedAt: occurredAt,
+              updatedAt: occurredAt,
+            },
+          });
+          return events;
+        },
       );
     }
 
@@ -1740,8 +1774,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // inject mid-turn input; everywhere else they queue and interrupt below.
       const shouldQueue =
         targetThread.parentThreadId === null &&
-        isThreadRunning &&
-        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
+        (targetThread.claudeCacheReview != null ||
+          (isThreadRunning &&
+            (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1800,7 +1835,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: shouldQueue ? "thread.turn-queued" : "thread.turn-start-requested",
         payload: turnRequestPayload,
       };
-      if (shouldQueue && dispatchMode === "steer") {
+      if (shouldQueue && dispatchMode === "steer" && targetThread.claudeCacheReview == null) {
         return [
           userMessageEvent,
           queuedEvent,
@@ -1822,6 +1857,68 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ];
       }
       return [userMessageEvent, queuedEvent];
+    }
+
+    case "thread.claude-cache.set": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.expectedReviewId !== undefined &&
+        (thread.claudeCacheReview?.reviewId ?? null) !== command.expectedReviewId
+      )
+        return [];
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.claude-cache-set",
+        payload: {
+          threadId: command.threadId,
+          review: command.review,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.claude-cache.respond": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const review = thread.claudeCacheReview;
+      if (
+        !review ||
+        review.reviewId !== command.reviewId ||
+        review.messageId !== command.messageId ||
+        (review.status !== "pending" && review.status !== "failed")
+      )
+        return [];
+      const base = {
+        aggregateKind: "thread" as const,
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      };
+      return [
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-set",
+          payload: {
+            threadId: command.threadId,
+            review: { ...review, status: "responding" as const, error: undefined },
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-response-requested",
+          payload: {
+            threadId: command.threadId,
+            review,
+            decision: command.decision,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.turn.dispatch-queued": {
@@ -2226,12 +2323,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.session.stop": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -2244,6 +2341,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      const review = thread.claudeCacheReview;
+      return review && review.status !== "compacting" && review.status !== "uncertain"
+        ? [
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set" as const,
+              payload: { threadId: command.threadId, review: null, updatedAt: command.createdAt },
+            },
+            stopEvent,
+          ]
+        : stopEvent;
     }
 
     case "thread.goal.continue": {

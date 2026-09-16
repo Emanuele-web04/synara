@@ -10,6 +10,7 @@ import {
   type ModelSelection,
   type ModelSlug,
   type PinnedMessage,
+  type PendingClaudeCacheReview,
   type ProjectScript,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
@@ -251,6 +252,10 @@ import {
 } from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import {
+  ComposerClaudeCacheReviewPanel,
+  type ClaudeCacheReviewDecision,
+} from "./chat/ComposerClaudeCacheReviewPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
@@ -1855,6 +1860,30 @@ export default function ChatView({
     gitCwd,
     piAgentDir: settings.piAgentDir,
   });
+  const claudeCompactDisabledReason =
+    !canCompactThread || selectedProvider !== "claudeAgent"
+      ? "Compaction is unavailable for this Claude session."
+      : hasLiveTurn || isConnecting || (activeBackgroundTasks?.activeCount ?? 0) > 0
+        ? "Wait for Claude and its background tasks to finish."
+        : activePendingApproval || pendingUserInputs.length > 0
+          ? "Resolve the pending request before compacting."
+          : null;
+  const onRespondToClaudeCacheReview = useCallback(
+    async (review: PendingClaudeCacheReview, decision: ClaudeCacheReviewDecision) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Reconnect before choosing how to resume.");
+      await api.orchestration.dispatchCommand({
+        type: "thread.claude-cache.respond",
+        commandId: newCommandId(),
+        threadId,
+        messageId: review.messageId,
+        reviewId: review.reviewId,
+        decision,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [threadId],
+  );
   const activeRootBranch = useMemo(
     () =>
       resolveComposerSlashRootBranch({
@@ -3737,6 +3766,7 @@ export default function ChatView({
     activePendingApproval,
     activePendingProgress,
     pendingUserInputs,
+    hasPendingCacheReview: activeThread?.claudeCacheReview != null,
     sendInFlightRef,
     sendPreflightInFlightRef,
   });
@@ -5051,6 +5081,16 @@ export default function ChatView({
                   />
                 </div>
               ) : null}
+              {activeThread?.claudeCacheReview ? (
+                <div className="pb-2">
+                  <ComposerClaudeCacheReviewPanel
+                    key={`${threadId}:${activeThread.claudeCacheReview.reviewId}`}
+                    review={activeThread.claudeCacheReview}
+                    compactDisabledReason={claudeCompactDisabledReason}
+                    onRespond={onRespondToClaudeCacheReview}
+                  />
+                </div>
+              ) : null}
               {expiredQuestionDrafts[0] &&
               pendingUserInputs.length === 0 &&
               !activePendingApproval ? (
@@ -5313,6 +5353,7 @@ export default function ChatView({
                       busy: isSendBusy,
                       connecting: isConnecting,
                       expired: isSidechatExpired,
+                      hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                       preparingImages: isPreparingComposerImages,
                       preparingWorktree: isPreparingWorktree,
                       hasContent: composerSendState.hasSendableContent,
