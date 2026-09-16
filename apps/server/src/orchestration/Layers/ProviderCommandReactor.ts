@@ -3718,30 +3718,21 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // A start that never reached the provider (session pinned in `starting`
-    // or a turn-less `running` with no live turn) has nothing to interrupt.
-    // Settle it locally so Stop rescues stuck-starting threads instead of
-    // failing against a runtime that owns nothing. A late turn.started still
-    // re-establishes running afterwards via the normal ingestion path.
+    // The projection can lag a live turn. Only use session stop when neither
+    // side owns a turn to interrupt, and retire the runtime rather than just
+    // changing the UI state: a half-started session may still emit events.
     const interruptSession = thread.session;
     if (
       interruptSession !== null &&
       (interruptSession.status === "starting" || interruptSession.status === "running") &&
       interruptSession.activeTurnId === null &&
-      thread.latestTurn?.state !== "running"
+      thread.latestTurn?.state !== "running" &&
+      !(yield* hasLiveProviderTurn(input.threadId))
     ) {
-      yield* setThreadSession({
+      return yield* processThreadSessionStop({
         threadId: input.threadId,
-        session: {
-          ...interruptSession,
-          threadId: input.threadId,
-          status: "interrupted",
-          activeTurnId: null,
-          updatedAt: input.createdAt,
-        },
         createdAt: input.createdAt,
       });
-      return;
     }
 
     const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>
