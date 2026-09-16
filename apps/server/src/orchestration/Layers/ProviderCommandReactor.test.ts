@@ -1869,6 +1869,9 @@ describe("ProviderCommandReactor", () => {
           evidence === "confirmed-unacknowledged"
         ) {
           await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          // The ingestion waiter releases the send asynchronously. Entering
+          // sendTurn does not mean its durable acknowledgement has completed.
+          await waitFor(async () => (await readHarnessThread(harness))?.claudeCacheReview === null);
           expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
             "Resume the saved original message",
           );

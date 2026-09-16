@@ -41,6 +41,9 @@ Waiting for a choice releases the delivery lock. Other tasks continue normally; 
 the affected task waits. A response identifies the review and message, and stale or duplicate
 responses cannot authorize a different send. Relevant session, model, or context changes require
 revalidation. Archive, stop, and delete revoke pending authorization.
+Installing a hold and marking the session ready happen in one command. Admission checks the
+conversation journal for cancellation after the source request, including cancellation during a
+cache observation, so a delayed hold cannot revive a stopped task.
 
 The provider may accept a prompt before Synara persists the acknowledgement. This is not an
 exactly-once external API. An ambiguous delivery remains uncertain instead of being blindly
@@ -59,7 +62,9 @@ compaction boundary as well. A failed, interrupted, or unrelated operation canno
 message. The original message must not be bound to the temporary compaction turn.
 Release also waits for the compaction dispatch to settle and for runtime ingestion to acknowledge
 the terminal event. This prevents delayed compaction lifecycle events from consuming the restored
-pending-message binding. A matching uncertain review completes through one atomic internal command.
+pending-message binding. Claude's live turn state is settled before the adapter publishes completion,
+so a released send does not encounter the just-finished compaction as active work. A matching
+uncertain review completes through one atomic internal command.
 
 Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
 on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite

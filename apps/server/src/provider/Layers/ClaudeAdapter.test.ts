@@ -21,8 +21,9 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Queue, Random, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { vi } from "vitest";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
@@ -40,6 +41,11 @@ import {
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
 } from "./ClaudeAdapter.ts";
+
+vi.mock("effect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("effect")>();
+  return { ...actual, Queue: { ...actual.Queue } };
+});
 
 function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
   return makeClaudeAdapterLiveBase({
@@ -11747,6 +11753,96 @@ describe("ClaudeAdapterLive forkThread", () => {
 describe("Claude explicit native compaction", () => {
   const nativeSessionId = "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba1";
   const compactionTurnId = TurnId.makeUnsafe("native-compact-turn");
+
+  for (const firstTurnKind of ["ordinary", "compaction"] as const) {
+    it.effect(`settles ${firstTurnKind} state before publishing its terminal event`, () => {
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [
+        { name: "compact", description: "Compact context", argumentHint: "" },
+      ];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          resumeCursor: { resume: nativeSessionId },
+        });
+        const first = yield* firstTurnKind === "compaction"
+          ? adapter.startClaudeCompaction!({ threadId: THREAD_ID, turnId: compactionTurnId })
+          : adapter.sendTurn({ threadId: THREAD_ID, input: "First turn", attachments: [] });
+        const nextTurnStarted = yield* Deferred.make<void>();
+        const offer = Queue.offer;
+        const publication = vi.spyOn(Queue, "offer").mockImplementation((queue, message) => {
+          const offered = offer(queue, message);
+          if (
+            typeof message === "object" &&
+            message !== null &&
+            "type" in message &&
+            message.type === "turn.completed" &&
+            "turnId" in message &&
+            message.turnId === first.turnId
+          ) {
+            // Publish the terminal, then hold its producer until its consumer
+            // has inspected the session and dispatched the following turn.
+            return offered.pipe(Effect.tap(() => Deferred.await(nextTurnStarted)));
+          }
+          return offered;
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => publication.mockRestore()));
+        const continuation = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "turn.completed" && event.turnId === first.turnId,
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.flatMap(([terminal]) =>
+            Effect.gen(function* () {
+              assert.equal(terminal?.type, "turn.completed");
+              assert.equal(
+                terminal?.type === "turn.completed" ? terminal.payload.contextCompacted : undefined,
+                firstTurnKind === "compaction" ? true : undefined,
+              );
+              const [session] = yield* adapter.listSessions();
+              assert.equal(session?.status, "ready");
+              assert.isUndefined(session?.activeTurnId);
+              assert.equal((session?.resumeCursor as { turnCount?: number })?.turnCount, 1);
+              return yield* adapter.sendTurn({
+                threadId: THREAD_ID,
+                input: "Continue after the completed turn",
+                attachments: [],
+              });
+            }),
+          ),
+          Effect.ensuring(Deferred.succeed(nextTurnStarted, undefined)),
+          Effect.forkChild,
+        );
+        if (firstTurnKind === "compaction") {
+          emitCompactionBoundary(harness.query, nativeSessionId, "settled-boundary");
+        }
+        emitSuccessResult(harness.query, nativeSessionId, "settled-first", {
+          input_tokens: 11,
+          output_tokens: 2,
+        });
+        const next = yield* Fiber.join(continuation);
+        const completion = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "turn.completed"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        emitSuccessResult(harness.query, nativeSessionId, "settled-second", {});
+        const [terminal] = yield* Fiber.join(completion);
+        assert.equal(terminal?.turnId, next.turnId);
+        const [session] = yield* adapter.listSessions();
+        assert.equal(session?.status, "ready");
+        assert.isUndefined(session?.activeTurnId);
+        assert.equal((session?.resumeCursor as { turnCount?: number })?.turnCount, 2);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   for (const command of ["/compact", "/compact preserve the current investigation"]) {
     it.effect(
