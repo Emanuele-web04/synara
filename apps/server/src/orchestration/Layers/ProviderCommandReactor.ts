@@ -403,6 +403,27 @@ const sameClaudeCacheContext = (
   left.contextTokens === right.contextTokens &&
   left.lastResponseAt === right.lastResponseAt;
 
+const claudeCacheReviewCoversObservation = (
+  review: PendingClaudeCacheReview,
+  observation: ClaudeCacheObservation,
+): boolean => {
+  if (sameClaudeCacheContext(review.assessment, observation)) return true;
+  // Only the internal verified-compaction command emits Continue with the
+  // original compacting/uncertain review. Public choices carry pending/failed.
+  // Compact-and-send authorizes the reduced history in that same session, even
+  // when native cache timing still describes the expired pre-compaction prefix.
+  return (
+    (review.status === "compacting" || review.status === "uncertain") &&
+    review.compactionTurnId !== undefined &&
+    review.assessment.nativeSessionId === observation.nativeSessionId &&
+    review.assessment.lifecycleGeneration === observation.lifecycleGeneration &&
+    review.assessment.model === observation.model &&
+    review.assessment.contextTokens !== undefined &&
+    observation.contextTokens !== undefined &&
+    observation.contextTokens <= review.assessment.contextTokens
+  );
+};
+
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
@@ -2215,7 +2236,7 @@ const make = Effect.gen(function* () {
         observation &&
         assessment.requiresConfirmation &&
         (!input.acceptedCacheReview ||
-          !sameClaudeCacheContext(input.acceptedCacheReview.assessment, observation))
+          !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation))
       ) {
         const createdAt = new Date().toISOString();
         const hold = {
@@ -3576,7 +3597,26 @@ const make = Effect.gen(function* () {
         turnId: review.compactionTurnId!,
         createdAt: event.createdAt,
       })
-      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
+      .pipe(
+        Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+          Effect.gen(function* () {
+            if (error.detail === "Command produced no events.") return;
+            const current = (yield* resolveThread(event.threadId))?.claudeCacheReview;
+            if (
+              current?.reviewId === review.reviewId &&
+              current.compactionTurnId === event.turnId &&
+              (current.status === "compacting" || current.status === "uncertain")
+            ) {
+              yield* setClaudeCacheReview(
+                event.threadId,
+                { ...current, status: "failed", error: error.detail },
+                current.reviewId,
+              );
+            }
+            return yield* Effect.fail(error);
+          }),
+        ),
+      );
   });
 
   const processClaudeCacheResponse = (

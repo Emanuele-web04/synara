@@ -1331,6 +1331,142 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn).not.toHaveBeenCalled();
     });
 
+    it("releases the saved message once after verified compaction even when the remaining large context is expired", async () => {
+      const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness();
+      const review = await sendHeldMessage(harness);
+      await respondToReview(harness, review, "compact");
+      const turnId = startClaudeCompaction.mock.calls[0]?.[0].turnId;
+      expect(turnId).toBeTruthy();
+      setObservation({
+        ...review.assessment,
+        contextTokens: 110_000,
+        state: "likely-expired",
+        lastResponseAt: new Date().toISOString(),
+        observedAt: new Date().toISOString(),
+      });
+
+      await emitCompactionTerminal(harness, turnId!, {
+        state: "completed",
+        contextCompacted: true,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe("Continue with this exact message");
+      expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+      await emitCompactionTerminal(
+        harness,
+        turnId!,
+        { state: "completed", contextCompacted: true },
+        "large-expired-duplicate",
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(startClaudeCompaction).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["nativeSessionId", "lifecycleGeneration", "model"] as const)(
+      "does not reuse verified compaction consent after %s changes",
+      async (field) => {
+        const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness();
+        const review = await sendHeldMessage(harness);
+        await respondToReview(harness, review, "compact");
+        const turnId = startClaudeCompaction.mock.calls[0]?.[0].turnId;
+        expect(turnId).toBeTruthy();
+        setObservation({
+          ...review.assessment,
+          [field]: `${review.assessment[field]}-changed`,
+          contextTokens: 110_000,
+          state: "likely-expired",
+          lastResponseAt: new Date().toISOString(),
+          observedAt: new Date().toISOString(),
+        });
+
+        await emitCompactionTerminal(harness, turnId!, {
+          state: "completed",
+          contextCompacted: true,
+        });
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "pending",
+        );
+        await harness.drain();
+
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.claudeCacheReview).toMatchObject({
+          messageId: review.messageId,
+          assessment: { [field]: `${review.assessment[field]}-changed` },
+        });
+      },
+    );
+
+    it("requires another review when context grows beyond the consented size after compaction", async () => {
+      const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness();
+      const review = await sendHeldMessage(harness);
+      await respondToReview(harness, review, "compact");
+      const turnId = startClaudeCompaction.mock.calls[0]?.[0].turnId;
+      expect(turnId).toBeTruthy();
+      setObservation({
+        ...review.assessment,
+        contextTokens: 150_000,
+        state: "likely-expired",
+        lastResponseAt: new Date().toISOString(),
+        observedAt: new Date().toISOString(),
+      });
+
+      await emitCompactionTerminal(harness, turnId!, {
+        state: "completed",
+        contextCompacted: true,
+      });
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "pending",
+      );
+      await harness.drain();
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.claudeCacheReview?.assessment.contextTokens).toBe(
+        150_000,
+      );
+    });
+
+    it("surfaces a real invariant failure while releasing a verified compaction", async () => {
+      const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness();
+      const review = await sendHeldMessage(harness);
+      await respondToReview(harness, review, "compact");
+      const turnId = startClaudeCompaction.mock.calls[0]?.[0].turnId;
+      expect(turnId).toBeTruthy();
+      setObservation({
+        ...review.assessment,
+        contextTokens: 16_000,
+        state: "likely-warm",
+        lastResponseAt: new Date().toISOString(),
+      });
+      let rejectedCommands = 0;
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.claude-cache.compacted") return undefined;
+        rejectedCommands += 1;
+        return Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Simulated compaction release invariant violation.",
+          }),
+        );
+      });
+
+      await emitCompactionTerminal(harness, turnId!, {
+        state: "completed",
+        contextCompacted: true,
+      });
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "failed",
+      );
+      await harness.drain();
+
+      expect(rejectedCommands).toBe(1);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.claudeCacheReview?.error).toContain(
+        "Simulated compaction release invariant violation.",
+      );
+    });
+
     it.each(["accepted", "persistence-failure"] as const)(
       "waits for compaction dispatch settlement before releasing an early terminal (%s)",
       async (settlement) => {

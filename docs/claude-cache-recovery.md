@@ -65,6 +65,11 @@ the terminal event. This prevents delayed compaction lifecycle events from consu
 pending-message binding. Claude's live turn state is settled before the adapter publishes completion,
 so a released send does not encounter the just-finished compaction as active work. A matching
 uncertain review completes through one atomic internal command.
+That verified completion also authorizes sending with the reduced context in the same native
+session, generation, and model, even if the remaining history exceeds 100,000 tokens and the cache
+observation still reports expiry. Increased context or changed session identity requires a fresh
+review. An unexpected invariant failure while releasing the message leaves an actionable failed
+review and is reported instead of silently leaving compaction in progress.
 
 Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
 on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite
