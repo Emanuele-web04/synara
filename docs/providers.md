@@ -118,6 +118,21 @@ the native resume cursor and incorporates native resume metadata when the runtim
 Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
 transcript file size and base64 image size are not model token counts.
 
+When Claude has more than 100,000 context tokens and available evidence indicates an expired cache,
+Synara holds the next message before delivering it to the runtime. The composer lets you continue
+with the full history or cancel that send. The held message and attachments survive reconnects and
+server restarts; cancelling keeps the message in the conversation. An unresolved request blocks
+automatic queue promotion for that task, while other tasks can continue.
+Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
+or rollback recorded after the original request prevents a delayed cache check from restoring it.
+
+This check also covers long pauses in an existing process and model changes on the next send.
+A warm observation for the previous model cannot bypass the review for a different requested model;
+checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
+Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
+imported sessions without timing evidence remain unknown, so a warning cannot be guaranteed for
+them. The check makes no model request to keep a cache warm or measure its state.
+
 ## Switching providers
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to
