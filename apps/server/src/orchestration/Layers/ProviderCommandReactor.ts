@@ -2018,9 +2018,8 @@ const make = Effect.gen(function* () {
     reviewId: string,
     status: "responding" | "compacting",
   ) =>
-    orchestrationEngine.getReadModel().pipe(
-      Effect.map((snapshot) => {
-        const thread = snapshot.threads.find((entry) => entry.id === threadId);
+    resolveThread(threadId).pipe(
+      Effect.map((thread) => {
         return (
           !!thread &&
           thread.deletedAt == null &&

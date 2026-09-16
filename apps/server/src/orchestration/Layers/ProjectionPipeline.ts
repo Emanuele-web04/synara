@@ -181,6 +181,7 @@ const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.deleted",
   "thread.archived",
   "thread.session-stop-requested",
   "thread.claude-cache-response-requested",
@@ -1278,6 +1279,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.deleted":
         case "thread.archived":
         case "thread.session-stop-requested":
           yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
