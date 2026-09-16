@@ -14,6 +14,27 @@ const input = {
 };
 
 describe("AsyncUserInputCard", () => {
+  it("reopens after rollback even when this client has an optimistic accepted answer", async () => {
+    const questions = [{ title: "Which option?", options: ["A", "B"] }];
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const screen = await render(
+      <AsyncUserInputCard messageId={messageId} input={{ questions }} onRespond={onRespond} />,
+    );
+    await screen.getByRole("button", { name: "1 question", exact: true }).click();
+    await screen.getByRole("button", { name: "Send answer" }).click();
+    await expect.element(screen.getByText("Answered", { exact: true })).toBeVisible();
+    await screen.rerender(
+      <AsyncUserInputCard
+        messageId={messageId}
+        input={{ questions, responseSequence: 10 }}
+        onRespond={onRespond}
+      />,
+    );
+    await expect.element(screen.getByText("Answered", { exact: true })).not.toBeInTheDocument();
+    await screen.getByRole("button", { name: /B/ }).click();
+    await screen.getByRole("button", { name: "Send answer" }).click();
+    expect(onRespond).toHaveBeenLastCalledWith(messageId, ["B"]);
+  });
   it("requires an explicit submission, allows free text, and prevents double clicks", async () => {
     let accept!: () => void;
     const onRespond = vi.fn(

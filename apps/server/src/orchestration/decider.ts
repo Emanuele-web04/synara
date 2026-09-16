@@ -1825,7 +1825,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
-          source: "native",
+          source: questionResponse ? "async-user-input" : "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1887,20 +1887,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               occurredAt: command.createdAt,
               commandId: command.commandId,
             }),
-            type: "thread.message-sent",
+            type: "thread.async-user-input-answered",
             payload: {
-              ...questionMessage,
               threadId: command.threadId,
               messageId: questionMessage.id,
-              asyncUserInput: {
-                questions: questionMessage.asyncUserInput.questions,
-                response: {
-                  messageId: command.message.messageId,
-                  answers: questionResponse.answers,
-                },
+              response: {
+                messageId: command.message.messageId,
+                answers: questionResponse.answers,
               },
-              // Answering changes metadata, not when the assistant finished this message.
-              updatedAt: questionMessage.updatedAt,
             },
           },
           userMessageEvent,

@@ -143,6 +143,11 @@ or restarting Synara restores that state. Concurrent submissions are admitted on
 by the server; a second client refreshes the accepted answer. Normal turn-delivery
 errors remain visible on the conversation, as for any other user message.
 
+Rolling back a turn or reverting a checkpoint that removes an answer reopens its
+question. Formatted question replies do not offer plain-text edit-and-resend, so
+the capsule and the submitted message cannot show different answers. Answer updates
+preserve the original assistant message's completion time and turn summary.
+
 ### App-server protocol
 
 Verified with codex-cli **0.154.0**, its generated experimental TypeScript schemas,

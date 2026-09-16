@@ -14,6 +14,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { mergeAsyncUserInput } from "@synara/shared/asyncUserInput";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
@@ -548,10 +549,7 @@ export function normalizeChatMessage(
   const previousSkills = previous?.skills ?? [];
   const previousMentions = previous?.mentions ?? [];
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
-  // Answers are immutable; a lagging snapshot must not reopen a submitted card.
-  const asyncUserInput = previous?.asyncUserInput?.response
-    ? previous.asyncUserInput
-    : (incoming.asyncUserInput ?? previous?.asyncUserInput);
+  const asyncUserInput = mergeAsyncUserInput(previous?.asyncUserInput, incoming.asyncUserInput);
   if (
     previous &&
     previous.role === incoming.role &&
@@ -786,9 +784,10 @@ function mergeReadModelMessagesWithLiveHotPath(
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
       startsNewTurn: incomingMessage.startsNewTurn ?? previousMessage.startsNewTurn,
-      asyncUserInput: previousMessage.asyncUserInput?.response
-        ? previousMessage.asyncUserInput
-        : (incomingMessage.asyncUserInput ?? previousMessage.asyncUserInput),
+      asyncUserInput: mergeAsyncUserInput(
+        previousMessage.asyncUserInput,
+        incomingMessage.asyncUserInput,
+      ),
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,

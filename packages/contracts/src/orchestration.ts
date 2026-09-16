@@ -312,6 +312,7 @@ export type ThreadEnvironmentMode = typeof ThreadEnvironmentMode.Type;
 
 export const OrchestrationMessageSource = Schema.Literals([
   "native",
+  "async-user-input",
   "handoff-import",
   "fork-import",
 ]);
@@ -1730,6 +1731,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
+  "thread.async-user-input-answered",
   "thread.turn-queued",
   "thread.turn-start-requested",
   "thread.goal-continuation-requested",
@@ -1999,6 +2001,12 @@ export const ThreadMessageSentPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadAsyncUserInputAnsweredPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  response: AsyncUserInputResponse,
+});
+
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -2251,6 +2259,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
     payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.async-user-input-answered"),
+    payload: ThreadAsyncUserInputAnsweredPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

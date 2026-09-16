@@ -3,6 +3,7 @@ import {
   encodeMessageTextFallback,
 } from "../../persistence/messageTextChunks.ts";
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -159,6 +160,7 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
 
 const THREAD_MESSAGE_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.message-sent",
+  "thread.async-user-input-answered",
   "thread.reverted",
   "thread.conversation-rolled-back",
 ]);
@@ -957,6 +959,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.async-user-input-answered": {
+          const existingMessage = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          if (Option.isSome(existingMessage) && existingMessage.value.asyncUserInput) {
+            yield* projectionThreadMessageRepository.upsert({
+              ...existingMessage.value,
+              asyncUserInput: {
+                ...existingMessage.value.asyncUserInput,
+                response: event.payload.response,
+                responseSequence: event.sequence,
+              },
+            });
+          }
+          return;
+        }
         case "thread.message-sent": {
           if (event.payload.role === "assistant") {
             if (event.payload.streaming) {
@@ -1082,6 +1101,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadMessageRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
+          keptRows = clearRemovedAsyncUserInputResponses(
+            keptRows,
+            new Set(keptRows.map((message) => message.messageId)),
+            event.sequence,
+          );
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert);
           // Reinserted retained messages must still reject deltas from before
           // this rollback, even though their chunk rows have been compacted.

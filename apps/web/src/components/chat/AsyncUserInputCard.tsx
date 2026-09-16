@@ -47,10 +47,15 @@ export function AsyncUserInputCard({
   const [open, setOpen] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [submittedAnswers, setSubmittedAnswers] = useState<readonly string[] | null>(null);
+  const [submission, setSubmission] = useState<{
+    answers: readonly string[];
+    responseSequence: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const acceptedAnswers = input.response?.answers ?? submittedAnswers;
+  const acceptedAnswers =
+    input.response?.answers ??
+    (submission?.responseSequence === (input.responseSequence ?? 0) ? submission.answers : null);
   const answered = acceptedAnswers !== null;
   const disabled = answered || submitting || !onRespond;
   const progress = derivePendingUserInputProgress(questions, answers, questionIndex);
@@ -73,7 +78,7 @@ export function AsyncUserInputCard({
     setError(null);
     try {
       await onRespond!(messageId, response);
-      setSubmittedAnswers(response);
+      setSubmission({ answers: response, responseSequence: input.responseSequence ?? 0 });
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "The answer could not be submitted. Try again.",

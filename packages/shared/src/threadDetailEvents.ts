@@ -2,6 +2,7 @@ import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
 
 export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",
+  "thread.async-user-input-answered",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",
   "thread.turn-diff-completed",

@@ -11,6 +11,9 @@ type TurnMessageLike<TTurnId extends string = string> = {
 type EditableMessageLike = TurnMessageLike & {
   readonly role: string;
   readonly source?: string | undefined;
+  readonly asyncUserInput?:
+    | { readonly response?: { readonly messageId: string } | undefined }
+    | undefined;
 };
 
 export type TailUserMessageEditTarget =
@@ -28,6 +31,7 @@ export type TailUserMessageEditTarget =
         | "missing-message"
         | "not-user-message"
         | "non-native-message"
+        | "structured-answer"
         | "not-latest-native-user-message"
         | "missing-turn-metadata"
         | "spans-multiple-turns";
@@ -81,6 +85,9 @@ export function resolveTailUserMessageEditTarget(input: {
   }
   if (!isNativeEditableSource(message.source)) {
     return { editable: false, reason: "non-native-message" };
+  }
+  if (input.messages.some((entry) => entry.asyncUserInput?.response?.messageId === message.id)) {
+    return { editable: false, reason: "structured-answer" };
   }
 
   const latestNativeUserIndex = findLatestNativeUserMessageIndex(input.messages);

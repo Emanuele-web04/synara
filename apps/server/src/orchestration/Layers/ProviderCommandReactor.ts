@@ -2768,7 +2768,9 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(threadId);
     if (!thread) return null;
     const userMessages = thread.messages.filter(
-      (message) => message.role === "user" && message.source === "native",
+      (message) =>
+        message.role === "user" &&
+        (message.source === "native" || message.source === "async-user-input"),
     );
     return userMessages.length === 1 && userMessages[0]?.id === messageId ? thread : null;
   });

@@ -7,6 +7,34 @@ import {
 } from "./conversationEdit";
 
 describe("conversationEdit", () => {
+  it("rejects generated question replies even when the question is outside the loaded history", () => {
+    expect(
+      resolveLatestTailUserMessageEditTarget({
+        messages: [{ id: "answer", role: "user", source: "async-user-input", turnId: "turn-2" }],
+      }).editable,
+    ).toBe(false);
+    expect(
+      resolveTailUserMessageEditTarget({
+        messages: [{ id: "answer", role: "user", source: "async-user-input", turnId: "turn-2" }],
+        messageId: "answer",
+      }).editable,
+    ).toBe(false);
+  });
+
+  it("also protects legacy native replies linked to a structured question", () => {
+    expect(
+      resolveLatestTailUserMessageEditTarget({
+        messages: [
+          {
+            id: "question",
+            role: "assistant",
+            asyncUserInput: { response: { messageId: "answer" } },
+          },
+          { id: "answer", role: "user", source: "native", turnId: "turn-2" },
+        ],
+      }),
+    ).toEqual({ editable: false, reason: "structured-answer" });
+  });
   it("collects unique turn ids from a target message through the tail", () => {
     expect(
       collectTailTurnIds({

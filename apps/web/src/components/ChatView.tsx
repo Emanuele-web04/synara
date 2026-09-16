@@ -2105,7 +2105,9 @@ export default function ChatView({
   const hasNativeUserMessages = useMemo(
     () =>
       activeThread?.messages.some(
-        (message) => message.role === "user" && message.source === "native",
+        (message) =>
+          message.role === "user" &&
+          (message.source === "native" || message.source === "async-user-input"),
       ) ?? false,
     [activeThread?.messages],
   );
