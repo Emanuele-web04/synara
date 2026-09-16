@@ -2008,6 +2008,29 @@ const make = Effect.gen(function* () {
         ),
       );
 
+  const isClaudeReviewAuthorized = (
+    threadId: ThreadId,
+    reviewId: string,
+    status: "responding" | "compacting",
+  ) =>
+    orchestrationEngine.getReadModel().pipe(
+      Effect.map((snapshot) => {
+        const thread = snapshot.threads.find((entry) => entry.id === threadId);
+        return (
+          !!thread &&
+          thread.deletedAt == null &&
+          thread.archivedAt == null &&
+          !isExpiredSidechat(thread) &&
+          thread.claudeCacheReview?.reviewId === reviewId &&
+          thread.claudeCacheReview.status === status &&
+          thread.messages.some(
+            (message) =>
+              message.id === thread.claudeCacheReview?.messageId && message.role === "user",
+          )
+        );
+      }),
+    );
+
   const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageId: string;
@@ -2160,7 +2183,16 @@ const make = Effect.gen(function* () {
     if (activeSession.provider === "claudeAgent" && input.dispatchMode !== "steer") {
       const latestThread = yield* resolveThread(input.threadId);
       const pendingReview = latestThread?.claudeCacheReview;
-      if (pendingReview && pendingReview.reviewId !== input.acceptedCacheReview?.reviewId) return;
+      if (input.acceptedCacheReview) {
+        if (
+          !(yield* isClaudeReviewAuthorized(
+            input.threadId,
+            input.acceptedCacheReview.reviewId,
+            "responding",
+          ))
+        )
+          return;
+      } else if (pendingReview) return;
       const observation = providerService.getClaudeCacheObservation
         ? yield* providerService
             .getClaudeCacheObservation(input.threadId)
@@ -2476,9 +2508,25 @@ const make = Effect.gen(function* () {
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
     const sendQueuedProviderTurn = (messageText: string | undefined) =>
-      providerService.sendTurn({
-        ...providerTurnInput,
-        ...(messageText ? { input: messageText } : {}),
+      Effect.gen(function* () {
+        if (
+          input.acceptedCacheReview &&
+          !(yield* isClaudeReviewAuthorized(
+            input.threadId,
+            input.acceptedCacheReview.reviewId,
+            "responding",
+          ))
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: selectedProvider,
+            operation: "thread.turn.start",
+            issue: "The saved send was cancelled before delivery.",
+          });
+        }
+        return yield* providerService.sendTurn({
+          ...providerTurnInput,
+          ...(messageText ? { input: messageText } : {}),
+        });
       });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {

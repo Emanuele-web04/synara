@@ -1311,6 +1311,79 @@ describe("ProviderCommandReactor", () => {
       ).toEqual([]);
     });
 
+    it.each(["archive", "stop", "rollback"] as const)(
+      "revokes an accepted Continue when %s arrives during cache revalidation",
+      async (action) => {
+        const observation = expiredCacheObservation();
+        let getterCalls = 0;
+        let releaseObservation!: (observation: ClaudeCacheObservation) => void;
+        const observationGate = new Promise<ClaudeCacheObservation>((resolve) => {
+          releaseObservation = resolve;
+        });
+        const harness = await createHarness({
+          threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          getClaudeCacheObservation: () => {
+            getterCalls += 1;
+            return getterCalls === 2
+              ? Effect.promise(() => observationGate)
+              : Effect.succeed(observation);
+          },
+        });
+        const review = await sendHeldMessage(harness);
+        try {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.claude-cache.respond",
+              commandId: CommandId.makeUnsafe("cmd-cache-continue-during-revalidation"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              reviewId: review.reviewId,
+              messageId: review.messageId,
+              decision: "continue",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          await waitFor(() => getterCalls === 2);
+          await Effect.runPromise(
+            harness.engine.dispatch(
+              action === "archive"
+                ? {
+                    type: "thread.archive",
+                    commandId: CommandId.makeUnsafe("cmd-cache-archive-during-revalidation"),
+                    threadId: ThreadId.makeUnsafe("thread-1"),
+                  }
+                : action === "stop"
+                  ? {
+                      type: "thread.session.stop",
+                      commandId: CommandId.makeUnsafe("cmd-cache-stop-during-revalidation"),
+                      threadId: ThreadId.makeUnsafe("thread-1"),
+                      createdAt: new Date().toISOString(),
+                    }
+                  : {
+                      type: "thread.conversation.rollback.complete",
+                      commandId: CommandId.makeUnsafe("cmd-cache-rollback-during-revalidation"),
+                      threadId: ThreadId.makeUnsafe("thread-1"),
+                      messageId: review.messageId,
+                      numTurns: 1,
+                      createdAt: new Date().toISOString(),
+                    },
+            ),
+          );
+        } finally {
+          releaseObservation(observation);
+        }
+        await harness.drain();
+
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.claudeCacheReview?.status).not.toBe(
+          "responding",
+        );
+        if (action === "rollback") {
+          expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("failed");
+          expect((await readHarnessThread(harness))?.messages).toEqual([]);
+        }
+      },
+    );
+
     it("settles a removed held message as failed instead of leaving the review responding", async () => {
       const observation = expiredCacheObservation();
       const harness = await createCacheHarness(() => observation);
