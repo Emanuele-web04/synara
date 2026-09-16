@@ -114,51 +114,40 @@ afterEach(() => {
 });
 
 describe("Codex session startup failures", () => {
-  it("allows a slow historical resume to outlive the ordinary request deadline", async () => {
-    vi.useFakeTimers();
-    const { manager, input, requests } = createStartupHarness("thread/resume", "delayed-response");
-    const result = manager.startSession(input);
-    let settled = false;
-    void result.finally(() => {
-      settled = true;
-    });
+  it.each(["thread/start", "thread/resume", "thread/fork"])(
+    "keeps %s on the existing request deadline",
+    async (method) => {
+      vi.useFakeTimers();
+      const { manager, input, requests } = createStartupHarness(
+        method,
+        "delayed-response",
+        method === "thread/resume",
+      );
+      const result = manager
+        .startSession({
+          ...input,
+          ...(method === "thread/fork"
+            ? { forkSourceResumeCursor: { threadId: "codex-source-thread" } }
+            : {}),
+        })
+        .catch((error: unknown) => error);
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
 
-    await vi.waitFor(() => expect(requests).toContain("thread/resume"));
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(requests).toContain(method));
+      // vi.waitFor advances fake time while the async startup reaches the open request.
+      // Stay comfortably below the ordinary deadline before crossing it.
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(result).resolves.toMatchObject({
-      status: "ready",
-      resumeCursor: { threadId: "native-thread" },
-    });
-    await manager.stopAll();
-  });
-
-  it("keeps fresh thread starts on the ordinary request deadline", async () => {
-    vi.useFakeTimers();
-    const { manager, input, requests } = createStartupHarness(
-      "thread/start",
-      "delayed-response",
-      false,
-    );
-    const result = manager.startSession(input).catch((error: unknown) => error);
-    let settled = false;
-    void result.then(() => {
-      settled = true;
-    });
-
-    await vi.waitFor(() => expect(requests).toContain("thread/start"));
-    // vi.waitFor advances fake time while the async startup reaches thread/start.
-    // Stay comfortably below the ordinary deadline before crossing it.
-    await vi.advanceTimersByTimeAsync(19_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(result).resolves.toMatchObject({ message: "Timed out waiting for thread/start." });
-    expect(settled).toBe(true);
-    expect(manager.listSessions()).toEqual([]);
-  });
+      await expect(result).resolves.toMatchObject({ message: `Timed out waiting for ${method}.` });
+      expect(settled).toBe(true);
+      expect(manager.listSessions()).toEqual([]);
+    },
+  );
 
   it.each([
     ["initialize", "error"],
