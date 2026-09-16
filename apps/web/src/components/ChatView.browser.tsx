@@ -72,8 +72,15 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
+<<<<<<< HEAD
 import { isMacNavigatorPlatform, randomUUID } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
+||||||| parent of b5bf3af71 (feat(web): add composer model presets)
+import { isMacNavigatorPlatform } from "../lib/utils";
+=======
+import { isMacNavigatorPlatform } from "../lib/utils";
+import { COMPOSER_MODEL_PRESETS_STORAGE_KEY } from "../lib/composerModelPresets";
+>>>>>>> b5bf3af71 (feat(web): add composer model presets)
 import { readNativeApi } from "../nativeApi";
 import { DEFAULT_THEME_STATE, getCodeThemeSeed } from "~/theme/theme.logic";
 import { emitWsTransportState } from "../wsTransportEvents";
@@ -9814,6 +9821,132 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+<<<<<<< HEAD
+||||||| parent of b5bf3af71 (feat(web): add composer model presets)
+  it("opens the composer model picker surface", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-shortcut" as MessageId,
+        targetText: "model picker shortcut",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
+      composerEditor.focus();
+      dispatchComposerPickerShortcut(composerEditor, "m");
+
+      await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+=======
+  it.each([false, true])(
+    "restores a model-and-effort preset through ChatView (new draft=%s)",
+    async (newDraft) => {
+      localStorage.setItem(
+        COMPOSER_MODEL_PRESETS_STORAGE_KEY,
+        JSON.stringify([
+          {
+            provider: "codex",
+            model: "gpt-5.5",
+            reasoning: {
+              kind: "effort",
+              optionId: "reasoningEffort",
+              value: "xhigh",
+              label: "Extra High",
+            },
+          },
+          {
+            provider: "claudeAgent",
+            model: "claude-opus-5",
+            reasoning: { kind: "effort", optionId: "effort", value: "max", label: "Max" },
+          },
+        ]),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("msg-preset"),
+          targetText: "Preset integration",
+        }),
+      });
+      try {
+        let targetThreadId = THREAD_ID;
+        if (newDraft) {
+          await page.getByTestId("new-thread-button").click();
+          const path = await waitForURL(
+            mounted.router,
+            (path) => UUID_ROUTE_RE.test(path),
+            "Expected a new draft.",
+          );
+          targetThreadId = ThreadId.makeUnsafe(path.slice(1));
+        }
+        const trigger = page.getByRole("button", {
+          name: "Change model and reasoning",
+          exact: true,
+        });
+        await expect.element(trigger).toBeVisible();
+        await trigger.click();
+        await expect
+          .element(page.getByRole("group", { name: "Presets", exact: true }))
+          .toBeVisible();
+        expect(document.body.textContent?.includes("Opus 5 · Max")).toBe(newDraft);
+        await page
+          .getByRole("menuitem", { name: "Apply GPT-5.5 · Extra High (Codex)", exact: true })
+          .click();
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+        await vi.waitFor(() => {
+          const state = useComposerDraftStore.getState();
+          expect(
+            state.draftsByThreadId[targetThreadId]?.modelSelectionByProvider.codex,
+          ).toMatchObject({ model: "gpt-5.5", options: { reasoningEffort: "xhigh" } });
+          expect(state.stickyModelSelectionByProvider.codex).toMatchObject({
+            model: "gpt-5.5",
+            options: { reasoningEffort: "xhigh" },
+          });
+        });
+        await trigger.click();
+        const slider = page.getByRole("slider", { name: "Reasoning effort" });
+        await expect.element(slider).toHaveAttribute("aria-valuetext", "Extra High");
+        await slider.element().focus();
+        await userEvent.keyboard("{Home}");
+        await expect
+          .element(page.getByRole("button", { name: "Save GPT-5.5 · Low as preset" }))
+          .toBeVisible();
+        await userEvent.keyboard("{Escape}");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("opens the composer model picker surface", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-shortcut" as MessageId,
+        targetText: "model picker shortcut",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
+      composerEditor.focus();
+      dispatchComposerPickerShortcut(composerEditor, "m");
+
+      await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+>>>>>>> b5bf3af71 (feat(web): add composer model presets)
   it("cycles the active provider model without opening the picker", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
