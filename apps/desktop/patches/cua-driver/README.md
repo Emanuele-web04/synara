@@ -97,6 +97,20 @@ Revision 14 reports the exact layer-0 window's Space metadata from
 lookup as input admission, while retaining the any-layer fallback needed to
 identify unsupported accessory surfaces.
 
+Revision 15 rebases the patch from cua-driver 0.24.0 (`4b3396d9`) onto 0.28.2
+(`fc188250`) and bumps the native revision literal to 15. The upstream changes
+inherited in the same files are the macOS click-delivery split (#2907
+background is one SkyLight post with a public fallback, foreground is one
+public pid post), the cursor overlay exclusion from foreground verification
+(#3704), the embedded-host build fix (#3687), the desktop snapshot identity and
+payload ownership rework (#3616) and the macOS browser checkbox read (#3404).
+Synara's admission-gate wrapping, single-transport event posting, exact-target
+delivery modes and retained semantic-text delivery are preserved on top; the
+only judgment call is that `MousePostMode::Both` now means one SkyLight-first
+submission instead of the upstream duplicate SkyLight plus public post, and
+`click_at_xy_native_with_window_local` preserves the non-Chromium synthetic
+recipe on the background path.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event
