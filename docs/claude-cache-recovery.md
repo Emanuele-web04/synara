@@ -53,6 +53,7 @@ existing edit-and-resend action is available for a message with no provider turn
 ## Native compaction
 
 Command discovery is local and bounded. Unsupported runtimes leave compaction unavailable. The
+adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
 adapter requires an idle session with no pending interactions or tasks that share the context, and
 rechecks that condition after asynchronous preparation. It preserves the current model, permission
 mode, and settings. Plan and Ultrathink prompt prefixes must not be prepended to a native command.
@@ -75,6 +76,16 @@ failures and cancellation still propagate. If a native compaction has neither a 
 event nor a matching live turn, its uncertain control delivery is abandoned without retrying it.
 The saved message stays held for a fresh choice. Uncertainty about delivery of the user's message
 after compaction remains quarantined and requires separate reconciliation.
+
+Stopping or archiving remains available while delivery is uncertain. Revoking the send review does
+not discard the persisted compaction execution evidence: matching late terminal events can settle
+the control delivery without restoring consent or sending the cancelled message. Startup uses the
+same evidence when the visible review has already been cleared.
+
+The standalone compact action retains its exact command in browser session storage until acceptance
+is observed in the conversation. Retrying after a lost acknowledgement reuses the command receipt,
+including after route changes or a page reload. A proven server rejection releases that identity;
+a timeout or transport error does not create a new compaction.
 
 Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
 on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite

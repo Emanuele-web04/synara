@@ -6026,7 +6026,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (isCompaction) {
           const commands = yield* Effect.tryPromise({
             try: () => context.query.supportedCommands(),
-            catch: (cause) => toRequestError(input.threadId, "context/compact/discovery", cause),
+            // Discovery is read-only and precedes prompt enqueue. A failed
+            // lookup proves that this compaction request was never dispatched.
+            catch: (cause) =>
+              new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "startClaudeCompaction",
+                issue: `Could not discover native compaction support: ${toMessage(cause, "Command discovery failed.")}`,
+              }),
           }).pipe(Effect.timeoutOption(CLAUDE_CONTEXT_USAGE_TIMEOUT_MS));
           if (
             Option.isNone(commands) ||

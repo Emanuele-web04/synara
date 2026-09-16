@@ -89,6 +89,10 @@ import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationCommandPreviouslyRejectedError,
+} from "./orchestration/Errors";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -288,9 +292,20 @@ function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
   });
 }
 
-function toWsRpcError(cause: unknown, fallbackMessage: string) {
+export function toWsRpcError(cause: unknown, fallbackMessage: string) {
   if (Schema.is(WsRpcError)(cause)) {
     return cause;
+  }
+  if (
+    cause instanceof OrchestrationCommandInvariantError ||
+    cause instanceof OrchestrationCommandPreviouslyRejectedError
+  ) {
+    return new WsRpcError({
+      message: cause.message,
+      code: "ORCHESTRATION_COMMAND_REJECTED",
+      retryable: false,
+      cause,
+    });
   }
   // Missing projector cursors make the snapshot fence underivable. Mark the
   // failure non-retryable with its own code so clients surface a diagnosable

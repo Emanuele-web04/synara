@@ -11751,6 +11751,26 @@ describe("ClaudeAdapterLive forkThread", () => {
 });
 
 describe("Claude explicit native compaction", () => {
+  it.effect("discovery failure is provably rejected before dispatch", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      vi.spyOn(harness.query, "supportedCommands").mockRejectedValue(
+        new Error("Transient command discovery RPC failure"),
+      );
+      const failure = yield* adapter.startClaudeCompaction!({
+        threadId: THREAD_ID,
+        turnId: TurnId.makeUnsafe("review-compact"),
+      }).pipe(Effect.flip);
+      assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+      assert.equal(failure._tag, "ProviderAdapterValidationError");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   const nativeSessionId = "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba1";
   const compactionTurnId = TurnId.makeUnsafe("native-compact-turn");
 

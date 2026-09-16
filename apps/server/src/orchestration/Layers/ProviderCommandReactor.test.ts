@@ -1206,6 +1206,101 @@ describe("ProviderCommandReactor", () => {
       await harness.drain();
     }
 
+    it("discovery error leaves the held message retryable", async () => {
+      const { harness, startClaudeCompaction } = await createCompactionHarness();
+      const review = await sendHeldMessage(harness);
+      startClaudeCompaction.mockImplementation(() =>
+        Effect.fail(
+          new ProviderAdapterValidationError({
+            provider: "claudeAgent",
+            operation: "startClaudeCompaction",
+            issue:
+              "Could not discover native compaction support: Transient command discovery RPC failure",
+          }),
+        ),
+      );
+      await respondToReview(harness, review, "compact");
+      const blocker = await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-1",
+        }),
+      );
+      expect({
+        status: (await readHarnessThread(harness))?.claudeCacheReview?.status,
+        blocked: Option.isSome(blocker),
+      }).toEqual({ status: "failed", blocked: false });
+    });
+    it.each([
+      { cancellation: "stop", terminal: "completed" },
+      { cancellation: "archive", terminal: "completed" },
+      { cancellation: "stop", terminal: "aborted" },
+    ] as const)(
+      "$cancellation preserves recovery of an uncertain compaction ($terminal)",
+      async ({ cancellation, terminal }) => {
+        const { harness, startClaudeCompaction } = await createCompactionHarness();
+        const review = await sendHeldMessage(harness);
+        startClaudeCompaction.mockImplementation(() =>
+          Effect.fail(
+            new ProviderSessionDirectoryPersistenceError({
+              operation: "startClaudeCompaction.persist",
+              detail: "Accepted but persistence failed",
+              cause: new PersistenceSqlError({
+                operation: "persistCompaction",
+                detail: "SQL unavailable",
+              }),
+            }),
+          ),
+        );
+        await respondToReview(harness, review, "compact");
+        const uncertain = (await readHarnessThread(harness))?.claudeCacheReview;
+        expect(uncertain?.status).toBe("uncertain");
+        const turnId = uncertain!.compactionTurnId!;
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: cancellation === "stop" ? "thread.session.stop" : "thread.archive",
+            commandId: CommandId.makeUnsafe("review-stop"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await harness.drain();
+        await emitCompactionTerminal(
+          harness,
+          asTurnId("unrelated-late-terminal"),
+          {
+            state: "completed",
+            contextCompacted: true,
+          },
+          "unrelated",
+        );
+        expect(
+          await Effect.runPromise(
+            harness.reactor.listBlockingDeliveries({
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              limit: 10,
+            }),
+          ),
+        ).toHaveLength(1);
+        await emitCompactionTerminal(harness, turnId, {
+          state: terminal,
+          contextCompacted: true,
+        });
+        const blocker = await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: "thread-1",
+          }),
+        );
+        expect({
+          stopped: harness.stopRuntimeSession.mock.calls.length,
+          blocked: Option.isSome(blocker),
+          review: (await readHarnessThread(harness))?.claudeCacheReview,
+        }).toEqual({ stopped: 1, blocked: false, review: null });
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      },
+    );
+
     it("persists compacting before native dispatch and keeps the user message pending", async () => {
       const { harness, startClaudeCompaction } = await createCompactionHarness();
       const review = await sendHeldMessage(harness);
@@ -1862,6 +1957,8 @@ describe("ProviderCommandReactor", () => {
     it.each([
       "confirmed",
       "confirmed-after-reconciliation",
+      "cancelled-confirmed",
+      "cancelled-missing",
       "confirmed-unacknowledged",
       "confirmed-invariant-failure",
       "confirmed-infrastructure-defect",
@@ -1937,7 +2034,8 @@ describe("ProviderCommandReactor", () => {
                 evidence === "failed-recovery-interrupted"
                   ? "failed"
                   : evidence === "confirmed-after-reconciliation" ||
-                      evidence === "uncertain-missing"
+                      evidence === "uncertain-missing" ||
+                      evidence.startsWith("cancelled-")
                     ? "uncertain"
                     : "compacting",
               compactionTurnId: turnId,
@@ -1959,7 +2057,9 @@ describe("ProviderCommandReactor", () => {
             }),
           );
           await Effect.runPromise(
-            (evidence === "uncertain-missing" || evidence === "failed-recovery-interrupted") &&
+            (evidence === "uncertain-missing" ||
+              evidence === "failed-recovery-interrupted" ||
+              evidence.startsWith("cancelled-")) &&
               eventSequence === compactResponse.sequence
               ? harness.deliveryRepository.markTerminalFailure({
                   consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -2031,6 +2131,7 @@ describe("ProviderCommandReactor", () => {
         let terminalSequence: number | undefined;
         if (
           evidence !== "missing" &&
+          evidence !== "cancelled-missing" &&
           evidence !== "uncertain-missing" &&
           evidence !== "failed-recovery-interrupted" &&
           evidence !== "uncertain-user-delivery"
@@ -2163,10 +2264,30 @@ describe("ProviderCommandReactor", () => {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           return;
         }
+        if (evidence.startsWith("cancelled-")) {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.session.stop",
+              commandId: CommandId.makeUnsafe("cancel-before-recovery"),
+              threadId,
+              createdAt: now,
+            }),
+          );
+        }
         await harness.startReactor();
         await harness.drain();
 
         expect(startClaudeCompaction).not.toHaveBeenCalled();
+        if (evidence.startsWith("cancelled-")) {
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+          expect(
+            await Effect.runPromise(
+              harness.reactor.listBlockingDeliveries({ threadId, limit: 10 }),
+            ),
+          ).toEqual([]);
+          return;
+        }
         if (evidence === "uncertain-user-delivery") {
           expect(harness.sendTurn).not.toHaveBeenCalled();
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("uncertain");

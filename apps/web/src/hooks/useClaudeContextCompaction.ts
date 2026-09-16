@@ -2,6 +2,7 @@ import type { MessageId, ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toastManager } from "../components/ui/toast";
 import { newCommandId, newMessageId } from "../lib/utils";
+import { useClaudeCompactionRequests } from "../lib/claudeCompactionRequests";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
@@ -32,6 +33,23 @@ export function useClaudeContextCompaction({
   );
   useEffect(() => {
     activeThreadIdRef.current = threadId;
+  }, [threadId]);
+
+  useEffect(() => {
+    const forgetObservedRequest = () => {
+      const pending = useClaudeCompactionRequests.getState();
+      const request = pending.requests[threadId];
+      if (!request) return;
+      const current = getThreadFromState(useStore.getState(), threadId);
+      if (
+        current?.claudeCacheReview?.messageId === request.message.messageId ||
+        current?.messages.some((message) => message.id === request.message.messageId)
+      ) {
+        pending.forget(threadId);
+      }
+    };
+    forgetObservedRequest();
+    return useStore.subscribe(forgetObservedRequest);
   }, [threadId]);
 
   const compact = useCallback(async (): Promise<boolean> => {
@@ -67,21 +85,29 @@ export function useClaudeContextCompaction({
     )
       return false;
 
-    const messageId = newMessageId();
+    const pending = useClaudeCompactionRequests.getState();
+    const command = pending.requests[threadId] ?? {
+      type: "thread.turn.start" as const,
+      commandId: newCommandId(),
+      threadId,
+      message: {
+        messageId: newMessageId(),
+        role: "user" as const,
+        text: "/compact",
+        attachments: [],
+      },
+      dispatchMode: "queue" as const,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      createdAt: new Date().toISOString(),
+    };
+    const messageId = command.message.messageId;
+    pending.remember(command);
     inFlightThreadIdsRef.current.add(threadId);
     setSubmittingThreadIds((current) => new Set([...current, threadId]));
     onBegin({ expectedUserMessageId: messageId });
     try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId,
-        message: { messageId, role: "user", text: "/compact", attachments: [] },
-        dispatchMode: "queue",
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        createdAt: new Date().toISOString(),
-      });
+      await api.orchestration.dispatchCommand(command);
       if (activeThreadIdRef.current === threadId) onAccepted(threadId);
       return true;
     } catch (error) {
@@ -91,14 +117,24 @@ export function useClaudeContextCompaction({
         current?.claudeCacheReview?.messageId === messageId ||
         current?.messages.some((message) => message.id === messageId)
       ) {
+        useClaudeCompactionRequests.getState().forget(threadId);
         if (activeThreadIdRef.current === threadId) onAccepted(threadId);
         return true;
       }
+      const rejected =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ORCHESTRATION_COMMAND_REJECTED";
+      if (rejected) useClaudeCompactionRequests.getState().forget(threadId);
       if (activeThreadIdRef.current === threadId) onFailure();
       toastManager.add({
         type: "error",
-        title: "Could not request compaction",
-        description: error instanceof Error ? error.message : "Try again when Claude is ready.",
+        title: rejected ? "Could not request compaction" : "Could not confirm compaction",
+        description:
+          rejected && error instanceof Error
+            ? error.message
+            : "Retry to confirm the same request. A second compaction will not be created.",
       });
       return false;
     } finally {

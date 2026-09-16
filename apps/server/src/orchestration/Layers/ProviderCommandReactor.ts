@@ -3491,24 +3491,68 @@ const make = Effect.gen(function* () {
   const earlyClaudeCompactionTerminals = new Map<ThreadId, ProviderQueueDrainEvent>();
   const pendingClaudeCompactionIngestion = new Set<ThreadId>();
 
+  // Execution evidence belongs to the event log, independently of the user's
+  // current send authorization. Stop/archive can revoke the latter while a
+  // native control request is still settling.
+  const readClaudeCompactionAttempt = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    responseEventSequence: number,
+  ) {
+    const response = yield* readOrchestrationEventAtSequence(responseEventSequence);
+    if (
+      response?.type !== "thread.claude-cache-response-requested" ||
+      response.payload.threadId !== threadId ||
+      response.payload.decision !== "compact"
+    )
+      return undefined;
+    const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
+    return yield* orchestrationEngine
+      .readThreadEventsThrough(threadId, responseEventSequence, highWater, [
+        "thread.claude-cache-set",
+      ])
+      .pipe(
+        Stream.runFold(
+          () => undefined as PendingClaudeCacheReview | undefined,
+          (attempt, event) => {
+            if (event.type !== "thread.claude-cache-set") return attempt;
+            const review = event.payload.review;
+            return review?.reviewId === response.payload.review.reviewId &&
+              review.compactionResponseEventSequence === responseEventSequence &&
+              review.compactionTurnId
+              ? review
+              : attempt;
+          },
+        ),
+      );
+  });
+
+  const readBlockedClaudeCompactionAttempt = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
+      consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+      threadId,
+    });
+    return Option.isSome(blocker)
+      ? yield* readClaudeCompactionAttempt(threadId, blocker.value.eventSequence)
+      : undefined;
+  });
+
   const processClaudeCompactionTerminal: (
     event: ProviderQueueDrainEvent,
   ) => Effect.Effect<void, unknown, Scope.Scope> = Effect.fnUntraced(function* (
     event: ProviderQueueDrainEvent,
   ) {
+    if (event.provider !== "claudeAgent") return;
     const thread = yield* resolveThread(event.threadId);
     let review = thread?.claudeCacheReview;
-    if (
-      !review ||
-      !review.compactionTurnId ||
-      review.compactionTurnId !== event.turnId ||
-      (review.status !== "compacting" && review.status !== "uncertain")
-    )
-      return;
+    const attempt =
+      review?.compactionTurnId === event.turnId
+        ? review
+        : yield* readBlockedClaudeCompactionAttempt(event.threadId);
+    if (!attempt?.compactionTurnId || attempt.compactionTurnId !== event.turnId) return;
     const journalHighWater = yield* runtimeEventRepository.getHighWaterSequence;
     const journalEvents = yield* runtimeEventRepository.readThreadEvents({
       threadId: event.threadId,
-      turnId: review.compactionTurnId,
+      turnId: attempt.compactionTurnId,
       throughSequenceInclusive: journalHighWater,
       limit: 1,
       eventTypes: ["turn.completed", "turn.aborted"],
@@ -3528,14 +3572,11 @@ const make = Effect.gen(function* () {
       // the provider lease or the delivery source's permit.
       if (!pendingClaudeCompactionIngestion.has(event.threadId)) {
         pendingClaudeCompactionIngestion.add(event.threadId);
-        const reviewId = review.reviewId;
         yield* Effect.gen(function* () {
           while (
             (yield* runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER)) <
             terminalSequence
           ) {
-            const current = (yield* resolveThread(event.threadId))?.claudeCacheReview;
-            if (current?.reviewId !== reviewId || current.compactionTurnId !== event.turnId) return;
             yield* Effect.sleep(Duration.millis(50));
           }
           yield* processClaudeCompactionTerminal(event);
@@ -3553,10 +3594,10 @@ const make = Effect.gen(function* () {
       }
       return;
     }
-    if (review.compactionResponseEventSequence !== undefined && reconcileDeliveryRuntime) {
+    if (attempt.compactionResponseEventSequence !== undefined && reconcileDeliveryRuntime) {
       const delivery = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-        eventSequence: review.compactionResponseEventSequence,
+        eventSequence: attempt.compactionResponseEventSequence,
       });
       if (Option.isSome(delivery) && delivery.value.state === "inflight") {
         earlyClaudeCompactionTerminals.set(event.threadId, event);
@@ -3568,16 +3609,23 @@ const make = Effect.gen(function* () {
       ) {
         yield* reconcileDeliveryRuntime({
           threadId: event.threadId,
-          eventSequence: review.compactionResponseEventSequence,
+          eventSequence: attempt.compactionResponseEventSequence,
           expectedState: delivery.value.state,
           outcome: "accepted",
           reconciledBy: "claude-compaction-terminal",
           note: "The matching native compaction terminal event confirms that the operation was accepted.",
         });
-        review = (yield* resolveThread(event.threadId))?.claudeCacheReview;
-        if (!review || review.compactionTurnId !== event.turnId) return;
       }
     }
+    // A terminal settles delivery, but never restores revoked send consent.
+    review = (yield* resolveThread(event.threadId))?.claudeCacheReview;
+    if (
+      !review ||
+      review.reviewId !== attempt.reviewId ||
+      review.compactionTurnId !== event.turnId ||
+      (review.status !== "compacting" && review.status !== "uncertain")
+    )
+      return;
     if (
       event.type !== "turn.completed" ||
       event.payload.state !== "completed" ||
@@ -3607,7 +3655,7 @@ const make = Effect.gen(function* () {
         ),
         threadId: event.threadId,
         reviewId: review.reviewId,
-        turnId: review.compactionTurnId!,
+        turnId: attempt.compactionTurnId!,
         createdAt: event.createdAt,
       })
       .pipe(
@@ -5911,8 +5959,8 @@ const make = Effect.gen(function* () {
       ) {
         const earlyTerminal = earlyClaudeCompactionTerminals.get(event.payload.threadId);
         earlyClaudeCompactionTerminals.delete(event.payload.threadId);
-        const review = (yield* resolveThread(event.payload.threadId))?.claudeCacheReview;
-        if (review?.compactionTurnId && review.compactionResponseEventSequence === event.sequence) {
+        const review = yield* readClaudeCompactionAttempt(event.payload.threadId, event.sequence);
+        if (review?.compactionTurnId) {
           const terminal =
             earlyTerminal?.turnId === review.compactionTurnId
               ? earlyTerminal
@@ -6306,7 +6354,8 @@ const make = Effect.gen(function* () {
   const recoverClaudeCompactions = Effect.gen(function* () {
     const snapshot = yield* orchestrationEngine.getReadModel();
     for (const thread of snapshot.threads) {
-      const review = thread.claudeCacheReview;
+      const review =
+        thread.claudeCacheReview ?? (yield* readBlockedClaudeCompactionAttempt(thread.id));
       if (
         !review?.compactionTurnId ||
         (review.status !== "compacting" &&
