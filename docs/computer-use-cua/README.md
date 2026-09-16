@@ -10,9 +10,9 @@ The [initial completion audit](completion-audit.md) maps the revision 1 requirem
 
 - Base: `8599826d75d9932e69c301f2441f585da8f211e2` (v0.8.3).
 - Shared foundations were selected from the reviewed #820, #821, #822 and #1010 heads. [import-provenance.json](import-provenance.json) records the exact heads and imported paths. Those files were then modified locally; this manifest is not a claim that they remain identical to the source PRs.
-- Driver: `cua-driver 0.24.0`, source `4b3396d9fe4bd3cf723b0eb8db83c18a8764b520`.
+- Driver: `cua-driver 0.28.2`, source `fc188250b4ca8549b8e61f937fdb1fb560770e86` (rebased from `0.24.0` / `4b3396d9`; native revision 15).
 - The current native revision and patch checksum are pinned by [the shared release manifest](../../packages/shared/src/cuaDriverRelease.json), using Rust `1.97.1` and [the checked-in native patch](../../apps/desktop/patches/cua-driver/0001-synara-native.patch).
-- The source, upstream archive checksum, patch checksum and toolchain are defined once in `packages/shared/src/cuaDriverRelease.json`. The original release binary is no longer accepted: it lacks the required cancellation protocol. The redistribution license is [CUA-LICENSE.txt](CUA-LICENSE.txt).
+- The source, upstream archive checksum, patch checksum and toolchain are defined once in `packages/shared/src/cuaDriverRelease.json`. The `sha256` field is the upstream binary release archive (`cua-driver-rs-<version>-darwin-universal-binary.tar.gz` from the release `checksums.txt`), kept as provenance; the build compiles the pinned source commit instead of that archive. The original release binary is no longer accepted: it lacks the required cancellation protocol. The redistribution license is [CUA-LICENSE.txt](CUA-LICENSE.txt).
 - The historical revision 1 fixture artifact, before app signing, has SHA-256 `a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336`; [provenance](evidence/native-revision1-provenance.json) records both architectures and that patch checksum.
 
 No branches, commits, pushes, PR changes, merges, published artifacts or deployment were made by this implementation task.

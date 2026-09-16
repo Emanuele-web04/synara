@@ -1,6 +1,6 @@
 # Cua capability audit — 2026-09-16
 
-This audit compares the pinned Cua Driver `0.24.0` surface with Synara's provider tools, backend, desktop host, and packaged runtime. “Not agent-facing” is intentional where exposing a raw native operation would bypass Synara's exact-target, approval, cancellation, or observation contracts.
+This audit compares the pinned Cua Driver `0.28.2` surface with Synara's provider tools, backend, desktop host, and packaged runtime. The native tool surface is unchanged from the `0.24.0` audit; the rebase changed behavior inside the same tools (click delivery, cursor-overlay verification, snapshot identity) and is recorded in the [native patch notes](../../apps/desktop/patches/cua-driver/README.md). “Not agent-facing” is intentional where exposing a raw native operation would bypass Synara's exact-target, approval, cancellation, or observation contracts.
 
 ## Coverage
 
