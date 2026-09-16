@@ -116,6 +116,7 @@ export function useChatProviderModels({
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
+      cline: resolveHint("cline"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -239,7 +240,8 @@ export function useChatProviderModels({
     selectedProvider === "droid" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi" ||
-    selectedProvider === "devin";
+    selectedProvider === "devin" ||
+    selectedProvider === "cline";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,

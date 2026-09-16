@@ -29,6 +29,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
   | "devinBinaryPath"
+  | "clineBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -136,6 +137,13 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "cursor",
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
+        priority,
+      });
+    case "cline":
+      return providerModelsQueryOptions({
+        provider: "cline",
+        binaryPath: settings.clineBinaryPath || null,
+        cwd,
         priority,
       });
     case "devin":

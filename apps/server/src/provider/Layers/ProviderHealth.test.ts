@@ -31,6 +31,7 @@ import {
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
   makeCheckDevinProviderStatus,
+  makeCheckClineProviderStatus,
   makeCheckGrokProviderStatus,
   makeCheckOpenCodeProviderStatus,
   makeProviderHealthLive,
@@ -157,6 +158,7 @@ const allProvidersDisabledSettings = {
     claudeAgent: { enabled: false },
     cursor: { enabled: false },
     devin: { enabled: false },
+    cline: { enabled: false },
     antigravity: { enabled: false },
     grok: { enabled: false },
     droid: { enabled: false },
@@ -172,6 +174,7 @@ const allProvidersDisabledServerSettings = {
     claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     devin: { ...DEFAULT_SERVER_SETTINGS.providers.devin, enabled: false },
+    cline: { ...DEFAULT_SERVER_SETTINGS.providers.cline, enabled: false },
     antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
@@ -502,7 +505,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 9);
+      assert.strictEqual(statuses.length, Object.keys(DEFAULT_SERVER_SETTINGS.providers).length);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -637,7 +640,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 9);
+        assert.strictEqual(statuses.length, Object.keys(DEFAULT_SERVER_SETTINGS.providers).length);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -2691,4 +2694,39 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(parsed.authStatus, "unknown");
     });
   });
+});
+
+describe("Cline CLI health", () => {
+  it.effect("reports installation without claiming authentication", () =>
+    Effect.gen(function* () {
+      const status = yield* makeCheckClineProviderStatus("/custom/cline");
+      assert.strictEqual(status.provider, "cline");
+      assert.strictEqual(status.available, true);
+      assert.strictEqual(status.authStatus, "unknown");
+      assert.strictEqual(status.version, "2.0.0");
+      assert.match(status.message ?? "", /cline auth/u);
+    }).pipe(
+      Effect.provide(
+        mockSpawnerLayer((args, command) => {
+          assert.strictEqual(command, "/custom/cline");
+          assert.deepEqual(args, ["--version"]);
+          return { stdout: "Cline CLI 2.0.0", stderr: "", code: 0 };
+        }),
+      ),
+    ),
+  );
+  it.effect("provides install guidance when Cline is missing", () =>
+    Effect.gen(function* () {
+      const status = yield* makeCheckClineProviderStatus();
+      assert.strictEqual(status.available, false);
+      assert.match(status.message ?? "", /npm install -g cline/u);
+    }).pipe(Effect.provide(failingSpawnerLayer("Cline not found"))),
+  );
+  it.effect("rejects nonzero version checks", () =>
+    Effect.gen(function* () {
+      const status = yield* makeCheckClineProviderStatus();
+      assert.strictEqual(status.available, false);
+      assert.strictEqual(status.authStatus, "unknown");
+    }).pipe(Effect.provide(mockSpawnerLayer(() => ({ stdout: "", stderr: "broken", code: 1 })))),
+  );
 });

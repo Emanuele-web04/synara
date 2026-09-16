@@ -48,6 +48,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "OpenAI",
     },
   ],
+  cline: [{ slug: "default", name: "Cline configured model" }],
   devin: [
     {
       slug: "devin/swe-1.7",

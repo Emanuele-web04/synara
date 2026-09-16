@@ -159,3 +159,35 @@ runtime works independently but remains unavailable in Synara.
 Use the dedicated [provider guides](https://www.trysynara.com/docs/providers) for exact
 installation, authentication, verification, capabilities, update paths, and provider-specific
 failure checks.
+
+## Cline
+
+Cline is an installed CLI provider, connected through `cline --acp`. Install the
+current CLI with `npm install -g cline`, run `cline auth` in a terminal, then select
+Cline in Synara. Settings → Providers supports a custom executable path, provider
+enablement, and custom model IDs. A successful `--version` check proves only that
+the CLI is installed; authentication is verified by Cline when a session starts.
+
+The model picker discovers the configured upstream provider's model catalog from
+ACP `configOptions`. IDs are preserved verbatim. **Cline configured model** follows
+the CLI's default at session startup; no specific hosted model, quota, or reasoning
+setting is assumed. Configure the upstream provider/account in Cline itself (or
+with Cline's documented environment variables), not with another Synara provider's
+credentials. Discovery failures are shown rather than replaced with an invented
+model catalog.
+
+Synara uses native Plan/Act modes and routes ACP permission requests through its
+existing approval controls. It explicitly disables Cline auto-approval even for
+Full Access sessions: Synara decides how to answer each request. Configuration
+failures prevent prompt dispatch. Text, images, file attachments, streamed replies,
+tool calls, plans, usage events, cancellation, and session load/resume are supported.
+Cancellation retires the child process to isolate late events; the next session can
+resume from the saved cursor. Scoped Synara MCP tools use the existing gateway.
+
+Native rollback, compaction, thread import, skills/plugins, command discovery,
+turn steering, and quota polling are not advertised. Rollback uses Synara's
+restart-with-history path. Git text generation is unchanged. Cline's official icon
+is included with attribution under `third-party/cline-icon`.
+
+References: [Cline ACP](https://docs.cline.bot/usage/acp),
+[Cline CLI reference](https://docs.cline.bot/cli/cli-reference).

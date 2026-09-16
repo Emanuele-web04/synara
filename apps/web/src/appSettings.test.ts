@@ -433,6 +433,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -453,6 +454,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -473,6 +475,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -493,6 +496,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -513,6 +517,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -677,6 +682,7 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
+        clineBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -718,6 +724,7 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
+        clineBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -733,6 +740,7 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         devinBinaryPath: "devin",
+        clineBinaryPath: "",
         droidBinaryPath: "droid",
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
@@ -753,6 +761,7 @@ describe("provider-indexed custom model settings", () => {
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
     customDevinModels: ["devin/custom-model"],
+    customClineModels: [],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
@@ -763,6 +772,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "devin",
+      "cline",
       "antigravity",
       "grok",
       "droid",
@@ -797,6 +807,7 @@ describe("provider-indexed custom model settings", () => {
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
       customDevinModels: ["adaptive"],
+      customClineModels: [],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
     } as const;
@@ -879,6 +890,7 @@ describe("provider-indexed custom model settings", () => {
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
       devin: ["devin/custom-model"],
+      cline: [],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
     });
@@ -928,6 +940,7 @@ describe("provider-indexed custom model settings", () => {
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
       customDevinModels: [" adaptive ", "devin/custom-model", "devin/custom-model"],
+      customClineModels: [],
       customOpenCodeModels: [
         " openai/gpt-5 ",
         "openrouter/gpt-oss-120b",
