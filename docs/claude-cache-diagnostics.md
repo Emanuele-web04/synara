@@ -15,6 +15,8 @@ Inputs are Claude's native session JSONL records, including sessions launched by
 Synara. SDK assistant records with the same `message.id` and usage shape also work;
 SDK records without timestamps cannot provide timing evidence. Synara database
 activity exports and raw `stream_event` deltas are not equivalent input formats.
+Compaction boundaries accept native `compactMetadata` and SDK `compact_metadata`
+records. Token counts absent from either format remain `null`.
 
 The versioned JSON report deduplicates assistant blocks by session and API message
 ID, falling back to `requestId` when needed. Aggregate `result` messages and synthetic

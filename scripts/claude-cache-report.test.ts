@@ -149,6 +149,26 @@ describe("Claude cache report", () => {
     expect(JSON.stringify(report)).not.toMatch(/private-tool-id|private-request-id/u);
   });
 
+  it.each([undefined, 0, 5_000])(
+    "reads SDK compaction metadata with post_tokens=%s",
+    async (postTokens) => {
+      const report = await analyze([
+        {
+          type: "system",
+          subtype: "compact_boundary",
+          session_id: "private-session",
+          compact_metadata: { trigger: "manual", pre_tokens: 150_000, post_tokens: postTokens },
+        },
+      ]);
+      expect(report.compactions[0]).toMatchObject({
+        at: null,
+        trigger: "manual",
+        preTokens: 150_000,
+        postTokens: postTokens ?? null,
+      });
+    },
+  );
+
   it("reports malformed input without echoing transcript text", async () => {
     await expect(analyzeClaudeCache(["{}", '{"PRIVATE'])).rejects.toThrow(
       "Invalid JSON at line 2.",

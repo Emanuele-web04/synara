@@ -143,14 +143,14 @@ export async function analyzeClaudeCache(lines: Iterable<string> | AsyncIterable
       stream.prompts.push({ line, at });
     }
     if (row.type === "system" && row.subtype === "compact_boundary") {
-      const compact = record(row.compactMetadata);
+      const compact = record(row.compactMetadata ?? row.compact_metadata);
       compactions.push({
         line,
         at,
         stream: stream.id,
         trigger: text(compact.trigger),
-        preTokens: count(compact.preTokens),
-        postTokens: count(compact.postTokens),
+        preTokens: count(compact.preTokens) ?? count(compact.pre_tokens),
+        postTokens: count(compact.postTokens) ?? count(compact.post_tokens),
       });
     }
     if (row.type !== "assistant") continue;
