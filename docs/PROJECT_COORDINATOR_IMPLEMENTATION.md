@@ -14,7 +14,8 @@ Approved spec: [PROJECT_COORDINATOR_PLAN.md](PROJECT_COORDINATOR_PLAN.md)
 | 3. Project interface                     | repaired    | Editable setup/settings; Work evidence/archive; activity pagination; thread exclusion                                                 |
 | 4. Observation and summaries             | repaired    | `generateProjectDigest` with 60s debounce, one inflight, source validation, last-good retention                                       |
 | 5. Bounded coordination                  | repaired    | Wake event-range receipts + restart reconcile; creationCoordinator goal/limit hook; context packet injected at provider turn dispatch |
-| 6. Integration and rollout               | in progress | Focused Vitest; isolated preview owned by root; no fmt/lint/typecheck                                                                 |
+| 6. Integration and rollout               | in progress | Focused Vitest; isolated preview owned by root                                                                                        |
+| 7. Sidebar project agent                 | done        | Project row owns the named agent; coordinator thread hidden from child lists                                                          |
 
 Feature stays disabled until a project is configured. Autonomous work starts only after a user starts a goal.
 
@@ -33,7 +34,8 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 - `22e624222` Record Project Coordinator commit in the implementation ledger.
 - `2369e560d` Repair Project Coordinator security and product gaps.
 - `6453cd5cc` Make Project Coordinator pass fmt, lint, and typecheck.
-- (next) Render Context preview as Markdown.
+- `f53ad79db` Render Project Context preview as Markdown and update ledger.
+- (this commit) Move project agent identity into the sidebar project row.
 
 ## Checks
 
@@ -52,6 +54,7 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 - Starting a goal (autonomous coordination, live digest generation) not exercised in preview; user validation pending
 - ProviderCommandReactor tests stub `formatContextPacketForTurn`; live injection needs preview
 - Settings model picker reuses the current chat model rather than a full composer catalog
+- Isolated preview server (6931) needs a restart to pick up `projectAgent.listSummaries`
 
 ## Risks
 

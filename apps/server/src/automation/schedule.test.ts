@@ -1,3 +1,4 @@
+import { ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { AutomationId } from "@synara/contracts";
 
@@ -346,7 +347,7 @@ describe("computeAutomationScheduleSpacingSeconds", () => {
     ).toBeNull();
     expect(
       computeAutomationScheduleSpacingSeconds(
-        { type: "project-event", projectId: "project-1" },
+        { type: "project-event", projectId: ProjectId.makeUnsafe("project-1") },
         "2026-06-16T10:00:00.000Z",
       ),
     ).toBeNull();

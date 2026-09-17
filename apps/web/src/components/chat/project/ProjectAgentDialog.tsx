@@ -1,0 +1,159 @@
+import type { ModelSelection, ProjectId } from "@synara/contracts";
+import { useId, useState } from "react";
+
+import { Button } from "~/components/ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "~/components/ui/dialog";
+import { Input } from "~/components/ui/input";
+import { cn } from "~/lib/utils";
+
+import { defaultProjectAgentName, resolveProjectAgentName } from "./projectAgentDialog.logic";
+
+const FIELD_LABEL_CLASS_NAME =
+  "text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground/80";
+
+export type ProjectAgentDialogMode = "setup" | "edit";
+
+export function ProjectAgentDialog(props: {
+  open: boolean;
+  mode: ProjectAgentDialogMode;
+  projectId: ProjectId | null;
+  projectName: string;
+  agentName?: string | undefined;
+  workspacePath: string;
+  defaultModelSelection: ModelSelection | null;
+  currentModelSelection?: ModelSelection | null;
+  expectedRevision?: number | undefined;
+  busy?: boolean | undefined;
+  error?: string | null | undefined;
+  onOpenChange: (open: boolean) => void;
+  onSave: (input: {
+    coordinatorName: string;
+    expectedRevision?: number | undefined;
+  }) => Promise<void> | void;
+}) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {props.mode === "setup" ? "Set up project agent" : "Edit project agent"}
+          </DialogTitle>
+          <DialogDescription>
+            {props.mode === "setup"
+              ? "Assign a named agent to this project folder. Setup does not start a model turn."
+              : "Update this project's named agent. Saving does not start a model turn."}
+          </DialogDescription>
+        </DialogHeader>
+        {props.open ? (
+          <ProjectAgentDialogForm
+            mode={props.mode}
+            projectName={props.projectName}
+            agentName={props.agentName}
+            workspacePath={props.workspacePath}
+            defaultModelSelection={props.defaultModelSelection}
+            currentModelSelection={props.currentModelSelection ?? null}
+            projectId={props.projectId}
+            expectedRevision={props.expectedRevision}
+            busy={props.busy === true}
+            error={props.error ?? null}
+            onOpenChange={props.onOpenChange}
+            onSave={props.onSave}
+          />
+        ) : null}
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function ProjectAgentDialogForm(props: {
+  mode: ProjectAgentDialogMode;
+  projectId: ProjectId | null;
+  projectName: string;
+  agentName: string | undefined;
+  workspacePath: string;
+  defaultModelSelection: ModelSelection | null;
+  currentModelSelection: ModelSelection | null;
+  expectedRevision: number | undefined;
+  busy: boolean;
+  error: string | null;
+  onOpenChange: (open: boolean) => void;
+  onSave: (input: {
+    coordinatorName: string;
+    expectedRevision?: number | undefined;
+  }) => Promise<void> | void;
+}) {
+  const nameInputId = useId();
+  const fallbackName = defaultProjectAgentName(props.projectName);
+  const [name, setName] = useState(props.agentName?.trim() || fallbackName);
+  const modelSelection = props.defaultModelSelection ?? props.currentModelSelection;
+  const modelLabel = modelSelection
+    ? `${modelSelection.provider} / ${modelSelection.model}`
+    : "none";
+
+  return (
+    <form
+      key={props.projectId ?? "project-agent"}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (props.busy || !modelSelection) return;
+        void props.onSave({
+          coordinatorName: resolveProjectAgentName({
+            value: name,
+            fallbackName,
+          }),
+          ...(props.mode === "edit" && props.expectedRevision !== undefined
+            ? { expectedRevision: props.expectedRevision }
+            : {}),
+        });
+      }}
+    >
+      <DialogPanel className="space-y-3">
+        <div className="space-y-1.5">
+          <label htmlFor={nameInputId} className={cn("block", FIELD_LABEL_CLASS_NAME)}>
+            Agent name
+          </label>
+          <Input
+            id={nameInputId}
+            value={name}
+            maxLength={160}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={fallbackName}
+          />
+        </div>
+        <div className="space-y-1">
+          <p className={FIELD_LABEL_CLASS_NAME}>Provider and model</p>
+          <p className="text-[12px] text-muted-foreground">
+            Uses this chat&apos;s model ({modelLabel}) without starting a turn.
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p className={FIELD_LABEL_CLASS_NAME}>Assigned folder</p>
+          <p className="truncate text-[12px] text-muted-foreground" title={props.workspacePath}>
+            {props.workspacePath.length > 0 ? props.workspacePath : "No folder assigned"}
+          </p>
+        </div>
+        {props.error ? (
+          <p className="text-[12px] text-destructive" role="alert">
+            {props.error}
+          </p>
+        ) : null}
+      </DialogPanel>
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={props.busy || !modelSelection}>
+          {props.mode === "setup" ? "Set up project agent" : "Save"}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}

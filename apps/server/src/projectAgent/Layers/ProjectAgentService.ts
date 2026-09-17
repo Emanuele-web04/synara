@@ -23,6 +23,7 @@ import {
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectAgentOverview,
+  type ProjectAgentSummary,
   type ProjectAgentStreamEvent,
   type ProjectDocumentRevision,
   type ProjectTaskStatus,
@@ -39,7 +40,7 @@ import {
   normalizeProjectDocumentPath,
   truncateToContextBudget,
 } from "@synara/shared/projectAgent";
-import { Duration, Effect, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
+import { Cause, Duration, Effect, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
@@ -64,8 +65,10 @@ import {
   canConfigureProject,
   canStartGoal,
   canWriteUserOwnedDocuments,
+  coordinatorStatusFromGoal,
   isCoordinatorPrincipal,
   isUserPrincipal,
+  projectAgentSummariesForPrincipal,
   type ProjectAgentPrincipal,
 } from "../principal.ts";
 import {
@@ -305,14 +308,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
           reason: task.acceptanceCriteria ?? "Blocked",
         }));
       const goalValue = Option.getOrNull(goal);
-      const coordinatorStatus =
-        goalValue?.status === "paused"
-          ? "paused"
-          : goalValue?.status === "stopped"
-            ? "stopped"
-            : goalValue?.status === "active"
-              ? "running"
-              : "idle";
       return {
         projectId,
         configured: true,
@@ -321,7 +316,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         digest: Option.getOrNull(digest),
         blockers,
         recentOutcomes: activity,
-        coordinatorStatus,
+        coordinatorStatus: coordinatorStatusFromGoal(true, goalValue?.status ?? null),
       };
     });
 
@@ -517,6 +512,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.andThen(buildOverview(input.projectId)),
       ),
 
+    listSummaries: (_input, principal) =>
+      repository.listSummaries().pipe(
+        Effect.mapError(toServiceError("Failed to list project agents.")),
+        Effect.map((rows) => {
+          const summaries: ReadonlyArray<ProjectAgentSummary> = rows.map((row) => ({
+            projectId: row.projectId,
+            configured: true,
+            coordinatorName: row.coordinatorName,
+            coordinatorThreadId: row.coordinatorThreadId,
+            coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
+            revision: row.revision,
+          }));
+          return { summaries: [...projectAgentSummariesForPrincipal(summaries, principal)] };
+        }),
+      ),
+
     configure: (input, principal) =>
       Effect.gen(function* () {
         if (!canConfigureProject(principal)) {
@@ -566,8 +577,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ? { coordinatorProviderOptions: input.coordinatorProviderOptions }
             : {}),
           ...(input.workerRouting ? { workerRouting: input.workerRouting } : {}),
-          limits: input.limits,
-          captureEnabled: input.captureEnabled,
+          limits: input.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
+          captureEnabled: input.captureEnabled ?? true,
           enabled: true,
           automationId,
           revision,
@@ -799,8 +810,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .listTasks({
               projectId: input.projectId,
               ...(input.goalId ? { goalId: input.goalId } : {}),
-              includeArchived: input.includeArchived,
-              limit: input.limit,
+              includeArchived: input.includeArchived ?? false,
+              limit: input.limit ?? 50,
               ...(decodeProjectAgentListCursor(input.cursor)
                 ? { cursor: decodeProjectAgentListCursor(input.cursor)! }
                 : {}),
@@ -851,16 +862,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .listTaskEdges(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load task dependencies.")));
         const taskId = branded.task();
+        const dependsOnTaskIds = input.dependsOnTaskIds ?? [];
         if (
           detectProjectTaskDependencyCycle({
             taskId,
-            dependsOnTaskIds: input.dependsOnTaskIds,
+            dependsOnTaskIds,
             edges,
           })
         ) {
           return yield* Effect.fail(fail("Task dependencies cannot form a cycle.", "cycle"));
         }
-        for (const dependencyId of input.dependsOnTaskIds) {
+        for (const dependencyId of dependsOnTaskIds) {
           const dependency = yield* repository
             .getTask(dependencyId)
             .pipe(Effect.mapError(toServiceError("Failed to load task dependency.")));
@@ -871,10 +883,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           }
         }
         const ready =
-          input.dependsOnTaskIds.length === 0 ||
-          (yield* Effect.forEach(input.dependsOnTaskIds, (id) => repository.getTask(id))).every(
-            (option) => Option.isSome(option) && option.value.status === "done",
-          );
+          dependsOnTaskIds.length === 0 ||
+          (yield* Effect.forEach(dependsOnTaskIds, (id) =>
+            repository
+              .getTask(id)
+              .pipe(Effect.mapError(toServiceError("Failed to load task dependency."))),
+          )).every((option) => Option.isSome(option) && option.value.status === "done");
         const now = isoNow();
         const task: ProjectTask = {
           id: taskId,
@@ -884,7 +898,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           description: input.description ?? null,
           acceptanceCriteria: input.acceptanceCriteria ?? null,
           status: ready ? "ready" : "planned",
-          dependsOnTaskIds: input.dependsOnTaskIds,
+          dependsOnTaskIds,
           assignedThreadId: null,
           repairCount: 0,
           archivedAt: null,
@@ -1034,7 +1048,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           repository
             .listActivity({
               projectId: input.projectId,
-              limit: input.limit,
+              limit: input.limit ?? 50,
               ...(decodeProjectAgentListCursor(input.cursor)
                 ? { cursor: decodeProjectAgentListCursor(input.cursor)! }
                 : {}),
@@ -1188,7 +1202,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 ? "coordinator"
                 : "worker",
           authorThreadId: principal.kind === "user" ? null : principal.threadId,
-          sources: input.sources,
+          sources: input.sources ?? [],
           createdAt: now,
         };
         const saved = yield* repository
@@ -1290,7 +1304,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               return next;
             }),
           ),
-          Effect.forkDaemon,
+          Effect.forkChild,
         );
       }).pipe(Effect.asVoid),
 
@@ -1543,7 +1557,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             projectId: input.projectId,
             taskId: task.id,
             attemptId: input.attemptId ?? null,
-            kind: input.evidenceKind,
+            kind: input.evidenceKind ?? "message",
             classification: "reported",
             authorKind: principal.kind === "user" ? "user" : principal.kind,
             authorThreadId: principal.kind === "user" ? null : principal.threadId,
@@ -1960,7 +1974,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
-          const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent>(64);
+          const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);
           yield* Stream.fromPubSub(events).pipe(
             Stream.filter(matchesProject),
             Stream.runIntoQueue(liveQueue),
@@ -1984,7 +1998,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (task.status !== "planned" && task.status !== "blocked") continue;
         if (!task.dependsOnTaskIds.includes(accepted.id)) continue;
         const prerequisites = yield* Effect.forEach(task.dependsOnTaskIds, (id) =>
-          repository.getTask(id),
+          repository
+            .getTask(id)
+            .pipe(Effect.mapError(toServiceError("Failed to load prerequisite task."))),
         );
         const ready = prerequisites.every(
           (option) => Option.isSome(option) && option.value.status === "done",

@@ -8,6 +8,8 @@ import type {
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
+  ProjectAgentListSummariesInput,
+  ProjectAgentListSummariesResult,
   ProjectAgentGoalControlInput,
   ProjectAgentListActivityInput,
   ProjectAgentListActivityResult,
@@ -48,6 +50,10 @@ export interface ProjectAgentServiceShape {
     input: ProjectAgentGetOverviewInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly listSummaries: (
+    input: ProjectAgentListSummariesInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentListSummariesResult, ProjectAgentServiceError>;
   readonly configure: (
     input: ProjectAgentConfigureInput,
     principal: ProjectAgentPrincipal,

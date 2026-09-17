@@ -18,6 +18,7 @@ import {
   ProjectAgentConfigureInput,
   ProjectAgentExportDocumentsInput,
   ProjectAgentGetOverviewInput,
+  ProjectAgentListSummariesInput,
   ProjectAgentGoalControlInput,
   ProjectAgentListActivityInput,
   ProjectAgentListDocumentsInput,
@@ -325,6 +326,7 @@ export const WS_METHODS = {
   subscribeAutomationEvents: "automation.subscribe",
 
   projectAgentGetOverview: "projectAgent.getOverview",
+  projectAgentListSummaries: "projectAgent.listSummaries",
   projectAgentConfigure: "projectAgent.configure",
   projectAgentStartGoal: "projectAgent.startGoal",
   projectAgentUpdateGoal: "projectAgent.updateGoal",
@@ -559,6 +561,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
 
   tagRequestBody(WS_METHODS.projectAgentGetOverview, ProjectAgentGetOverviewInput),
+  tagRequestBody(WS_METHODS.projectAgentListSummaries, ProjectAgentListSummariesInput),
   tagRequestBody(WS_METHODS.projectAgentConfigure, ProjectAgentConfigureInput),
   tagRequestBody(WS_METHODS.projectAgentStartGoal, ProjectAgentStartGoalInput),
   tagRequestBody(WS_METHODS.projectAgentUpdateGoal, ProjectAgentUpdateGoalInput),

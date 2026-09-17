@@ -2054,6 +2054,11 @@ const makeWsRpcHandlersLayer = () =>
             projectAgentService.getOverview(input, { kind: "user" }),
             "Failed to load project overview",
           ),
+        [WS_METHODS.projectAgentListSummaries]: (input) =>
+          rpcEffect(
+            projectAgentService.listSummaries(input, { kind: "user" }),
+            "Failed to list project agents",
+          ),
         [WS_METHODS.projectAgentConfigure]: (input) =>
           rpcEffect(
             projectAgentService.configure(input, { kind: "user" }),

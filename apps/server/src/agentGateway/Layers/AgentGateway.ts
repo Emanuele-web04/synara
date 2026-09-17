@@ -216,7 +216,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   // that runs with more privileges than the user granted the caller itself —
   // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
-    caller: { readonly runtimeMode: RuntimeMode; readonly envMode?: string | null | undefined },
+    caller: {
+      readonly id: string;
+      readonly runtimeMode: RuntimeMode;
+      readonly envMode?: string | null | undefined;
+    },
     target: {
       readonly id: string;
       readonly runtimeMode: RuntimeMode;

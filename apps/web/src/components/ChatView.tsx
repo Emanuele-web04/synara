@@ -5963,6 +5963,7 @@ export default function ChatView({
               mobile={isMobileViewport}
               projectId={activeProjectId}
               projectName={activeProjectDisplayName ?? activeProject?.name ?? "Project"}
+              workspacePath={activeProject?.cwd ?? ""}
               defaultModelSelection={
                 activeThread.modelSelection ?? activeProject?.defaultModelSelection ?? null
               }

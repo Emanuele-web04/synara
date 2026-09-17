@@ -8,7 +8,7 @@
 //      pin and "Edit project" rows are real controls. Spacing/type mirror the
 //      app's menu rows (12px UI font, compact padding) so it reads as native.
 
-import { MessageCircleIcon, SettingsIcon } from "~/lib/icons";
+import { BotIcon, MessageCircleIcon, SettingsIcon } from "~/lib/icons";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { FolderClosed, FolderOpen } from "./FolderClosed";
@@ -25,6 +25,7 @@ export type ProjectHoverCardContentProps = {
   path: string;
   onTogglePin: () => void;
   onEditProject: () => void;
+  onEditProjectAgent?: (() => void) | undefined;
 };
 
 // One shared row rhythm for every line. No dividers: the card separates rows
@@ -48,6 +49,7 @@ export function ProjectHoverCardContent({
   path,
   onTogglePin,
   onEditProject,
+  onEditProjectAgent,
 }: ProjectHoverCardContentProps) {
   return (
     <div
@@ -90,6 +92,19 @@ export function ProjectHoverCardContent({
         <SettingsIcon className={ICON_CLASS_NAME} aria-hidden />
         <span className="min-w-0 truncate">Edit project</span>
       </button>
+      {onEditProjectAgent ? (
+        <button
+          type="button"
+          onClick={onEditProjectAgent}
+          className={cn(
+            ROW_CLASS_NAME,
+            "cursor-pointer text-left text-foreground/80 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+          )}
+        >
+          <BotIcon className={ICON_CLASS_NAME} aria-hidden />
+          <span className="min-w-0 truncate">Edit project agent</span>
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { Effect, Schema } from "effect";
 import {
   DEFAULT_PROJECT_AGENT_LIMITS,
   ProjectAgentConfigureInput,
+  ProjectAgentListSummariesInput,
+  ProjectAgentSummary,
   ProjectTaskStatus,
 } from "./projectAgent";
 
@@ -31,5 +33,28 @@ it.effect("keeps review distinct from done", () =>
     const review = yield* decode(ProjectTaskStatus, "review");
     const done = yield* decode(ProjectTaskStatus, "done");
     assert.notStrictEqual(review, done);
+  }),
+);
+
+it.effect("accepts an empty listSummaries payload", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(ProjectAgentListSummariesInput, {});
+    assert.deepStrictEqual(parsed, {});
+  }),
+);
+
+it.effect("decodes a configured project agent summary", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(ProjectAgentSummary, {
+      projectId: "project-1",
+      configured: true,
+      coordinatorName: "Synara Coordinator",
+      coordinatorThreadId: "thread-coordinator",
+      coordinatorStatus: "idle",
+      revision: 1,
+    });
+    assert.strictEqual(parsed.configured, true);
+    assert.strictEqual(parsed.coordinatorName, "Synara Coordinator");
+    assert.strictEqual(parsed.revision, 1);
   }),
 );

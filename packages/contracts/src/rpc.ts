@@ -27,6 +27,8 @@ import {
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
+  ProjectAgentListSummariesInput,
+  ProjectAgentListSummariesResult,
   ProjectAgentGoalControlInput,
   ProjectAgentListActivityInput,
   ProjectAgentListActivityResult,
@@ -1319,6 +1321,11 @@ export const WsProjectAgentGetOverviewRpc = Rpc.make(WS_METHODS.projectAgentGetO
   success: ProjectAgentOverview,
   error: WsRpcError,
 });
+export const WsProjectAgentListSummariesRpc = Rpc.make(WS_METHODS.projectAgentListSummaries, {
+  payload: ProjectAgentListSummariesInput,
+  success: ProjectAgentListSummariesResult,
+  error: WsRpcError,
+});
 export const WsProjectAgentConfigureRpc = Rpc.make(WS_METHODS.projectAgentConfigure, {
   payload: ProjectAgentConfigureInput,
   success: ProjectAgentOverview,
@@ -1556,6 +1563,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
   WsProjectAgentGetOverviewRpc,
+  WsProjectAgentListSummariesRpc,
   WsProjectAgentConfigureRpc,
   WsProjectAgentStartGoalRpc,
   WsProjectAgentUpdateGoalRpc,

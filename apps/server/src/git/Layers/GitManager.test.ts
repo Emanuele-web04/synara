@@ -24,6 +24,8 @@ import {
   type TextGenerationShape,
   TextGeneration,
   type ThreadRecapGenerationInput,
+  type ProjectDigestGenerationInput,
+  type ProjectDigestGenerationResult,
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
@@ -84,12 +86,9 @@ interface FakeGitTextGeneration {
   generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<{ recap: string }, TextGenerationError>;
-  generateProjectDigest: (input: {
-    cwd: string;
-    activity: string;
-    coverage: string;
-    pinnedFocus: string;
-  }) => Effect.Effect<{ summary: string; focusItems: ReadonlyArray<unknown> }, TextGenerationError>;
+  generateProjectDigest: (
+    input: ProjectDigestGenerationInput,
+  ) => Effect.Effect<ProjectDigestGenerationResult, TextGenerationError>;
   generateAutomationIntent: (
     input: AutomationIntentGenerationInput,
   ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
@@ -189,7 +188,7 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
     generateProjectDigest: () =>
       Effect.succeed({
         summary: "Update workflow digest",
-        focusItems: [],
+        focusItems: [] as ProjectDigestGenerationResult["focusItems"],
       }),
     generateAutomationIntent: () =>
       Effect.succeed({

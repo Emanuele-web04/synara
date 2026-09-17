@@ -46,6 +46,8 @@ import type {
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
+  ProjectAgentListSummariesInput,
+  ProjectAgentListSummariesResult,
   ProjectAgentGoalControlInput,
   ProjectAgentListActivityInput,
   ProjectAgentListActivityResult,
@@ -987,6 +989,9 @@ export interface NativeApi {
   };
   projectAgent: {
     getOverview: (input: ProjectAgentGetOverviewInput) => Promise<ProjectAgentOverview>;
+    listSummaries: (
+      input?: ProjectAgentListSummariesInput,
+    ) => Promise<ProjectAgentListSummariesResult>;
     configure: (input: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>;
     startGoal: (input: ProjectAgentStartGoalInput) => Promise<ProjectGoal>;
     updateGoal: (input: ProjectAgentUpdateGoalInput) => Promise<ProjectGoal>;

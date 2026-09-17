@@ -1,5 +1,4 @@
 import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
-import { DEFAULT_PROJECT_AGENT_LIMITS } from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
@@ -15,6 +14,8 @@ import {
   EnvironmentSectionDivider,
   EnvironmentSectionLabel,
 } from "../environment/EnvironmentRow";
+import { ProjectAgentDialog } from "./ProjectAgentDialog";
+import { defaultProjectAgentName } from "./projectAgentDialog.logic";
 import { useProjectAgent } from "./useProjectAgent";
 
 export type ProjectPanelView = "overview" | "work" | "context" | "activity";
@@ -25,6 +26,7 @@ export interface ProjectPanelProps {
   mobile: boolean;
   projectId: ProjectId | null;
   projectName: string;
+  workspacePath: string;
   defaultModelSelection: ModelSelection | null;
   importedInstructions?: string;
   onOpenCoordinator: (threadId: ThreadId) => void;
@@ -45,6 +47,7 @@ export function ProjectPanel({
   mobile,
   projectId,
   projectName,
+  workspacePath,
   defaultModelSelection,
   importedInstructions,
   onOpenCoordinator,
@@ -52,11 +55,12 @@ export function ProjectPanel({
   onClose,
 }: ProjectPanelProps) {
   const [view, setView] = useState<ProjectPanelView>("overview");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [goalDraft, setGoalDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
-  const coordinatorName = agent.overview?.config?.coordinatorName ?? `${projectName} Coordinator`;
+  const coordinatorName =
+    agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
 
   const content = (
     <div className="flex flex-col gap-1 p-2">
@@ -84,7 +88,7 @@ export function ProjectPanel({
             <IconButton
               type="button"
               label="Project settings"
-              onClick={() => setSettingsOpen((openSettings) => !openSettings)}
+              onClick={() => setAgentDialogOpen(true)}
             >
               <SettingsIcon className="size-3.5" />
             </IconButton>
@@ -99,43 +103,17 @@ export function ProjectPanel({
       ) : null}
 
       {!agent.overview?.configured ? (
-        <SetupForm
-          coordinatorName={coordinatorName}
-          defaultModelSelection={defaultModelSelection}
-          busy={agent.busy}
-          onSetup={(name) => {
-            if (!defaultModelSelection) return;
-            void agent.configure({
-              modelSelection: defaultModelSelection,
-              coordinatorName: name,
-              importedInstructions,
-            });
-          }}
-        />
+        <div className="flex flex-col gap-2 px-1 py-2">
+          <p className="text-[12px] text-muted-foreground">
+            Set up a named coordinator for this project. Opening Project does not launch a model.
+            Assigned work starts only when you start a goal.
+          </p>
+          <Button type="button" size="sm" onClick={() => setAgentDialogOpen(true)}>
+            Set up coordinator
+          </Button>
+        </div>
       ) : (
         <>
-          {settingsOpen ? (
-            <SettingsForm
-              name={coordinatorName}
-              busy={agent.busy}
-              defaultModelSelection={defaultModelSelection}
-              currentModel={agent.overview.config?.coordinatorModelSelection ?? null}
-              onSave={(name) => {
-                if (!defaultModelSelection && !agent.overview?.config?.coordinatorModelSelection) {
-                  return;
-                }
-                void agent.configure({
-                  modelSelection:
-                    defaultModelSelection ?? agent.overview!.config!.coordinatorModelSelection,
-                  coordinatorName: name,
-                  workerRouting: agent.overview?.config?.workerRouting,
-                  limits: agent.overview?.config?.limits,
-                  expectedRevision: agent.overview?.config?.revision,
-                });
-                setSettingsOpen(false);
-              }}
-            />
-          ) : null}
           <div className="grid grid-cols-4 gap-0.5 px-1">
             {VIEWS.map((entry) => (
               <button
@@ -349,108 +327,48 @@ export function ProjectPanel({
   );
 
   return (
-    <ChatAuxiliaryPanel
-      open={open}
-      variant={variant}
-      mobile={mobile}
-      title="Project"
-      description="Persistent coordinator, tasks, and shared context for this project."
-      onClose={onClose}
-    >
-      {content}
-    </ChatAuxiliaryPanel>
-  );
-}
-
-function SetupForm({
-  coordinatorName,
-  defaultModelSelection,
-  busy,
-  onSetup,
-}: {
-  coordinatorName: string;
-  defaultModelSelection: ModelSelection | null;
-  busy: boolean;
-  onSetup: (name: string) => void;
-}) {
-  const [name, setName] = useState(coordinatorName);
-  return (
-    <form
-      className="flex flex-col gap-2 px-1 py-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSetup(name.trim() || coordinatorName);
-      }}
-    >
-      <p className="text-[12px] text-muted-foreground">
-        Set up a named coordinator for this project. Opening Project does not launch a model.
-        Assigned work starts only when you start a goal.
-      </p>
-      <label className="text-[11px] text-muted-foreground" htmlFor="coordinator-name">
-        Coordinator name
-      </label>
-      <input
-        id="coordinator-name"
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-        className="rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
+    <>
+      <ChatAuxiliaryPanel
+        open={open}
+        variant={variant}
+        mobile={mobile}
+        title="Project"
+        description="Persistent coordinator, tasks, and shared context for this project."
+        onClose={onClose}
+      >
+        {content}
+      </ChatAuxiliaryPanel>
+      <ProjectAgentDialog
+        open={agentDialogOpen}
+        mode={agent.overview?.configured ? "edit" : "setup"}
+        projectId={projectId}
+        projectName={projectName}
+        agentName={coordinatorName}
+        workspacePath={workspacePath}
+        defaultModelSelection={defaultModelSelection}
+        currentModelSelection={agent.overview?.config?.coordinatorModelSelection ?? null}
+        expectedRevision={agent.overview?.config?.revision}
+        busy={agent.busy}
+        error={agent.error}
+        onOpenChange={setAgentDialogOpen}
+        onSave={async ({ coordinatorName: nextName, expectedRevision }) => {
+          const modelSelection =
+            defaultModelSelection ?? agent.overview?.config?.coordinatorModelSelection ?? null;
+          if (!modelSelection) return;
+          const saved = await agent.configure({
+            modelSelection,
+            coordinatorName: nextName,
+            ...(agent.overview?.config?.workerRouting
+              ? { workerRouting: agent.overview.config.workerRouting }
+              : {}),
+            ...(agent.overview?.config?.limits ? { limits: agent.overview.config.limits } : {}),
+            ...(importedInstructions?.trim() ? { importedInstructions } : {}),
+            ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+          });
+          if (saved) setAgentDialogOpen(false);
+        }}
       />
-      <p className="text-[11px] text-muted-foreground">
-        Provider/model: {defaultModelSelection?.provider ?? "none"} /{" "}
-        {defaultModelSelection?.model ?? "none"}
-      </p>
-      <p className="text-[11px] text-muted-foreground">
-        Default limits: {DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers} concurrent workers,{" "}
-        {DEFAULT_PROJECT_AGENT_LIMITS.maxNewWorkersPerTurn} new per turn.
-      </p>
-      <Button type="submit" size="sm" disabled={busy || !defaultModelSelection}>
-        Set up coordinator
-      </Button>
-    </form>
-  );
-}
-
-function SettingsForm({
-  name,
-  busy,
-  defaultModelSelection,
-  currentModel,
-  onSave,
-}: {
-  name: string;
-  busy: boolean;
-  defaultModelSelection: ModelSelection | null;
-  currentModel: ModelSelection | null;
-  onSave: (name: string) => void;
-}) {
-  const [value, setValue] = useState(name);
-  return (
-    <form
-      className="flex flex-col gap-1 px-1 py-1"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSave(value.trim() || name);
-      }}
-    >
-      <EnvironmentSectionLabel>Settings</EnvironmentSectionLabel>
-      <label className="text-[11px] text-muted-foreground" htmlFor="settings-name">
-        Coordinator name
-      </label>
-      <input
-        id="settings-name"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        className="rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
-      />
-      <p className="text-[11px] text-muted-foreground">
-        Current model: {currentModel?.provider}/{currentModel?.model}. Saving uses this chat&apos;s
-        model ({defaultModelSelection?.provider}/{defaultModelSelection?.model}) without starting a
-        turn.
-      </p>
-      <Button type="submit" size="sm" disabled={busy}>
-        Save settings
-      </Button>
-    </form>
+    </>
   );
 }
 

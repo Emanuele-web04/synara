@@ -162,4 +162,63 @@ layer("ProjectAgentRepository", (it) => {
       }
     }),
   );
+
+  it.effect("lists lightweight summaries with the active goal status", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectAgentRepository;
+      const firstProjectId = ProjectId.makeUnsafe("project-summary-1");
+      const secondProjectId = ProjectId.makeUnsafe("project-summary-2");
+      const firstThreadId = ThreadId.makeUnsafe("thread-summary-1");
+      const secondThreadId = ThreadId.makeUnsafe("thread-summary-2");
+      const config = {
+        projectId: firstProjectId,
+        coordinatorThreadId: firstThreadId,
+        coordinatorName: "Demo Coordinator",
+        coordinatorModelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+        limits,
+        captureEnabled: true,
+        enabled: true,
+        automationId: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        disabledAt: null,
+      };
+      yield* repository.saveConfig(config, null);
+      yield* repository.saveConfig(
+        {
+          ...config,
+          projectId: secondProjectId,
+          coordinatorThreadId: secondThreadId,
+          coordinatorName: "Other Coordinator",
+        },
+        null,
+      );
+      yield* repository.saveGoal(
+        {
+          id: ProjectGoalId.makeUnsafe("goal-summary"),
+          projectId: firstProjectId,
+          objective: "Keep summaries fresh",
+          authorizationSource: "user",
+          scopeVersion: 1,
+          acceptanceCriteria: null,
+          limits,
+          status: "active",
+          continuationCount: 0,
+          workerCreationCount: 0,
+          authorizedAt: now,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+        null,
+      );
+      const summaries = yield* repository.listSummaries();
+      const byProject = new Map(summaries.map((row) => [row.projectId, row]));
+      assert.equal(byProject.get(firstProjectId)?.coordinatorName, "Demo Coordinator");
+      assert.equal(byProject.get(firstProjectId)?.goalStatus, "active");
+      assert.equal(byProject.get(secondProjectId)?.coordinatorName, "Other Coordinator");
+      assert.equal(byProject.get(secondProjectId)?.goalStatus, null);
+    }),
+  );
 });

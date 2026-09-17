@@ -352,6 +352,24 @@ export const ProjectAgentGetOverviewInput = Schema.Struct({
 });
 export type ProjectAgentGetOverviewInput = typeof ProjectAgentGetOverviewInput.Type;
 
+export const ProjectAgentSummary = Schema.Struct({
+  projectId: ProjectId,
+  configured: Schema.Boolean,
+  coordinatorName: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+  coordinatorThreadId: Schema.NullOr(ThreadId),
+  coordinatorStatus: Schema.Literals(["unconfigured", "idle", "running", "paused", "stopped"]),
+  revision: ProjectAgentRevision,
+});
+export type ProjectAgentSummary = typeof ProjectAgentSummary.Type;
+
+export const ProjectAgentListSummariesInput = Schema.Struct({});
+export type ProjectAgentListSummariesInput = typeof ProjectAgentListSummariesInput.Type;
+
+export const ProjectAgentListSummariesResult = Schema.Struct({
+  summaries: Schema.Array(ProjectAgentSummary),
+});
+export type ProjectAgentListSummariesResult = typeof ProjectAgentListSummariesResult.Type;
+
 export const ProjectAgentConfigureInput = Schema.Struct({
   requestId: ProjectAgentRequestId,
   projectId: ProjectId,

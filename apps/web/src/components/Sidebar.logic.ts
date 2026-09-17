@@ -1364,6 +1364,25 @@ export function sortProjectsForSidebar<
   });
 }
 
+export function isHiddenProjectAgentCoordinatorThread(
+  threadId: string,
+  coordinatorThreadIds: ReadonlySet<string>,
+): boolean {
+  return coordinatorThreadIds.has(threadId);
+}
+
+export function excludeHiddenProjectAgentCoordinatorThreads<T extends { readonly id: string }>(
+  threads: readonly T[],
+  coordinatorThreadIds: ReadonlySet<string>,
+): T[] {
+  if (coordinatorThreadIds.size === 0) {
+    return [...threads];
+  }
+  return threads.filter(
+    (thread) => !isHiddenProjectAgentCoordinatorThread(thread.id, coordinatorThreadIds),
+  );
+}
+
 // Groups thread summaries once so project-specific sidebar derivations can reuse the same slices.
 export function groupSidebarThreadsByProjectId(
   threads: readonly SidebarThreadSummary[],

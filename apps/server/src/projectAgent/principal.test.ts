@@ -5,7 +5,9 @@ import {
   canAcceptTask,
   canStartGoal,
   canWriteUserOwnedDocuments,
+  coordinatorStatusFromGoal,
   isCoordinatorPrincipal,
+  projectAgentSummariesForPrincipal,
 } from "./principal";
 
 const projectId = ProjectId.makeUnsafe("project-1");
@@ -66,5 +68,43 @@ describe("project agent principal", () => {
     expect(canStartGoal(unmanaged)).toBe(false);
     expect(canWriteUserOwnedDocuments(unmanaged)).toBe(false);
     expect(canWriteUserOwnedDocuments({ kind: "user" })).toBe(true);
+  });
+
+  it("keeps unmanaged MCP callers from seeing other project agent summaries", () => {
+    const own = ProjectId.makeUnsafe("project-own");
+    const other = ProjectId.makeUnsafe("project-other");
+    const summaries = [
+      {
+        projectId: own,
+        configured: true,
+        coordinatorName: "Own Coordinator",
+        coordinatorThreadId: ThreadId.makeUnsafe("thread-own"),
+        coordinatorStatus: "idle" as const,
+        revision: 1,
+      },
+      {
+        projectId: other,
+        configured: true,
+        coordinatorName: "Other Coordinator",
+        coordinatorThreadId: ThreadId.makeUnsafe("thread-other"),
+        coordinatorStatus: "running" as const,
+        revision: 2,
+      },
+    ];
+    const visible = projectAgentSummariesForPrincipal(summaries, {
+      kind: "unmanaged",
+      threadId: ThreadId.makeUnsafe("thread-mcp"),
+      projectId: own,
+    });
+    expect(visible).toHaveLength(1);
+    expect(visible[0]?.projectId).toBe(own);
+    expect(projectAgentSummariesForPrincipal(summaries, { kind: "user" })).toHaveLength(2);
+  });
+
+  it("maps an active goal to running coordinator status", () => {
+    expect(coordinatorStatusFromGoal(false, null)).toBe("unconfigured");
+    expect(coordinatorStatusFromGoal(true, null)).toBe("idle");
+    expect(coordinatorStatusFromGoal(true, "active")).toBe("running");
+    expect(coordinatorStatusFromGoal(true, "paused")).toBe("paused");
   });
 });

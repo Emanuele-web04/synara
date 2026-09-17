@@ -824,6 +824,7 @@ export function createWsNativeApi(): NativeApi {
     },
     projectAgent: {
       getOverview: (input) => transport.request(WS_METHODS.projectAgentGetOverview, input),
+      listSummaries: (input = {}) => transport.request(WS_METHODS.projectAgentListSummaries, input),
       configure: (input) => transport.request(WS_METHODS.projectAgentConfigure, input),
       startGoal: (input) => transport.request(WS_METHODS.projectAgentStartGoal, input),
       updateGoal: (input) => transport.request(WS_METHODS.projectAgentUpdateGoal, input),

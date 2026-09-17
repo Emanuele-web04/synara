@@ -7,6 +7,7 @@ import {
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
+  excludeHiddenProjectAgentCoordinatorThreads,
   extractDuplicateProjectCreateProjectId,
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
@@ -27,6 +28,7 @@ import {
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
+  isHiddenProjectAgentCoordinatorThread,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
@@ -74,6 +76,22 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("project agent sidebar hiding", () => {
+  it("hides the coordinator thread from child lists and visible counts", () => {
+    const coordinatorId = ThreadId.makeUnsafe("thread-coordinator");
+    const childId = ThreadId.makeUnsafe("thread-child");
+    const hiddenIds = new Set([coordinatorId]);
+    expect(isHiddenProjectAgentCoordinatorThread(coordinatorId, hiddenIds)).toBe(true);
+    expect(isHiddenProjectAgentCoordinatorThread(childId, hiddenIds)).toBe(false);
+    expect(
+      excludeHiddenProjectAgentCoordinatorThreads(
+        [{ id: coordinatorId }, { id: childId }],
+        hiddenIds,
+      ).map((thread) => thread.id),
+    ).toEqual([childId]);
+  });
+});
 
 describe("isProjectsSidebarSurface", () => {
   it("enables Space shortcuts only where the Space switcher is visible", () => {

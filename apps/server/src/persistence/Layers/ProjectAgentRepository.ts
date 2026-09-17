@@ -11,6 +11,7 @@ import {
   ProjectEvidence,
   ProjectGoal,
   ProjectGoalId,
+  ProjectGoalStatus,
   ProjectId,
   ProjectInboxEvent,
   ProjectTask,
@@ -33,6 +34,7 @@ import {
 import {
   ProjectAgentReceipt,
   ProjectAgentRepository,
+  type ProjectAgentConfigSummaryRow,
   type ProjectAgentRepositoryShape,
 } from "../Services/ProjectAgentRepository.ts";
 
@@ -92,6 +94,14 @@ const DependencyRow = Schema.Struct({
 });
 
 const ChangedRow = Schema.Struct({ changed: Schema.Number });
+
+const SummaryRow = Schema.Struct({
+  projectId: ProjectId,
+  coordinatorName: ProjectAgentConfig.fields.coordinatorName,
+  coordinatorThreadId: ThreadId,
+  revision: ProjectAgentConfig.fields.revision,
+  goalStatus: Schema.NullOr(ProjectGoalStatus),
+});
 
 function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
   return {
@@ -447,6 +457,37 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config"),
         ),
       ),
+    listSummaries: () =>
+      SqlSchema.findAll({
+        Request: Schema.Struct({}),
+        Result: SummaryRow,
+        execute: () => sql`
+          SELECT
+            c.project_id AS "projectId",
+            c.coordinator_name AS "coordinatorName",
+            c.coordinator_thread_id AS "coordinatorThreadId",
+            c.revision AS "revision",
+            g.status AS "goalStatus"
+          FROM project_agent_configs c
+          LEFT JOIN project_agent_goals g
+            ON g.project_id = c.project_id
+            AND g.status IN ('active', 'paused')
+        `,
+      })({}).pipe(
+        Effect.map(
+          (rows): ReadonlyArray<ProjectAgentConfigSummaryRow> =>
+            rows.map((row) => ({
+              projectId: row.projectId,
+              coordinatorName: row.coordinatorName,
+              coordinatorThreadId: row.coordinatorThreadId,
+              revision: row.revision,
+              goalStatus: row.goalStatus,
+            })),
+        ),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listSummaries", "summary"),
+        ),
+      ),
     getConfigByCoordinatorThread: (threadId) =>
       getConfigByCoordinatorRow({ threadId }).pipe(
         Effect.map(Option.map(toConfig)),
@@ -702,7 +743,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         ),
       ),
     getDocumentHead: (projectId, logicalPath) =>
-      sql<typeof ProjectDocumentHead.Type>`
+      sql<Record<string, unknown>>`
         SELECT
           project_id AS "projectId", logical_path AS "logicalPath", revision,
           content_hash AS "contentHash", disk_hash AS "diskHash",
@@ -746,7 +787,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         ),
       ),
     readDocumentRevision: (input) =>
-      sql<ProjectDocumentRevision>`
+      sql<Record<string, unknown>>`
         SELECT
           revision_id AS "id", project_id AS "projectId", logical_path AS "logicalPath", revision,
           content, content_hash AS "contentHash", author_kind AS "authorKind",
@@ -762,11 +803,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.flatMap((rows) => {
           const row = rows[0];
           if (!row) return Effect.succeed(Option.none());
-          const sources =
-            typeof (row as { sources?: unknown }).sources === "string"
-              ? JSON.parse((row as { sources: string }).sources)
-              : (row as { sources?: unknown }).sources;
-          return Schema.decodeUnknownEffect(ProjectDocumentRevision)({ ...row, sources }).pipe(
+          const sources = typeof row.sources === "string" ? JSON.parse(row.sources) : row.sources;
+          return Schema.decodeUnknownEffect(ProjectDocumentRevision)({
+            ...row,
+            sources,
+          }).pipe(
             Effect.map(Option.some),
             Effect.mapError(
               toPersistenceDecodeError("ProjectAgentRepository.readDocumentRevision"),
@@ -854,7 +895,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.as(activity),
       ),
     listActivity: (input) =>
-      sql<ProjectActivity>`
+      sql<Record<string, unknown>>`
         SELECT
           activity_id AS "id", project_id AS "projectId", sequence, kind,
           actor_kind AS "actorKind", actor_thread_id AS "actorThreadId",
@@ -873,11 +914,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listActivity")),
         Effect.flatMap((rows) =>
           Effect.forEach(rows, (row) => {
-            const source =
-              typeof (row as { source?: unknown }).source === "string"
-                ? JSON.parse((row as { source: string }).source)
-                : (row as { source?: unknown }).source;
-            return Schema.decodeUnknownEffect(ProjectActivity)({ ...row, source }).pipe(
+            const source = typeof row.source === "string" ? JSON.parse(row.source) : row.source;
+            return Schema.decodeUnknownEffect(ProjectActivity)({
+              ...row,
+              source,
+            }).pipe(
               Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listActivity")),
             );
           }),

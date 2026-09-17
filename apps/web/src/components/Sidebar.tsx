@@ -6,6 +6,7 @@ import {
   AddPlusIcon,
   ArchiveIcon,
   BookIcon,
+  BotIcon,
   ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
@@ -222,6 +223,9 @@ import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
+import { ProjectAgentDialog } from "./chat/project/ProjectAgentDialog";
+import { defaultProjectAgentName } from "./chat/project/projectAgentDialog.logic";
+import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
@@ -304,6 +308,7 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
+  excludeHiddenProjectAgentCoordinatorThreads,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -495,6 +500,7 @@ type ProjectContextMenuId =
   | "stop-dev"
   | "open-dev-server"
   | "rename"
+  | "edit-project-agent"
   | "toggle-pin"
   | "archive-threads"
   | "delete-threads"
@@ -1599,6 +1605,12 @@ export default function Sidebar() {
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
+  const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
+    projectId: ProjectId;
+    mode: "setup" | "edit";
+  } | null>(null);
+  const [projectAgentDialogBusy, setProjectAgentDialogBusy] = useState(false);
+  const [projectAgentDialogError, setProjectAgentDialogError] = useState<string | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -1693,19 +1705,29 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
+  const { summariesByProjectId, applyOverview, summaryFor, coordinatorThreadIds } =
+    useProjectAgentSummaries();
+  const displaySidebarThreads = useMemo(
+    () => excludeHiddenProjectAgentCoordinatorThreads(sidebarThreads, coordinatorThreadIds),
+    [coordinatorThreadIds, sidebarThreads],
+  );
+  const displaySidebarTreeThreads = useMemo(
+    () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
+    [coordinatorThreadIds, sidebarTreeThreads],
+  );
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
   const { nonStudioThreads: nonStudioSidebarThreads, studioThreads: studioSidebarThreads } =
     useMemo(
-      () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
-      [sidebarThreads, studioProjectIdSet],
+      () => partitionSidebarThreadsByProjectIds(displaySidebarThreads, studioProjectIdSet),
+      [displaySidebarThreads, studioProjectIdSet],
     );
   const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
     useMemo(
-      () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
-      [sidebarTreeThreads, studioProjectIdSet],
+      () => partitionSidebarThreadsByProjectIds(displaySidebarTreeThreads, studioProjectIdSet),
+      [displaySidebarTreeThreads, studioProjectIdSet],
     );
   // Activity view + unread bell read the same visibility-filtered list, so the
   // bell can never point at a row the Activity list is hiding.
@@ -2101,7 +2123,7 @@ export default function Sidebar() {
       // Only navigate to threads the sidebar actually shows — focusing a hidden
       // automation-run thread would select a row the user can't see.
       const latestThread = sortThreadsForSidebar(
-        sidebarThreads.filter(
+        displaySidebarThreads.filter(
           (thread) =>
             thread.projectId === projectId &&
             isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
@@ -2115,7 +2137,7 @@ export default function Sidebar() {
         params: { threadId: latestThread.id },
       });
     },
-    [appSettings.sidebarThreadSortOrder, hideAutomationRunThreads, navigate, sidebarThreads],
+    [appSettings.sidebarThreadSortOrder, displaySidebarThreads, hideAutomationRunThreads, navigate],
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
@@ -3403,7 +3425,7 @@ export default function Sidebar() {
   } = useSpacesController({
     ordinarySpaceProjects,
     projectById,
-    sidebarThreads,
+    sidebarThreads: displaySidebarThreads,
     sidebarThreadSortOrder: appSettings.sidebarThreadSortOrder,
     routeThreadId,
     routeProjectId,
@@ -3583,6 +3605,14 @@ export default function Sidebar() {
         setRenameProjectDialogId(projectId);
         return;
       }
+      if (clicked === "edit-project-agent") {
+        setProjectAgentDialogError(null);
+        setProjectAgentDialogState({
+          projectId,
+          mode: summaryFor(projectId)?.configured ? "edit" : "setup",
+        });
+        return;
+      }
       if (clicked === "toggle-pin") {
         toggleProjectPinned(projectId);
         return;
@@ -3597,7 +3627,10 @@ export default function Sidebar() {
       }
       if (clicked !== "delete") return;
 
-      const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
+      const projectThreads = excludeHiddenProjectAgentCoordinatorThreads(
+        sidebarThreads.filter((thread) => thread.projectId === projectId),
+        coordinatorThreadIds,
+      );
       const confirmed = await api.dialogs.confirm(
         projectThreads.length > 0
           ? [
@@ -3661,6 +3694,7 @@ export default function Sidebar() {
     [
       archiveAllThreadsInProject,
       clearProjectDraftThreads,
+      coordinatorThreadIds,
       copyPathToClipboard,
       deleteProjectThreads,
       handleOpenProjectRunServer,
@@ -3670,6 +3704,7 @@ export default function Sidebar() {
       projectById,
       removeDeletedProjectFromClientState,
       sidebarThreads,
+      summaryFor,
       toggleProjectPinned,
     ],
   );
@@ -3857,8 +3892,8 @@ export default function Sidebar() {
   // Trees need child (subagent) threads too; the flat display list stays
   // root-only for pinned rows and other non-tree consumers.
   const sidebarThreadsByProjectId = useMemo(
-    () => groupSidebarThreadsByProjectId(sidebarTreeThreads),
-    [sidebarTreeThreads],
+    () => groupSidebarThreadsByProjectId(displaySidebarTreeThreads),
+    [displaySidebarTreeThreads],
   );
   const sortedSidebarThreadsByProjectId = useMemo(() => {
     const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
@@ -3887,8 +3922,9 @@ export default function Sidebar() {
   );
 
   const sortedProjects = useMemo(
-    () => sortProjectsForSidebar(projects, sidebarThreads, appSettings.sidebarProjectSortOrder),
-    [appSettings.sidebarProjectSortOrder, projects, sidebarThreads],
+    () =>
+      sortProjectsForSidebar(projects, displaySidebarThreads, appSettings.sidebarProjectSortOrder),
+    [appSettings.sidebarProjectSortOrder, displaySidebarThreads, projects],
   );
   const chatProjects = useMemo(
     () =>
@@ -4273,8 +4309,8 @@ export default function Sidebar() {
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
-    () => sidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
-    [sidebarTreeThreads, visibleSidebarThreadIdSet],
+    () => displaySidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
+    [displaySidebarTreeThreads, visibleSidebarThreadIdSet],
   );
   // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
   const prByThreadId = useThreadPullRequests({
@@ -4550,6 +4586,12 @@ export default function Sidebar() {
           path={abbreviateHomePath(project.cwd, homeDir)}
           onTogglePin={() => toggleProjectPinned(project.id)}
           onEditProject={() => void handleProjectContextMenuAction(project.id, "rename")}
+          {...(summaryFor(project.id)?.configured
+            ? {
+                onEditProjectAgent: () =>
+                  void handleProjectContextMenuAction(project.id, "edit-project-agent"),
+              }
+            : {})}
         />
       </PreviewCardPopup>
     );
@@ -4924,6 +4966,8 @@ export default function Sidebar() {
     // A project reads as "running" when Synara tracks a run for it or when a
     // local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
+    const projectAgentSummary = summariesByProjectId.get(project.id) ?? null;
+    const projectAgentConfigured = projectAgentSummary?.configured === true;
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
     // the hover toolbar always reserves space for the three thread actions. The
@@ -5005,6 +5049,59 @@ export default function Sidebar() {
                 >
                   {projectRowLabel}
                 </span>
+                {projectAgentConfigured && projectAgentSummary?.coordinatorName ? (
+                  <span className="flex min-w-0 items-center gap-1 overflow-hidden text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-accent)]">
+                    <span className="shrink-0 text-muted-foreground/55" aria-hidden>
+                      ·
+                    </span>
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      className="inline-flex min-w-0 items-center gap-1 truncate"
+                      aria-label={`Open ${projectAgentSummary.coordinatorName}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (projectAgentSummary.coordinatorThreadId) {
+                          activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (projectAgentSummary.coordinatorThreadId) {
+                          activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
+                        }
+                      }}
+                    >
+                      <BotIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">{projectAgentSummary.coordinatorName}</span>
+                    </span>
+                  </span>
+                ) : (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="shrink-0 text-muted-foreground/55 hover:text-foreground"
+                    aria-label={`Set up project agent for ${project.name}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setProjectAgentDialogError(null);
+                      setProjectAgentDialogState({ projectId: project.id, mode: "setup" });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setProjectAgentDialogError(null);
+                      setProjectAgentDialogState({ projectId: project.id, mode: "setup" });
+                    }}
+                  >
+                    <BotIcon className="size-3.5" />
+                  </span>
+                )}
               </div>
               {/* Closed folders surface child-chat status on the project row; open
                   folders leave that signal to their visible child thread rows. */}
@@ -5903,15 +6000,20 @@ export default function Sidebar() {
   const renameProjectDialogProject = renameProjectDialogId
     ? (projectById.get(renameProjectDialogId) ?? null)
     : null;
+  const projectAgentDialogProject = projectAgentDialogState
+    ? (projectById.get(projectAgentDialogState.projectId) ?? null)
+    : null;
   const projectContextMenuProject = projectContextMenuState
     ? (projectById.get(projectContextMenuState.projectId) ?? null)
     : null;
   const projectContextMenuThreads = useMemo(
     () =>
       projectContextMenuState
-        ? sidebarThreads.filter((thread) => thread.projectId === projectContextMenuState.projectId)
+        ? displaySidebarThreads.filter(
+            (thread) => thread.projectId === projectContextMenuState.projectId,
+          )
         : [],
-    [projectContextMenuState, sidebarThreads],
+    [displaySidebarThreads, projectContextMenuState],
   );
   const projectContextMenuAnchor = useMemo(
     () =>
@@ -6712,6 +6814,20 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={PencilIcon} />
                 <span>Edit name</span>
               </MenuItem>
+              {summaryFor(projectContextMenuState.projectId)?.configured ? (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "edit-project-agent",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={BotIcon} />
+                  <span>Edit project agent</span>
+                </MenuItem>
+              ) : null}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
@@ -6901,6 +7017,71 @@ export default function Sidebar() {
             nextName,
             renameProjectDialogProject.localName,
           );
+        }}
+      />
+
+      <ProjectAgentDialog
+        open={projectAgentDialogState !== null && projectAgentDialogProject !== null}
+        mode={projectAgentDialogState?.mode ?? "setup"}
+        projectId={projectAgentDialogProject?.id ?? null}
+        projectName={projectAgentDialogProject?.name ?? ""}
+        agentName={
+          projectAgentDialogProject
+            ? (summaryFor(projectAgentDialogProject.id)?.coordinatorName ??
+              defaultProjectAgentName(projectAgentDialogProject.name))
+            : undefined
+        }
+        workspacePath={
+          projectAgentDialogProject
+            ? abbreviateHomePath(projectAgentDialogProject.cwd, homeDir)
+            : ""
+        }
+        defaultModelSelection={projectAgentDialogProject?.defaultModelSelection ?? null}
+        expectedRevision={
+          projectAgentDialogState?.mode === "edit" && projectAgentDialogProject
+            ? (summaryFor(projectAgentDialogProject.id)?.revision ?? undefined)
+            : undefined
+        }
+        busy={projectAgentDialogBusy}
+        error={projectAgentDialogError}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProjectAgentDialogState(null);
+            setProjectAgentDialogError(null);
+            setProjectAgentDialogBusy(false);
+          }
+        }}
+        onSave={async ({ coordinatorName, expectedRevision }) => {
+          const project = projectAgentDialogProject;
+          const modelSelection = project?.defaultModelSelection ?? null;
+          if (!project || !modelSelection) {
+            setProjectAgentDialogError("Select a model in this chat before setting up the agent.");
+            return;
+          }
+          const api = readNativeApi();
+          if (!api?.projectAgent) {
+            setProjectAgentDialogError("Project agent is unavailable.");
+            return;
+          }
+          setProjectAgentDialogBusy(true);
+          setProjectAgentDialogError(null);
+          try {
+            const overview = await api.projectAgent.configure({
+              requestId: crypto.randomUUID(),
+              projectId: project.id,
+              coordinatorName,
+              coordinatorModelSelection: modelSelection,
+              ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+            });
+            applyOverview(overview);
+            setProjectAgentDialogState(null);
+          } catch (error) {
+            setProjectAgentDialogError(
+              error instanceof Error ? error.message : "Could not save the project agent.",
+            );
+          } finally {
+            setProjectAgentDialogBusy(false);
+          }
         }}
       />
 

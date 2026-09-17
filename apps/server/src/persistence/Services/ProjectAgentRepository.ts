@@ -2,6 +2,7 @@ import {
   ProjectActivity,
   ProjectAgentConfig,
   ProjectAgentRequestId,
+  ProjectGoalStatus,
   ProjectDigest,
   ProjectDocumentHead,
   ProjectDocumentRevision,
@@ -32,12 +33,24 @@ export const ProjectAgentReceipt = Schema.Struct({
 });
 export type ProjectAgentReceipt = typeof ProjectAgentReceipt.Type;
 
+export interface ProjectAgentConfigSummaryRow {
+  readonly projectId: ProjectId;
+  readonly coordinatorName: ProjectAgentConfig["coordinatorName"];
+  readonly coordinatorThreadId: ThreadId;
+  readonly revision: ProjectAgentConfig["revision"];
+  readonly goalStatus: ProjectGoalStatus | null;
+}
+
 export interface ProjectAgentRepositoryShape {
   readonly getConfig: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ProjectAgentConfig>, ProjectAgentRepositoryError>;
   readonly listConfigs: () => Effect.Effect<
     ReadonlyArray<ProjectAgentConfig>,
+    ProjectAgentRepositoryError
+  >;
+  readonly listSummaries: () => Effect.Effect<
+    ReadonlyArray<ProjectAgentConfigSummaryRow>,
     ProjectAgentRepositoryError
   >;
   readonly getConfigByCoordinatorThread: (

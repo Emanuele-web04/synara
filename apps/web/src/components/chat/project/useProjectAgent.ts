@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readNativeApi } from "~/nativeApi";
+import { useProjectAgentSummariesStore } from "./useProjectAgentSummaries";
 
 export function useProjectAgent(input: {
   readonly projectId: ProjectId | null;
@@ -111,15 +112,17 @@ export function useProjectAgent(input: {
     ) => {
       const api = readNativeApi();
       const projectId = projectIdRef.current;
-      if (!api?.projectAgent || !projectId) return;
+      if (!api?.projectAgent || !projectId) return false;
       setBusy(true);
       try {
         await work(api.projectAgent, projectId);
         if (projectIdRef.current === projectId) await load();
+        return true;
       } catch (cause) {
         if (projectIdRef.current === projectId) {
           setError(cause instanceof Error ? cause.message : "Project action failed.");
         }
+        return false;
       } finally {
         if (projectIdRef.current === projectId) setBusy(false);
       }
@@ -143,7 +146,7 @@ export function useProjectAgent(input: {
       expectedRevision?: number | undefined;
     }) =>
       runMutation(async (projectAgent, projectId) => {
-        await projectAgent.configure({
+        const overview = await projectAgent.configure({
           requestId: crypto.randomUUID(),
           projectId,
           coordinatorModelSelection: input.modelSelection,
@@ -157,6 +160,7 @@ export function useProjectAgent(input: {
             ? { expectedRevision: input.expectedRevision }
             : {}),
         });
+        useProjectAgentSummariesStore.getState().applyOverview(overview);
       }),
     [runMutation],
   );

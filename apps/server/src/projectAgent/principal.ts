@@ -1,4 +1,10 @@
-import type { ProjectId, ProjectTaskId, ThreadId } from "@synara/contracts";
+import type {
+  ProjectAgentOverview,
+  ProjectGoalStatus,
+  ProjectId,
+  ProjectTaskId,
+  ThreadId,
+} from "@synara/contracts";
 
 export type ProjectAgentPrincipal =
   | { readonly kind: "user" }
@@ -48,4 +54,24 @@ export function canStartGoal(principal: ProjectAgentPrincipal): boolean {
 
 export function canConfigureProject(principal: ProjectAgentPrincipal): boolean {
   return isUserPrincipal(principal);
+}
+
+export function coordinatorStatusFromGoal(
+  configured: boolean,
+  goalStatus: ProjectGoalStatus | null,
+): ProjectAgentOverview["coordinatorStatus"] {
+  if (!configured) return "unconfigured";
+  if (goalStatus === "paused") return "paused";
+  if (goalStatus === "stopped") return "stopped";
+  if (goalStatus === "active") return "running";
+  return "idle";
+}
+
+export function projectAgentSummariesForPrincipal<T extends { readonly projectId: ProjectId }>(
+  summaries: readonly T[],
+  principal: ProjectAgentPrincipal,
+): readonly T[] {
+  const scopedProjectId = principalProjectId(principal);
+  if (scopedProjectId === null) return summaries;
+  return summaries.filter((summary) => summary.projectId === scopedProjectId);
 }
