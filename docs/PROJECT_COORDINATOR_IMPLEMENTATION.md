@@ -32,19 +32,24 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 - `3bad29eecfb842e387a35f46c53c13f9eff9e82e` Add Project Coordinator domain, panel, and bounded wakes.
 - `22e624222` Record Project Coordinator commit in the implementation ledger.
 - `2369e560d` Repair Project Coordinator security and product gaps.
+- `6453cd5cc` Make Project Coordinator pass fmt, lint, and typecheck.
+- (next) Render Context preview as Markdown.
 
 ## Checks
 
 - `apps/server` principal, digest, lifecycle, ProjectAgentRepository, Migrations, AgentGateway (73) passed
 - `packages/contracts` projectAgent + ws passed
 - `apps/web` auxiliary panel, ChatView.logic, projectInstructionsStore passed
-- Did not run `bun fmt`, `bun lint`, `bun typecheck`, or isolated preview
+- `bun fmt` applied; `bun lint` 0 errors; `bun typecheck` passes (2026-09-17)
+- `bun run test`: 2994 passed, 36 failed in 5 web store/markdown files; the same 36 fail on `main` (missing `localStorage` in this test environment), so they are not caused by this branch
+- Isolated preview (`SYNARA_HOME=~/.synara/project-coordinator-preview`, web 8891, server 6931) smoke-tested: Project icon, Overview/Work/Context/Activity, Context save with CAS revision + history + on-disk mirror, Environment instructions read from server doc, settings form
+- Independently confirmed the six security/recovery repairs: unmanaged principal for ordinary MCP callers, goal-association check in drive authorization, context packet injected in ProviderCommandReactor, creationCoordinator goal hook wired, wake receipts + reconcile, live-subscribe-then-snapshot stream ordering
+- Server rejects mode/schedule/target edits on project-managed automations
 
 ## Remaining requirements
 
-- Isolated Synara preview (separate state/ports) remains root-owned; this repair did not relaunch it
 - No 1,000-thread / 10,000-activity soak
-- `bun fmt` / `bun lint` / `bun typecheck` still unauthorized
+- Starting a goal (autonomous coordination, live digest generation) not exercised in preview; user validation pending
 - ProviderCommandReactor tests stub `formatContextPacketForTurn`; live injection needs preview
 - Settings model picker reuses the current chat model rather than a full composer catalog
 

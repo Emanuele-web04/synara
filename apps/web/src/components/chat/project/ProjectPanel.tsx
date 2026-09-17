@@ -2,6 +2,7 @@ import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { DEFAULT_PROJECT_AGENT_LIMITS } from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import ChatMarkdown from "~/components/ChatMarkdown";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { PauseIcon, PlayIcon, SettingsIcon, WorkflowIcon } from "~/lib/icons";
@@ -640,7 +641,9 @@ function ContextDocuments({
         </p>
       ) : null}
       {mode === "preview" ? (
-        <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-[11px]">{body}</pre>
+        <div className="max-h-48 overflow-auto text-[11px]">
+          <ChatMarkdown text={body} cwd={undefined} isStreaming={false} />
+        </div>
       ) : (
         <textarea
           className="min-h-32 rounded-md border border-border bg-transparent px-2 py-1 font-mono text-[11px]"
