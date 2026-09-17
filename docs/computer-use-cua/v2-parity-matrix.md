@@ -82,20 +82,95 @@ The gap summary above predates the decisive input matrix. Verified results:
   Options: keep scroll foreground-only, or implement rev-16 scroll with
   AX-first + 2-axis + modifiers per the subagent map.
 
-Driver surface inventory (55 tools): Synara exposes 30 agent-facing
-(`computer_*`) tools after the milestone set. Remaining: reads
-(`health_report`, `get_config`, `get_recording_state`, `get_session`,
-`get_session_state`, `list_sessions`, `check_for_update`, `debug_window_info`,
-`history_status`/`history_query`), mutations (`set_config`,
-`set_agent_cursor_enabled`/`motion`/`theme`,
-`start_session`/`end_session`/`escalate_session`,
-`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`,
-`browser_prepare`), and the browser family (`get_browser_state`,
-`browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
-`browser_dialog`, `browser_download`, `browser_set_input_files`, legacy
-`page`). `get_accessibility_tree` and `get_cursor_position` are allowlisted
-reads used internally by the backend, not separate agent tools. Browser
-tools are a distinct feature family needing their own consent model.
+## Driver tool inventory — definitive audit (0.28.2, native rev 16, embedded serve)
+
+Every tool the managed macOS driver registers, classified once. Registration
+comes from `platform-macos` `tools::register_all` plus the binary's host
+tools (`check_for_update`, and `history_status`/`history_query` only under the
+upstream preview admission — the embedded daemon Synara spawns does not admit
+them, so 57 names exist on the wire here, 59 upstream). Names in the contract
+vocabulary that macOS never registers are listed last.
+
+The allowlist boundary is machine-pinned by
+`packages/shared/src/cuaDriverProtocol.test.ts`: a driver tool not in
+`CUA_READ_TOOLS`/`CUA_ACTION_TOOLS` is unreachable from the server side, and
+growing the allowlist means re-auditing the tool here first.
+
+### Agent-facing (`computer_*` tools)
+
+| Driver tool              | Synara surface                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_windows`           | `computer_list_windows`                                                                                                                                                             |
+| `get_window_state`       | `computer_get_state` / `computer_screenshot` (exact-window tree + capture)                                                                                                          |
+| `get_desktop_state`      | `computer_get_state` / `computer_screenshot` (whole-desktop overview)                                                                                                               |
+| `get_screen_size`        | `computer_get_screen_size`                                                                                                                                                          |
+| `list_apps`              | `computer_list_apps`                                                                                                                                                                |
+| `get_accessibility_tree` | `computer_get_accessibility_tree` (desktop inventory; `window_id` scopes to the owning app)                                                                                         |
+| `get_cursor_position`    | `computer_get_cursor_position`                                                                                                                                                      |
+| `verify_state`           | `computer_verify_state` (tri-state preserved verbatim)                                                                                                                              |
+| `zoom`                   | `computer_zoom` (display-only; never a coordinate frame)                                                                                                                            |
+| `click`                  | `computer_click`; `computer_double_click`/`computer_triple_click` via `count`; `computer_right_click` via `button:"right"`; `computer_perform_action` via `element_token` (AXPress) |
+| `move_cursor`            | `computer_move_cursor` (overlay-only move; never aims input)                                                                                                                        |
+| `drag`                   | `computer_drag` (foreground delivery only)                                                                                                                                          |
+| `scroll`                 | `computer_scroll` (rev-16 two-axis + modifiers + measured travel)                                                                                                                   |
+| `type_text`              | `computer_type_text` (focus-neutral AX insert or synthetic keys)                                                                                                                    |
+| `press_key`              | `computer_press_key`                                                                                                                                                                |
+| `hotkey`                 | `computer_hotkey`                                                                                                                                                                   |
+| `set_value`              | `computer_set_value` (exact element-token write, no synthetic fallback)                                                                                                             |
+| `clipboard_read`         | `computer_read_clipboard` (approval-gated)                                                                                                                                          |
+| `clipboard_write`        | `computer_write_clipboard` / `computer_paste` (approval-gated)                                                                                                                      |
+| `launch_app`             | `computer_launch_app` (approval-gated)                                                                                                                                              |
+| `bring_to_front`         | `computer_activate_window` (approval-gated, foreground-only, restores prior frontmost)                                                                                              |
+| `set_window_frame`       | `computer_set_window_frame` (approval-gated, independent read-back)                                                                                                                 |
+| `invoke_menu`            | `computer_invoke_menu` (approval-gated, AX path refuses disabled/absent items)                                                                                                      |
+| `kill_app`               | `computer_kill_app` (approval-gated, independent `list_apps` read-back)                                                                                                             |
+
+24 driver tools back the 31 `computer_*` definitions (`computer_wait`,
+`computer_run`, `computer_paste`, `computer_perform_action`, and the
+double/triple/right-click spellings are Synara-side compositions of the same
+tools).
+
+### Surfaced through another driver tool — no separate allowlist entry
+
+| Driver tool    | Reachable as                                                                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `double_click` | `click` with `count:2` — identical pixel path. Its element-token `AXOpen` recipe is the tracked "secondary actions beyond AXPress" gap, not a missing wire. |
+| `right_click`  | `click` with `button:"right"` — identical pixel path; the AX path maps to the same `AXShowMenu` gap.                                                        |
+
+### Allowlisted, internal reads — never agent-facing
+
+The host allowlist gates the server→host `call` method; these names are in it
+because `CuaComputerBackend` itself calls them, not because a `computer_*`
+tool exposes them.
+
+| Driver tool              | Internal use                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `check_permissions`      | `refresh()`/`missingPermissions()` probes; the desktop host intercepts it for the AppSnap helper. Grants surface to the user via the setup card, to the model via result setup notes — a model-facing permission query adds nothing. |
+| `check_input_ready`      | `refreshInputPause` resume probe after an `inputPause`. Readiness is reported by dispatch itself; a pre-flight poll cannot tell the model anything the action verdict does not.                                                      |
+| `get_agent_cursor_state` | Allowlist headroom for the host-managed agent cursor; no current caller.                                                                                                                                                             |
+
+### Host-internal by decision (workstream-f / capability audit)
+
+| Driver tool                                                | Reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start_session`, `end_session`, `escalate_session`         | Native session lifecycle is host machinery: the host calls `start_session` at generation bootstrap and owns teardown; escalation is Synara's approval gate's job, not the driver's.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `get_session`, `list_sessions`, `get_session_state`        | Session inventory is host state; provider threads must not see or outlive native sessions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `set_agent_cursor_enabled`, `set_agent_cursor_theme`       | Cursor ownership: spawn flags (`--compact-cursor --idle-hide-ms 900`) and `set_agent_cursor_motion` at bootstrap set the whole posture.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `set_agent_cursor_motion`                                  | Host calls it once per generation at bootstrap; agent control of overlay physics bypasses the preview contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `get_config`, `set_config`                                 | Driver configuration is Synara policy — a session-scoped `max_image_dimension` change would silently break the screenshot-frame mapping every pointer tool depends on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `start_recording`, `stop_recording`, `get_recording_state` | Recording stays internal until a privacy policy exists (gap 14 / workstream-f).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `replay_trajectory`, `install_ffmpeg`                      | Replay would bypass per-action approval and dispatch contracts; the ffmpeg install belongs to the recording pipeline's owner, not the model.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `check_for_update`                                         | The app owns upgrade lifecycle; the embedded daemon spawns with `CUA_DRIVER_RS_UPDATE_CHECK=0`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `health_report`                                            | Consumer-diagnostics contract ("consumers stay thin"), and every check it runs has a cheaper Synara-native equivalent already wired: `binary_version` = spawn handshake pin, `session_active` = generation liveness/`health().status`, `bundle_identity` = host bundle plumbing, `tcc_*` = `check_permissions` → `missingPermissions`/setup card, `ax_capability` = proven by live AX reads, `screen_capture_capability` = `health().captureAvailable`. A model cannot act on driver internals differently than on the structured errors and setup cards it already gets, so this stays out of the agent surface; revisit only if a user-facing diagnostics card wants the driver's own verdict. |
+| `history_status`, `history_query`                          | Privacy policy prerequisite (gap 14); upstream only registers them under the preview admission the embedded host never grants.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+### Browser surface — owned by the browser workstream
+
+`page` (the legacy compatibility tool: `get_text`/`query_dom`/`execute_javascript`/et al.) and `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, `browser_pointer` are a separate feature family with their own consent model. The desktop host refuses them at the allowlist (pinned by `cuaDriverHost.test.ts`); `page`'s generic text extraction overlaps `computer_get_state` `include_text`, so nothing is lost by deferring it.
+
+### Not registered on macOS at this pin
+
+`type_text_chars` (deprecated invoke-time alias of `type_text`, hidden from `tools/list`), `mouse_button_down`, `mouse_button_up`, `mouse_drag`, `parallel_mouse_drag`, and `debug_window_info` exist only in the shared contract vocabulary or other platforms' registries — there is nothing to wire.
 
 ## Evidence
 
