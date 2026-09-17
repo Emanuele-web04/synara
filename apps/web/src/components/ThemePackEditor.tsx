@@ -3,7 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
 import {
@@ -35,6 +35,7 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "../surfaceStyles"
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
+  buildThemeCssVariables,
   getAvailableCodeThemes,
   getCodeThemeSeed,
   resolveThemePack,
@@ -60,8 +61,6 @@ export function ThemePackEditor({
   isActive: isActiveProp,
   mode: modeProp,
 }: ThemePackEditorProps) {
-  const isActive = isActiveProp ?? false;
-  const mode = modeProp ?? "system";
   const {
     darkTheme,
     lightTheme,
@@ -70,12 +69,22 @@ export function ThemePackEditor({
     isDefaultThemePack,
     resetThemeVariant,
     setCodeThemeId,
+    setTheme,
+    resolvedTheme,
+    theme: themeMode,
+    systemUiFont,
     updateThemePack,
     updateThemeFonts,
   } = useTheme();
+  const isActive = isActiveProp ?? resolvedTheme === variant;
+  const mode = modeProp ?? themeMode;
 
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
+  const previewVariables = useMemo(
+    () => buildThemeCssVariables(pack, variant, { systemUiFont }).variables,
+    [pack, variant, systemUiFont],
+  );
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
@@ -178,8 +187,40 @@ export function ThemePackEditor({
           </Select>
         </div>
       </div>
-      <div className="border-b border-[color:var(--color-border)] px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
-        {contextLabel}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
+        <span>{contextLabel}</span>
+        {!isActive ? (
+          <Button variant="outline" size="xs" onClick={() => setTheme(variant)}>
+            Use {variant} theme
+          </Button>
+        ) : null}
+      </div>
+      <div className="border-b border-[color:var(--color-border)] px-4 pb-3">
+        <div
+          role="img"
+          aria-label={`${titleLabel} preview: ${codeThemeLabel}`}
+          className="flex items-center justify-between gap-3 rounded-lg border p-3"
+          style={
+            {
+              ...previewVariables,
+              backgroundColor: "var(--color-background-surface)",
+              color: "var(--color-text-foreground)",
+              borderColor: "var(--color-border)",
+              colorScheme: variant,
+            } as CSSProperties
+          }
+        >
+          <span className="text-sm font-medium">{codeThemeLabel}</span>
+          <span
+            className="rounded-md px-3 py-1 text-xs"
+            style={{
+              backgroundColor: "var(--color-background-accent)",
+              color: "var(--color-text-accent)",
+            }}
+          >
+            Accent preview
+          </span>
+        </div>
       </div>
 
       <div className={SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME}>
@@ -239,6 +280,11 @@ export function ThemePackEditor({
               ariaLabel={`${titleLabel} UI font`}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
+            {systemUiFont ? (
+              <span className="text-[11px] text-muted-foreground">
+                Use system UI font is on; theme fonts are not applied.
+              </span>
+            ) : null}
           </div>
         </ThemeRow>
 
