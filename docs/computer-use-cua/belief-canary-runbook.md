@@ -44,10 +44,27 @@ whether any canary window held OS focus; the expectation is none ever does.
 
 ## Prerequisites
 
-1. TCC Accessibility and Screen Recording granted to
-   `~/Applications/Synara Cua Canary.app` (System Settings, the same flow as
-   the fixture app). A rebuilt bundle changes the cdhash and needs the grant
-   again; stale grants have to be removed and re-added.
+1. **TCC attribution — measured on this VM (2026-09-17).** The embedded
+   `cua-driver` is a child of the canary process, so TCC attributes every
+   permission to the host bundle `com.synara.cua-canary`. The ad-hoc staged
+   bundle held no grants here: `check_permissions` returned
+   `accessibility:false, screen_recording:false`, `get_window_state`
+   answered with an EMPTY AX tree (`ax_window_unresolved`, all routes
+   refused), and even `list_windows` titles arrived stripped (WindowServer
+   removes `kCGWindowTitle` for a viewer without a capture grant). Without
+   a manual grant the embedded mode cannot certify anything.
+   Two ways forward:
+   - Grant `com.synara.cua-canary` Accessibility + Screen Recording in
+     System Settings (manual, once per cdhash), or
+   - **External trusted driver (used for the 2026-09-17 certification):**
+     host `CuaDriverHost` under an already-trusted ancestry (the operator
+     terminal) and pass the canary
+     `--env SYNARA_CUA_CANARY_ENDPOINT=<host.sock>` +
+     `--env SYNARA_CUA_CANARY_CAPABILITY=<≥32-byte token>`. The semantic
+     path is identical — the driver AXes into the canary's windows either
+     way; only TCC provisioning differs. `report.driverMode` records
+     `external` vs `embedded`. This mirrors production, where the driver
+     is embedded inside the signed, granted Synara.app.
 2. The launch is always `open -g -n -W -a`: `-g` suppresses activation, so
    the canary never becomes frontmost and never pulls the operator's Space.
    Never direct-exec the binary (`Contents/MacOS/Electron`): LaunchServices
@@ -79,6 +96,17 @@ open -g -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
   --env SYNARA_CUA_CANARY_DIR=/private/tmp/synara-cua-implementation/canary-run-1
 ```
 
+External trusted-driver run (what certified 2026-09-17): start a
+`CuaDriverHost` under the operator terminal pointed at the staged rev-17
+binary with a ≥32-byte capability, then launch with both env vars:
+
+```sh
+open -g -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
+  --env SYNARA_CUA_CANARY_DIR=/private/tmp/synara-cua-implementation/canary-run-1 \
+  --env SYNARA_CUA_CANARY_ENDPOINT=<host-socket> \
+  --env SYNARA_CUA_CANARY_CAPABILITY=<capability>
+```
+
 A correct run never steals focus or switches Spaces. If the run still pulls
 Kartik's Space or focus, kill it immediately
 (`pkill -f "Synara Cua Canary"`), record the alarm, and stop. Do not iterate
@@ -102,6 +130,20 @@ A `none-passed` run is still a complete, evidence-backed result.
 - Live run: `/private/tmp/synara-cua-implementation/canary-run-1/` (report.json
   plus helper-stage JSONs).
 - Decision: `docs/computer-use-cua/belief-canary-2026-09-17.md`.
+
+## Certification result (2026-09-17, external trusted driver)
+
+`canary-run-9` and `canary-run-10` under `/private/tmp/synara-cua-implementation/`:
+
+- `summary: baseline` — the background semantic write landed on the
+  never-activated, unfocused target window without any belief priming.
+- `typeText` returned `deliveryPath: cua-accessibility-background`,
+  `effect: verified`, `verified: confirmed`; both the Electron in-process
+  readback and the driver's AX-tree readback matched the exact typed string.
+- Zero focus theft: `sentinelFocusedBefore: false`, `focusAfterType: null`,
+  ghostty stayed frontmost for the whole run.
+- The identity check matches `pid + exact bounds`, not title — titles are
+  stripped for a viewer without a capture grant (see Prerequisites).
 
 ## Preflight status (2026-09-17, before the live run)
 
