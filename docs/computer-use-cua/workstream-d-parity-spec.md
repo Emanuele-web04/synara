@@ -1,0 +1,151 @@
+# Workstream D: capability parity plus spec
+
+Milestone one scope is settled. Menus and window frames are in. The Chrome CDP path is deferred. Locked use, record and replay history, and the Intel slice are out of milestone one. This spec agrees with `docs/computer-use-cua/v2-parity-matrix.md:32` and `docs/computer-use-cua/v2-parity-matrix.md:33` and Gap items 4 (`docs/computer-use-cua/v2-parity-matrix.md:42`), 10 and 11 (`docs/computer-use-cua/v2-parity-matrix.md:48`), 12 and 13 (`docs/computer-use-cua/v2-parity-matrix.md:50`), 14 and 15 (`docs/computer-use-cua/v2-parity-matrix.md:52`).
+
+## Problem
+
+Synara computer use covers the common actions. It still lacks menus and window frame control. Drag needs foreground. Hover does not exist as a real event. The cursor is overlay only with no per agent identity. Small gaps remain in secondary actions, app listing, text selection, and key coverage. Codex behavior claims in this area are unverified. They come from third party reconstructions and local binary scans. This spec closes the decided gaps and holds the rest out with reasons.
+
+## Current state
+
+Three native capabilities are deliberately unexposed. The audit names `invoke_menu`, `set_window_frame`, and `verify_state` as not agent facing in `docs/computer-use-cua/capability-audit-2026-09-16.md:24`, `docs/computer-use-cua/capability-audit-2026-09-16.md:25`, and `docs/computer-use-cua/capability-audit-2026-09-16.md:26`. The reasons are explicit. Menus need exact ownership, approval semantics, effect reporting, and platform tests. Raw exposure would bypass semantic targeting. Window moves need a cross platform contract, a bounds policy, and explicit visible approval. A second verifier would need one authoritative effect contract to avoid conflicts with the existing scoped observation.
+
+Drag is foreground only on macOS. The backend refuses background drag in `apps/server/src/computer/CuaComputerBackend.ts:1146`. Duration is capped at 10 seconds in `apps/server/src/computer/CuaComputerBackend.ts:1152`. The gateway describes the drag shape in `apps/server/src/agentGateway/computerTools.ts:2340`.
+
+There is no hover promise. The move cursor tool only draws an overlay on macOS. It delivers no hover events and opens no hover menus, stated in `apps/server/src/agentGateway/computerTools.ts:2322`. The backend reports the overlay only delivery path in `apps/server/src/computer/CuaComputerBackend.ts:1138`. The limits table states the cursor does not promise a real hover in `docs/computer-use-cua/README.md:67`.
+
+Secondary actions are AXPress only. The dialect list allows one name on macOS in `apps/server/src/agentGateway/computerTools.ts:2747`. The backend refuses every other action name in `apps/server/src/computer/CuaComputerBackend.ts:1303`. The supported action check is exact in `apps/server/src/computer/CuaComputerBackend.ts:1301`. The limits table confirms no synthetic semantic fallback in `docs/computer-use-cua/README.md:64`.
+
+The cursor is one shared overlay. The host configures glide 100 ms and dwell 0 in `apps/desktop/src/cuaDriverHost.ts:719`. There is no per agent identity and no multi cursor. Approvals are per action with queue caps defined in `apps/server/src/computer/ComputerApprovalGate.ts:18`. There is no always allow grant. Foreground always needs explicit approval, noted in `docs/computer-use-cua/README.md:52`. Locked operation does not exist. The lifecycle pauses on lock, sleep, and session resign in `apps/desktop/src/computerDesktopLifecycle.ts:27`. Recording tools stay internal. There is no agent facing history. Runtime behavior at revision 15 is uncertified until a signed app run with fresh permissions passes. That certification gap is stated in `docs/computer-use-cua/v2-parity-matrix.md:5`.
+
+## Approach
+
+### Menus (milestone one, Gap 4 and Gap 10)
+
+Menus ride on AX first actioning, not on raw native menu calls. The provider names a menu path. The backend resolves each step to a fresh AX element inside the exact admitted window. Each step uses the same ownership check as click and set_value. The approval gate treats menu use as a mutating action. Foreground menu excursions need explicit per action approval like activation does. Effect semantics follow the existing three values. The result is verified only on native read back. Anything else reports dispatched unknown or not dispatched. Uncertain menu steps never replay. The run stops at the first failed step, matching the batch rule.
+
+Menu dismissal gets attention. A background menu open must not steal focus or strand an open menu. On failure the backend issues a cancel escape path through the existing input cleanup. If the menu needs a real activation, that step follows the foreground restore rule and restores the prior frontmost window. Menu support also widens secondary actions past AXPress. New names land one at a time behind the same token freshness rule. Each new name needs a fixture proving it dispatches and reports honestly. Codex menu internals stay unverified. We match the observable shape, not their binary.
+
+### Window frames (milestone one, Gap 4)
+
+Window frame control mutates layout. It needs a bounds policy before any tool ships. The policy keeps the full frame on a known display. It refuses zero area frames. It refuses frames that would strand the title bar off screen. It refuses moves to a display with unqualified scale until that coverage is certified. Every call needs explicit visible approval. The approval copy shows the app, the window title, and the old and new frames in plain numbers. The call resolves the target window fresh, applies the move, then reads back geometry. Verified requires the read back frame to match within tolerance. Anything else is dispatched unknown. No silent retry. Off Space moves are refused in milestone one. Space assignment stays with the Spaces work, not with this tool.
+
+### Hover semantics
+
+Hover becomes a real delivered event, not an overlay draw. The current overlay behavior stays as the safe default for pointing without effect. The new hover action posts a real pointer move without button state to the exact window. It never aims the keyboard. A hover followed by typing without a window id stays refused, matching the rule in the current move cursor text. Hover menus that open need the same settle and read back as menus. If the target app class needs synthetic focus belief for hover, hover waits for the focus workstream. It ships degraded as overlay only until then, with the refusal text saying so.
+
+### Background drag (after focus work lands, Gap 6 in the matrix)
+
+Background drag stays refused until synthetic focus belief lands. The refusal text already says this. When the focus layer is certified, drag gains a background path with the same event stream shape as foreground. Both endpoints must stay inside the exact window. The 10 second cap stays. Stop during drag must still produce matched release with no later movement. Foreground remains available with explicit approval. Nothing here replays an uncertain drag.
+
+### Cursor richness and per agent identity (Gap 12)
+
+The cursor stays visual only. It never aims input. Milestone one adds per agent identity. Each concurrent agent gets its own named cursor with a distinct color and label. Motion keeps the current glide and dwell shape unless measurement says otherwise. Idle behavior stays quiet. Multi cursor rendering must keep one replaceable pending bitmap per cursor and must not regress the preview frame budget. Richer spring motion is cosmetic and ships only if it costs no latency.
+
+### Click recipe breadth (Gap 11)
+
+Native versus Chromium recipe selection exists today, chosen from process metadata per `docs/computer-use-cua/README.md:62`. Electron masking is missing. This spec does not add masked real activation in milestone one. It specifies the seam so the focus workstream can add it later. The seam is a per app class delivery selector with explicit logging of which recipe ran. Uncertain clicks never replay under any recipe.
+
+### Small gaps (Gap 13)
+
+List apps, select text, and press key coverage are P2. List apps returns the app list the window list already implies, with the same completeness limits. Select text resolves a text range through the AX tree and reports verified only on read back of the selection. Triple click and select all remain the fallback until then. Press key coverage adds missing keys one at a time with fixture proof per key. No key ships on claim alone.
+
+### Beyond parity (not milestone one)
+
+These ideas ship after parity. Verification receipts for every mutating call. Smarter scroll with measurement. Faster observation with conditional settle. Protocol level openness for any agent. Better permissions UX. Configurable safety tiers with denylists and an audit log. None of these enter the milestone one diff. Each gets its own spec and its own approval review.
+
+### What stays out and why
+
+Chrome CDP path is deferred by decision, recorded in `docs/computer-use-cua/v2-parity-matrix.md:30`. Browser work uses the separate browser surface. Computer use stays the native app fallback. Locked use is out. It needs an explicit safety decision first, recorded in `docs/computer-use-cua/v2-parity-matrix.md:29`. Record and replay history is out. It needs a privacy policy before any recording surface, recorded in `docs/computer-use-cua/v2-parity-matrix.md:31`. The Intel slice is out of milestone one. It is compiled but unexecuted (per handoff section 3.6, unverified here) and needs its own execution plan. Beyond parity ideas in this spec stay in their own section. They are not milestone one.
+
+## Interfaces
+
+All new tools reuse the existing gateway patterns. Targeting reuses the exact window id plus label or coordinate shape used by move and drag. The move cursor entry shows the pattern in `apps/server/src/agentGateway/computerTools.ts:2320`. Window id reading reuses the shared reader in `apps/server/src/agentGateway/computerTools.ts:411`. Consent reuses the per action authorize path in `apps/server/src/agentGateway/computerTools.ts:1064`. Batch inclusion reuses the per step targeting and consent checks described in `apps/server/src/agentGateway/computerTools.ts:2670`.
+
+Proposed signatures:
+
+computer_invoke_menu({ window_id, path, mode }). window_id is required. path is a nonempty list of menu labels, one per level, for example File then New Window. mode is background or foreground, default background. Background resolves each level through AX in the exact window with no activation. Foreground needs explicit approval and restores the prior frontmost window after. Returns per level results plus effect per level using the shared verified, dispatched unknown, and not dispatched values. Stops at the first failure. Refuses ambiguous labels. Refuses stale element tokens. Never replays an uncertain level.
+
+computer_set_window_frame({ window_id, x, y, width, height, display }). window_id is required. x, y, width, and height are integers in desktop pixels. display is optional and names a known display. Requires explicit visible approval showing app, title, and old and new frames. Applies the bounds policy from the Approach section, then reads back geometry. Returns the requested frame, the observed frame, and the effect. Refuses off Space moves in milestone one.
+
+computer_hover({ window_id, target }). window_id is required. target is a label plus optional role, or x and y in a registered frame. Delivers a real button free pointer move to the exact window. Reports overlay only with a clear flag when the focus layer is absent. Never aims keys. Never opens a click path.
+
+computer_drag keeps its shape and gains background only after the focus certification. No signature change. The delivery mode field selects the path. The backend refusal stays until then.
+
+Cursor identity needs no new provider tool. The session carries an agent label and color. The host renders one overlay per live agent. The preview shows which cursor belongs to which agent.
+
+Secondary action growth adds names to the existing perform action tool one at a time. Each name reuses the fresh token rule. Each name is approval gated as a mutating action. Each name reports with the shared effect values.
+
+List apps adds computer_list_apps({}). It returns app name, bundle id when known, and window count. It carries the same completeness note as the window list. Select text adds computer_select_text({ window_id, target, range }). It resolves through AX and reports verified only on selection read back.
+
+Every new mutating tool ships with ownership, approval, and effect semantics. Ownership means the exact admitted pid plus window id, revalidated at dispatch. Approval means the shared authorize path with queue caps. Effect means the shared three values with verified only on read back. Any proposal missing one of the three is rejected.
+
+## Acceptance criteria
+
+Menus on AppKit apps. Open five standard menus across TextEdit, Finder, and Preview. Each resolves by label with no coordinates. Each reports verified on read back of the open state or the applied command. Ambiguous labels refuse. Stale menus after a layout change refuse. No focus theft is observed on the human app during background menu use.
+
+Menus on Electron apps. Repeat the same five menu flows on VS Code and Slack. If an app class needs the focus layer, the tool refuses with a clear code until that layer is certified. No silent coordinate fallback. No replay after an uncertain step.
+
+Window frames on AppKit apps. Move and resize a TextEdit and a Finder window to five frames each. Read back matches within 2 pixels per edge. Off screen and zero area requests refuse. The approval prompt shows app, title, and both frames. The human frontmost window is unchanged after background frame calls.
+
+Window frames on Electron apps. Repeat on VS Code and Slack. Same tolerance. Same refusal rules. Same approval copy.
+
+Hover on AppKit and Electron. Hover a control with a hover reveal in one AppKit app and one Electron app. The reveal appears in read back state. Keys stay unaimed. The real system pointer never moves.
+
+Background drag after focus work. Drag a text selection and a slider in one AppKit app and one Electron app without activation. Both endpoints stay in window. Stop during drag releases cleanly with no later movement. This criterion is gated on the focus certification. It is not milestone one done proof.
+
+Cursor identity. Two concurrent agents show two labeled cursors in the preview. Input still routes only through exact targets. Frame budget holds.
+
+Small gaps. List apps returns the running test apps with correct window counts. Select text selects a known range in TextEdit with read back proof. New keys each have a fixture pass. All pass on AppKit and at least one Electron app.
+
+Every criterion runs against real apps. Source checks alone do not pass any item. Codex side comparisons stay marked unverified.
+
+## Tests and evidence
+
+Unit and contract tier. Targeting validation for each new tool. Refusal codes for ambiguous labels, stale tokens, out of policy frames, and off Space moves. Approval queue behavior under the existing caps. Effect mapping for verified, dispatched unknown, and not dispatched. Run the affected Vitest suites for the server package. Save the run output.
+
+Fixture tier. Extend the existing fixture set with a menu fixture, a frame fixture, and a hover fixture. The menu fixture drives a scratch AppKit app menu by label and checks read back. The frame fixture moves a scratch window through five frames and checks read back within tolerance. The hover fixture checks a hover reveal through state read back. Each fixture records before and after images plus a result JSON under the evidence folder. The drag stop fixture pattern stays the model for proving clean release.
+
+Live tier. Run the AppKit and Electron matrix by hand in a signed app with fresh permissions. Record the human foreground app throughout. Assert zero focus theft and zero pointer moves from the real pointer. Save evidence JSON plus before and after images per run.
+
+Evidence shape. One folder per run with the tool arguments, the approval record, the per level or per edge results, the effect values, and the images. Mark every Codex comparison as unverified. Mark revision 15 runtime claims as uncertified until the signed run passes.
+
+## Risks
+
+Private API drift. Menu and hover delivery may lean on AX behaviors that shift across macOS releases. Keep availability checks and fail closed refusals. Never make one private path the only route without a documented refusal.
+
+Focus theft through menus. Opening a menu can pull focus or dismiss under the user. Mitigate with AX first actioning, the no repost policy from the focus workstream (Codex shape, unverified), and immediate cleanup on failure.
+
+Layout fights. The user or the app can move a window between the bounds check and the frame write. Mitigate with read back match and dispatched unknown on mismatch. Never silently retry a frame write.
+
+Approval fatigue. Frame and menu calls can arrive in bursts. Mitigate with batch scoping and per step results. Never add an implicit always allow to quiet the prompts. That tradeoff has its own open decision.
+
+Electron variance. Electron apps may ignore background menu and hover paths that work on AppKit. Mitigate with per app class refusal codes and a public support table. Never fall back to raw coordinates silently.
+
+Overlay confusion. Two cursors can confuse the user about who acts where. Mitigate with labels and colors tied to the owning agent and turn. The cursor never implies input routing.
+
+Evidence discipline. Source tests do not prove real app behavior. Keep the unit, fixture, and live tiers separate. Report each tier plainly.
+
+## Open decisions
+
+Cursor identity shape. Recommendation is a labeled color cursor per agent, owned by the session. Safe default is the current single overlay until multi cursor rendering passes the frame budget. This decision needs a design pass on colors and labels.
+
+Always allow tradeoff. Recommendation is scoped always allow per app with a visible grant, a short expiry, and an audit log entry per granted call. Safe default is no always allow. Every foreground call keeps per action approval until the safety review signs off. The parity matrix flags this as a safety tradeoff in `docs/computer-use-cua/v2-parity-matrix.md:27`.
+
+Chrome revisit trigger. Recommendation is to revisit the CDP path only after native parity lands and two native browser flows prove painful through AX. Safe default is deferred, with the browser surface as the path for web work. The deferral is recorded in `docs/computer-use-cua/v2-parity-matrix.md:30`.
+
+Menu depth limit. Recommendation is three levels max in milestone one. Deeper paths are rare and harder to verify. Safe default is to refuse deeper paths with a clear code.
+
+Frame scope. Recommendation is same Space moves only in milestone one. Safe default is to refuse cross Space and cross display moves until Spaces certification lands.
+
+Hover default. Recommendation is real hover where certified, overlay only elsewhere, with the result flag saying which ran. Safe default is overlay only until the focus layer certifies the app class.
+
+## Implementer brief
+
+Read these first. The parity matrix rows and Gap items in `docs/computer-use-cua/v2-parity-matrix.md:35`. The audit decisions in `docs/computer-use-cua/capability-audit-2026-09-16.md:24`. The handoff workstream D seed and the decision shortlist, plus the focus workstream for the background dependency. Then read the gateway targeting and approval code around `apps/server/src/agentGateway/computerTools.ts:2320` and `apps/server/src/agentGateway/computerTools.ts:1064`, the backend drag and cursor code around `apps/server/src/computer/CuaComputerBackend.ts:1138`, and the host cursor setup in `apps/desktop/src/cuaDriverHost.ts:719`.
+
+Build order. First the shared bounds policy and menu path resolution as pure units with tests. Then computer_invoke_menu behind the approval gate with effect reporting. Then computer_set_window_frame with visible approval copy and read back. Then computer_hover with the certified or overlay only flag. Then cursor identity rendering. Then the P2 small gaps. Keep background drag refused until the focus workstream certifies it.
+
+Do not change the settled scope. Do not add the Chrome path. Do not add locked use. Do not add recording history. Do not touch the Intel slice. Keep beyond parity ideas out of the milestone one diff.
+
+Done proof. The affected Vitest suites pass. The new fixtures pass on a scratch AppKit app. The AppKit and Electron matrix passes in a signed app with fresh permissions. Evidence folders hold arguments, approvals, effects, and images per run. The report states what ran, what passed, and what stays unverified or uncertified.
