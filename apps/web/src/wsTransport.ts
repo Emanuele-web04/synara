@@ -861,6 +861,7 @@ export class WsTransport {
         const streamKey = `projectAgent.events:${projectId}`;
         this.resetStreamCapacityRetry(streamKey);
         this.projectAgentSubscriptions.set(projectId, params);
+        const client = await awaitWithAbort(this.getClient(), abortScope.signal);
         this.startStream(
           client,
           streamKey,
@@ -1097,6 +1098,7 @@ export class WsTransport {
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
     this.projectFileSubscriptions.clear();
+    this.projectAgentSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1467,6 +1469,16 @@ export class WsTransport {
         }
         for (const [key, subscription] of this.projectFileSubscriptions) {
           this.startProjectFileChangeStream(client, key, subscription);
+        }
+        for (const [projectId, params] of this.projectAgentSubscriptions) {
+          const streamKey = `projectAgent.events:${projectId}`;
+          this.startStream(
+            client,
+            streamKey,
+            client[WS_METHODS.subscribeProjectAgentEvents](params as never),
+            (event: ProjectAgentStreamEvent) => this.emit(WS_CHANNELS.projectAgentEvent, event),
+            () => undefined,
+          );
         }
         this.reconnectFailures = 0;
         return client;

@@ -2,13 +2,18 @@ import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
+import { FolderClosed } from "~/components/FolderClosed";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
-import { PauseIcon, PlayIcon, SettingsIcon, WorkflowIcon } from "~/lib/icons";
+import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
+import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
+import { basenameOfPath } from "~/file-icons";
+import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, WorkflowIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import { ChatAuxiliaryPanel } from "../auxiliary/ChatAuxiliaryPanel";
 import {
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentCollapsibleSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
   EnvironmentSectionDivider,
@@ -18,12 +23,9 @@ import { ProjectAgentDialog } from "./ProjectAgentDialog";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
 import { useProjectAgent } from "./useProjectAgent";
 
-export type ProjectPanelView = "overview" | "work" | "context" | "activity";
-
 export interface ProjectPanelProps {
   open: boolean;
   variant: "docked" | "floating";
-  mobile: boolean;
   projectId: ProjectId | null;
   projectName: string;
   workspacePath: string;
@@ -34,17 +36,12 @@ export interface ProjectPanelProps {
   onClose: () => void;
 }
 
-const VIEWS: ReadonlyArray<{ id: ProjectPanelView; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "work", label: "Work" },
-  { id: "context", label: "Context" },
-  { id: "activity", label: "Activity" },
-];
+const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
 
 export function ProjectPanel({
   open,
   variant,
-  mobile,
   projectId,
   projectName,
   workspacePath,
@@ -52,35 +49,30 @@ export function ProjectPanel({
   importedInstructions,
   onOpenCoordinator,
   onOpenThread,
-  onClose,
 }: ProjectPanelProps) {
-  const [view, setView] = useState<ProjectPanelView>("overview");
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [goalDraft, setGoalDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
   const coordinatorName =
     agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
+  const folderLabel = basenameOfPath(workspacePath) || workspacePath || projectName;
+  const configured = agent.overview?.configured === true;
+  const coordinatorModel =
+    agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
 
   const content = (
-    <div className="flex flex-col gap-1 p-2">
-      <div className="flex items-center justify-between gap-2 px-1">
+    <div className="flex flex-col gap-0.5 p-1.5">
+      <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Project</EnvironmentPanelTitle>
-        {agent.overview?.config ? (
+        {configured ? (
           <div className="flex items-center gap-0.5">
-            <IconButton
-              type="button"
-              label="Open coordinator"
-              onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
-            >
-              <WorkflowIcon className="size-3.5" />
-            </IconButton>
-            {agent.overview.goal?.status === "active" ? (
+            {agent.overview?.goal?.status === "active" ? (
               <IconButton type="button" label="Pause goal" onClick={() => void agent.pauseGoal()}>
                 <PauseIcon className="size-3.5" />
               </IconButton>
             ) : null}
-            {agent.overview.goal?.status === "paused" ? (
+            {agent.overview?.goal?.status === "paused" ? (
               <IconButton type="button" label="Resume goal" onClick={() => void agent.resumeGoal()}>
                 <PlayIcon className="size-3.5" />
               </IconButton>
@@ -88,6 +80,8 @@ export function ProjectPanel({
             <IconButton
               type="button"
               label="Project settings"
+              tooltip="Project settings"
+              className="-mr-[7px] sm:-mr-[5px]"
               onClick={() => setAgentDialogOpen(true)}
             >
               <SettingsIcon className="size-3.5" />
@@ -102,98 +96,97 @@ export function ProjectPanel({
         </p>
       ) : null}
 
-      {!agent.overview?.configured ? (
-        <div className="flex flex-col gap-2 px-1 py-2">
-          <p className="text-[12px] text-muted-foreground">
-            Set up a named coordinator for this project. Opening Project does not launch a model.
-            Assigned work starts only when you start a goal.
-          </p>
-          <Button type="button" size="sm" onClick={() => setAgentDialogOpen(true)}>
-            Set up coordinator
-          </Button>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-4 gap-0.5 px-1">
-            {VIEWS.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className={cn(
-                  "rounded-md px-1 py-1 text-[10px] font-medium",
-                  view === entry.id
-                    ? "bg-[var(--color-background-elevated-secondary)] text-foreground"
-                    : "text-muted-foreground hover:bg-[var(--color-background-elevated-secondary)]",
-                )}
-                aria-pressed={view === entry.id}
-                onClick={() => setView(entry.id)}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
+      <EnvironmentRow
+        icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+        label={
+          <span className="truncate" title={workspacePath}>
+            {folderLabel}
+          </span>
+        }
+      />
 
-          {view === "overview" ? (
-            <div className="flex flex-col gap-1 px-1 py-1">
-              <EnvironmentSectionLabel>Coordinator</EnvironmentSectionLabel>
-              <p className="text-[12px]">{agent.overview.config?.coordinatorName}</p>
-              <p className="text-[11px] text-muted-foreground">
-                Status: {agent.overview.coordinatorStatus}
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                Model is used only after a goal starts. Setup does not launch a turn.
-              </p>
-              {agent.overview.goal ? (
-                <>
-                  <EnvironmentSectionDivider />
-                  <EnvironmentSectionLabel>Active goal</EnvironmentSectionLabel>
-                  <p className="text-[12px]">{agent.overview.goal.objective}</p>
-                  <p className="text-[11px] text-muted-foreground">{agent.overview.goal.status}</p>
-                  {agent.overview.goal.status === "active" ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void agent.stopGoal()}
-                    >
-                      Stop goal
-                    </Button>
-                  ) : null}
-                </>
-              ) : (
-                <form
-                  className="flex flex-col gap-1 pt-2"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (goalDraft.trim().length === 0) return;
-                    void agent.startGoal(goalDraft.trim());
-                    setGoalDraft("");
-                  }}
-                >
-                  <label className="text-[11px] text-muted-foreground" htmlFor="project-goal">
-                    Start goal
-                  </label>
-                  <textarea
-                    id="project-goal"
-                    value={goalDraft}
-                    onChange={(event) => setGoalDraft(event.target.value)}
-                    className="min-h-16 rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
-                    placeholder="What should the coordinator accomplish?"
-                  />
+      {configured && agent.overview?.config ? (
+        <EnvironmentRow
+          icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          label={coordinatorName}
+          trailing={
+            <span className="text-[10px] text-muted-foreground">
+              {agent.overview.coordinatorStatus}
+            </span>
+          }
+          onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
+        />
+      ) : (
+        <EnvironmentRow
+          icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          label="Set up project agent"
+          onClick={() => setAgentDialogOpen(true)}
+        />
+      )}
+
+      {coordinatorModel ? (
+        <p className="px-2 text-[11px] text-muted-foreground">
+          {coordinatorModel.provider} / {coordinatorModel.model}
+        </p>
+      ) : null}
+
+      {configured ? (
+        <>
+          {agent.overview?.goal ? (
+            <>
+              <EnvironmentSectionDivider />
+              <EnvironmentSectionLabel>Active goal</EnvironmentSectionLabel>
+              <p className="px-2 text-[12px]">{agent.overview.goal.objective}</p>
+              <p className="px-2 text-[11px] text-muted-foreground">{agent.overview.goal.status}</p>
+              {agent.overview.goal.status === "active" ? (
+                <div className="px-2">
                   <Button
-                    type="submit"
+                    type="button"
                     size="sm"
-                    disabled={agent.busy || goalDraft.trim().length === 0}
+                    variant="ghost"
+                    onClick={() => void agent.stopGoal()}
                   >
-                    <PlayIcon className="size-3.5" />
-                    Start goal
+                    Stop goal
                   </Button>
-                </form>
-              )}
-              {agent.overview.digest ? (
-                <>
-                  <EnvironmentSectionDivider />
-                  <EnvironmentSectionLabel>Summary</EnvironmentSectionLabel>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <form
+              className="flex flex-col gap-1 px-2 pt-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (goalDraft.trim().length === 0) return;
+                void agent.startGoal(goalDraft.trim());
+                setGoalDraft("");
+              }}
+            >
+              <label className="text-[11px] text-muted-foreground" htmlFor="project-goal">
+                Start goal
+              </label>
+              <textarea
+                id="project-goal"
+                value={goalDraft}
+                onChange={(event) => setGoalDraft(event.target.value)}
+                className="min-h-16 rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
+                placeholder="What should the coordinator accomplish?"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                disabled={agent.busy || goalDraft.trim().length === 0}
+              >
+                <PlayIcon className="size-3.5" />
+                Start goal
+              </Button>
+            </form>
+          )}
+
+          {agent.overview?.digest ? (
+            <>
+              <EnvironmentSectionDivider />
+              <EnvironmentCollapsibleSection label="Summary">
+                <div className="flex flex-col gap-1 px-2 pb-1">
                   <p className="text-[12px]">{agent.overview.digest.summary}</p>
                   {agent.overview.digest.generationState === "failed" ? (
                     <p className="text-[11px] text-destructive" role="alert">
@@ -220,7 +213,7 @@ export function ProjectPanel({
                   {agent.overview.digest.focusItems.slice(0, 8).map((item) => (
                     <EnvironmentRow
                       key={item.id}
-                      icon={<WorkflowIcon className="size-4" />}
+                      icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
                       label={item.title}
                       onClick={() => {
                         if (item.sourceThreadId) onOpenThread(item.sourceThreadId);
@@ -235,17 +228,24 @@ export function ProjectPanel({
                   >
                     Refresh summary
                   </Button>
-                </>
-              ) : null}
-              {agent.overview.blockers.map((blocker) => (
-                <p key={blocker.taskId} className="text-[11px] text-destructive">
-                  Blocked: {blocker.title} — {blocker.reason}
-                </p>
-              ))}
-            </div>
+                </div>
+              </EnvironmentCollapsibleSection>
+            </>
           ) : null}
 
-          {view === "work" ? (
+          {agent.overview?.blockers.map((blocker) => (
+            <p key={blocker.taskId} className="px-2 text-[11px] text-destructive">
+              Blocked: {blocker.title} — {blocker.reason}
+            </p>
+          ))}
+
+          <EnvironmentSectionDivider />
+          <EnvironmentCollapsibleSection label="Context">
+            <ContextDocuments projectId={projectId} enabled={open} agent={agent} />
+          </EnvironmentCollapsibleSection>
+
+          <EnvironmentSectionDivider />
+          <EnvironmentCollapsibleSection label="Work" defaultOpen={false}>
             <WorkList
               tasks={agent.tasks}
               busy={agent.busy}
@@ -261,13 +261,10 @@ export function ProjectPanel({
               onOpenThread={onOpenThread}
               loadEvidence={agent.loadEvidence}
             />
-          ) : null}
+          </EnvironmentCollapsibleSection>
 
-          {view === "context" ? (
-            <ContextDocuments projectId={projectId} enabled={open} agent={agent} />
-          ) : null}
-
-          {view === "activity" ? (
+          <EnvironmentSectionDivider />
+          <EnvironmentCollapsibleSection label="Activity" defaultOpen={false}>
             <div className="flex flex-col gap-1 px-1 py-1">
               {agent.threads.length > 0 ? (
                 <>
@@ -320,41 +317,52 @@ export function ProjectPanel({
                 </Button>
               ) : null}
             </div>
-          ) : null}
+          </EnvironmentCollapsibleSection>
         </>
+      ) : (
+        <p className="px-2 py-1 text-[12px] text-muted-foreground">
+          Shared context, tasks, and summaries live in this project folder after you set up the
+          agent. Setup does not launch a model.
+        </p>
       )}
     </div>
   );
 
   return (
     <>
-      <ChatAuxiliaryPanel
-        open={open}
-        variant={variant}
-        mobile={mobile}
-        title="Project"
-        description="Persistent coordinator, tasks, and shared context for this project."
-        onClose={onClose}
+      <div
+        className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
+        data-environment-panel-variant={variant}
+        aria-hidden={!open}
       >
-        {content}
-      </ChatAuxiliaryPanel>
+        <div
+          className={cn(
+            ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
+            AUXILIARY_PANEL_MOTION_CLASS,
+            "flex max-h-full w-72 flex-col",
+            open
+              ? "pointer-events-auto translate-x-0 opacity-100"
+              : "pointer-events-none translate-x-full opacity-0",
+          )}
+        >
+          <div className="min-h-0 overflow-y-auto">{content}</div>
+        </div>
+      </div>
       <ProjectAgentDialog
         open={agentDialogOpen}
-        mode={agent.overview?.configured ? "edit" : "setup"}
+        mode={configured ? "edit" : "setup"}
         projectId={projectId}
         projectName={projectName}
         agentName={coordinatorName}
         workspacePath={workspacePath}
+        projectCwd={workspacePath}
         defaultModelSelection={defaultModelSelection}
         currentModelSelection={agent.overview?.config?.coordinatorModelSelection ?? null}
         expectedRevision={agent.overview?.config?.revision}
         busy={agent.busy}
         error={agent.error}
         onOpenChange={setAgentDialogOpen}
-        onSave={async ({ coordinatorName: nextName, expectedRevision }) => {
-          const modelSelection =
-            defaultModelSelection ?? agent.overview?.config?.coordinatorModelSelection ?? null;
-          if (!modelSelection) return;
+        onSave={async ({ coordinatorName: nextName, modelSelection, expectedRevision }) => {
           const saved = await agent.configure({
             modelSelection,
             coordinatorName: nextName,

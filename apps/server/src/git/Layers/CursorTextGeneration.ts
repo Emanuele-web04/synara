@@ -328,14 +328,15 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       coverage: input.coverage,
       pinnedFocus: input.pinnedFocus,
     });
-    return yield* runCursorJson({
+    return yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateProjectDigest",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       rawTextFallback,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
   });
 

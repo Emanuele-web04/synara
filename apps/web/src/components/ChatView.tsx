@@ -324,12 +324,6 @@ import {
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
-import {
-  ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
-  EnvironmentPanel,
-  type EnvironmentPanelProps,
-} from "./chat/environment/EnvironmentPanel";
-import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { createThreadFindHighlightStore, type ThreadFindMatch } from "./chat/threadFind.logic";
 import { useChatAutomationCreation } from "./chat/useChatAutomationCreation";
@@ -5960,7 +5954,6 @@ export default function ChatView({
             <ProjectPanel
               open={projectPanelVisible}
               variant={environmentOverlayVariant}
-              mobile={isMobileViewport}
               projectId={activeProjectId}
               projectName={activeProjectDisplayName ?? activeProject?.name ?? "Project"}
               workspacePath={activeProject?.cwd ?? ""}

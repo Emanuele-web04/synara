@@ -224,7 +224,10 @@ import {
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { ProjectAgentDialog } from "./chat/project/ProjectAgentDialog";
-import { defaultProjectAgentName } from "./chat/project/projectAgentDialog.logic";
+import {
+  defaultProjectAgentName,
+  resolveProjectAgentRowLabel,
+} from "./chat/project/projectAgentDialog.logic";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
@@ -5049,59 +5052,6 @@ export default function Sidebar() {
                 >
                   {projectRowLabel}
                 </span>
-                {projectAgentConfigured && projectAgentSummary?.coordinatorName ? (
-                  <span className="flex min-w-0 items-center gap-1 overflow-hidden text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-accent)]">
-                    <span className="shrink-0 text-muted-foreground/55" aria-hidden>
-                      ·
-                    </span>
-                    <span
-                      role="link"
-                      tabIndex={0}
-                      className="inline-flex min-w-0 items-center gap-1 truncate"
-                      aria-label={`Open ${projectAgentSummary.coordinatorName}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (projectAgentSummary.coordinatorThreadId) {
-                          activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (projectAgentSummary.coordinatorThreadId) {
-                          activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
-                        }
-                      }}
-                    >
-                      <BotIcon className="size-3.5 shrink-0" />
-                      <span className="truncate">{projectAgentSummary.coordinatorName}</span>
-                    </span>
-                  </span>
-                ) : (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="shrink-0 text-muted-foreground/55 hover:text-foreground"
-                    aria-label={`Set up project agent for ${project.name}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setProjectAgentDialogError(null);
-                      setProjectAgentDialogState({ projectId: project.id, mode: "setup" });
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setProjectAgentDialogError(null);
-                      setProjectAgentDialogState({ projectId: project.id, mode: "setup" });
-                    }}
-                  >
-                    <BotIcon className="size-3.5" />
-                  </span>
-                )}
               </div>
               {/* Closed folders surface child-chat status on the project row; open
                   folders leave that signal to their visible child thread rows. */}
@@ -5221,6 +5171,54 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
+              <SidebarMenuSubItem className="w-full">
+                <SidebarMenuSubButton
+                  render={<div role="button" tabIndex={0} />}
+                  data-thread-selection-safe
+                  size="sm"
+                  isActive={
+                    projectAgentConfigured &&
+                    projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId
+                  }
+                  className={cn(
+                    resolveThreadRowClassName({
+                      isActive:
+                        projectAgentConfigured &&
+                        projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId,
+                      isSelected: false,
+                    }),
+                    SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                  )}
+                  aria-label={
+                    projectAgentConfigured
+                      ? `Open ${resolveProjectAgentRowLabel({
+                          configured: true,
+                          coordinatorName: projectAgentSummary?.coordinatorName,
+                        })}`
+                      : `Set up project agent for ${project.name}`
+                  }
+                  onMouseDown={preventFocusOnMouseDown}
+                  onClick={() => {
+                    if (projectAgentConfigured && projectAgentSummary?.coordinatorThreadId) {
+                      activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
+                      return;
+                    }
+                    setProjectAgentDialogError(null);
+                    setProjectAgentDialogState({
+                      projectId: project.id,
+                      mode: projectAgentConfigured ? "edit" : "setup",
+                    });
+                  }}
+                >
+                  <BotIcon className="size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">
+                    {resolveProjectAgentRowLabel({
+                      configured: projectAgentConfigured,
+                      coordinatorName: projectAgentSummary?.coordinatorName,
+                    })}
+                  </span>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
               {visibleEntries.map((entry) =>
                 renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
               )}
@@ -7036,6 +7034,7 @@ export default function Sidebar() {
             ? abbreviateHomePath(projectAgentDialogProject.cwd, homeDir)
             : ""
         }
+        projectCwd={projectAgentDialogProject?.cwd ?? ""}
         defaultModelSelection={projectAgentDialogProject?.defaultModelSelection ?? null}
         expectedRevision={
           projectAgentDialogState?.mode === "edit" && projectAgentDialogProject
@@ -7051,11 +7050,10 @@ export default function Sidebar() {
             setProjectAgentDialogBusy(false);
           }
         }}
-        onSave={async ({ coordinatorName, expectedRevision }) => {
+        onSave={async ({ coordinatorName, modelSelection, expectedRevision }) => {
           const project = projectAgentDialogProject;
-          const modelSelection = project?.defaultModelSelection ?? null;
-          if (!project || !modelSelection) {
-            setProjectAgentDialogError("Select a model in this chat before setting up the agent.");
+          if (!project) {
+            setProjectAgentDialogError("Select a project before setting up the agent.");
             return;
           }
           const api = readNativeApi();

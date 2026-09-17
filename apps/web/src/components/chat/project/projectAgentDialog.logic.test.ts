@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectAgentConfigureInput,
   defaultProjectAgentName,
+  FALLBACK_PROJECT_AGENT_MODEL_SELECTION,
+  resolveProjectAgentModelSelection,
   resolveProjectAgentName,
+  resolveProjectAgentRowLabel,
 } from "./projectAgentDialog.logic";
 
 describe("project agent dialog defaults", () => {
@@ -47,5 +50,43 @@ describe("project agent dialog defaults", () => {
     });
     expect(edited.expectedRevision).toBe(4);
     expect(edited.coordinatorName).toBe("Studio Agent");
+  });
+
+  it("prefers the current coordinator model, then the project default", () => {
+    const current = { provider: "grok" as const, model: "grok-4" };
+    const fallback = { provider: "codex" as const, model: "gpt-5-codex" };
+    expect(
+      resolveProjectAgentModelSelection({
+        current,
+        fallback,
+      }),
+    ).toEqual(current);
+    expect(
+      resolveProjectAgentModelSelection({
+        current: null,
+        fallback,
+      }),
+    ).toEqual(fallback);
+    expect(
+      resolveProjectAgentModelSelection({
+        current: null,
+        fallback: null,
+      }),
+    ).toEqual(FALLBACK_PROJECT_AGENT_MODEL_SELECTION);
+  });
+
+  it("labels the nested sidebar row as the agent or a setup action", () => {
+    expect(
+      resolveProjectAgentRowLabel({
+        configured: true,
+        coordinatorName: "Master Bot",
+      }),
+    ).toBe("Master Bot");
+    expect(
+      resolveProjectAgentRowLabel({
+        configured: false,
+        coordinatorName: "Master Bot",
+      }),
+    ).toBe("Set up project agent");
   });
 });
