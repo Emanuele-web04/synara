@@ -96,4 +96,34 @@ describe("computer revoke", () => {
     await firstRejected;
     await manager.dispose();
   });
+
+  it("a stale generation cannot revive control after stop, and re-enable mints a fresh one", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const threadId = "stale-generation-thread";
+    // The turn admitted control at generation 0.
+    expect(await manager.admitControl(threadId, "chat", 0, true)).toBe(true);
+    // Stop latches: the generation bumps immediately, before any cleanup.
+    const stopped = await manager.setControlEnabled(threadId, false);
+    expect(stopped.enabled).toBe(false);
+    expect(stopped.generation).toBe(1);
+    // A request queued before Stop still carries generation 0: it must not
+    // re-arm the thread or authorize anything.
+    expect(await manager.admitControl(threadId, "request", 0, true)).toBe(false);
+    expect(manager.canActivateControl(threadId, 0)).toBe(false);
+    expect(manager.canContinueChatControl(threadId)).toBe(false);
+    // The user's explicit re-enable is the only way back...
+    const reenabled = await manager.setControlEnabled(threadId, true);
+    expect(reenabled.enabled).toBe(true);
+    // ...and it does not resurrect the stale generation: an old queued
+    // request still answers false while the current one answers true.
+    expect(await manager.admitControl(threadId, "request", 0, true)).toBe(false);
+    expect(await manager.admitControl(threadId, "request", 1, true)).toBe(true);
+    // Stop again and the current generation goes stale the same way.
+    const stoppedAgain = await manager.setControlEnabled(threadId, false);
+    expect(stoppedAgain.generation).toBe(2);
+    expect(await manager.admitControl(threadId, "request", 1, true)).toBe(false);
+    expect(backend.callsFor("click")).toHaveLength(0);
+    await manager.dispose();
+  });
 });
