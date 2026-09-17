@@ -1,5 +1,28 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
+index 87bc75e..44dd907 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
+@@ -234,8 +234,16 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
+             CursorAction::Navigate
+         }
+ 
+-        "launch_app" | "activate_app" | "bring_to_front" | "set_window_frame" | "invoke_menu"
+-        | "list_apps" | "list_windows" | "kill_app" => CursorAction::App,
++        "launch_app"
++        | "activate_app"
++        | "bring_to_front"
++        | "set_window_frame"
++        | "invoke_menu"
++        | "list_apps"
++        | "list_windows"
++        | "kill_app"
++        | "set_window_minimized"
++        | "set_app_visibility" => CursorAction::App,
+ 
+         "upload_file" | "download_file" | "copy_file" | "move_file" => CursorAction::Transfer,
+ 
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-index 2625ee2..5c51fc3 100644
+index 2625ee2..72d6948 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 @@ -869,6 +869,7 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
@@ -10,7 +33,16 @@ index 2625ee2..5c51fc3 100644
          | "check_for_update"
          | "health_report"
          | "probe" => RiskClass::R0,
-@@ -1162,6 +1163,23 @@ pub fn authorize_tool_call_with_context(
+@@ -893,6 +894,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+         | "launch_app"
+         | "bring_to_front"
+         | "set_window_frame"
++        | "set_window_minimized"
++        | "set_app_visibility"
+         | "start_session"
+         | "end_session"
+         | "set_agent_cursor_enabled"
+@@ -1162,6 +1165,23 @@ pub fn authorize_tool_call_with_context(
                  )))
              }
          }
@@ -34,7 +66,7 @@ index 2625ee2..5c51fc3 100644
      }
      Ok(risk)
  }
-@@ -1191,6 +1209,7 @@ fn enforce_hard_invariants(
+@@ -1191,6 +1211,7 @@ fn enforce_hard_invariants(
              | "bring_to_front"
              | "get_accessibility_tree"
              | "get_window_state"
@@ -42,7 +74,7 @@ index 2625ee2..5c51fc3 100644
              | "verify_state"
              | "page"
              | "browser_prepare"
-@@ -1519,6 +1538,105 @@ mod tests {
+@@ -1519,6 +1540,105 @@ mod tests {
          assert!(!risk.operation_sensitive);
      }
  
@@ -243,6 +275,19 @@ index cfd35d2..5e16b83 100644
      /// Minimized/hidden targets retain exact semantic AX actions; raw keys and
      /// the routed pointer refuse rather than restoring the window.
      #[test]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+index d93bf6d..e5d10ad 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+@@ -356,6 +356,8 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+         "list_windows" => &["window.list"],
+         "bring_to_front" => &["window.activate"],
+         "set_window_frame" => &["window.frame.set"],
++        "set_window_minimized" => &["window.visibility.set"],
++        "set_app_visibility" => &["app.visibility.set"],
+         "debug_window_info" => &["window.debug_info"],
+ 
+         // ── permissions / config ─────────────────────────────────────
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 index 5d6ac1f..e772dda 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
@@ -263,27 +308,44 @@ index 5d6ac1f..e772dda 100644
                  })
                  .expect("spawn serve thread");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-index a26a6bf..490f9ed 100644
+index a26a6bf..e12b1d3 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-@@ -12,6 +12,16 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
+@@ -12,6 +12,33 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
  use cua_driver_sdk::{CuaDriver, CuaDriverSession, TrustedSessionOptions};
  use serde_json::{json, Value};
  
 +#[cfg(target_os = "macos")]
 +fn uses_stable_space_membership(name: &str, arguments: &Value) -> bool {
-+    name == "type_text"
++    if arguments.get("delivery_mode").and_then(Value::as_str) == Some("foreground") {
++        return false;
++    }
++    if name == "type_text"
 +        && arguments
 +            .get("semantic_only")
 +            .and_then(Value::as_bool)
 +            .unwrap_or(false)
-+        && arguments.get("delivery_mode").and_then(Value::as_str) != Some("foreground")
++    {
++        return true;
++    }
++    // Element-addressed actions bind to an element already proven to live in
++    // the exact window, so stable Space *membership* — not active-space
++    // visibility — is the correct admission frame. The coordinate/pointer
++    // routes still refuse minimized-or-hidden targets inside
++    // decide_background_input; this widening only lets the AX semantic routes
++    // (set_value, AXPress-style element clicks, semantic type_text) reach
++    // windows that are minimized or in a hidden app, which the core policy
++    // explicitly permits for AxSemantic.
++    matches!(
++        name,
++        "set_value" | "click" | "double_click" | "right_click" | "type_text" | "scroll"
++    ) && (arguments.get("element_token").is_some() || arguments.get("element_index").is_some())
 +}
 +
  #[derive(Default)]
  struct PublicSessionState {
      scopes: HashMap<String, CaptureScope>,
-@@ -172,7 +182,117 @@ impl SdkAdapter {
+@@ -172,7 +199,117 @@ impl SdkAdapter {
          daemon_tools_list_from(&self.tools_list)
      }
  
@@ -402,7 +464,7 @@ index a26a6bf..490f9ed 100644
          let _lifecycle = if matches!(name, "start_session" | "end_session") {
              Some(self.session_lifecycle.lock().await)
          } else {
-@@ -453,6 +573,33 @@ impl ToolProvider for SdkAdapter {
+@@ -453,6 +590,33 @@ impl ToolProvider for SdkAdapter {
  mod tests {
      use super::*;
  
@@ -437,7 +499,7 @@ index a26a6bf..490f9ed 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..43bb5a2 100644
+index 67e123b..845ab9d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -452,7 +514,7 @@ index 67e123b..43bb5a2 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(16);
++        metadata["synara_native_revision"] = serde_json::json!(17);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -902,8 +964,124 @@ index cb1e393..c90048d 100644
      // --- Focus rect highlight (macOS only — others pass None) ---
      // Cyan glow border + faint fill, matching Swift AgentCursor.showFocusRect.
      if let Some(fr) = focus_rect {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
+index 78981e9..33fe517 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
+@@ -80,6 +80,21 @@ fn list_running_apps_native() -> Vec<AppInfo> {
+     apps
+ }
+ 
++/// Whether `pid` is a running application currently hidden (Cmd+H state).
++///
++/// A hidden app's windows detach from every managed Space — WindowServer
++/// reports them with no Space membership at all — yet their AX trees stay
++/// fully reachable. This is the honest signal that distinguishes
++/// "legitimately detached while hidden" from "membership unresolved" when a
++/// window reports empty `space_ids`.
++pub(crate) fn app_is_hidden(pid: i32) -> bool {
++    use objc2_app_kit::NSRunningApplication;
++    unsafe {
++        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
++            .is_some_and(|app| app.isHidden())
++    }
++}
++
+ /// Launch an app by bundle ID via NSWorkspace, background only (no focus
+ /// steal). Returns the pid on success.
+ ///
+@@ -94,12 +109,18 @@ fn list_running_apps_native() -> Vec<AppInfo> {
+ ///     without needing a separate `list_running_apps` lookup, so we
+ ///     can't race a same-bundle-id helper that happens to be running.
+ pub fn launch_app(bundle_id: &str) -> anyhow::Result<i32> {
++    launch_app_with_options(bundle_id, false)
++}
++
++/// `launch_app` with an explicit `hidden` flag for the hidden-workspace launch path.
++pub fn launch_app_with_options(bundle_id: &str, hidden: bool) -> anyhow::Result<i32> {
+     // Pass the bundle id straight through — `nsworkspace::resolve_application_url`
+     // calls `URLForApplicationWithBundleIdentifier` and uses the resulting
+     // NSURL verbatim. Going via a `path` string and back loses the
+     // alias/cryptex metadata Safari (and other Cryptex-installed apps)
+     // need to relaunch from `/System/Cryptexes/App/...`.
+     let cfg = nsworkspace::OpenConfig {
++        hidden,
+         apple_event_bundle_id: Some(bundle_id.to_owned()),
+         ..Default::default()
+     };
+@@ -116,10 +137,16 @@ pub fn launch_app(bundle_id: &str) -> anyhow::Result<i32> {
+ /// roots for `<Name>.app`, then fall back to a LaunchServices lookup
+ /// in case the caller passed a bundle identifier in the `name` slot.
+ pub fn launch_app_by_name(name: &str) -> anyhow::Result<i32> {
++    launch_app_by_name_with_options(name, false)
++}
++
++/// `launch_app_by_name` with an explicit `hidden` flag.
++pub fn launch_app_by_name_with_options(name: &str, hidden: bool) -> anyhow::Result<i32> {
+     let located = locate_by_name(name)
+         .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
+     let (app_ref, bid) = located.app_ref_and_bundle_id();
+     let cfg = nsworkspace::OpenConfig {
++        hidden,
+         apple_event_bundle_id: bid,
+         ..Default::default()
+     };
+@@ -141,6 +168,7 @@ pub fn launch_with_urls_by_bundle(
+     additional_args: &[String],
+     env: &std::collections::HashMap<String, String>,
+     creates_new_instance: bool,
++    hidden: bool,
+ ) -> anyhow::Result<i32> {
+     if additional_args.is_empty()
+         && env.is_empty()
+@@ -162,6 +190,7 @@ pub fn launch_with_urls_by_bundle(
+         arguments: additional_args.to_vec(),
+         environment: env.clone(),
+         creates_new_instance,
++        hidden,
+         apple_event_bundle_id: if urls.is_empty() {
+             Some(bundle_id.to_owned())
+         } else {
+@@ -187,6 +216,7 @@ pub fn launch_with_urls_by_name(
+     additional_args: &[String],
+     env: &std::collections::HashMap<String, String>,
+     creates_new_instance: bool,
++    hidden: bool,
+ ) -> anyhow::Result<i32> {
+     let located = locate_by_name(name)
+         .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
+@@ -206,6 +236,7 @@ pub fn launch_with_urls_by_name(
+         arguments: additional_args.to_vec(),
+         environment: env.clone(),
+         creates_new_instance,
++        hidden,
+         apple_event_bundle_id: if urls.is_empty() { bid } else { None },
+     };
+     let running = if urls.is_empty() {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
+index 7893a01..b0ec2ca 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
+@@ -63,6 +63,9 @@ pub struct OpenConfig {
+     pub environment: std::collections::HashMap<String, String>,
+     /// Force a fresh application instance even if one is already running.
+     pub creates_new_instance: bool,
++    /// Launch with the application hidden (`open -j` / `hides = true`): the
++    /// app's windows exist but render nothing — the hidden-workspace launch.
++    pub hidden: bool,
+     /// Attach a synthetic `aevt/oapp` AppleEvent addressed to this bundle id.
+     /// Set this whenever the bundle id is known — see Swift `AppLauncher`
+     /// comment for the reasoning (cold-launch window-creation reliability).
+@@ -196,6 +199,7 @@ fn build_configuration(cfg: &OpenConfig) -> Retained<NSWorkspaceOpenConfiguratio
+         config.setActivates(false);
+         config.setAddsToRecentItems(false);
+         config.setCreatesNewApplicationInstance(cfg.creates_new_instance);
++        config.setHides(cfg.hidden);
+ 
+         if !cfg.arguments.is_empty() {
+             let strs: Vec<Retained<NSString>> = cfg
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
-index 02ba09c..6d5fb8c 100644
+index 02ba09c..723de60 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 @@ -44,6 +44,10 @@ pub const kAXValueCGPointType: AXValueType = 1;
@@ -942,7 +1120,33 @@ index 02ba09c..6d5fb8c 100644
      pub fn AXValueGetType(value: AXValueRef) -> AXValueType;
      pub fn AXValueGetValue(
          value: AXValueRef,
-@@ -748,6 +763,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
+@@ -661,10 +676,23 @@ pub unsafe fn set_size_attr(
+ ///
+ /// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
+ pub unsafe fn set_bool_attr_true(element: AXUIElementRef, attr_name: &str) -> AXError {
++    set_bool_attr(element, attr_name, true)
++}
++
++/// Set an AX attribute to a CFBoolean value.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
++pub unsafe fn set_bool_attr(element: AXUIElementRef, attr_name: &str, value: bool) -> AXError {
+     use core_foundation::boolean::CFBoolean;
+     let attr = CFStr::new(attr_name);
+-    let cf_true = CFBoolean::true_value();
+-    AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), cf_true.as_CFTypeRef())
++    let cf_bool = if value {
++        CFBoolean::true_value()
++    } else {
++        CFBoolean::false_value()
++    };
++    AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), cf_bool.as_CFTypeRef())
+ }
+ 
+ /// Signal to a Chromium/Electron application root that a real assistive client
+@@ -748,6 +776,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
          .collect()
  }
  
@@ -4131,18 +4335,22 @@ index 2b9baf8..347018e 100644
      let mut flags = CGEventFlags::CGEventFlagNull;
      for m in modifiers {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
-index 7411233..f0f4456 100644
+index 7411233..e6e0ad2 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
-@@ -9,6 +9,8 @@
+@@ -9,10 +9,12 @@
  //!    the activity-monitor tickle required for live-input detection.
  
  pub mod ax_actions;
 +pub mod cancellation;
-+pub mod target_guard;
  pub mod interactive;
  pub mod keyboard;
  pub mod mouse;
+ pub mod skylight;
++pub mod target_guard;
+ 
+ pub use ax_actions::perform_ax_action;
+ pub use interactive::{
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 index 8ace326..0f24d55 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
@@ -5216,10 +5424,10 @@ index a657ced..b0f21ed 100644
      fn make_key_records_address_only_the_exact_window() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
 new file mode 100644
-index 0000000..71f4b61
+index 0000000..b0dda5b
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
-@@ -0,0 +1,537 @@
+@@ -0,0 +1,549 @@
 +//! Read-only, exact-window input admission. Focus-sensitive actions stay bound
 +//! to the active Space. Exact semantic text may instead stay bound to unchanged
 +//! WindowServer Space membership without switching the user's active Space.
@@ -5438,25 +5646,37 @@ index 0000000..71f4b61
 +                }
 +            }
 +            SpacePolicy::StableMembership => {
-+                let Some(actual_space_ids) = window
++                match window
 +                    .space_ids
 +                    .as_ref()
 +                    .filter(|space_ids| !space_ids.is_empty())
-+                else {
-+                    return Err(refuse(
-+                        "space_membership_unresolved",
-+                        "WindowServer did not report stable Space membership for the exact window.",
-+                    ));
-+                };
-+                if self
-+                    .space_ids
-+                    .as_ref()
-+                    .is_some_and(|expected| expected != actual_space_ids)
 +                {
-+                    return Err(refuse(
-+                        "stale_space_membership",
-+                        "The exact window changed Space membership during this action.",
-+                    ));
++                    Some(actual_space_ids) => {
++                        if self
++                            .space_ids
++                            .as_ref()
++                            .is_some_and(|expected| expected != actual_space_ids)
++                        {
++                            return Err(refuse(
++                                "stale_space_membership",
++                                "The exact window changed Space membership during this action.",
++                            ));
++                        }
++                    }
++                    // A window of a hidden application is detached from every
++                    // managed Space — WindowServer reports no membership at
++                    // all. That state is itself stable: while the app stays
++                    // hidden the window cannot migrate Spaces, and the
++                    // element-ancestry proof still binds the action to this
++                    // exact window. Accept it as stably-detached membership;
++                    // any other empty report stays fail-closed.
++                    None if crate::apps::app_is_hidden(window.pid) => {}
++                    None => {
++                        return Err(refuse(
++                            "space_membership_unresolved",
++                            "WindowServer did not report stable Space membership for the exact window.",
++                        ));
++                    }
 +                }
 +            }
 +        }
@@ -6325,7 +6545,7 @@ index f0e211e..997c7b0 100644
      #[test]
      fn plain_click_requires_selected_readback() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
-index f5eb9d0..130e82d 100644
+index f5eb9d0..94e6179 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 @@ -56,6 +56,8 @@ fn def() -> &'static ToolDef {
@@ -6337,7 +6557,27 @@ index f5eb9d0..130e82d 100644
                  "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
                  "pid": { "type": "integer", "description": "Target process ID." },
                  "window_id": {
-@@ -253,7 +255,12 @@ impl Tool for DragTool {
+@@ -186,15 +188,11 @@ impl Tool for DragTool {
+         // delivery_mode: foreground briefly fronts the window before the
+         // press-drag-release gesture (the explicit last resort for surfaces
+         // that drop background CGEvents), via the same skylight assist click
+-        // uses. Requires a window_id to have a window to front.
++        // uses. Requires a window_id to have a window to front. Background
++        // delivery routes the gesture through `drag_at_xy_observed` — the
++        // window-local stamped CGEventPostToPid path — after the same
++        // WindowPointer admission gate click uses.
+         let delivery_mode = super::DeliveryMode::parse(args.opt_str("delivery_mode").as_deref());
+-        if !delivery_mode.is_foreground() {
+-            return ToolResult::error(
+-                "Background drag is unavailable on macOS; use delivery_mode:\"foreground\"."
+-                    .to_owned(),
+-            )
+-            .with_structured(serde_json::json!({ "code": "background_unavailable" }));
+-        }
+         // Coerce integer or float from JSON for coordinate fields.
+         let coerce = |key: &str| -> Option<f64> {
+             args.opt_f64(key)
+@@ -253,7 +251,12 @@ impl Tool for DragTool {
                      ))
                  }
              }
@@ -6351,7 +6591,7 @@ index f5eb9d0..130e82d 100644
              from_x *= ratio;
              from_y *= ratio;
              to_x *= ratio;
-@@ -266,7 +273,7 @@ impl Tool for DragTool {
+@@ -266,10 +269,31 @@ impl Tool for DragTool {
          // refuses rather than dragging across the desktop behind it.
          let (from_sx, from_sy, from_lx, from_ly, to_sx, to_sy, to_lx, to_ly) =
              if let Some(wid) = window_id {
@@ -6360,6 +6600,66 @@ index f5eb9d0..130e82d 100644
                      Ok(frame) => {
                          let (fsx, fsy, flx, fly) = frame.to_screen(from_x, from_y);
                          let (tsx, tsy, tlx, tly) = frame.to_screen(to_x, to_y);
++                        // A drag is grabbed by the window it starts in, and a
++                        // background caller cannot see what a stray endpoint
++                        // hit. The same out-of-frame refusal click applies to
++                        // its one point covers both endpoints here.
++                        if !delivery_mode.is_foreground() {
++                            for (lx, ly) in [(flx, fly), (tlx, tly)] {
++                                if lx < 0.0
++                                    || ly < 0.0
++                                    || lx > frame.bounds.width
++                                    || ly > frame.bounds.height
++                                {
++                                    return ToolResult::error(format!(
++                                        "drag: window-local point ({lx:.1}, {ly:.1}) pt lies \
++                                         outside window {wid}'s {:.0}×{:.0} pt frame; background \
++                                         delivery refused. Re-read coordinates from a fresh \
++                                         get_window_state screenshot.",
++                                        frame.bounds.width, frame.bounds.height
++                                    ));
++                                }
++                            }
++                        }
+                         (fsx, fsy, flx, fly, tsx, tsy, tlx, tly)
+                     }
+                     Err(refusal) => return refusal,
+@@ -278,6 +302,35 @@ impl Tool for DragTool {
+                 (from_x, from_y, from_x, from_y, to_x, to_y, to_x, to_y)
+             };
+ 
++        // ── Exact-target background gate (macOS background input v1) ──
++        // A window-addressed background drag mutates whatever the pressed
++        // gesture touches (selection, drag-and-drop, resize handles), so it is
++        // held to the same WindowPointer rung as a pixel click: fresh
++        // WindowServer ownership, AXWindows membership, proven not-minimized
++        // and not-hidden. Gate BEFORE cursor/dispatch work so a stale or
++        // sibling-owned target refuses instead of acting on the wrong window.
++        let _mutation_lease = if !delivery_mode.is_foreground()
++            && !crate::background_mutation::held_by_current_task(pid)
++        {
++            if let Some(wid) = window_id {
++                match super::gate_background_window_action(
++                    pid,
++                    wid,
++                    None,
++                    cua_driver_core::background_input::BackgroundAction::WindowPointer,
++                )
++                .await
++                {
++                    Ok(lease) => Some(lease),
++                    Err(refusal_result) => return refusal_result,
++                }
++            } else {
++                None
++            }
++        } else {
++            None
++        };
++
+         // Animate agent cursor along drag path (start → end).
+         if let Some(wid) = window_id {
+             crate::cursor::overlay::send_command(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 index 9078607..13cc3ea 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
@@ -6446,11 +6746,103 @@ index 9078607..13cc3ea 100644
      fn node(
          idx: Option<usize>,
          role: &str,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
+index 6085da9..22db22e 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
+@@ -64,6 +64,10 @@ fn def() -> &'static ToolDef {
+                     "type": "boolean",
+                     "description": "When true, force a new app instance even if already running (open -n). Use for concurrent multi-agent/multi-session work so each session gets an isolated instance + window instead of sharing one — on single-instance apps (e.g. Calculator) every caller otherwise gets the same window and the sessions clobber each other."
+                 },
++                "hidden": {
++                    "type": "boolean",
++                    "description": "Launch the application hidden (open -j): its windows are created but never render on screen, and nothing activates or switches Spaces. A hidden app's windows remain addressable for background semantic actions (set_value, element click, semantic type_text) — the hidden-workspace launch. Unhide later with set_app_visibility."
++                },
+                 "additional_arguments": {
+                     "type": "array",
+                     "items": { "type": "string" },
+@@ -103,6 +107,7 @@ impl Tool for LaunchAppTool {
+         }
+         let webkit_inspector_port = args.opt_u64("webkit_inspector_port").map(|v| v as u16);
+         let creates_new_instance = args.bool_or("creates_new_application_instance", false);
++        let hidden = args.bool_or("hidden", false);
+         let additional_arguments: Vec<String> = args.str_array("additional_arguments");
+         if additional_arguments
+             .iter()
+@@ -233,7 +238,7 @@ impl Tool for LaunchAppTool {
+                     && env.is_empty()
+                     && !creates_new_instance
+                 {
+-                    crate::apps::launch_app(bid)?
++                    crate::apps::launch_app_with_options(bid, hidden)?
+                 } else {
+                     crate::apps::launch_with_urls_by_bundle(
+                         bid,
+@@ -241,6 +246,7 @@ impl Tool for LaunchAppTool {
+                         &additional_arguments,
+                         &env,
+                         creates_new_instance,
++                        hidden,
+                     )?
+                 }
+             } else {
+@@ -250,7 +256,7 @@ impl Tool for LaunchAppTool {
+                     && env.is_empty()
+                     && !creates_new_instance
+                 {
+-                    crate::apps::launch_app_by_name(n)?
++                    crate::apps::launch_app_by_name_with_options(n, hidden)?
+                 } else {
+                     crate::apps::launch_with_urls_by_name(
+                         n,
+@@ -258,6 +264,7 @@ impl Tool for LaunchAppTool {
+                         &additional_arguments,
+                         &env,
+                         creates_new_instance,
++                        hidden,
+                     )?
+                 }
+             };
+@@ -452,8 +459,14 @@ impl Tool for LaunchAppTool {
+                     response_requested_name.as_deref(),
+                 );
+ 
+-                let mut summary =
+-                    format!("Launched {app_name} (pid {pid}) in background.{port_summary}");
++                let mut summary = format!(
++                    "Launched {app_name} (pid {pid}) in background{}.{port_summary}",
++                    if hidden {
++                        ", hidden (windows never rendered; unhide with set_app_visibility)"
++                    } else {
++                        ""
++                    }
++                );
+ 
+                 if !windows.is_empty() {
+                     summary.push_str("\n\nWindows:");
+@@ -480,6 +493,7 @@ impl Tool for LaunchAppTool {
+                     "bundle_id": bid,
+                     "name": app_name,
+                     "windows": windows_json,
++                    "hidden": hidden,
+                     "launch_state": launch_state(true, true, !windows.is_empty()),
+                 });
+                 // Only emit `self_activation_suppressed` when the
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-index 5b2ce9e..992211d 100644
+index 5b2ce9e..b44506d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-@@ -23,6 +23,7 @@ mod type_text;
+@@ -15,14 +15,17 @@ mod list_windows;
+ mod press_key;
+ mod right_click;
+ mod scroll;
++mod set_app_visibility;
+ mod set_value;
+ mod set_window_frame;
++mod set_window_minimized;
+ mod type_text;
+ // `screenshot` / `screenshot_compat` modules removed in PR #1692 —
+ // `get_window_state` capture_mode:"vision" is the canonical screenshot
  // path. The capture functions they wrapped (ScreenCaptureKit, CGWindow,
  // etc.) live elsewhere under CuaDriverCore::Capture and are reached
  // through GetWindowStateTool.
@@ -6458,7 +6850,7 @@ index 5b2ce9e..992211d 100644
  mod check_permissions;
  mod cursor_tools;
  mod get_accessibility_tree;
-@@ -235,7 +236,7 @@ pub(crate) fn background_refusal_result(
+@@ -235,7 +238,7 @@ pub(crate) fn background_refusal_result(
  /// target-bound verification.
  pub(crate) struct BackgroundMutationLease {
      pid: i32,
@@ -6467,7 +6859,7 @@ index 5b2ce9e..992211d 100644
  }
  
  impl BackgroundMutationLease {
-@@ -305,6 +306,16 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
+@@ -305,6 +308,16 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
      }
  }
  
@@ -6484,7 +6876,7 @@ index 5b2ce9e..992211d 100644
  /// Finish the post-action observation window. Embedded interactive clients
  /// that already observe the target continuously may opt out through the
  /// private registry argument to avoid adding a one-second acknowledgement
-@@ -320,15 +331,96 @@ pub(crate) async fn finish_window_observation(
+@@ -320,15 +333,96 @@ pub(crate) async fn finish_window_observation(
      {
          drop(snapshot);
          crate::window_change_detector::Changes::no_change()
@@ -6581,7 +6973,16 @@ index 5b2ce9e..992211d 100644
      #[tokio::test]
      async fn embedded_interactive_input_can_finish_without_polling() {
          let snapshot = crate::window_change_detector::WindowChangeDetector::snapshot(None);
-@@ -981,6 +1073,7 @@ pub fn register_all(
+@@ -931,6 +1025,8 @@ pub fn register_all(
+         &pid_window_candidates,
+     ));
+     registry.register(Box::new(set_window_frame::SetWindowFrameTool));
++    registry.register(Box::new(set_window_minimized::SetWindowMinimizedTool));
++    registry.register(Box::new(set_app_visibility::SetAppVisibilityTool));
+     registry.register(Box::new(invoke_menu::InvokeMenuTool));
+     registry.register(pid_window_guarded(
+         click::ClickTool::new(state.clone()),
+@@ -981,6 +1077,7 @@ pub fn register_all(
      // register the MCP server under the `cua-computer-use` name, which is what
      // triggers Claude Code's computer-use beta-tool injection (see cli.rs).
      let _ = compat;
@@ -6706,7 +7107,7 @@ index 19d54df..37008fb 100644
          WindowPxFrame {
              bounds: WindowBounds {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
-index 64b98e1..953c421 100644
+index 64b98e1..d09baac 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 @@ -79,6 +79,8 @@ fn def() -> &'static ToolDef {
@@ -6767,7 +7168,7 @@ index 64b98e1..953c421 100644
              if let (Some(element_guard), Some(wid)) = (pre_focus_guard.clone(), window_id) {
                  if !delivery_mode.is_foreground() {
                      if let Some(lease) = _mutation_lease.as_ref() {
-@@ -324,12 +352,38 @@ impl Tool for ScrollTool {
+@@ -324,12 +352,37 @@ impl Tool for ScrollTool {
          } else {
              WHEEL_STEP_LINE_PX
          };
@@ -6789,8 +7190,7 @@ index 64b98e1..953c421 100644
 +            let tx = delta_x_arg.unwrap_or(0).clamp(-50, 50) as i32;
 +            if ty == 0 && tx == 0 {
 +                return ToolResult::error(
-+                    "scroll: delta_x/delta_y supplied but both resolve to zero ticks."
-+                        .to_string(),
++                    "scroll: delta_x/delta_y supplied but both resolve to zero ticks.".to_string(),
 +                )
 +                .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
 +            }
@@ -6812,7 +7212,7 @@ index 64b98e1..953c421 100644
          };
  
          // Resolve a screen-space wheel target, if a target was supplied.
-@@ -420,7 +474,12 @@ impl Tool for ScrollTool {
+@@ -420,7 +473,12 @@ impl Tool for ScrollTool {
              // click pixel path — undo any session downscale, then translate
              // through the shared window frame (which refuses a window with no
              // live frame rather than scrolling at screen-absolute coords).
@@ -6826,7 +7226,7 @@ index 64b98e1..953c421 100644
                  cx *= ratio;
                  cy *= ratio;
              }
-@@ -431,7 +490,7 @@ impl Tool for ScrollTool {
+@@ -431,7 +489,7 @@ impl Tool for ScrollTool {
                      "window_id is required when scrolling by window-local x,y pixels.".to_string(),
                  );
              };
@@ -6835,7 +7235,7 @@ index 64b98e1..953c421 100644
                  Ok(frame) => {
                      let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
                      Some(WheelTarget {
-@@ -521,7 +580,6 @@ impl Tool for ScrollTool {
+@@ -521,7 +579,6 @@ impl Tool for ScrollTool {
                  win_local,
                  wid,
              } = target;
@@ -6843,7 +7243,7 @@ index 64b98e1..953c421 100644
              let fg = delivery_mode.is_foreground() && wid.is_some();
              let result = focus_guard::with_focus_suppressed(
                  Some(pid),
-@@ -538,7 +596,9 @@ impl Tool for ScrollTool {
+@@ -538,7 +595,9 @@ impl Tool for ScrollTool {
                                  wid,
                                  delta_y,
                                  delta_x,
@@ -6854,7 +7254,7 @@ index 64b98e1..953c421 100644
                              )
                          };
                          // Foreground rung: brief front → wheel → restore prior frontmost.
-@@ -566,20 +626,37 @@ impl Tool for ScrollTool {
+@@ -566,20 +625,37 @@ impl Tool for ScrollTool {
                  ""
              };
              return match result {
@@ -6885,7 +7285,8 @@ index 64b98e1..953c421 100644
 +                    }))
 +                }
                  Ok(Err(e)) => ToolResult::error(format!("Wheel scroll failed: {e}")),
-                 Err(e)     => ToolResult::error(format!("Task error: {e}")),
+-                Err(e)     => ToolResult::error(format!("Task error: {e}")),
++                Err(e) => ToolResult::error(format!("Task error: {e}")),
              };
          }
  
@@ -6901,6 +7302,196 @@ index 64b98e1..953c421 100644
          let key = match (by.as_str(), direction.as_str()) {
              ("page", "down") | (_, "down") if by == "page" => "pagedown",
              ("page", "up") | (_, "up") if by == "page" => "pageup",
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
+new file mode 100644
+index 0000000..e1b38ad
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
+@@ -0,0 +1,184 @@
++//! Hide or unhide a running application without activating it.
++//!
++//! This is the workspace-lifecycle half of hidden workspaces: an app hidden
++//! this way keeps its windows fully addressable for background semantic AX
++//! reads and writes while rendering nothing on screen. Unhiding restores the
++//! windows in place; neither direction raises the app frontmost.
++
++use async_trait::async_trait;
++use cua_driver_core::{
++    action_record::{
++        effect_from_value_readback, ActionEvidence, ActionExecutionRecord, ActionTransport,
++        ActualDelivery, EvidenceKind, RequestedDelivery,
++    },
++    protocol::ToolResult,
++    tool::{Tool, ToolDef},
++};
++use serde_json::Value;
++
++pub struct SetAppVisibilityTool;
++
++static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
++
++fn def() -> &'static ToolDef {
++    DEF.get_or_init(|| ToolDef {
++        name: "set_app_visibility".into(),
++        description: "Hide or unhide a running application without activating it. \
++             A hidden app keeps its windows, stays on its Space, and remains fully \
++             addressable for background accessibility reads and semantic writes \
++             (set_value, element clicks, semantic type_text) — the hidden-workspace \
++             lifecycle. Unhiding restores the windows where they were; neither \
++             direction brings the app to the foreground."
++            .into(),
++        input_schema: serde_json::json!({
++            "type": "object",
++            "required": ["pid", "hidden"],
++            "properties": {
++                "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
++                "pid": { "type": "integer" },
++                "hidden": {
++                    "type": "boolean",
++                    "description": "true hides every window of the application (Cmd+H equivalent); false unhides."
++                }
++            },
++            "additionalProperties": false
++        }),
++        read_only: false,
++        destructive: false,
++        idempotent: true,
++        open_world: true,
++    })
++}
++
++#[derive(Debug)]
++struct VisibilityOutcome {
++    requested_hidden: bool,
++    observed: Option<bool>,
++}
++
++fn mutate_and_verify(pid: i32, hidden: bool) -> Result<VisibilityOutcome, String> {
++    use crate::ax::bindings::{
++        copy_bool_attr, is_attribute_settable, kAXErrorSuccess, set_bool_attr,
++        AXUIElementCreateApplication, AXUIElementSetMessagingTimeout,
++    };
++    use core_foundation::base::{CFRelease, CFTypeRef};
++    use objc2_app_kit::NSRunningApplication;
++
++    unsafe {
++        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
++            return Err(format!("pid {pid} is not a running application"));
++        };
++        // AXHidden on the application element is the cross-process hide/unhide
++        // path: NSRunningApplication.hide()/unhide() can refuse requests aimed
++        // at launch-hidden apps, while the AX attribute drives the same app
++        // hidden state the Dock's Cmd+H uses.
++        let app_element = AXUIElementCreateApplication(pid);
++        if app_element.is_null() {
++            return Err(format!(
++                "could not create an accessibility element for pid {pid}"
++            ));
++        }
++        AXUIElementSetMessagingTimeout(app_element, 2.0);
++        let result = if !is_attribute_settable(app_element, "AXHidden") {
++            Err(format!(
++                "pid {pid} does not expose a settable AXHidden attribute"
++            ))
++        } else {
++            let error = set_bool_attr(app_element, "AXHidden", hidden);
++            if error != kAXErrorSuccess {
++                Err(format!("AXHidden write was rejected with AXError {error}"))
++            } else {
++                let mut observed = None;
++                for _ in 0..30 {
++                    std::thread::sleep(std::time::Duration::from_millis(50));
++                    let state = copy_bool_attr(app_element, "AXHidden")
++                        .unwrap_or_else(|| app.isHidden());
++                    observed = Some(state);
++                    if state == hidden {
++                        break;
++                    }
++                }
++                Ok(VisibilityOutcome {
++                    requested_hidden: hidden,
++                    observed,
++                })
++            }
++        };
++        CFRelease(app_element as CFTypeRef);
++        result
++    }
++}
++
++fn action_record(outcome: &VisibilityOutcome) -> ActionExecutionRecord {
++    let confirmed = outcome.observed == Some(outcome.requested_hidden);
++    let changed = outcome.observed == Some(outcome.requested_hidden);
++    let effect = effect_from_value_readback(confirmed, changed, outcome.observed.is_some());
++    let mut builder = ActionExecutionRecord::builder(
++        effect,
++        ActionTransport::MacosAxValue,
++        RequestedDelivery::NotApplicable,
++    )
++    .actual_delivery(ActualDelivery::NotApplicable)
++    .detail(format!(
++        "requested_hidden={} observed={:?}",
++        outcome.requested_hidden, outcome.observed,
++    ));
++    if outcome.observed.is_some() {
++        builder = builder.evidence(ActionEvidence {
++            kind: EvidenceKind::ValueReadback,
++            detail: if confirmed {
++                "NSRunningApplication.isHidden matched the request".into()
++            } else {
++                "NSRunningApplication.isHidden did not match the request".into()
++            },
++        });
++    }
++    builder.build().expect("set_app_visibility record is valid")
++}
++
++#[async_trait]
++impl Tool for SetAppVisibilityTool {
++    fn def(&self) -> &ToolDef {
++        def()
++    }
++
++    async fn invoke(&self, args: Value) -> ToolResult {
++        use cua_driver_core::tool_args::ArgsExt;
++        let pid = match args.require_i32("pid") {
++            Ok(v) => v,
++            Err(e) => return e,
++        };
++        if pid <= 0 {
++            return ToolResult::error("set_app_visibility: pid must be a positive integer");
++        }
++        let hidden = match args.get("hidden").and_then(Value::as_bool) {
++            Some(v) => v,
++            None => {
++                return ToolResult::error(
++                    "set_app_visibility: hidden must be a boolean (true hides, false unhides)",
++                )
++            }
++        };
++        let outcome =
++            match tokio::task::spawn_blocking(move || mutate_and_verify(pid, hidden)).await {
++                Ok(Ok(outcome)) => outcome,
++                Ok(Err(error)) => return ToolResult::error(format!("set_app_visibility: {error}")),
++                Err(error) => {
++                    return ToolResult::error(format!(
++                        "set_app_visibility: blocking task failed: {error}"
++                    ))
++                }
++            };
++        let confirmed = outcome.observed == Some(outcome.requested_hidden);
++        ToolResult::text(if confirmed {
++            if outcome.requested_hidden {
++                "Hid the application; its windows remain addressable for background semantic actions."
++            } else {
++                "Unhid the application."
++            }
++        } else {
++            "The visibility mutation was attempted, but the resulting state could not be confirmed."
++        })
++        .with_action_record(action_record(&outcome))
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 index 79bcca1..17e31c0 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
@@ -7800,6 +8391,244 @@ index 79bcca1..17e31c0 100644
  
      #[test]
      fn unreadable_value_reports_neither_verified_nor_changed() {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs
+new file mode 100644
+index 0000000..7d45b2b
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs
+@@ -0,0 +1,232 @@
++//! Minimize or unminimize one exact window without activating it.
++//!
++//! The window-level half of hidden workspaces: a minimized window stays on
++//! its Space, keeps a coherent frame and AX surface, and remains fully
++//! addressable for background semantic reads and writes (get_window_state,
++//! set_value, element clicks, semantic type_text). Unminimizing restores it
++//! in place without raising the owning app frontmost.
++
++use async_trait::async_trait;
++use core_foundation::base::{CFRelease, CFTypeRef};
++use cua_driver_core::{
++    action_record::{
++        effect_from_value_readback, ActionEvidence, ActionExecutionRecord, ActionTransport,
++        ActualDelivery, EvidenceKind, RequestedDelivery,
++    },
++    protocol::ToolResult,
++    tool::{Tool, ToolDef},
++};
++use serde_json::Value;
++
++pub struct SetWindowMinimizedTool;
++
++static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
++
++fn def() -> &'static ToolDef {
++    DEF.get_or_init(|| ToolDef {
++        name: "set_window_minimized".into(),
++        description: "Minimize or unminimize one exact window without activating it or \
++             switching Spaces. A minimized window keeps its Space membership, AX surface \
++             and element addresses, so background semantic actions (set_value, element \
++             clicks, semantic type_text, get_window_state) keep working on it — the \
++             hidden-workspace lifecycle at window granularity."
++            .into(),
++        input_schema: serde_json::json!({
++            "type": "object",
++            "required": ["pid", "window_id", "minimized"],
++            "properties": {
++                "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
++                "pid": { "type": "integer" },
++                "window_id": { "type": "integer" },
++                "minimized": {
++                    "type": "boolean",
++                    "description": "true minimizes the window into the Dock; false restores it."
++                }
++            },
++            "additionalProperties": false
++        }),
++        read_only: false,
++        destructive: false,
++        idempotent: true,
++        open_world: true,
++    })
++}
++
++#[derive(Debug)]
++struct MinimizeOutcome {
++    requested: bool,
++    observed: Option<bool>,
++}
++
++fn mutate_and_verify(pid: i32, window_id: u32, minimized: bool) -> Result<MinimizeOutcome, String> {
++    use crate::{
++        ax::bindings::{
++            ax_get_window_id, copy_ax_windows, copy_bool_attr, is_attribute_settable,
++            kAXErrorSuccess, set_bool_attr, AXUIElementCreateApplication,
++            AXUIElementSetMessagingTimeout,
++        },
++        windows::WindowOwner,
++    };
++
++    match crate::windows::resolve_window_owner(pid, window_id) {
++        WindowOwner::SamePid => {}
++        WindowOwner::ForeignPid {
++            owner_pid,
++            owner_app_name,
++        } => {
++            return Err(format!(
++                "window_id {window_id} belongs to pid {owner_pid} ({owner_app_name}), not pid {pid}"
++            ));
++        }
++        WindowOwner::Unknown => {
++            return Err(format!(
++                "window_id {window_id} is closed, stale, or unknown to WindowServer"
++            ));
++        }
++    }
++
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return Err(format!(
++                "could not create an accessibility element for pid {pid}"
++            ));
++        }
++        AXUIElementSetMessagingTimeout(app, 2.0);
++        let windows = copy_ax_windows(app);
++        let target = windows
++            .iter()
++            .copied()
++            .find(|window| ax_get_window_id(*window) == Some(window_id));
++
++        let result = if let Some(target) = target {
++            AXUIElementSetMessagingTimeout(target, 2.0);
++            if !is_attribute_settable(target, "AXMinimized") {
++                Err(format!(
++                    "window_id {window_id} does not expose a settable AXMinimized"
++                ))
++            } else {
++                let error = set_bool_attr(target, "AXMinimized", minimized);
++                if error != kAXErrorSuccess {
++                    Err(format!(
++                        "AXMinimized write was rejected with AXError {error}"
++                    ))
++                } else {
++                    let mut observed = None;
++                    for _ in 0..30 {
++                        std::thread::sleep(std::time::Duration::from_millis(50));
++                        if let Some(state) = copy_bool_attr(target, "AXMinimized") {
++                            observed = Some(state);
++                            if state == minimized {
++                                break;
++                            }
++                        }
++                    }
++                    Ok(MinimizeOutcome {
++                        requested: minimized,
++                        observed,
++                    })
++                }
++            }
++        } else {
++            Err(format!(
++                "window_id {window_id} belongs to pid {pid} in WindowServer but has no matching AXWindow"
++            ))
++        };
++
++        for window in windows {
++            CFRelease(window as CFTypeRef);
++        }
++        CFRelease(app as CFTypeRef);
++        result
++    }
++}
++
++fn action_record(outcome: &MinimizeOutcome) -> ActionExecutionRecord {
++    let confirmed = outcome.observed == Some(outcome.requested);
++    let effect = effect_from_value_readback(confirmed, confirmed, outcome.observed.is_some());
++    let mut builder = ActionExecutionRecord::builder(
++        effect,
++        ActionTransport::MacosAxValue,
++        RequestedDelivery::NotApplicable,
++    )
++    .actual_delivery(ActualDelivery::NotApplicable)
++    .detail(format!(
++        "requested_minimized={} observed={:?}",
++        outcome.requested, outcome.observed,
++    ));
++    if outcome.observed.is_some() {
++        builder = builder.evidence(ActionEvidence {
++            kind: EvidenceKind::ValueReadback,
++            detail: if confirmed {
++                "AXMinimized readback matched the request".into()
++            } else {
++                "AXMinimized readback did not match the request".into()
++            },
++        });
++    }
++    builder
++        .build()
++        .expect("set_window_minimized record is valid")
++}
++
++#[async_trait]
++impl Tool for SetWindowMinimizedTool {
++    fn def(&self) -> &ToolDef {
++        def()
++    }
++
++    async fn invoke(&self, args: Value) -> ToolResult {
++        use cua_driver_core::tool_args::ArgsExt;
++        let pid = match args.require_i32("pid") {
++            Ok(v) => v,
++            Err(e) => return e,
++        };
++        let window_id = match args
++            .get("window_id")
++            .and_then(Value::as_u64)
++            .and_then(|v| u32::try_from(v).ok())
++            .filter(|v| *v > 0)
++        {
++            Some(v) => v,
++            None => {
++                return ToolResult::error(
++                    "set_window_minimized: window_id must be a positive integer",
++                )
++            }
++        };
++        let minimized = match args.get("minimized").and_then(Value::as_bool) {
++            Some(v) => v,
++            None => {
++                return ToolResult::error(
++                    "set_window_minimized: minimized must be a boolean (true minimizes, false restores)",
++                )
++            }
++        };
++        let outcome =
++            match tokio::task::spawn_blocking(move || mutate_and_verify(pid, window_id, minimized))
++                .await
++            {
++                Ok(Ok(outcome)) => outcome,
++                Ok(Err(error)) => {
++                    return ToolResult::error(format!("set_window_minimized: {error}"))
++                }
++                Err(error) => {
++                    return ToolResult::error(format!(
++                        "set_window_minimized: blocking task failed: {error}"
++                    ))
++                }
++            };
++        let confirmed = outcome.observed == Some(outcome.requested);
++        ToolResult::text(if confirmed {
++            if outcome.requested {
++                "Minimized the window; it remains addressable for background semantic actions."
++            } else {
++                "Restored the window without activating it."
++            }
++        } else {
++            "The minimize mutation was attempted, but the resulting state could not be confirmed."
++        })
++        .with_action_record(action_record(&outcome))
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
 index 94c332a..def1e9f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
@@ -8120,7 +8949,7 @@ index 94c332a..def1e9f 100644
              Some(TypedProgress::Unchanged) if unchanged_web_readback => AxAttempt::Unverifiable,
              Some(TypedProgress::Unchanged) => AxAttempt::Unchanged,
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
-index 64fdf26..92d40cb 100644
+index 64fdf26..06d0809 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
 @@ -108,6 +108,14 @@ enum LayerFilter {
@@ -8147,11 +8976,18 @@ index 64fdf26..92d40cb 100644
      if raw_ref.is_null() {
          return WindowEnumeration {
              windows: vec![],
-@@ -326,6 +334,19 @@ fn get_bounds_num(
+@@ -326,6 +334,32 @@ fn get_bounds_num(
  ///
  /// Returns `None` only when WindowServer has no record of the id at all —
  /// which is precisely the "closed or fabricated window_id" signal callers need.
 +/// Exact layer-0 metadata and Space membership for input admission, without capture.
++///
++/// `kCGWindowListOptionIncludingWindow` alone cannot see minimized or hidden
++/// windows (its base set is the on-screen list, so the query returns nothing),
++/// which mislabeled live minimized windows as `stale_target` and refused
++/// background semantic writes the core policy explicitly permits. When the
++/// targeted query misses, fall back to the full layer-0 enumeration — the same
++/// list `list_windows` reports — before declaring the window gone.
 +pub(crate) fn input_window_info_by_id(window_id: u32) -> Option<WindowInfo> {
 +    const INCLUDING_WINDOW: u32 = 8;
 +    enumerate_window_metadata(
@@ -8162,6 +8998,12 @@ index 64fdf26..92d40cb 100644
 +    .windows
 +    .into_iter()
 +    .find(|window| window.window_id == window_id)
++    .or_else(|| {
++        all_windows_with_space_snapshot()
++            .windows
++            .into_iter()
++            .find(|window| window.window_id == window_id)
++    })
 +}
 +
  pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
