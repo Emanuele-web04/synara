@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ComputerUiNode, ComputerWindow, ThreadComputerState } from "@synara/contracts";
 import { decodeComputerFrame } from "@synara/shared/computerFrame";
@@ -6,6 +6,7 @@ import { decodeComputerFrame } from "@synara/shared/computerFrame";
 import {
   COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
   ComputerBackendError,
+  type ComputerBackendActionResult,
 } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { ComputerManager } from "./ComputerManager.ts";
@@ -688,6 +689,192 @@ describe("ComputerManager and FakeComputerBackend", () => {
     ).rejects.toThrow(/session bus disconnected/);
 
     await manager.dispose();
+  });
+
+  describe("the post-action settle", () => {
+    const ENV = ["SYNARA_CUA_CONDITIONAL_SETTLE", "SYNARA_CUA_ACTION_SETTLE_MS"] as const;
+    const savedEnv = new Map<string, string | undefined>();
+
+    afterEach(() => {
+      for (const name of ENV) {
+        if (savedEnv.has(name)) {
+          const value = savedEnv.get(name);
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+      savedEnv.clear();
+      vi.restoreAllMocks();
+    });
+
+    const setEnv = (name: (typeof ENV)[number], value: string | undefined) => {
+      if (!savedEnv.has(name)) savedEnv.set(name, process.env[name]);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+
+    /**
+     * The settle is a bare `setTimeout(resolve, actionSettleMs)`: whether it
+     * ran is visible as a timer scheduled with exactly that delay, which is a
+     * deterministic check no elapsed-time assertion can match.
+     */
+    const settleWaitedFor = (
+      spy: { readonly mock: { readonly calls: readonly (readonly unknown[])[] } },
+      ms: number,
+    ) => spy.mock.calls.some((call) => call[1] === ms);
+
+    /** A backend whose key presses report whatever verdict the test sets. */
+    class ProvenBackend extends FakeComputerBackend {
+      proof: ComputerBackendActionResult = {};
+      override async pressKey(key: string): Promise<ComputerBackendActionResult> {
+        const result = await super.pressKey(key);
+        return { ...result, ...this.proof };
+      }
+    }
+
+    const pressThenObserve = (manager: ComputerManager, spy = vi.spyOn(globalThis, "setTimeout")) =>
+      manager
+        .withAgentActivity("thread-1", async () => {
+          await manager.pressKey("thread-1", "enter");
+          return manager.captureActionScreenshot();
+        })
+        .then((observation) => ({ observation, spy }));
+
+    it("waits the fixed settle by default even when the backend verified the effect", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend();
+      backend.proof = { effect: "verified", verified: "confirmed" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(true);
+      await manager.dispose();
+    });
+
+    it("still waits the compiled 300 ms when nothing overrides it", async () => {
+      setEnv("SYNARA_CUA_ACTION_SETTLE_MS", undefined);
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 300)).toBe(true);
+      await manager.dispose();
+    });
+
+    it("SYNARA_CUA_ACTION_SETTLE_MS overrides the wait, and an explicit 0 removes it", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      setEnv("SYNARA_CUA_ACTION_SETTLE_MS", "45");
+      const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 45)).toBe(true);
+      await manager.dispose();
+
+      setEnv("SYNARA_CUA_ACTION_SETTLE_MS", "0");
+      const zeroed = new ComputerManager({ backend: new FakeComputerBackend() });
+      const zero = await pressThenObserve(zeroed);
+      // 0 means no settle leg at all — no timer is even scheduled.
+      expect(zero.spy.mock.calls.some((call) => call[1] === 0)).toBe(false);
+      await zeroed.dispose();
+    });
+
+    it("a constructor override wins over SYNARA_CUA_ACTION_SETTLE_MS", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      setEnv("SYNARA_CUA_ACTION_SETTLE_MS", "45");
+      const manager = new ComputerManager({
+        backend: new FakeComputerBackend(),
+        actionSettleMs: 60,
+      });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(true);
+      expect(settleWaitedFor(spy, 45)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("SYNARA_CUA_CONDITIONAL_SETTLE skips the wait on a verified effect", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      backend.proof = { effect: "verified" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("SYNARA_CUA_CONDITIONAL_SETTLE skips the wait on a confirmed read-back", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      backend.proof = { verified: "confirmed" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it.each([
+      ["an unconfirmed read-back", { verified: "unconfirmed" }],
+      ["an unverifiable surface", { verified: "unverifiable" }],
+      ["an unknown dispatch", { effect: "dispatched-unknown" }],
+      ["no verdict at all", {}],
+    ] as const)("SYNARA_CUA_CONDITIONAL_SETTLE keeps the wait after %s", async (_label, proof) => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      backend.proof = proof;
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(true);
+      await manager.dispose();
+    });
+
+    it("consumes the proof once: a second observation in the same call settles again", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      backend.proof = { effect: "verified" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const spy = vi.spyOn(globalThis, "setTimeout");
+      await manager.withAgentActivity("thread-1", async () => {
+        await manager.pressKey("thread-1", "enter");
+        await manager.captureActionScreenshot();
+        expect(settleWaitedFor(spy, 60)).toBe(false);
+        await manager.captureActionScreenshot();
+        expect(settleWaitedFor(spy, 60)).toBe(true);
+      });
+      await manager.dispose();
+    });
+
+    it("a second action's verdict replaces the first inside one call", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const spy = vi.spyOn(globalThis, "setTimeout");
+      await manager.withAgentActivity("thread-1", async () => {
+        backend.proof = { effect: "verified" };
+        await manager.pressKey("thread-1", "enter");
+        // The second action could not prove itself; its verdict is the one
+        // the following observation must honor.
+        backend.proof = { effect: "dispatched-unknown" };
+        await manager.pressKey("thread-1", "enter");
+        await manager.captureActionScreenshot();
+        expect(settleWaitedFor(spy, 60)).toBe(true);
+      });
+      await manager.dispose();
+    });
+
+    it("a verdict never waives a later call's settle", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend();
+      backend.proof = { effect: "verified" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const spy = vi.spyOn(globalThis, "setTimeout");
+      await manager.withAgentActivity("thread-1", async () => {
+        await manager.pressKey("thread-1", "enter");
+        // The observation was never taken inside this call, so the proof is
+        // still sitting on the context when the call ends — and must die
+        // with it.
+      });
+      await manager.withAgentActivity("thread-1", async () => {
+        await manager.captureActionScreenshot();
+        expect(settleWaitedFor(spy, 60)).toBe(true);
+      });
+      await manager.dispose();
+    });
   });
 
   it("attributes every action event to the thread that drove it", async () => {

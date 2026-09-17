@@ -22,6 +22,11 @@ import type { ComputerBackendActionResult } from "./ComputerBackend.ts";
  *
  * When neither flag is set no context is created at all, so the default path
  * keeps its exact current shape.
+ *
+ * This module is also where the computer path's other opt-in env flags live
+ * (the workstream-C speed flags). Each one defaults to the current behavior
+ * so a live run can isolate a single optimization at a time; see
+ * docs/computer-use-cua/speed-flags.md for the full list.
  */
 
 function envFlagEnabled(value: string | undefined): boolean {
@@ -52,6 +57,44 @@ export function cuaActionSettleMsOverride(): number | undefined {
   if (raw === undefined || raw.trim() === "") return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * `SYNARA_CUA_AX_ONLY_GET_STATE=1` declares that tree-only `get_state` reads
+ * carry no capture interest at all: the driver request omits
+ * `include_screenshot` and `max_dimension` entirely rather than sending a
+ * disabled capture. Tree-only reads already skip capture, encode, and image
+ * delivery unconditionally — this flag pins that contract on the wire so a
+ * driver change cannot quietly start sizing a frame for a read that never
+ * uses one, and so an A/B run can isolate the AX-only path explicitly.
+ */
+export function cuaAxOnlyGetStateEnabled(): boolean {
+  return envFlagEnabled(process.env.SYNARA_CUA_AX_ONLY_GET_STATE);
+}
+
+/**
+ * `SYNARA_CUA_CAPTURE_REUSE=1` extends the post-action observation's
+ * byte-identical frame reuse to explicit perception reads: when a fresh
+ * capture is byte-for-byte the latest delivered frame with the same
+ * coordinate frame, the result names the existing `screenshotId` instead of
+ * shipping the same pixels again. The capture itself always happens — only
+ * identical bytes prove nothing changed — so no stale picture is ever
+ * served; what is saved is the image part of the tool result.
+ */
+export function cuaCaptureReuseEnabled(): boolean {
+  return envFlagEnabled(process.env.SYNARA_CUA_CAPTURE_REUSE);
+}
+
+/**
+ * `SYNARA_CUA_PREVIEW_STILL_MS` overrides the pane's still-capture cadence
+ * (default 2000 ms). Unset or unparsable means the compiled-in default; the
+ * caller clamps the resolved value to the publisher's floor.
+ */
+export function cuaPreviewStillMsOverride(): number | undefined {
+  const raw = process.env.SYNARA_CUA_PREVIEW_STILL_MS;
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 /**

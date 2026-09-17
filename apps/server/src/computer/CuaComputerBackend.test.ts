@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
 import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@synara/contracts";
 import { Schema } from "effect";
@@ -18,6 +18,7 @@ const isTyping = (name?: string) => name === "type_text";
 function fixture(options?: {
   readonly semanticTextLaneHoldMs?: number;
   readonly semanticTextLaneGapMs?: number;
+  readonly stillIntervalMs?: number;
 }) {
   const calls: Array<{
     name?: string;
@@ -204,6 +205,7 @@ function fixture(options?: {
     ...(options?.semanticTextLaneGapMs !== undefined
       ? { semanticTextLaneGapMs: options.semanticTextLaneGapMs }
       : {}),
+    ...(options?.stillIntervalMs !== undefined ? { stillIntervalMs: options.stillIntervalMs } : {}),
   });
   return {
     backend,
@@ -2290,5 +2292,116 @@ describe("native preview task lifetime", () => {
     expect(f.calls.at(-1)).toMatchObject({ method: "end_task", task });
     await f.backend.endTask("thread", "turn");
     expect(f.calls).toHaveLength(before + 1);
+  });
+});
+
+describe("Cua workstream-C speed flags", () => {
+  const ENV = ["SYNARA_CUA_AX_ONLY_GET_STATE", "SYNARA_CUA_PREVIEW_STILL_MS"] as const;
+  const savedEnv = new Map<string, string | undefined>();
+
+  afterEach(() => {
+    for (const name of ENV) {
+      if (savedEnv.has(name)) {
+        const value = savedEnv.get(name);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    savedEnv.clear();
+    vi.restoreAllMocks();
+  });
+
+  const setEnv = (name: (typeof ENV)[number], value: string | undefined) => {
+    if (!savedEnv.has(name)) savedEnv.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+
+  const windowStateArgs = (f: ReturnType<typeof fixture>) =>
+    f.calls.find((call) => call.name === "get_window_state")?.args ?? {};
+
+  it("keeps the capture arguments on a tree-only get_state by default", async () => {
+    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", undefined);
+    const f = fixture();
+    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    expect(windowStateArgs(f)).toMatchObject({
+      include_screenshot: false,
+      max_dimension: 1536,
+      include_accessibility_tree: true,
+    });
+    await f.backend.dispose();
+  });
+
+  it("SYNARA_CUA_AX_ONLY_GET_STATE omits the capture arguments on a tree-only read", async () => {
+    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", "1");
+    const f = fixture();
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const args = windowStateArgs(f);
+    expect(args).not.toHaveProperty("include_screenshot");
+    expect(args).not.toHaveProperty("max_dimension");
+    expect(args).toMatchObject({ include_accessibility_tree: true });
+    // The read still asks for the tree and returns no image either way.
+    expect(state.screenshot).toBeUndefined();
+    await f.backend.dispose();
+  });
+
+  it("SYNARA_CUA_AX_ONLY_GET_STATE never strips the arguments a pixel read needs", async () => {
+    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", "1");
+    const f = fixture();
+    await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+      includeScreenshot: true,
+    });
+    expect(windowStateArgs(f)).toMatchObject({
+      include_screenshot: true,
+      max_dimension: 1536,
+      include_accessibility_tree: true,
+    });
+    await f.backend.dispose();
+  });
+
+  it("arms the still publisher at the compiled 2000 ms cadence by default", async () => {
+    setEnv("SYNARA_CUA_PREVIEW_STILL_MS", undefined);
+    const f = fixture();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    await f.backend.attachStream(() => undefined);
+    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(true);
+    await f.backend.dispose();
+  });
+
+  it("SYNARA_CUA_PREVIEW_STILL_MS overrides the still cadence", async () => {
+    setEnv("SYNARA_CUA_PREVIEW_STILL_MS", "4000");
+    const f = fixture();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    await f.backend.attachStream(() => undefined);
+    expect(intervals.mock.calls.some((call) => call[1] === 4_000)).toBe(true);
+    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(false);
+    await f.backend.dispose();
+  });
+
+  it("an unparsable SYNARA_CUA_PREVIEW_STILL_MS falls back to the default", async () => {
+    setEnv("SYNARA_CUA_PREVIEW_STILL_MS", "fast");
+    const f = fixture();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    await f.backend.attachStream(() => undefined);
+    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(true);
+    await f.backend.dispose();
+  });
+
+  it("the constructor's stillIntervalMs wins and stays above the publisher floor", async () => {
+    setEnv("SYNARA_CUA_PREVIEW_STILL_MS", "4000");
+    const f = fixture({ stillIntervalMs: 750 });
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    await f.backend.attachStream(() => undefined);
+    expect(intervals.mock.calls.some((call) => call[1] === 750)).toBe(true);
+    await f.backend.dispose();
+
+    const floored = fixture({ stillIntervalMs: 5 });
+    await floored.backend.attachStream(() => undefined);
+    // MIN_STILL_INTERVAL_MS keeps an aggressive value from queueing captures
+    // faster than one encode can finish.
+    expect(intervals.mock.calls.some((call) => call[1] === 100)).toBe(true);
+    await floored.backend.dispose();
   });
 });

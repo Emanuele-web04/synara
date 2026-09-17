@@ -896,3 +896,138 @@ describe("frame tap launch prime", () => {
     expect(tap.updates).toEqual([]);
   });
 });
+
+describe("driver warm-up on first touch", () => {
+  const FLAG = "SYNARA_CUA_WARM_ON_FIRST_TOUCH";
+  let savedFlag: string | undefined;
+  let captured = false;
+
+  const setFlag = (value: string | undefined) => {
+    if (!captured) {
+      captured = true;
+      savedFlag = process.env[FLAG];
+    }
+    if (value === undefined) delete process.env[FLAG];
+    else process.env[FLAG] = value;
+  };
+
+  afterEach(() => {
+    if (captured) {
+      if (savedFlag === undefined) delete process.env[FLAG];
+      else process.env[FLAG] = savedFlag;
+      captured = false;
+      savedFlag = undefined;
+    }
+    vi.restoreAllMocks();
+  });
+
+  /** Poll the driver's event log until `event` appears or ~3 s elapse. */
+  const waitForEvent = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    event: string,
+  ): Promise<Array<{ event: string; pid: number; time: number }>> => {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      const events = await f
+        .events()
+        .catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+      if (events.some((row) => row.event === event)) return events;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return f.events().catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+  };
+
+  it.each([undefined, "0", "off"])("leaves the driver cold when the flag is %s", async (value) => {
+    setFlag(value);
+    const f = await fixture(capability, {
+      checkPermissions: async () => ({ accessibility: true, screenRecording: true }),
+    });
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("warms spawn and handshake on the first probe without opening a session", async () => {
+    setFlag("1");
+    const f = await fixture();
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
+      ok: true,
+    });
+    const warmed = await waitForEvent(f, "start");
+    expect(warmed.filter((event) => event.event === "start")).toHaveLength(1);
+    // Warm stops at the validated handshake on purpose: session setup — the
+    // fixture's motion event — never reaches the driver before real work.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect((await f.events()).some((event) => event.event === "motion-100-0")).toBe(false);
+    // The first real call reuses the warmed generation: no second spawn, and
+    // the once-per-generation cursor setup runs exactly once now.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+    ).resolves.toMatchObject({ ok: true });
+    const events = await f.events();
+    expect(events.filter((event) => event.event === "start")).toHaveLength(1);
+    expect(events.filter((event) => event.event === "motion-100-0")).toHaveLength(1);
+    expect(events.filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("warms on a permission check too, and only once per host lifetime", async () => {
+    setFlag("yes");
+    const f = await fixture(capability, {
+      checkPermissions: async () => ({ accessibility: true, screenRecording: true }),
+    });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await waitForEvent(f, "start");
+    // Later first-touch requests do not spawn again — warm is once-only even
+    // while it is still in flight.
+    await cuaRequest(f.endpoint, { method: "probe" });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+    // A stop retires the warmed generation; the next probe must not conjure a
+    // replacement — warm ran its once.
+    await f.host.stop();
+    await cuaRequest(f.endpoint, { method: "probe" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+    // Real work still starts a driver on demand, paying the cold start then.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+
+  it("does not treat housekeeping requests as first touches", async () => {
+    setFlag("1");
+    const f = await fixture();
+    await cuaRequest(f.endpoint, {
+      method: "end_task",
+      task: { threadId: "thread", turnId: "turn" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("logs a failed warm and leaves the first real call's own startup intact", async () => {
+    setFlag("1");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const f = await fixture(capability, { unpatched: true });
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
+      ok: true,
+    });
+    await waitForEvent(f, "exit");
+    await vi.waitFor(() =>
+      expect(
+        info.mock.calls.some((call) => String(call[0]).includes("driver warm-up failed")),
+      ).toBe(true),
+    );
+    // The warm failure retired its generation cleanly; the real call spawns
+    // again and fails on the same handshake, not on anything warm poisoned.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+});

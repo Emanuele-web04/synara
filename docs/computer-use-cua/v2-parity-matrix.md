@@ -42,7 +42,7 @@ Ranked by user pain and milestone order. Codex side items stay unverified until 
 2. Synthetic focus belief (DEAD by experiment): six belief stages including a real `_SLPSSetFrontProcessWithOptions` front flip cannot manufacture a key window; process-scoped `CGEventPostToPid` never reaches an inactive renderer. See the status block below.
 3. Scroll v2 (LANDED 2026-09-17, native rev 16): two axes plus modifiers in one pixel-unit wheel gesture, macOS before/after measurement inside the 2-leg/3-capture budget, and route-keyed gearing with a durable per-app file. Live-verified on TextEdit; the NSScrollView horizontal limitation is documented in the scroll row.
 4. Menus and window frames (LANDED 2026-09-17): `computer_invoke_menu` and `computer_set_window_frame` are exposed, approval-gated, and verified live on TextEdit.
-5. Settle and observation. Fixed 300 ms settle plus no AX observer settle slows every turn and weakens read back. Target P1.
+5. Settle and observation. Fixed 300 ms settle plus no AX observer settle slows every turn and weakens read back. Target P1. Narrowed by workstream C: `SYNARA_CUA_ACTION_SETTLE_MS` overrides the wait and `SYNARA_CUA_CONDITIONAL_SETTLE` skips it on a verified effect or confirmed read-back, both opt-in with the 300 ms default unchanged; a driver-side AX observer settle is still not implemented.
 6. Background drag. Foreground only drag forces activation excursions. Target P1 after focus work.
 7. Synthetic key activation. Raising a window just to aim keys steals focus. Target P1.
 8. Screenshots and Spaces certification. Freshness refusals and routing exist in source but are uncertified at rev 16. Target P1.

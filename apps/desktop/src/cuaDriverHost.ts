@@ -35,6 +35,12 @@ interface Generation {
    * driver that wedges before ever receiving input stays distinguishable
    * from one that may still hold OS input it never confirmed releasing. */
   inputEverDispatched: boolean;
+  /**
+   * The session half of startup, opened lazily on the first call that needs
+   * it. A generation the warm path spawned may be handshake-validated with no
+   * session yet; assigning this promise is what makes session setup once-only.
+   */
+  sessionOpening?: Promise<void>;
   retirement?: Promise<void>;
 }
 
@@ -307,6 +313,14 @@ export class CuaDriverHost {
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
+    // A probe or a permission check is the host's first touch: both answer
+    // without the driver, which is exactly what makes them the cheap moment
+    // to warm its spawn plus handshake in the background.
+    if (
+      request.method === "probe" ||
+      (request.method === "call" && request.name === "check_permissions")
+    )
+      this.warm();
     if (request.method === "probe") {
       try {
         await access(this.options.binaryPath);
@@ -595,7 +609,33 @@ export class CuaDriverHost {
     }
   }
 
-  private ensureStarted(): Promise<Generation> {
+  /**
+   * `SYNARA_CUA_WARM_ON_FIRST_TOUCH=1` asks the host to run the spawn plus
+   * validated handshake as soon as the first computer request arrives — a
+   * liveness probe or a permission check, both of which answer without the
+   * driver — so the first input does not pay the cold-start cost. Warming
+   * stops there on purpose: it opens no session, moves no focus, captures no
+   * pixels, and fires at most once per host lifetime so a retired driver is
+   * never re-warmed by polling alone.
+   */
+  private warmAttempted = false;
+
+  private warm(): void {
+    if (this.warmAttempted || this.closed || this.suspended) return;
+    const raw = process.env.SYNARA_CUA_WARM_ON_FIRST_TOUCH?.trim().toLowerCase();
+    if (raw !== "1" && raw !== "true" && raw !== "on" && raw !== "yes") return;
+    this.warmAttempted = true;
+    void this.ensureSpawned().catch((error: unknown) => {
+      log(`driver warm-up failed: ${String(error)}`);
+    });
+  }
+
+  /**
+   * Spawn plus the validated handshake — the warmable half of startup. The
+   * returned generation has no session yet: `openSession` runs that half on
+   * the first call that needs it.
+   */
+  private ensureSpawned(): Promise<Generation> {
     if (this.starting) return this.starting;
     const start = async () => {
       await this.retiring;
@@ -698,35 +738,6 @@ export class CuaDriverHost {
         await chmod(endpoint, 0o600);
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
-        const startupTimeoutMs = this.options.startupTimeoutMs ?? 5_000;
-        const session = await cuaRequest<CuaReply>(
-          endpoint,
-          {
-            method: "call",
-            name: "start_session",
-            args: { session: generation.session },
-          },
-          { timeoutMs: startupTimeoutMs },
-        );
-        if (!session.ok || session.result?.isError)
-          throw new Error("Cua session initialization failed.");
-        // Configure once per native generation, not before each input. The
-        // cursor remains visible without making travel distance delay the action.
-        const motion = await cuaRequest<CuaReply>(
-          endpoint,
-          {
-            method: "call",
-            name: "set_agent_cursor_motion",
-            args: {
-              session: generation.session,
-              glide_duration_ms: 100,
-              dwell_after_click_ms: 0,
-            },
-          },
-          { timeoutMs: startupTimeoutMs },
-        );
-        if (!motion.ok || motion.result?.isError)
-          throw new Error("Cua cursor initialization failed.");
         return generation;
       } catch (error) {
         await this.retire(generation);
@@ -737,6 +748,63 @@ export class CuaDriverHost {
       this.starting = undefined;
     });
     return this.starting;
+  }
+
+  /**
+   * The session half of startup: `start_session` plus the once-per-generation
+   * cursor-motion setup, opened lazily on the first call that needs it so the
+   * warm path can stop at the validated handshake. Runs once per generation;
+   * a failure retires the generation so the next call starts clean rather
+   * than reusing a half-opened session.
+   */
+  private async openSession(generation: Generation): Promise<void> {
+    generation.sessionOpening ??= (async () => {
+      const startupTimeoutMs = this.options.startupTimeoutMs ?? 5_000;
+      if (generation.retired || generation.didExit)
+        throw new Error("Cua Driver stopped during startup.");
+      const session = await cuaRequest<CuaReply>(
+        generation.socket,
+        {
+          method: "call",
+          name: "start_session",
+          args: { session: generation.session },
+        },
+        { timeoutMs: startupTimeoutMs },
+      );
+      if (!session.ok || session.result?.isError)
+        throw new Error("Cua session initialization failed.");
+      if (generation.retired || generation.didExit)
+        throw new Error("Cua Driver stopped during startup.");
+      // Configure once per native generation, not before each input. The
+      // cursor remains visible without making travel distance delay the action.
+      const motion = await cuaRequest<CuaReply>(
+        generation.socket,
+        {
+          method: "call",
+          name: "set_agent_cursor_motion",
+          args: {
+            session: generation.session,
+            glide_duration_ms: 100,
+            dwell_after_click_ms: 0,
+          },
+        },
+        { timeoutMs: startupTimeoutMs },
+      );
+      if (!motion.ok || motion.result?.isError)
+        throw new Error("Cua cursor initialization failed.");
+    })();
+    try {
+      await generation.sessionOpening;
+    } catch (error) {
+      await this.retire(generation);
+      throw error;
+    }
+  }
+
+  private async ensureStarted(): Promise<Generation> {
+    const generation = await this.ensureSpawned();
+    await this.openSession(generation);
+    return generation;
   }
 
   private async terminate(generation: Generation): Promise<void> {

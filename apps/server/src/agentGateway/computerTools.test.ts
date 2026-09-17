@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPUTER_TEXT_MAX_LENGTH,
@@ -3642,6 +3642,135 @@ describe("second-app consent", () => {
         expect(backend.callsFor("setWindowFrame")).toHaveLength(0);
         expect(backend.callsFor("invokeMenu")).toHaveLength(0);
         expect(backend.callsFor("killApp")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    });
+  });
+
+  describe("SYNARA_CUA_CAPTURE_REUSE", () => {
+    const FLAG = "SYNARA_CUA_CAPTURE_REUSE";
+    let savedFlag: string | undefined;
+
+    const setFlag = (value: string | undefined) => {
+      if (savedFlag === undefined) savedFlag = process.env[FLAG];
+      if (value === undefined) delete process.env[FLAG];
+      else process.env[FLAG] = value;
+    };
+
+    afterEach(() => {
+      if (savedFlag !== undefined) process.env[FLAG] = savedFlag;
+      else delete process.env[FLAG];
+      savedFlag = undefined;
+    });
+
+    const imageParts = (result: McpToolCallResult) =>
+      result.content.filter((entry) => entry.type === "image").length;
+
+    it("ships a fresh image for every read by default, even a byte-identical one", async () => {
+      setFlag(undefined);
+      const { call, see, manager } = await setup();
+      try {
+        const first = await see();
+        const second = await call("computer_get_state", { include_screenshot: true });
+        const payload = resultJson(second) as { screenshot: { screenshotId: string } };
+        expect(payload.screenshot.screenshotId).not.toBe(first.screenshotId);
+        expect(payload).not.toHaveProperty("screenshotUnchanged");
+        expect(imageParts(second)).toBe(1);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("names the earlier frame when the fresh capture is byte-identical", async () => {
+      setFlag("1");
+      const backend = new FakeComputerBackend();
+      const { call, see, manager } = await setup(backend);
+      try {
+        const first = await see();
+        const second = await call("computer_get_state", { include_screenshot: true });
+        const payload = resultJson(second) as {
+          screenshotUnchanged?: boolean;
+          screenshot: { screenshotId: string; windowId?: string };
+        };
+        // The pixels still cost a capture — only their delivery is deduplicated.
+        expect(backend.callsFor("getState")).toHaveLength(2);
+        expect(payload.screenshotUnchanged).toBe(true);
+        expect(payload.screenshot.screenshotId).toBe(first.screenshotId);
+        expect(imageParts(second)).toBe(0);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("delivers normally when the bytes differ or the coordinate frame moved", async () => {
+      setFlag("1");
+      const backend = new FakeComputerBackend();
+      const { call, see, manager } = await setup(backend);
+      try {
+        await see();
+        // Same window, new pixels: byte identity is the only proof nothing
+        // changed, so a different capture ships as a new frame.
+        backend.queueScreenshots([
+          Buffer.from("a-different-desktop").toString("base64"),
+          Buffer.from("a-different-desktop").toString("base64"),
+        ]);
+        const changed = await call("computer_screenshot", { window_id: "fake-calculator" });
+        const changedPayload = resultJson(changed) as {
+          screenshotUnchanged?: boolean;
+          screenshot: { screenshotId: string; windowId: string };
+        };
+        expect(changedPayload.screenshotUnchanged).toBeUndefined();
+        expect(imageParts(changed)).toBe(1);
+
+        // Identical bytes on the same window dedupe from then on — and the
+        // capture itself still ran.
+        const captures = backend.callsFor("captureScreenshot").length;
+        const again = await call("computer_screenshot", { window_id: "fake-calculator" });
+        const againPayload = resultJson(again) as {
+          screenshotUnchanged?: boolean;
+          screenshot: { screenshotId: string };
+        };
+        expect(backend.callsFor("captureScreenshot")).toHaveLength(captures + 1);
+        expect(againPayload.screenshotUnchanged).toBe(true);
+        expect(againPayload.screenshot.screenshotId).toBe(changedPayload.screenshot.screenshotId);
+        expect(imageParts(again)).toBe(0);
+
+        // Another window is a different coordinate frame even with identical
+        // bytes: pointing into shot-N must never read pixels it was not shown.
+        const other = await call("computer_screenshot", { window_id: "fake-terminal" });
+        const otherPayload = resultJson(other) as {
+          screenshotUnchanged?: boolean;
+          screenshot: { screenshotId: string; windowId: string };
+        };
+        expect(otherPayload.screenshotUnchanged).toBeUndefined();
+        expect(otherPayload.screenshot.screenshotId).not.toBe(
+          changedPayload.screenshot.screenshotId,
+        );
+        expect(otherPayload.screenshot.windowId).toBe("fake-terminal");
+        expect(imageParts(other)).toBe(1);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("never lets one thread's picture stand in for another's", async () => {
+      setFlag("1");
+      const { call, manager } = await setup();
+      try {
+        const first = resultJson(
+          await call("computer_screenshot", { window_id: "fake-calculator" }),
+        ) as { screenshot: { screenshotId: string } };
+        const second = resultJson(
+          await call(
+            "computer_screenshot",
+            { window_id: "fake-calculator" },
+            undefined,
+            "other-thread",
+          ),
+        ) as { screenshot: { screenshotId: string }; screenshotUnchanged?: boolean };
+        expect(second.screenshot.screenshotId).not.toBe(first.screenshot.screenshotId);
+        expect(second.screenshotUnchanged).toBeUndefined();
       } finally {
         await manager.dispose();
       }

@@ -59,6 +59,7 @@ import {
 } from "../computer/screenshotFrames.ts";
 import { withDesktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { cuaCaptureReuseEnabled } from "../computer/computerCallContext.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import { withComputerTask } from "../computer/computerTaskContext.ts";
 import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
@@ -910,6 +911,38 @@ export function makeAgentGatewayComputerTools(
       throw new ToolInputError("Screenshot identity differs from the requested window.");
     }
     windowId ??= screenshot.windowId;
+    // SYNARA_CUA_CAPTURE_REUSE: when the fresh capture is byte-for-byte the
+    // latest delivered frame with the same coordinate frame, name that frame
+    // instead of shipping identical pixels again. The capture itself always
+    // ran — byte identity is the only proof nothing moved — so this never
+    // serves a stale picture; it saves the image part of the result. Same
+    // rule the post-action observer applies, extended to explicit reads.
+    if (cuaCaptureReuseEnabled()) {
+      const reused = frames.matchLatest(threadId, screenshot, windowId);
+      if (reused) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                ...payload,
+                screenshotUnchanged: true,
+                screenshotId: reused.id,
+                screenshot: {
+                  screenshotId: reused.id,
+                  windowId: reused.windowId,
+                  region: reused.region,
+                  width: reused.width,
+                  height: reused.height,
+                  scale: reused.scale,
+                },
+                note: "The screen is byte-for-byte what your previous screenshot showed, with the same coordinates. Continue using this screenshotId. This does not prove nothing changed; wait and look again before repeating an action.",
+              }),
+            },
+          ],
+        };
+      }
+    }
     const { bytesBase64, ...metadata } = screenshot;
     const frame = frames.record(threadId, screenshot, windowId);
     return {

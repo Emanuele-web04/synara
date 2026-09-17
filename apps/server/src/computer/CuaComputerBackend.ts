@@ -53,10 +53,15 @@ import {
   assertDesktopOperationActive,
   desktopDeliveryMode,
 } from "./DesktopOperationQueue.ts";
-import { StillFramePublisher } from "./stillFramePublisher.ts";
+import { StillFramePublisher, resolveStillIntervalMs } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
-import { currentComputerCall, timedComputerLeg } from "./computerCallContext.ts";
+import {
+  cuaAxOnlyGetStateEnabled,
+  cuaPreviewStillMsOverride,
+  currentComputerCall,
+  timedComputerLeg,
+} from "./computerCallContext.ts";
 import { jpegDimensions } from "../jpegHeader.ts";
 import { pngDimensions } from "../pngHeader.ts";
 
@@ -118,6 +123,14 @@ export const CUA_SEMANTIC_TEXT_LANE_GAP_MS = 100;
  * Native dispatch still validates the element token, so expiry is the drift
  * bound for a control that survives but moved or changed meaning. */
 const RECENT_TREE_TTL_MS = 5_000;
+/**
+ * Pane preview still cadence when nothing overrides it. Slower than the
+ * Tier-1 default: the whole-desktop PNG a tick pulls is the expensive frame
+ * on this backend, and the pane reads as live at half a hertz.
+ * `SYNARA_CUA_PREVIEW_STILL_MS` replaces it; the constructor option replaces
+ * it in tests.
+ */
+const CUA_STILL_FRAME_INTERVAL_MS = 2_000;
 function cuaKey(value: string): string {
   const key = value.toLowerCase();
   if (key === "insert")
@@ -228,6 +241,12 @@ export class CuaComputerBackend implements ComputerBackend {
       semanticTextLaneHoldMs?: number;
       /** Test injection so lane tests do not sleep for real. */
       semanticTextLaneGapMs?: number;
+      /**
+       * Still-capture cadence for the pane preview; defaults to
+       * `SYNARA_CUA_PREVIEW_STILL_MS`, then 2000 ms. Injectable so tests can
+       * observe the interval without env manipulation.
+       */
+      stillIntervalMs?: number;
     } = {},
   ) {
     this.endpoint = options.endpoint ?? process.env[CUA_HOST_SOCKET_ENV];
@@ -251,7 +270,12 @@ export class CuaComputerBackend implements ComputerBackend {
       isCaptureAvailable: () => !this.disposed && !this.permissions.includes("screenRecording"),
       emit: () => undefined,
       now: Date.now,
-      intervalMs: 2_000,
+      // Still cadence is 2 s unless SYNARA_CUA_PREVIEW_STILL_MS overrides it;
+      // the publisher floor keeps an aggressive value from queueing captures
+      // faster than one encode can finish.
+      intervalMs: resolveStillIntervalMs(
+        options.stillIntervalMs ?? cuaPreviewStillMsOverride() ?? CUA_STILL_FRAME_INTERVAL_MS,
+      ),
     });
   }
   private readonly request: typeof cuaRequest;
@@ -835,14 +859,24 @@ export class CuaComputerBackend implements ComputerBackend {
     }
     let result: CuaToolResult;
     try {
+      // A read that did not ask for pixels already skips capture, encode, and
+      // image delivery. SYNARA_CUA_AX_ONLY_GET_STATE goes one step further and
+      // omits the capture arguments entirely, so the driver never even sizes
+      // a frame for a tree-only read; unset, the request stays bit-identical
+      // to what it has always been.
+      const wantsPixels = options.includeScreenshot === true;
       result = await this.call("get_window_state", {
         pid,
         window_id,
-        include_screenshot: options.includeScreenshot === true,
+        ...(wantsPixels || !cuaAxOnlyGetStateEnabled()
+          ? {
+              include_screenshot: wantsPixels,
+              max_dimension: 1536,
+            }
+          : {}),
         include_accessibility_tree: options.includeTree === true,
         max_elements: 1024,
         max_depth: 25,
-        max_dimension: 1536,
       });
       this.assertObservedWindow(result, pid, window_id);
     } catch (error) {
