@@ -138,7 +138,10 @@ try {
   if (architectures.some((value) => !present.includes(value === "x64" ? "x86_64" : "arm64")))
     throw new Error("Cua Mach-O is missing a requested architecture.");
   await mkdir(destination, { recursive: true });
-  await copyFile(binary, join(destination, "cua-driver"));
+  // Stage via a content write, not copyFile: macOS clonefile carries the
+  // protected com.apple.provenance xattr, and Gatekeeper kills the staged
+  // binary (SIGKILL at exec) when that marker survives onto a new path.
+  await writeFile(join(destination, "cua-driver"), await readFile(binary));
   await chmod(join(destination, "cua-driver"), 0o755);
   await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
   await copyFile(
