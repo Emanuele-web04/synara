@@ -33,6 +33,10 @@ async function fixture(
     crash?: boolean;
     sessionDeathOnce?: boolean;
     sessionDeathTransport?: boolean;
+    // Opt-in: logs `session:`/`open_session:` lines for the label each call
+    // rides. Off by default so full-event-list assertions in older tests are
+    // not polluted by the added instrumentation.
+    logSessions?: boolean;
     delayObservation?: boolean;
     hangSession?: boolean;
     dropCancel?: boolean;
@@ -69,6 +73,7 @@ net.createServer(s=>{
   const reply=result=>s.end(JSON.stringify({ok:true,result})+'\\n');
   s.once('data',b=>{
     const r=JSON.parse(b.toString());
+    if(options.logSessions&&r.method==='call'&&r.args&&typeof r.args.session==='string') write('session:'+r.args.session+':'+r.name);
     if(r.method==='metadata') reply({driver_version:${JSON.stringify(CUA_DRIVER_VERSION)},synara_native_revision:options.unpatched?undefined:${CUA_NATIVE_REVISION},embedded:true,pid:process.pid});
     else if(r.method==='cancel_input') {
       write('cancel');
@@ -102,6 +107,11 @@ net.createServer(s=>{
     // connection open — its lifetime is what the transport session rides on.
     else if(r.method==='session_begin') { write('session-begin:'+r.session_id); s.write(JSON.stringify({ok:true,result:{session_begin:true}})+'\\n'); }
     else if((r.name==='start_session'||r.name==='end_session')&&r.session_id) { write(r.name+':'+r.args.session+':'+r.session_id); reply({}); }
+    // Lifecycle calls without a transport envelope: the generation's own
+    // openSession start_session and a task-label revival. Distinct event name
+    // keeps them out of the browser lifecycle assertions above.
+    else if(options.logSessions&&(r.name==='start_session'||r.name==='end_session')) { write('open_session:'+r.name+':'+r.args.session); reply({}); }
+    else if(r.name==='start_session'||r.name==='end_session') { reply({}); }
     else if(r.name&&(r.name.indexOf('browser_')===0||r.name==='get_browser_state')) { write('browser:'+r.name+':'+(r.args&&r.args.session)+':'+(r.session_id||'-')); reply({}); }
     else reply({});
   });
@@ -1037,6 +1047,110 @@ describe("driver warm-up on first touch", () => {
       cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+});
+
+describe("per-agent cursor identity", () => {
+  const press = (endpoint: string, task?: Record<string, unknown>) =>
+    cuaRequest<CuaReply>(endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+      ...(task ? { task } : {}),
+    });
+
+  it("dispatches each task's calls under its own cursor session label", async () => {
+    const f = await fixture(capability, { logSessions: true });
+    await expect(
+      press(f.endpoint, { threadId: "t-1", label: "Research run" }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(press(f.endpoint, { threadId: "t-2", label: "Docs pass" })).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+    await expect(
+      press(f.endpoint, { threadId: "t-1", label: "Research run" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(press(f.endpoint)).resolves.toMatchObject({ ok: true });
+    const names = (await f.events()).map((row) => row.event);
+    // Each thread's actions ride — and badge — its own session cursor.
+    expect(names).toContain("session:agent·Research run·t-1:press_key");
+    expect(names).toContain("session:agent·Docs pass·t-2:press_key");
+    // The shared generation session still backs unattributed calls.
+    expect(
+      names.some((event) => event.startsWith("session:synara-") && event.endsWith(":press_key")),
+    ).toBe(true);
+    // Task sessions mint lazily on dispatch: the only explicit start_session
+    // is the generation's own bootstrap one — no extra round trip per label.
+    expect(names.filter((event) => event.startsWith("open_session:start_session:"))).toEqual([
+      expect.stringMatching(/^open_session:start_session:synara-[0-9a-f-]+$/),
+    ]);
+  });
+
+  it("keeps cursors distinct when two threads share one display label", async () => {
+    // The badge text is the session string itself, so the label alone cannot
+    // key the cursor — two agents named "Research run" must still get their
+    // own cursors and badge tints via the embedded thread id.
+    const f = await fixture(capability, { logSessions: true });
+    await expect(
+      press(f.endpoint, { threadId: "t-1", label: "Research run" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      press(f.endpoint, { threadId: "t-2", label: "Research run" }),
+    ).resolves.toMatchObject({ ok: true });
+    const names = (await f.events()).map((row) => row.event);
+    expect(names).toContain("session:agent·Research run·t-1:press_key");
+    expect(names).toContain("session:agent·Research run·t-2:press_key");
+  });
+
+  it("falls back to the thread id when a task carries no display label", async () => {
+    const f = await fixture(capability, { logSessions: true });
+    await expect(press(f.endpoint, { threadId: "t-9" })).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).map((row) => row.event)).toContain("session:agent·t-9:press_key");
+  });
+
+  it("sanitizes badge-breaking characters out of the minted label", async () => {
+    const f = await fixture(capability, { logSessions: true });
+    await expect(
+      press(f.endpoint, { threadId: "t-1", label: "Res\u0000earch\nrun\u200B" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).map((row) => row.event)).toContain(
+      "session:agent·Researchrun·t-1:press_key",
+    );
+  });
+
+  it("a caller session arg can never override the minted agent label", async () => {
+    const f = await fixture(capability, { logSessions: true });
+    await expect(
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        task: { threadId: "t-1", label: "Research run" },
+        args: { key: "enter", session: "forged" },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const names = (await f.events()).map((row) => row.event);
+    expect(names.some((event) => event.startsWith("session:forged"))).toBe(false);
+    expect(names).toContain("session:agent·Research run·t-1:press_key");
+  });
+
+  it("revives an ended task session in place instead of retiring the generation", async () => {
+    // A task-scoped label can die on driver idle expiry while the generation
+    // stays healthy: the heal is a start_session revival on the same label,
+    // not a new driver process the way a shared-session death forces.
+    const f = await fixture(capability, { sessionDeathOnce: true, logSessions: true });
+    const task = { threadId: "t-1", label: "Research run" };
+    const reply = await press(f.endpoint, task);
+    expect(reply.ok).toBe(true);
+    expect(reply.result?.isError).not.toBe(true);
+    const events = (await f.events()).map((row) => row.event);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
+    expect(events).toContain("open_session:start_session:agent·Research run·t-1");
+    expect(events.filter((event) => event === "key")).toHaveLength(1);
+    expect(events).toContain("session:agent·Research run·t-1:press_key");
   });
 });
 

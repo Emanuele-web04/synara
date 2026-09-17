@@ -68,6 +68,14 @@ interface Generation {
    * reaper has already torn down everything the old transport owned.
    */
   liveBrowserSessions: Set<string>;
+  /**
+   * Per-task desktop session labels the driver reported ended (idle expiry
+   * or driver-side eviction). Mirrored from `endedBrowserSessions`: the next
+   * dispatch on an ended label revives it with `start_session` first — a
+   * session-scoped heal that must not retire the whole generation the way a
+   * shared-session death does.
+   */
+  endedTaskSessions: Set<string>;
   retirement?: Promise<void>;
 }
 
@@ -80,6 +88,33 @@ interface Generation {
  */
 function browserSessionLabel(threadId: string): string {
   return `synara-browser-${threadId}`;
+}
+
+/**
+ * The driver-side lifecycle label for one task's desktop session. The driver
+ * derives everything about that cursor's identity from this one string: the
+ * overlay keys cursor state by it, tints the badge from its hash, and paints
+ * it verbatim as the badge text (the registry stamps `_public_session_label`
+ * from `session`, and the badge clips at 28 chars — so the string leads with
+ * the human label and embeds the full thread id at the tail). Every
+ * attributed call runs under its own label rather than the shared generation
+ * session, so each concurrent agent gets a distinguishable cursor and two
+ * threads that share a display label still get distinct cursors and tints.
+ * The `agent·` prefix is compact because badge space is scarce, and it keeps
+ * task-derived labels out of the `synara-browser-*` lifecycle namespace, the
+ * anonymous `default` cursor, and the `__cua_runtime_` runtime-key space —
+ * none of which can be spelled with the prefix in place.
+ */
+const AGENT_SESSION_LABEL_PREFIX = "agent·";
+const AGENT_SESSION_LABEL_MAX_CHARS = 120;
+const agentBadgeComponent = (value: string) => value.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+function agentSessionLabel(task: CuaComputerTask): string {
+  const threadId = agentBadgeComponent(task.threadId) || "task";
+  const label = [...agentBadgeComponent(task.label ?? "")]
+    .slice(0, AGENT_SESSION_LABEL_MAX_CHARS)
+    .join("");
+  if (label.length === 0) return `${AGENT_SESSION_LABEL_PREFIX}${threadId}`;
+  return `${AGENT_SESSION_LABEL_PREFIX}${label}·${threadId}`;
 }
 
 interface HostPermissions {
@@ -631,6 +666,11 @@ export class CuaDriverHost {
     // namespace per thread, surviving turn boundaries, ended only by
     // `end_browser_thread` or transport teardown.
     const label = isBrowser && task ? browserSessionLabel(task.threadId) : undefined;
+    // Desktop calls get a per-task cursor session: the overlay keys cursors —
+    // and the badge each one carries — by session label, so each attributed
+    // thread animates under its own color and name instead of the shared
+    // generation session. Minted lazily on dispatch; no extra round trip.
+    const agentLabel = !isBrowser && task ? agentSessionLabel(task) : undefined;
     // A failed cleanup remains the admission barrier. Consume this detached
     // rejection here; the next call/stop reports the retained failure.
     const abort = () => {
@@ -673,6 +713,21 @@ export class CuaDriverHost {
               generation.endedBrowserSessions.delete(label);
           }
           browserSessionId = generation.controlSession;
+        } else if (agentLabel && generation.endedTaskSessions.has(agentLabel)) {
+          // The same documented revival path browser labels ride, minus the
+          // transport envelope: a desktop task session owns itself, so the
+          // plain call form of start_session is what revives it.
+          const revived = await cuaRequest<CuaReply>(
+            generation.socket,
+            {
+              method: "call",
+              name: "start_session",
+              args: { session: agentLabel },
+            },
+            { timeoutMs: 10_000 },
+          );
+          if (revived.ok && !revived.result?.isError)
+            generation.endedTaskSessions.delete(agentLabel);
         }
         dispatched = true;
         if (label) generation.liveBrowserSessions.add(label);
@@ -687,7 +742,7 @@ export class CuaDriverHost {
             // is the real guard: the label overwrites any caller `session`,
             // and `_session_id`/`_transport_session_id` are injected by the
             // daemon from this request's envelope, never trusted from args.
-            args: { ...args, session: label ?? generation.session },
+            args: { ...args, session: label ?? agentLabel ?? generation.session },
             ...(browserSessionId ? { session_id: browserSessionId } : {}),
           },
           { timeoutMs: 30_000, mutation },
@@ -701,6 +756,18 @@ export class CuaDriverHost {
             // later call) revives before dispatching.
             generation.liveBrowserSessions.delete(label);
             generation.endedBrowserSessions.add(label);
+            if (attempt === 0) continue;
+          } else if (agentLabel) {
+            // A task cursor session expires independently of the shared
+            // generation session the same way browser labels do: reviving the
+            // label in place keeps every other thread's cursor — and the
+            // driver itself — alive, where the shared-session path correctly
+            // retires the generation it can no longer trust.
+            generation.endedTaskSessions.add(agentLabel);
+            while (generation.endedTaskSessions.size > 256)
+              generation.endedTaskSessions.delete(
+                generation.endedTaskSessions.values().next().value!,
+              );
             if (attempt === 0) continue;
           } else if (attempt === 0) {
             await this.retire(generation).catch(() => undefined);
@@ -917,6 +984,7 @@ export class CuaDriverHost {
         controlSocket: undefined,
         endedBrowserSessions: new Set<string>(),
         liveBrowserSessions: new Set<string>(),
+        endedTaskSessions: new Set<string>(),
       };
       this.generation = generation;
       void exited.then(() => {
