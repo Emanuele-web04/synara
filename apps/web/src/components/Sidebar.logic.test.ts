@@ -1992,6 +1992,52 @@ describe("deriveSidebarProjectData", () => {
 });
 
 describe("sortThreadsForSidebar", () => {
+  it("uses the persisted manual order and keeps new threads at the top", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-manual-first"),
+          createdAt: "2026-03-09T09:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-new"),
+          createdAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-manual-second"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+        }),
+      ],
+      "manual",
+      [ThreadId.makeUnsafe("thread-manual-first"), ThreadId.makeUnsafe("thread-manual-second")],
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-new"),
+      ThreadId.makeUnsafe("thread-manual-first"),
+      ThreadId.makeUnsafe("thread-manual-second"),
+    ]);
+  });
+
+  it("keeps manual order stable while a conversation is working", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        {
+          ...makeThread({ id: ThreadId.makeUnsafe("thread-working") }),
+          hasLiveTailWork: true,
+        },
+        makeThread({ id: ThreadId.makeUnsafe("thread-first") }),
+      ],
+      "manual",
+      [ThreadId.makeUnsafe("thread-first"), ThreadId.makeUnsafe("thread-working")],
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-first"),
+      ThreadId.makeUnsafe("thread-working"),
+    ]);
+  });
+
   it("sorts threads by the latest user message in recency mode", () => {
     const sorted = sortThreadsForSidebar(
       [

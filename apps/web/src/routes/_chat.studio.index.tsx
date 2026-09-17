@@ -25,6 +25,7 @@ import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { useSidebarThreadOrderStore } from "../sidebarThreadOrderStore";
 
 // How long the splash below waits for the welcome's Studio root before surfacing an error —
 // generous next to a normal welcome round-trip, mirroring the home route's eventual error+retry.
@@ -32,6 +33,7 @@ const WORKSPACE_PATHS_TIMEOUT_MS = 10_000;
 
 function StudioIndexRouteView() {
   const { settings: appSettings } = useAppSettings();
+  const manualThreadIds = useSidebarThreadOrderStore((state) => state.orderedThreadIds);
   const { handleNewStudioChat } = useHandleNewStudioChat();
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
@@ -72,7 +74,11 @@ function StudioIndexRouteView() {
   // The most recent Studio chat (if any), used to restore the surface instead of always opening
   // a brand-new draft.
   const latestStudioThreadId =
-    sortThreadsForSidebar(studioThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
+    sortThreadsForSidebar(
+      studioThreadSummaries,
+      appSettings.sidebarThreadSortOrder,
+      manualThreadIds,
+    )[0]?.id ?? null;
 
   // Same landing policy as the Studio segment switch and settings back: remembered route first
   // (scoped to Studio threads plus the stored draft), then the stored draft, then the latest

@@ -7,12 +7,18 @@ import { type ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { normalizePinnedIds, pinId, prunePinnedIds, unpinId } from "./pinning.logic";
+import { moveSidebarThreadWithinScope } from "./sidebarThreadOrdering";
 
 interface PinnedThreadsStoreState {
   pinnedThreadIds: ThreadId[];
   pinThread: (threadId: ThreadId) => void;
   unpinThread: (threadId: ThreadId) => void;
   togglePinnedThread: (threadId: ThreadId) => void;
+  movePinnedThread: (input: {
+    scopeThreadIds: readonly ThreadId[];
+    activeThreadId: ThreadId;
+    overThreadId: ThreadId;
+  }) => boolean;
   prunePinnedThreads: (threadIds: readonly ThreadId[]) => void;
 }
 
@@ -54,6 +60,20 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
           }
           return { pinnedThreadIds: pinId(state.pinnedThreadIds, threadId).pinnedIds };
         });
+      },
+      movePinnedThread: (input) => {
+        let changed = false;
+        set((state) => {
+          const result = moveSidebarThreadWithinScope({
+            orderedIds: state.pinnedThreadIds,
+            scopeIds: input.scopeThreadIds,
+            activeId: input.activeThreadId,
+            overId: input.overThreadId,
+          });
+          changed = result.changed;
+          return result.changed ? { pinnedThreadIds: result.orderedIds } : state;
+        });
+        return changed;
       },
       prunePinnedThreads: (threadIds) => {
         set((state) => {
