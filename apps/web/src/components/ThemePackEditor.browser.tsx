@@ -22,7 +22,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  document.body.innerHTML = "";
   if (previousTheme === null) localStorage.removeItem("synara:theme");
   else localStorage.setItem("synara:theme", previousTheme);
   window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));

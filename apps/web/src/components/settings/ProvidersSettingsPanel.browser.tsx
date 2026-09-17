@@ -3,7 +3,7 @@ import "../../index.css";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { page } from "vitest/browser";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
@@ -12,11 +12,13 @@ const harness = vi.hoisted(() => ({
   refresh: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({}),
   useQuery: () => ({ data: { providers: harness.statuses }, isPending: false }),
 }));
-vi.mock("~/lib/serverReactQuery", () => ({
+vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/serverReactQuery")>()),
   serverConfigQueryOptions: () => ({}),
   serverSettingsQueryOptions: () => ({}),
   hasReconciledServerProviderStatuses: () => harness.reconciled,
@@ -55,10 +57,6 @@ beforeEach(() => {
       ? { message: "OpenCode CLI (`opencode`) is not installed or not on PATH." }
       : {}),
   }));
-});
-
-afterEach(() => {
-  document.body.innerHTML = "";
 });
 
 function activityRow(provider: string) {
