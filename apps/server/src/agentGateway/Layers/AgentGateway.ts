@@ -81,9 +81,14 @@ import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts"
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
+import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
-import { COMPUTER_CONTROL_CAPABILITY, makeAgentGatewayComputerTools } from "../computerTools.ts";
+import {
+  COMPUTER_CONTROL_CAPABILITY,
+  makeAgentGatewayComputerTools,
+  type AgentGatewayComputerToolsOptions,
+} from "../computerTools.ts";
 import { isSynaraComputerToolFamilyName } from "../computerToolPermission.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
@@ -809,21 +814,27 @@ export const makeAgentGateway = Effect.gen(function* () {
         .pipe(Effect.asVoid);
     },
   });
+  /**
+   * The caller thread's canonical workspace root. Shared by the integrated
+   * browser surface and the driver-backed `computer_browser_*` file-transfer
+   * tools — both bound model-supplied paths to it.
+   */
+  const resolveWorkspaceRoot = (context: ToolContext) =>
+    Effect.gen(function* () {
+      const thread = yield* requireThreadShell(context.callerThreadId);
+      const project = yield* snapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.map(Option.getOrNull));
+      if (!project) return null;
+      return (
+        resolveThreadWorkspaceCwd({
+          thread,
+          projects: [project],
+        }) ?? null
+      );
+    }).pipe(Effect.orElseSucceed(() => null));
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
-    resolveWorkspaceRoot: (context) =>
-      Effect.gen(function* () {
-        const thread = yield* requireThreadShell(context.callerThreadId);
-        const project = yield* snapshotQuery
-          .getProjectShellById(thread.projectId)
-          .pipe(Effect.map(Option.getOrNull));
-        if (!project) return null;
-        return (
-          resolveThreadWorkspaceCwd({
-            thread,
-            projects: [project],
-          }) ?? null
-        );
-      }).pipe(Effect.orElseSucceed(() => null)),
+    resolveWorkspaceRoot,
   });
 
   // One denial activity per (thread, turn, tool): agents typically retry the denied
@@ -1015,6 +1026,90 @@ export const makeAgentGateway = Effect.gen(function* () {
       );
   };
 
+  /**
+   * The Computer approval path, shared by the desktop tools and the
+   * driver-backed `computer_browser_*` family — same capability, same
+   * task-scoped consent, same disclosure. Browser names take task consent
+   * like every other mutating computer tool.
+   */
+  const authorizeComputerAction: NonNullable<
+    AgentGatewayComputerToolsOptions["authorizeAction"]
+  > = async (name, args, context, signal) => {
+    await Effect.runPromise(context.assertCallerTurnActive(), { signal });
+    const caller = await Effect.runPromise(
+      snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(context.callerThreadId)),
+      { signal },
+    );
+    if (Option.isNone(caller)) return false;
+    // Computer capability is issued only after task activation. Full
+    // access already consents to routine desktop actions, including
+    // foreground delivery; focus is not a second approval boundary.
+    if (caller.value.runtimeMode === "full-access") {
+      await Effect.runPromise(
+        surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
+        { signal },
+      ).catch(() => undefined);
+      return true;
+    }
+    const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
+    const requestApproval = taskConsent
+      ? computerApprovalGate.requestTask.bind(computerApprovalGate)
+      : computerApprovalGate.request.bind(computerApprovalGate);
+    const approved = await requestApproval({
+      threadId: context.callerThreadId,
+      turnId: context.callerTurnId ?? "",
+      signal,
+      publish: async (requestId, decision) => {
+        const createdAt = isoNow();
+        const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
+        await Effect.runPromise(
+          orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(eventKey),
+            threadId: ThreadId.makeUnsafe(context.callerThreadId),
+            activity: {
+              id: EventId.makeUnsafe(eventKey),
+              tone: "info",
+              kind: decision === undefined ? "approval.requested" : "approval.resolved",
+              summary:
+                decision === undefined
+                  ? taskConsent
+                    ? "Allow Computer for this task"
+                    : "Computer action needs approval"
+                  : "Computer approval resolved",
+              payload: {
+                requestId,
+                requestKind: "tool",
+                requestType: "tool",
+                toolName: name,
+                toolParamsDisplay: JSON.stringify(
+                  Object.fromEntries(
+                    Object.entries(args).filter(
+                      ([key]) => key !== "text" && key !== "value" && key !== "prompt_text",
+                    ),
+                  ),
+                ),
+                sessionApprovalAvailable: false,
+                ...(taskConsent ? { approvalScope: "computer-task" } : {}),
+                ...(decision === undefined ? {} : { decision }),
+              },
+              turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+              createdAt,
+            },
+            createdAt,
+          }),
+        );
+      },
+    });
+    if (approved) {
+      await Effect.runPromise(
+        surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
+        { signal },
+      ).catch(() => undefined);
+    }
+    return approved;
+  };
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1035,81 +1130,18 @@ export const makeAgentGateway = Effect.gen(function* () {
       ? makeAgentGatewayComputerTools({
           manager: computerService.manager,
           onSetupRequired: surfaceComputerSetupRequired,
-          authorizeAction: async (name, args, context, signal) => {
-            await Effect.runPromise(context.assertCallerTurnActive(), { signal });
-            const caller = await Effect.runPromise(
-              snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(context.callerThreadId)),
-              { signal },
-            );
-            if (Option.isNone(caller)) return false;
-            // Computer capability is issued only after task activation. Full
-            // access already consents to routine desktop actions, including
-            // foreground delivery; focus is not a second approval boundary.
-            if (caller.value.runtimeMode === "full-access") {
-              await Effect.runPromise(
-                surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
-                { signal },
-              ).catch(() => undefined);
-              return true;
-            }
-            const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
-            const requestApproval = taskConsent
-              ? computerApprovalGate.requestTask.bind(computerApprovalGate)
-              : computerApprovalGate.request.bind(computerApprovalGate);
-            const approved = await requestApproval({
-              threadId: context.callerThreadId,
-              turnId: context.callerTurnId ?? "",
-              signal,
-              publish: async (requestId, decision) => {
-                const createdAt = isoNow();
-                const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
-                await Effect.runPromise(
-                  orchestrationEngine.dispatch({
-                    type: "thread.activity.append",
-                    commandId: CommandId.makeUnsafe(eventKey),
-                    threadId: ThreadId.makeUnsafe(context.callerThreadId),
-                    activity: {
-                      id: EventId.makeUnsafe(eventKey),
-                      tone: "info",
-                      kind: decision === undefined ? "approval.requested" : "approval.resolved",
-                      summary:
-                        decision === undefined
-                          ? taskConsent
-                            ? "Allow Computer for this task"
-                            : "Computer action needs approval"
-                          : "Computer approval resolved",
-                      payload: {
-                        requestId,
-                        requestKind: "tool",
-                        requestType: "tool",
-                        toolName: name,
-                        toolParamsDisplay: JSON.stringify(
-                          Object.fromEntries(
-                            Object.entries(args).filter(
-                              ([key]) => key !== "text" && key !== "value",
-                            ),
-                          ),
-                        ),
-                        sessionApprovalAvailable: false,
-                        ...(taskConsent ? { approvalScope: "computer-task" } : {}),
-                        ...(decision === undefined ? {} : { decision }),
-                      },
-                      turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
-                      createdAt,
-                    },
-                    createdAt,
-                  }),
-                );
-              },
-            });
-            if (approved) {
-              await Effect.runPromise(
-                surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
-                { signal },
-              ).catch(() => undefined);
-            }
-            return approved;
-          },
+          authorizeAction: authorizeComputerAction,
+        })
+      : []),
+    // The driver-backed CDP browser family. Advertised only when the backend
+    // actually has a browser route — an absent `browser` member is how a
+    // desktop-only backend says so, and advertising unusable tools is worse
+    // than omitting them.
+    ...(computerService?.supported === true && computerService.manager.supportsBrowser
+      ? makeAgentGatewayComputerBrowserTools({
+          manager: computerService.manager,
+          authorizeAction: authorizeComputerAction,
+          resolveWorkspaceRoot,
         })
       : []),
   ];

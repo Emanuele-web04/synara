@@ -1,7 +1,17 @@
 # Browser surface — driver `browser_*` family through Synara
 
-Status: spec. Verified against the pinned driver (0.28.2, rev 15) schemas on
-2026-09-17. Not yet wired.
+Status: wired. Verified against the pinned driver (0.28.2, native rev 17)
+schemas on 2026-09-17, and end-to-end against the shipped driver binary the
+same day through the exact protocol path `cuaDriverHost.ts` implements:
+control `session_begin` accepted on a persistent connection, `browser_prepare`
+launched a driver-owned isolated Chromium (`prepared_pid`), `get_browser_state`
+bound `binding_quality:"exact"` via `native_cdp_window` and minted
+`target_id`/`tab_id`, `browser_navigate` landed a real navigation with
+`refs_invalidated`, a snapshot returned a `p1` snapshot id, non-CDP windows
+refused verbatim with a structured `browser_route_unavailable` refusal (a
+Chromium-family mismatch maps to `browser_wrong_target_refused`), and
+`end_session` ran the lifecycle teardown. Exposed to the agent as
+`computer_browser_*` (see the wiring map below).
 
 ## Why this exists
 
@@ -47,28 +57,41 @@ tools add a second axis: the **endpoint grant**.
   approval plus a per-call destination/file policy; never echo paths.
 - `get_browser_state` bind is a read but mints refs; snapshot is pure read.
 
-## Wiring map (mirrors milestone-1 pattern)
+## Wiring map (as built)
 
-- `packages/shared/src/cuaDriverProtocol.ts`: `browser_prepare` +
-  `get_browser_state` + mutating `browser_*` into `CUA_ACTION_TOOLS`;
-  `get_browser_state` also reads — classify by mutation-ness.
-- `apps/desktop/src/cuaDriverHost.ts`: admit each name; session injection is
-  automatic (`session: generation.session`).
-- `ComputerBackend.ts` + `CuaComputerBackend.ts`: `browserPrepare`,
-  `browserGetState`, `browserNavigate`, `browserClick`, `browserType`,
-  `browserPointer`, `browserDialog`, `browserDownload`, `browserSetInputFiles`.
-  Refs (`target_id`, `tab_id`, `ref`, `dialog_id`) are opaque strings passed
-  through; the driver enforces exactness.
-- `ComputerManager.ts`: route; browser mutations still honour
-  cancellation/`desktopEpoch` fencing where the window target applies.
-- `computerTools.ts`: `computer_browser_*` tools + approval set.
-- `packages/contracts/src/computer.ts`: result types for state/refs.
+- `packages/shared/src/cuaDriverProtocol.ts`: `CUA_BROWSER_TOOLS` +
+  `CUA_BROWSER_MUTATION_TOOLS` — a separate family, not folded into
+  `CUA_ACTION_TOOLS`: targets are `target_id`/`tab_id`/refs, not window ids,
+  and refusals arrive as `status:"refused"` results rather than errors.
+- `apps/desktop/src/cuaDriverHost.ts`: admits each name; requires task
+  attribution; injects a deterministic per-thread lifecycle label
+  (`synara-browser-<threadId>`) as `session` and the persistent control
+  connection's `session_id`; revives ended labels via `start_session`;
+  `end_browser_thread` maps to `end_session`; control-socket EOF is the
+  driver's own reaper for everything a transport owned.
+- `ComputerBackend.ts` + `CuaComputerBackend.ts`: a `browser` member with one
+  `call` — the backend forwards replies verbatim so `status:"refused"`
+  reaches the model as a result instead of a thrown error, and `endThread`
+  for thread teardown. An absent member means "no browser surface"; the
+  gateway then does not advertise the tools at all.
+- `ComputerManager.ts`: `browserCall` serializes per thread on a scoped
+  browser lane, marks `get_browser_state` as the family's only non-mutation,
+  and calls `browser.endThread` from `handleThreadRemoved`.
+- `computerBrowserTools.ts`: the nine `computer_browser_*` tools with the
+  same `computer:control` capability and approval gate as the desktop tools;
+  `computer_browser_state` and `browser_dialog` `inspect` are the only
+  reads. Upload/download paths are canonicalized and refused outside the
+  caller thread's workspace root before dispatch.
+- `packages/contracts/src/computerBrowser.ts`: gateway ↔ driver name map,
+  the closed refusal-code vocabulary, and the state/ref shapes Synara reads.
 
 ## Open decisions
 
-- Whether `computer_browser_*` tools live alongside `computer_*` or under a
-  separate tool namespace — they target tabs, not windows.
 - Whether the existing CDP/Chrome-extension path (deferred by decision in the
   parity matrix) is superseded by `browser_prepare`'s existing-profile grant.
-- `page` legacy: expose read-only `get_text`/`query_dom` or skip entirely.
-- Download/file-pick policy surface: which directories are approvable.
+- `page` legacy: not exposed — the typed tools cover its read surface.
+  Revisit only if a driver version ships a `get_text`/`query_dom` behavior
+  the semantic snapshot cannot express.
+- Download/file-pick policy surface beyond the workspace boundary (approved
+  directories outside the thread workspace) — currently refused by policy,
+  not by the driver.

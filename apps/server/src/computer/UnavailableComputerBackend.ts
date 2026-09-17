@@ -225,6 +225,16 @@ export class UnavailableComputerBackend implements ComputerBackend {
     return Promise.resolve();
   }
 
+  /**
+   * Same rule as the optional methods above: present so the refusal carries
+   * this backend's one message, and so `browser` being set does not itself
+   * advertise a working surface — the manager gates tools on capability, and
+   * every call here still rejects with the recorded reason.
+   */
+  readonly browser = {
+    call: (): Promise<never> => this.refuse(),
+  };
+
   dispose(): void {}
 
   private refuse(): Promise<never> {

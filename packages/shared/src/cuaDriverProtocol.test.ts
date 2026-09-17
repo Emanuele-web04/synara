@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { CUA_ACTION_TOOLS, CUA_READ_TOOLS } from "./cuaDriverProtocol";
+import {
+  CUA_ACTION_TOOLS,
+  CUA_BROWSER_MUTATION_TOOLS,
+  CUA_BROWSER_TOOLS,
+  CUA_READ_TOOLS,
+} from "./cuaDriverProtocol";
 
 /**
  * The macOS cua-driver tool inventory at the pinned release (driver 0.28.2,
@@ -168,6 +173,9 @@ describe("cuaDriverProtocol tool boundary", () => {
         "history_status",
         "history_query",
         "page",
+        // Browser-family names stay out of the *desktop* allowlists: they are
+        // admitted only through CUA_BROWSER_TOOLS with task attribution, a
+        // separate consent model — asserted below.
         "get_browser_state",
         "browser_prepare",
         "browser_navigate",
@@ -181,11 +189,38 @@ describe("cuaDriverProtocol tool boundary", () => {
     );
   });
 
+  it("admits the browser family only through its own tool set", () => {
+    // Browser calls ride CDP on session-scoped target_id/tab_id capabilities,
+    // never the desktop frame/pixel machinery — the family membership is
+    // pinned so a stray entry cannot smuggle a browser name into the desktop
+    // allowlists or an unregistered name into the family.
+    expect([...CUA_BROWSER_TOOLS].sort()).toEqual(
+      [
+        "get_browser_state",
+        "browser_prepare",
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_dialog",
+        "browser_set_input_files",
+        "browser_download",
+        "browser_pointer",
+      ].sort(),
+    );
+    expect([...CUA_BROWSER_MUTATION_TOOLS].sort()).toEqual(
+      [...CUA_BROWSER_TOOLS].filter((name) => name !== "get_browser_state").sort(),
+    );
+    for (const name of CUA_BROWSER_TOOLS) {
+      expect(CUA_READ_TOOLS.has(name)).toBe(false);
+      expect(CUA_ACTION_TOOLS.has(name)).toBe(false);
+    }
+  });
+
   it("admits only names the macOS driver actually registers", () => {
     // A typo'd allowlist entry would pass both sets above while naming
     // nothing the driver has — keep the allowlist inside the real registry.
     const registered = new Set<string>(REGISTERED_MACOS_TOOLS);
-    for (const name of [...CUA_READ_TOOLS, ...CUA_ACTION_TOOLS]) {
+    for (const name of [...CUA_READ_TOOLS, ...CUA_ACTION_TOOLS, ...CUA_BROWSER_TOOLS]) {
       expect(registered.has(name), name).toBe(true);
     }
   });

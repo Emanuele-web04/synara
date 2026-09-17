@@ -30,6 +30,9 @@ import {
   type ComputerBackendActionResult,
   type ComputerBackendEvent,
   type ComputerBackendEventListener,
+  type ComputerBrowserBackend,
+  type ComputerBrowserCall,
+  type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerFrameListener,
   type ComputerResolvedTarget,
@@ -97,6 +100,18 @@ export interface FakeComputerBackendOptions {
   readonly apps?: readonly ComputerApp[];
   readonly root?: ComputerUiNode;
   readonly now?: () => string;
+  /**
+   * Opts the fake into the browser surface. `true` uses the built-in handler
+   * (a minted `target_id` for `get_browser_state`, `status:"completed"` for
+   * everything else); a function answers calls itself. Absent or `false`
+   * means the fake speaks no browser tools — `browser` stays undefined, which
+   * is how a desktop-only backend truthfully reports that.
+   */
+  readonly browser?:
+    | boolean
+    | ((
+        call: ComputerBrowserCall,
+      ) => ComputerBrowserCallResult | void | Promise<ComputerBrowserCallResult | void>);
 }
 
 export class FakeComputerBackend implements ComputerBackend {
@@ -130,6 +145,7 @@ export class FakeComputerBackend implements ComputerBackend {
   private verifySatisfied = true;
   private cursorPosition: ComputerPoint = { x: 0, y: 0 };
   private disposed = false;
+  readonly browser?: ComputerBrowserBackend;
 
   constructor(options: FakeComputerBackendOptions = {}) {
     this.computerId = (options.computerId ?? "desktop") as ComputerId;
@@ -149,6 +165,26 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentApps = [...(options.apps ?? defaultApps(this.currentWindows))];
     this.currentRoot = options.root ?? defaultRoot(this.currentScreenSize, this.currentWindows);
     this.now = options.now ?? (() => new Date().toISOString());
+    if (options.browser) {
+      const handler = typeof options.browser === "function" ? options.browser : undefined;
+      this.browser = {
+        call: async (call) => {
+          this.throwIfFailed(`browser.${call.name}`);
+          const result = (await handler?.(call)) ?? {
+            content: [{ type: "text", text: `fake browser ${call.name}` }],
+            structuredContent:
+              call.name === "get_browser_state"
+                ? { target_id: `fake-browser-${call.task.threadId}`, tabs: [] }
+                : { status: "completed" },
+          };
+          this.record(`browser.${call.name}`, call.args);
+          return result;
+        },
+        endThread: async (threadId) => {
+          this.record("browser.endThread", threadId);
+        },
+      };
+    }
   }
 
   async availability(): Promise<ComputerAvailability> {

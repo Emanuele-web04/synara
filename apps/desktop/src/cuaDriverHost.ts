@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createServer, type Server, type Socket } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +13,8 @@ import {
   CUA_SETUP_TIMEOUT_MS,
   CUA_READ_TOOLS,
   CUA_ACTION_TOOLS,
+  CUA_BROWSER_TOOLS,
+  CUA_BROWSER_MUTATION_TOOLS,
   type CuaReply,
   type CuaToolResult,
   type CuaComputerTask,
@@ -41,7 +43,43 @@ interface Generation {
    * session yet; assigning this promise is what makes session setup once-only.
    */
   sessionOpening?: Promise<void>;
+  /**
+   * The transport-owner id every browser call rides under. It belongs to one
+   * persistent control connection that opened with `session_begin`: while that
+   * connection lives the driver counts it an active proxy session (which is
+   * what lets browser_download receive the host approval injection), and its
+   * EOF reaps every lifecycle session this transport owns — grants, endpoints,
+   * and owned browsers included. Closing it early is the teardown path; there
+   * is no session_end call to forget.
+   */
+  controlSession: string;
+  controlSocket: Socket | undefined;
+  /**
+   * Browser lifecycle labels this host has seen end — either because
+   * `end_browser_thread` ran or because the driver reported the session dead.
+   * The next call on an ended label revives it with `start_session` first,
+   * the documented revival path; a revived label starts empty (targets and
+   * refs do not survive session end) but stays a usable capability namespace.
+   */
+  endedBrowserSessions: Set<string>;
+  /**
+   * Labels dispatched under this generation's control session. Kept so a
+   * control-connection reconnect can mark them all ended — the driver's EOF
+   * reaper has already torn down everything the old transport owned.
+   */
+  liveBrowserSessions: Set<string>;
   retirement?: Promise<void>;
+}
+
+/**
+ * The driver-side lifecycle label for one thread's browser namespace. Kept
+ * deterministic — same thread, same label — so `end_browser_thread` can name
+ * it and so an ended label revives in place instead of stranding the model's
+ * cached target ids under a new namespace each call. Thread ids are unique,
+ * so reuse after deletion cannot alias a different conversation's browser.
+ */
+function browserSessionLabel(threadId: string): string {
+  return `synara-browser-${threadId}`;
 }
 
 interface HostPermissions {
@@ -310,6 +348,62 @@ export class CuaDriverHost {
       await this.options.frameTap?.endTask(task);
       return { ok: true };
     }
+    if (request.method === "end_browser_thread") {
+      // Explicit browser teardown for a removed thread: end the thread's
+      // lifecycle session so the driver runs its session-end hooks (targets,
+      // grants, owned browsers) now rather than at control-connection EOF.
+      // Queued like a call so it cannot race an in-flight call on the same
+      // label — ending a session under a dispatching call would turn a
+      // known-alive capability into a mid-flight session death.
+      if (!task) throw new Error("Computer task attribution is required.");
+      const endTask = task;
+      const previousEnd = this.operations;
+      const endOperation = (async () => {
+        await previousEnd;
+        await this.stopping;
+        const generation = this.generation;
+        const label = browserSessionLabel(endTask.threadId);
+        if (
+          this.closed ||
+          !generation ||
+          generation.retired ||
+          generation.didExit ||
+          !generation.controlSocket ||
+          generation.controlSocket.destroyed ||
+          // Nothing was ever dispatched under this label — no session exists
+          // to end and none needs reviving later.
+          (!generation.liveBrowserSessions.has(label) &&
+            !generation.endedBrowserSessions.has(label))
+        )
+          return;
+        try {
+          await cuaRequest<CuaReply>(
+            generation.socket,
+            {
+              method: "call",
+              name: "end_session",
+              args: { session: label },
+              session_id: generation.controlSession,
+            },
+            { timeoutMs: 5_000 },
+          );
+          // Even a failed end marks the label ended for revival: the
+          // transport EOF will finish whatever the explicit call could not,
+          // and reviving an already-gone session is a no-op either way.
+          generation.liveBrowserSessions.delete(label);
+          generation.endedBrowserSessions.add(label);
+        } catch {
+          generation.liveBrowserSessions.delete(label);
+          generation.endedBrowserSessions.add(label);
+        }
+      })();
+      this.operations = endOperation.then(
+        () => undefined,
+        () => undefined,
+      );
+      await endOperation;
+      return { ok: true };
+    }
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
@@ -345,9 +439,14 @@ export class CuaDriverHost {
     if (
       request.method !== "call" ||
       typeof name !== "string" ||
-      (!CUA_READ_TOOLS.has(name) && !CUA_ACTION_TOOLS.has(name))
+      (!CUA_READ_TOOLS.has(name) && !CUA_ACTION_TOOLS.has(name) && !CUA_BROWSER_TOOLS.has(name))
     )
       throw new Error("Unsupported computer host request.");
+    // Browser calls mint session-scoped capabilities. Without task attribution
+    // there is no lifecycle label to scope them under, so they are refused at
+    // admission rather than dropped into an anonymous namespace.
+    if (CUA_BROWSER_TOOLS.has(name) && !task)
+      throw new Error("Computer browser calls require task attribution.");
     if (this.desktopPauses.size > 0) return this.desktopPauseReply();
     // Observations and input share one native session. A pane capture must not
     // race input or turn a harmless concurrent read into a driver restart.
@@ -442,6 +541,7 @@ export class CuaDriverHost {
         request.args,
         connection,
         request.modelObservation === true,
+        task,
       );
       // Frame tap updates carry no frames through this queue: they only point
       // the dedicated helper channel at the task's window target.
@@ -519,11 +619,18 @@ export class CuaDriverHost {
     input: unknown,
     connection: Socket,
     modelObservation: boolean,
+    task?: CuaComputerTask,
   ): Promise<CuaReply> {
     let generation: Generation | undefined;
     let dispatched = false;
     const admittedEpoch = this.epoch;
     const admittedDesktopEpoch = this.desktopEpoch;
+    const isBrowser = CUA_BROWSER_TOOLS.has(name);
+    const mutation = isBrowser ? CUA_BROWSER_MUTATION_TOOLS.has(name) : CUA_ACTION_TOOLS.has(name);
+    // Browser labels are minted from the task's thread: one capability
+    // namespace per thread, surviving turn boundaries, ended only by
+    // `end_browser_thread` or transport teardown.
+    const label = isBrowser && task ? browserSessionLabel(task.threadId) : undefined;
     // A failed cleanup remains the admission barrier. Consume this detached
     // rejection here; the next call/stop reports the retained failure.
     const abort = () => {
@@ -542,7 +649,33 @@ export class CuaDriverHost {
         )
           throw new Error("Cancelled before dispatch.");
         const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+        let browserSessionId: string | undefined;
+        if (isBrowser && label) {
+          // The transport owner must be a live proxy session for the driver's
+          // boundary to inject download approval; re-begin if the control
+          // connection died (its EOF already reaped every owned session).
+          await this.ensureControlSession(generation);
+          if (generation.endedBrowserSessions.has(label)) {
+            // Revival is the documented re-entry path for an ended id. It is
+            // attempted once here; a session that still reports dead after it
+            // returns the death reply verbatim rather than another retry.
+            const revived = await cuaRequest<CuaReply>(
+              generation.socket,
+              {
+                method: "call",
+                name: "start_session",
+                args: { session: label },
+                session_id: generation.controlSession,
+              },
+              { timeoutMs: 10_000 },
+            );
+            if (revived.ok && !revived.result?.isError)
+              generation.endedBrowserSessions.delete(label);
+          }
+          browserSessionId = generation.controlSession;
+        }
         dispatched = true;
+        if (label) generation.liveBrowserSessions.add(label);
         generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
         generation.inputEverDispatched ||= generation.inputInFlight;
         const attemptReply = await cuaRequest<CuaReply>(
@@ -550,14 +683,29 @@ export class CuaDriverHost {
           {
             method: "call",
             name,
-            args: { ...args, session: generation.session },
+            // The daemon sanitizes reserved keys anyway, but the spread order
+            // is the real guard: the label overwrites any caller `session`,
+            // and `_session_id`/`_transport_session_id` are injected by the
+            // daemon from this request's envelope, never trusted from args.
+            args: { ...args, session: label ?? generation.session },
+            ...(browserSessionId ? { session_id: browserSessionId } : {}),
           },
-          { timeoutMs: 30_000, mutation: CUA_ACTION_TOOLS.has(name) },
+          { timeoutMs: 30_000, mutation },
         );
         generation.inputInFlight = false;
-        if (attempt === 0 && isDriverSessionDeath(attemptReply)) {
-          await this.retire(generation).catch(() => undefined);
-          continue;
+        if (isDriverSessionDeath(attemptReply)) {
+          if (isBrowser && label) {
+            // A browser session can die without the generation dying — the
+            // lifecycle registry expires idle ids and transport EOF reaps
+            // owned sessions. Mark it ended so the next attempt (and any
+            // later call) revives before dispatching.
+            generation.liveBrowserSessions.delete(label);
+            generation.endedBrowserSessions.add(label);
+            if (attempt === 0) continue;
+          } else if (attempt === 0) {
+            await this.retire(generation).catch(() => undefined);
+            continue;
+          }
         }
         reply = attemptReply;
         break;
@@ -602,7 +750,7 @@ export class CuaDriverHost {
       return {
         ok: false,
         error: detail,
-        effect: dispatched && CUA_ACTION_TOOLS.has(name) ? "dispatched-unknown" : "not-dispatched",
+        effect: dispatched && mutation ? "dispatched-unknown" : "not-dispatched",
       };
     } finally {
       connection.removeListener("close", abort);
@@ -628,6 +776,68 @@ export class CuaDriverHost {
     void this.ensureSpawned().catch((error: unknown) => {
       log(`driver warm-up failed: ${String(error)}`);
     });
+  }
+
+  /**
+   * Open (or reopen) this generation's persistent control connection: the one
+   * socket that sends `session_begin` and then stays open. The driver ties
+   * two things to its lifetime — the active-proxy flag that lets
+   * browser_download carry the host approval bit, and the EOF reaper that
+   * tears down every lifecycle session the transport owns — so the id is
+   * reused on reconnect rather than minted fresh: re-beginning the same id
+   * re-arms it, and the just-reaped labels sit in `endedBrowserSessions`
+   * waiting for revival.
+   */
+  private async ensureControlSession(generation: Generation): Promise<void> {
+    if (generation.controlSocket && !generation.controlSocket.destroyed) return;
+    // The dead connection's EOF already reaped its owned sessions on the
+    // driver side; mirror that here so callers revive instead of dispatching
+    // into a capability namespace the driver no longer holds.
+    if (generation.controlSocket) {
+      for (const label of generation.liveBrowserSessions)
+        generation.endedBrowserSessions.add(label);
+      generation.liveBrowserSessions.clear();
+    }
+    const socket = createConnection(generation.socket);
+    generation.controlSocket = socket;
+    socket.on("error", () => undefined);
+    try {
+      const reply = await new Promise<CuaReply>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const timeout = setTimeout(() => reject(new Error("session_begin timed out")), 10_000);
+        const fail = () => {
+          clearTimeout(timeout);
+          reject(new Error("session_begin connection closed"));
+        };
+        socket.once("close", fail);
+        socket.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          const end = Buffer.concat(chunks).indexOf(10);
+          if (end < 0) return;
+          clearTimeout(timeout);
+          socket.removeListener("close", fail);
+          socket.removeAllListeners("data");
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).subarray(0, end).toString("utf8")));
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+        socket.write(
+          JSON.stringify({
+            method: "session_begin",
+            session_id: generation.controlSession,
+          }) + "\n",
+        );
+      });
+      if (!reply.ok) throw new Error(reply.error ?? "session_begin refused.");
+    } catch (error) {
+      socket.destroy();
+      if (generation.controlSocket === socket) generation.controlSocket = undefined;
+      throw error;
+    }
+    // Late EOF after a successful begin still means the sessions are gone —
+    // keep the dead socket referenced only until the next check notices it.
   }
 
   /**
@@ -703,6 +913,10 @@ export class CuaDriverHost {
         cancellationReady: false,
         inputInFlight: false,
         inputEverDispatched: false,
+        controlSession: `synara-transport-${randomUUID()}`,
+        controlSocket: undefined,
+        endedBrowserSessions: new Set<string>(),
+        liveBrowserSessions: new Set<string>(),
       };
       this.generation = generation;
       void exited.then(() => {
@@ -832,6 +1046,12 @@ export class CuaDriverHost {
   private retire(generation: Generation): Promise<void> {
     if (generation.retirement) return generation.retirement;
     generation.retired = true;
+    // Browser teardown rides the control connection's lifetime: closing it
+    // now lets the driver's EOF reaper end every session this transport owns
+    // while the daemon is still alive to run its cleanup hooks, instead of
+    // racing termination.
+    generation.controlSocket?.destroy();
+    generation.controlSocket = undefined;
     this.retiring = this.retiring.then(async () => {
       // Captured up front: the flag clears on confirmed cleanup, and a driver
       // exit event can land after the dead socket already broke the request —

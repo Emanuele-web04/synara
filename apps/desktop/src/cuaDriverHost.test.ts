@@ -95,6 +95,14 @@ net.createServer(s=>{
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else if(r.name==='list_windows') { write('list-windows'); reply({structuredContent:{windows:options.listWindows||[]}}); }
+    // Browser family observability: the persistent control connection opens
+    // with session_begin; lifecycle calls attributed to a transport session
+    // are the browser path (the desktop start_session carries no session_id).
+    // session_begin replies without s.end: the real driver holds the control
+    // connection open — its lifetime is what the transport session rides on.
+    else if(r.method==='session_begin') { write('session-begin:'+r.session_id); s.write(JSON.stringify({ok:true,result:{session_begin:true}})+'\\n'); }
+    else if((r.name==='start_session'||r.name==='end_session')&&r.session_id) { write(r.name+':'+r.args.session+':'+r.session_id); reply({}); }
+    else if(r.name&&(r.name.indexOf('browser_')===0||r.name==='get_browser_state')) { write('browser:'+r.name+':'+(r.args&&r.args.session)+':'+(r.session_id||'-')); reply({}); }
     else reply({});
   });
   s.on('error',()=>{});
@@ -1029,5 +1037,95 @@ describe("driver warm-up on first touch", () => {
       cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
+  });
+});
+
+describe("browser surface", () => {
+  const task = { threadId: "thread", turnId: "turn" };
+  it("attributes browser calls to a per-thread lifecycle session under the control transport", async () => {
+    const f = await fixture();
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "browser_navigate",
+      task,
+      args: { url: "https://example.com" },
+    });
+    expect(reply.ok).toBe(true);
+    const events = (await f.events()).map((row) => row.event);
+    // The first browser call opened the persistent control connection; the
+    // dispatch then rode the thread's lifecycle label under that transport id.
+    expect(events.some((event) => event.startsWith("session-begin:synara-transport-"))).toBe(true);
+    expect(
+      events.some((event) =>
+        event.startsWith("browser:browser_navigate:synara-browser-thread:synara-transport-"),
+      ),
+    ).toBe(true);
+    // A caller-supplied session can never override the minted label.
+    const forged = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "browser_click",
+      task,
+      args: { target_id: "t", tab_id: "tab", ref: "p1:0", session: "forged" },
+    });
+    expect(forged.ok).toBe(true);
+    expect(
+      (await f.events()).some((row) =>
+        String(row.event).startsWith("browser:browser_click:forged"),
+      ),
+    ).toBe(false);
+    expect(
+      (await f.events()).some((row) =>
+        String(row.event).startsWith(
+          "browser:browser_click:synara-browser-thread:synara-transport-",
+        ),
+      ),
+    ).toBe(true);
+  });
+  it("refuses browser calls without task attribution before starting a daemon", async () => {
+    const f = await fixture();
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "browser_navigate",
+      args: { url: "https://example.com" },
+    });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain("task attribution");
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("ends the thread's browser session on end_browser_thread and revives it on the next call", async () => {
+    const f = await fixture();
+    const click = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "browser_click",
+        task,
+        args: { target_id: "t", tab_id: "tab", ref: "p1:0" },
+      });
+    await expect(click()).resolves.toMatchObject({ ok: true });
+    await expect(
+      cuaRequest(f.endpoint, { method: "end_browser_thread", task }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(click()).resolves.toMatchObject({ ok: true });
+    const lifecycle = (await f.events())
+      .map((row) => row.event)
+      .filter(
+        (event) =>
+          event.startsWith("browser:") ||
+          event.startsWith("start_session:") ||
+          event.startsWith("end_session:"),
+      );
+    expect(lifecycle).toEqual([
+      expect.stringMatching(/^browser:browser_click:synara-browser-thread:/),
+      expect.stringMatching(/^end_session:synara-browser-thread:synara-transport-/),
+      expect.stringMatching(/^start_session:synara-browser-thread:synara-transport-/),
+      expect.stringMatching(/^browser:browser_click:synara-browser-thread:/),
+    ]);
+  });
+  it("keeps end_browser_thread a no-op for a thread that never used the browser", async () => {
+    const f = await fixture();
+    await expect(
+      cuaRequest(f.endpoint, { method: "end_browser_thread", task }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

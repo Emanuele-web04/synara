@@ -181,3 +181,40 @@ export const CUA_ACTION_TOOLS = new Set([
   "set_app_visibility",
   "kill_app",
 ]);
+/**
+ * The pinned driver's CDP browser family. Browser tools are deliberately not
+ * desktop tools: their targets are session-scoped `target_id`/`tab_id`/ref
+ * capabilities, not native window ids, their input travels over CDP rather
+ * than OS events, and their deliberate refusals arrive as structured
+ * `status:"refused"` results rather than protocol errors. The host admits
+ * them by exact name and keeps them out of every desktop assumption
+ * (frame-tap targeting, the desktop-observation gate, pixel geometry).
+ */
+export const CUA_BROWSER_TOOLS = new Set([
+  "get_browser_state",
+  "browser_prepare",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_dialog",
+  "browser_set_input_files",
+  "browser_download",
+  "browser_pointer",
+]);
+/**
+ * Browser calls whose in-flight loss must be reported as an uncertain effect.
+ * `get_browser_state` is the only read in the family; every other name can
+ * commit a page-visible or process-visible effect once dispatched
+ * (browser_dialog's inspect action is read-only, but the conservative verdict
+ * on a lost call is still "dispatched-unknown").
+ */
+export const CUA_BROWSER_MUTATION_TOOLS = new Set([
+  "browser_prepare",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_dialog",
+  "browser_set_input_files",
+  "browser_download",
+  "browser_pointer",
+]);

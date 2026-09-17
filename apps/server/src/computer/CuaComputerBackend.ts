@@ -43,6 +43,9 @@ import {
   assertComputerClipboardWriteFits,
   type ComputerBackend,
   type ComputerBackendActionResult,
+  type ComputerBrowserBackend,
+  type ComputerBrowserCall,
+  type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerFrameListener,
   type ComputerResolvedTarget,
@@ -2048,6 +2051,74 @@ export class CuaComputerBackend implements ComputerBackend {
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
     this.observedGeometry.clear();
+  }
+  /**
+   * The CDP browser surface. Present whenever this backend exists — the GUI
+   * host admits the driver's browser family — so the gateway can advertise
+   * `computer_browser_*` whenever the computer surface is supported.
+   *
+   * Deliberately NOT routed through `call()`: the desktop path converts
+   * `isError`/`status:"refused"` replies into thrown `CuaActionError`s, but
+   * a browser refusal IS the result the model must branch on. Desktop-epoch
+   * staleness and model-observation bookkeeping are skipped for the same
+   * reason — a browser reply describes a CDP surface, not the desktop.
+   */
+  readonly browser: ComputerBrowserBackend = {
+    call: (call) => this.browserCall(call),
+    endThread: (threadId) => this.endBrowserThread(threadId),
+  };
+  private async browserCall(call: ComputerBrowserCall): Promise<ComputerBrowserCallResult> {
+    if (this.disposed || !this.endpoint)
+      throw new CuaActionError(
+        "Open this session in the Synara macOS desktop app to use Computer.",
+        "not-dispatched",
+        "gui_host_required",
+      );
+    assertDesktopOperationActive();
+    const task: CuaComputerTask = {
+      threadId: call.task.threadId,
+      ...(call.task.turnId ? { turnId: call.task.turnId } : {}),
+      ...(call.task.label ? { label: call.task.label } : {}),
+    };
+    try {
+      const reply = await timedComputerLeg("host", () =>
+        this.request<CuaReply>(
+          this.endpoint!,
+          {
+            method: "call",
+            name: call.name,
+            args: call.args,
+            task,
+            capability: this.capability,
+          },
+          { signal: call.signal, mutation: call.mutation, timeoutMs: 35_000 },
+        ),
+      );
+      if (!reply.ok)
+        throw new CuaActionError(
+          reply.error ?? "Cua host failed.",
+          reply.effect ?? "not-dispatched",
+        );
+      return reply.result ?? {};
+    } catch (error) {
+      if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
+      throw error;
+    }
+  }
+  /**
+   * Thread-scoped browser teardown. Thread removal is reversible (archive →
+   * unarchive), but the session-end hooks are the driver's authoritative
+   * cleanup — endpoints, grants, and owned browsers release now, and a
+   * revived thread's next call reopens the same label via `start_session`.
+   */
+  private async endBrowserThread(threadId: string): Promise<void> {
+    if (!this.endpoint || this.disposed) return;
+    const reply = await this.request<CuaReply>(this.endpoint, {
+      method: "end_browser_thread",
+      task: { threadId },
+      capability: this.capability,
+    });
+    if (!reply.ok) throw new Error(reply.error ?? "Browser session teardown was not acknowledged.");
   }
   async dispose() {
     this.clearCachedImage();

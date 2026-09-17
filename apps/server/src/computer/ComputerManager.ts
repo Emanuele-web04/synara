@@ -56,6 +56,7 @@ import {
   type ComputerAgentDialect,
   type ComputerBackend,
   type ComputerBackendActionResult,
+  type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerStreamFrame,
   type ComputerResolvedTarget,
@@ -2662,6 +2663,60 @@ export class ComputerManager {
   }
 
   /**
+   * Whether the backend exposes the driver's CDP browser surface. Absent
+   * means "no browser route": the gateway must not advertise the tools at
+   * all, which is also the honest answer a desktop-only backend gives.
+   */
+  get supportsBrowser(): boolean {
+    return this.backend.browser !== undefined;
+  }
+
+  /**
+   * Dispatch one driver browser call for a thread. Browser work shares the
+   * turn's authority revocation and caller signal with desktop work, but not
+   * the desktop lease, the desktop coordinate space, the frame tap, or the
+   * post-unlock observation gate: targets are opaque session-scoped
+   * capabilities minted by the driver, and every result — including a
+   * deliberate `status:"refused"` reply — is driver-produced. Calls for one
+   * thread serialize on a browser lane keyed to the thread so lifecycle
+   * transitions (prepare, navigate, end) cannot interleave mid-flight.
+   */
+  async browserCall(
+    threadId: string,
+    turnId: string | undefined,
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ComputerBrowserCallResult> {
+    const browser = this.backend.browser;
+    if (!browser)
+      throw new ComputerBackendError("This computer backend does not provide browser automation.", {
+        retryable: false,
+      });
+    return this.withAgentActivity(
+      threadId,
+      () => {
+        const operationSignal = desktopOperationSignal();
+        if (!operationSignal)
+          throw new ComputerBackendError(
+            "Computer browser call ran outside an operation context.",
+            { retryable: false },
+          );
+        return browser.call({
+          name,
+          args,
+          task: { threadId, ...(turnId ? { turnId } : {}) },
+          mutation: name !== "get_browser_state",
+          signal: operationSignal,
+        });
+      },
+      signal,
+      turnId,
+      `browser:${threadId}`,
+    );
+  }
+
+  /**
    * Runs `run` inside a per-call context, creating one only when no enclosing
    * call already did. Tool calls arrive wrapped by `withAgentActivity`;
    * direct manager calls — pane input, tests — get one here so their legs
@@ -3065,6 +3120,11 @@ export class ComputerManager {
     // Deleted after the thread state, so the resulting publish cannot recreate
     // it: a removed thread must not reappear as a lease holder.
     await this.releaseDesktopControl(threadId);
+    // Browser sessions are thread-scoped, not lease-scoped: a browser-only
+    // thread may never have held the desktop lease, so teardown cannot ride
+    // the release. Failure is tolerated — the driver's transport-EOF reaper
+    // is the backstop for anything the explicit end could not reach.
+    await this.backend.browser?.endThread?.(threadId).catch(() => undefined);
   }
 
   async handleThreadRestored(threadId: string): Promise<void> {

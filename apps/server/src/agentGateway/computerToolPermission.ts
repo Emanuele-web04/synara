@@ -36,6 +36,20 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_wait",
   "computer_write_clipboard",
   "computer_zoom",
+  // The cua-driver CDP browser family. Deliberately inside the Computer
+  // namespace: these are the same capability (computer:control), the same
+  // approval gate, and the same denial-card path as the desktop tools — they
+  // merely dispatch over CDP rather than OS events. They must never collide
+  // with the integrated `browser_*` surface, which is a different host.
+  "computer_browser_state",
+  "computer_browser_prepare",
+  "computer_browser_navigate",
+  "computer_browser_click",
+  "computer_browser_type",
+  "computer_browser_dialog",
+  "computer_browser_upload",
+  "computer_browser_download",
+  "computer_browser_pointer",
 ] as const;
 
 export type SynaraComputerToolName = (typeof SYNARA_COMPUTER_TOOL_NAMES)[number];

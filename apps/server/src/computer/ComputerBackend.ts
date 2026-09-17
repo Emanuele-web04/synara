@@ -155,6 +155,52 @@ export type ComputerBackendEvent =
   | { readonly type: "capabilities-changed"; readonly capabilities: ComputerCapabilities }
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
+/**
+ * One call into the driver's CDP browser surface. `name` is a driver tool
+ * name (see `CUA_BROWSER_TOOLS`), not a gateway name; `args` are the
+ * sanitized model arguments — the backend/host layer owns every session,
+ * transport, and ownership field. `task` is the trusted local attribution the
+ * host turns into a browser lifecycle session label. `mutation` marks calls
+ * whose loss mid-dispatch must be reported as an uncertain effect rather than
+ * retried.
+ */
+export interface ComputerBrowserCall {
+  readonly name: string;
+  readonly args: Record<string, unknown>;
+  readonly task: { readonly threadId: string; readonly turnId?: string; readonly label?: string };
+  readonly mutation: boolean;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * The driver's MCP-shaped reply, carried verbatim: `content` holds text and
+ * image parts (browser screenshots are driver-produced, not desktop
+ * captures), `structuredContent` carries the browser payload — including
+ * `status:"refused"` results, which deliberately keep `isError` unset.
+ */
+export interface ComputerBrowserCallResult {
+  readonly content?: ReadonlyArray<Record<string, unknown>>;
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean;
+}
+
+/**
+ * The browser half of a desktop backend. Separate from the desktop method
+ * set because browser targets are opaque session-scoped capabilities, not
+ * `windowId`s, and because a backend can drive a desktop without owning any
+ * browser route (or refuse every browser call). Absent means "no browser
+ * surface": callers must not advertise the tools.
+ */
+export interface ComputerBrowserBackend {
+  call(call: ComputerBrowserCall): Promise<ComputerBrowserCallResult>;
+  /**
+   * End every driver browser session attributed to this thread. Called when
+   * the thread is removed; the driver also reaps sessions whose transport
+   * owner disappears, so this is the explicit form of the same cleanup.
+   */
+  endThread?(threadId: string): Promise<void>;
+}
+
 export type ComputerFrameListener = (frame: ComputerStreamFrame) => void;
 export type ComputerBackendEventListener = (event: ComputerBackendEvent) => void;
 
@@ -592,6 +638,12 @@ export interface ComputerBackend {
   stopInput?(): Promise<void>;
   /** Release task-owned observation resources, including read-only turns. */
   endTask?(threadId: string, turnId?: string): Promise<void>;
+  /**
+   * The CDP browser surface this backend exposes, if any. Absent means the
+   * `computer_browser_*` tools are not offered at all — an absent member is
+   * the honest answer, never a stub that fails every call.
+   */
+  readonly browser?: ComputerBrowserBackend;
   dispose(): Promise<void> | void;
 }
 

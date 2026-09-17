@@ -39,4 +39,5 @@ export * from "./studio";
 export * from "./filesystem";
 export * from "./device";
 export * from "./computer";
+export * from "./computerBrowser";
 export * from "./rpc";

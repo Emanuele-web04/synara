@@ -2592,3 +2592,60 @@ describe("Cua workstream-C speed flags", () => {
     await floored.backend.dispose();
   });
 });
+
+describe("driver browser surface", () => {
+  const signal = () => new AbortController().signal;
+  it("exposes a browser route whenever the backend exists", () => {
+    const f = fixture();
+    expect(f.backend.browser).toBeDefined();
+  });
+  it("forwards the driver's reply verbatim — a deliberate refusal is a result, not an error", async () => {
+    const f = fixture();
+    f.onTool("get_browser_state", () => ({
+      content: [{ type: "text", text: "refused (browser_requires_setup)" }],
+      structuredContent: {
+        status: "refused",
+        refusal: { code: "browser_requires_setup", message: "Prepare a browser first." },
+      },
+    }));
+    const result = await f.backend.browser!.call({
+      name: "get_browser_state",
+      args: { target_id: "bt-1", tab_id: "tab-1" },
+      task: { threadId: "thread", turnId: "turn" },
+      mutation: false,
+      signal: signal(),
+    });
+    // The desktop path converts the same payload into a thrown CuaActionError;
+    // the browser path must not — the refusal IS the result the model reads.
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: { code: "browser_requires_setup" },
+    });
+    expect(f.calls.at(-1)).toMatchObject({
+      method: "call",
+      name: "get_browser_state",
+      args: { target_id: "bt-1", tab_id: "tab-1" },
+      task: { threadId: "thread", turnId: "turn" },
+    });
+  });
+  it("fails closed without a GUI host instead of fabricating a route", async () => {
+    const backend = new CuaComputerBackend({ endpoint: "" });
+    await expect(
+      backend.browser!.call({
+        name: "browser_click",
+        args: {},
+        task: { threadId: "thread" },
+        mutation: true,
+        signal: signal(),
+      }),
+    ).rejects.toMatchObject({ code: "gui_host_required" });
+  });
+  it("ends the thread's driver browser session through the host", async () => {
+    const f = fixture();
+    await f.backend.browser!.endThread!("thread-1");
+    expect(f.calls.at(-1)).toMatchObject({
+      method: "end_browser_thread",
+      task: { threadId: "thread-1" },
+    });
+  });
+});
