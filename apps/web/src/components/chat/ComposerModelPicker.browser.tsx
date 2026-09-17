@@ -242,6 +242,43 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("keeps the panel open after switching model in slider mode so the slider stays usable", async () => {
+    // Mirror the app: a picked model lands in the draft store and flows back as props.
+    const onProviderModelChange = vi.fn((_provider: ProviderKind, model: ModelSlug) => {
+      useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+        provider: "codex",
+        model,
+        options: { reasoningEffort: "medium" },
+      });
+    });
+    const screen = await mountPicker(
+      { effortControl: "slider", onProviderModelChange },
+      { reasoningEffort: "medium" },
+    );
+    try {
+      const otherModel = page.getByRole("menuitem", { name: /GPT-5\.4/u });
+      // Slider mode drops the per-row effort side block: the footer slider owns effort.
+      await otherModel.hover();
+      expect(page.getByRole("menuitemradio").elements()).toHaveLength(0);
+
+      await otherModel.click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toBeVisible();
+      await expect.element(otherModel).toHaveAttribute("aria-current", "true");
+
+      // Stop labels are a second way to set the level.
+      await page.getByRole("button", { name: "Set effort to High" }).click();
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+
+      // Picking the model that is already current is the "done" gesture.
+      await otherModel.click();
+      await expect.element(slider).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("toggles fast mode and resets both controls from the slider card", async () => {
     const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "xhigh" });
     try {

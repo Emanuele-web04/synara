@@ -164,14 +164,13 @@ function withDisambiguatedMentionNames(
   });
 }
 
-export function buildThreadMentionComposerItems(input: {
+function buildThreadMentionCandidates(input: {
   readonly threads: readonly ComposerThreadMentionSource[];
   readonly projects: readonly Project[];
   readonly currentThreadId: string | null;
-  readonly query: string;
-}): ComposerCommandItem[] {
+}): ThreadMentionCandidate[] {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
-  const candidates = withDisambiguatedMentionNames(
+  return withDisambiguatedMentionNames(
     input.threads
       .filter(
         (thread) => thread.id !== input.currentThreadId && (thread.archivedAt ?? null) === null,
@@ -182,6 +181,33 @@ export function buildThreadMentionComposerItems(input: {
         projectName: threadSuggestionContainerName(projectById.get(thread.projectId)),
       })),
   );
+}
+
+// Resolves the mention a dropped chat row should insert: the exact name/path the
+// `@` menu would produce, or null when that chat is not mentionable here.
+export function resolveThreadMentionForThreadId(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly threadId: string;
+}): { name: string; path: string } | null {
+  const candidate = buildThreadMentionCandidates(input).find(
+    ({ thread }) => thread.id === input.threadId,
+  );
+  if (!candidate) return null;
+  return {
+    name: candidate.mentionName,
+    path: threadMentionPathForThreadId(candidate.thread.id),
+  };
+}
+
+export function buildThreadMentionComposerItems(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly query: string;
+}): ComposerCommandItem[] {
+  const candidates = buildThreadMentionCandidates(input);
   const query = normalizeProviderDiscoveryText(input.query);
   const ranked = (
     query

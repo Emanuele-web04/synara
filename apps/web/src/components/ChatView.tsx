@@ -100,7 +100,11 @@ import {
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { isElectron } from "../env";
 import { useFeatureFlags } from "../featureFlags";
-import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
+import {
+  resolveThreadMentionForThreadId,
+  useComposerCommandMenuItems,
+} from "../hooks/useComposerCommandMenuItems";
+import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
 import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
@@ -3584,6 +3588,35 @@ export default function ChatView({
     setIsDragOverComposer,
   });
 
+  // Dropping a sidebar/activity chat row on the composer references it exactly
+  // like picking it from the `@` menu: token in the prompt + mention binding.
+  const { isThreadDragOverComposer, threadMentionDropzoneProps } = useComposerThreadMentionDrop({
+    disabled: isSidechatExpired,
+    currentThreadId: threadId,
+    onDropThread: (droppedThreadId) => {
+      const mention = resolveThreadMentionForThreadId({
+        threads: composerThreadSummaries,
+        projects: composerThreadProjects,
+        currentThreadId: threadId,
+        threadId: droppedThreadId,
+      });
+      if (!mention) {
+        toastManager.add({
+          type: "error",
+          title: "Could not reference this chat",
+          description: "Archived chats cannot be mentioned.",
+        });
+        return;
+      }
+      discardPromptHistoryNavigationForComposerMutation();
+      appendComposerPromptText(threadId, formatComposerMentionToken(mention.name));
+      updateSelectedComposerMentions((existing) => [
+        ...existing.filter((existingMention) => existingMention.name !== mention.name),
+        mention,
+      ]);
+    },
+  });
+
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
       const api = readNativeApi();
@@ -5113,8 +5146,10 @@ export default function ChatView({
                 composerProviderState.composerFrameClassName,
                 composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                 isSidechatExpired && "pointer-events-none opacity-60",
+                isThreadDragOverComposer && "ring-1 ring-info/65",
               )}
               aria-disabled={isSidechatExpired}
+              {...threadMentionDropzoneProps}
             >
               <div
                 className={cn(
