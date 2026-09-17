@@ -177,5 +177,7 @@ export const CUA_ACTION_TOOLS = new Set([
   "bring_to_front",
   "invoke_menu",
   "set_window_frame",
+  "set_window_minimized",
+  "set_app_visibility",
   "kill_app",
 ]);

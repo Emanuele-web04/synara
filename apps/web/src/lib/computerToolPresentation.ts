@@ -42,6 +42,8 @@ export const COMPUTER_TOOL_TITLES = {
   computer_set_window_frame: "Move or resize a window",
   computer_invoke_menu: "Invoke a menu item",
   computer_kill_app: "Force-quit an app",
+  computer_set_window_minimized: "Minimize or restore a window",
+  computer_set_app_visibility: "Hide or unhide an app",
   computer_wait: "Wait",
   computer_read_clipboard: "Read the clipboard",
   computer_write_clipboard: "Write to the clipboard",
@@ -97,17 +99,42 @@ export function describeComputerToolCall(input: {
   const tool = computerToolName(input.toolName);
   if (tool === null) return null;
   const args = input.args ?? {};
-  const verb = COMPUTER_TOOL_TITLES[tool];
+  // The visibility pair's flag is the verb's direction: an approval that reads
+  // "Minimize or restore" makes the user guess which half is being asked for.
+  const verb =
+    (tool === "computer_set_window_minimized"
+      ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
+      : tool === "computer_set_app_visibility"
+        ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
+        : undefined) ?? COMPUTER_TOOL_TITLES[tool];
   const where =
     tool === "computer_launch_app"
       ? ""
       : tool === "computer_drag"
         ? describeDragTarget(args, input.windows)
-        : describeTarget(args, input.windows, tool === "computer_wait" ? "for" : "on");
+        : tool === "computer_set_app_visibility"
+          ? describePidTarget(args, input.windows)
+          : describeTarget(args, input.windows, tool === "computer_wait" ? "for" : "on");
   const what = describePayload(tool, args);
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
   return { tool, summary, params: describeParams(tool, args, input.windows) };
+}
+
+/** true/false pick the verb's direction; anything else keeps the generic title. */
+function directionVerb(flag: unknown, whenTrue: string, whenFalse: string): string | undefined {
+  return flag === true ? whenTrue : flag === false ? whenFalse : undefined;
+}
+
+/** "in Safari" — the pid resolved through the window list, or "" when it cannot be. */
+function describePidTarget(
+  args: Readonly<Record<string, unknown>>,
+  windows: readonly ComputerWindow[] | undefined,
+): string {
+  const pid = readNumber(args.pid);
+  if (pid === null || !windows) return "";
+  const app = windows.find((window) => window.pid === pid)?.appName?.trim();
+  return app ? `in ${app}` : "";
 }
 
 /** "at (812, 344) in Safari — Google", "on “Save” in Notes", or "". */
@@ -253,6 +280,17 @@ function describeParams(
   if (action) rows.push({ name: "Action", value: action });
   const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
   if (app) rows.push({ name: "App", value: app });
+  // The off-screen flag changes what the launch does to the user's screen, so
+  // the card shows it rather than letting "Open an app" read as ordinary.
+  if (tool === "computer_launch_app" && args.hidden === true) {
+    rows.push({ name: "Hidden", value: "yes" });
+  }
+  // The pid is what the call actually targeted; the app name resolved into the
+  // summary is the friendly gloss, not a substitute for the real argument.
+  if (tool === "computer_set_app_visibility") {
+    const pid = readNumber(args.pid);
+    if (pid !== null) rows.push({ name: "PID", value: `${pid}` });
+  }
   // A run approves the whole list at once, so the list is what the card must
   // show: each step's verb, in order, never its arguments.
   if (tool === "computer_run" && Array.isArray(args.steps)) {

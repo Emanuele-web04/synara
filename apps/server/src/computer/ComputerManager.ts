@@ -1261,12 +1261,15 @@ export class ComputerManager {
     app: string,
     args: readonly string[] = [],
     waitForWindowMs = 0,
+    options?: { readonly hidden?: boolean },
   ): Promise<ComputerLaunchAppResult> {
     return this.withDesktopControl(threadId, async () => {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
       this.assertDrivenAppAdmitted(threadId, app);
-      const result = await timedComputerLeg("dispatch", () => this.backend.launchApp(app, args));
+      const result = await timedComputerLeg("dispatch", () =>
+        this.backend.launchApp(app, args, options),
+      );
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && waitForWindowMs > 0) {
         const window = await waitForWindow(
@@ -1323,6 +1326,64 @@ export class ComputerManager {
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       const result = await timedComputerLeg("dispatch", () => invoke(windowId, path));
       return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
+    });
+  }
+
+  /**
+   * Minimize or restore the exact window without activating it — the
+   * window-grain half of the hidden-workspace lifecycle. Same lease,
+   * window-existence proof, and owning-app consent as a frame move: nothing
+   * here activates or switches Spaces.
+   */
+  async setWindowMinimized(
+    threadId: string | undefined,
+    windowId: string,
+    minimized: boolean,
+  ): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const setter = this.backend.setWindowMinimized?.bind(this.backend);
+      if (!setter)
+        throw new ComputerBackendError("This backend cannot minimize or restore windows.");
+      const windows = await timedComputerLeg("resolve", () => this.readWindows());
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target) throw windowNotFoundError(windowId);
+      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
+      const result = await timedComputerLeg("dispatch", () => setter(windowId, minimized));
+      return this.actionResult(
+        threadId,
+        "computer_set_window_minimized",
+        undefined,
+        result,
+        windowId,
+      );
+    });
+  }
+
+  /**
+   * Hide or unhide a running app by pid — the app-grain half of the hidden
+   * workspace. The pid is the target, so consent keys on what the pid
+   * resolves to: the app's name from the process list when it can be
+   * resolved, else a stable pid key — the same split the window-level tools
+   * make between an app name and the window id fallback.
+   */
+  async setAppVisibility(
+    threadId: string | undefined,
+    pid: number,
+    hidden: boolean,
+  ): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const setter = this.backend.setAppVisibility?.bind(this.backend);
+      if (!setter)
+        throw new ComputerBackendError("This backend cannot hide or unhide applications.");
+      const named = await timedComputerLeg("resolve", async () => {
+        const listApps = this.backend.listApps?.bind(this.backend);
+        if (!listApps) return undefined;
+        const apps = await listApps().catch(() => undefined);
+        return apps?.find((app) => app.pid === pid && app.running)?.name;
+      });
+      this.assertDrivenAppAdmitted(threadId, named ?? `pid ${pid}`);
+      const result = await timedComputerLeg("dispatch", () => setter(pid, hidden));
+      return this.actionResult(threadId, "computer_set_app_visibility", undefined, result);
     });
   }
 

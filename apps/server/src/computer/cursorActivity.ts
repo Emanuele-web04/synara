@@ -53,6 +53,10 @@ export function cursorToolActivity(tool: string): string {
       return "Reading cursor position";
     case "computer_kill_app":
       return "Force-quitting app";
+    case "computer_set_window_minimized":
+      return "Changing window visibility";
+    case "computer_set_app_visibility":
+      return "Changing app visibility";
     case "computer_perform_action":
       return "Activating control";
     case "computer_launch_app":

@@ -139,10 +139,14 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   // screen, which is exactly why it is gated.
   "computer_activate_window",
   // Window motion and menu invocation mutate the app the user is looking at;
-  // kill_app force-terminates it and loses unsaved state.
+  // kill_app force-terminates it and loses unsaved state. The visibility
+  // lifecycle pair mutates what is on screen without activating anything —
+  // a hidden app that vanishes mid-gesture is still the user's desktop.
   "computer_set_window_frame",
   "computer_invoke_menu",
   "computer_kill_app",
+  "computer_set_window_minimized",
+  "computer_set_app_visibility",
 ]);
 
 export function computerToolRequiresApproval(name: string): boolean {
@@ -1026,6 +1030,27 @@ export function makeAgentGatewayComputerTools(
   };
 
   /**
+   * Pid → driven-app resolution for the app-level visibility tool: the pid is
+   * the target, but consent is keyed on apps, so it resolves through the same
+   * process list the in-queue assert consults. A pid that resolves to nothing
+   * admits under the pid key the manager falls back to — the boundary is
+   * never skipped for want of a name.
+   */
+  const drivenAppsForPids = async (pids: ReadonlySet<number>): Promise<Set<string>> => {
+    const apps = new Set<string>();
+    if (pids.size === 0) return apps;
+    const listed = await manager
+      .listApps()
+      .then((result) => result.apps)
+      .catch(() => undefined);
+    for (const pid of pids) {
+      const named = listed?.find((app) => app.pid === pid && app.running)?.name;
+      apps.add(named ?? `pid ${pid}`);
+    }
+    return apps;
+  };
+
+  /**
    * The apps a call is about to drive, resolved before the desktop queue so a
    * consent prompt never holds the serialized operation slot. Steps inside a
    * computer_run are scanned raw — full validation still happens in the
@@ -1045,15 +1070,23 @@ export function makeAgentGatewayComputerTools(
       name === "computer_activate_window" ||
       name === "computer_set_window_frame" ||
       name === "computer_invoke_menu" ||
-      name === "computer_kill_app"
+      name === "computer_kill_app" ||
+      name === "computer_set_window_minimized"
     ) {
       return typeof args.window_id === "string" && args.window_id.length > 0
         ? drivenAppsForWindows(new Set([args.window_id]))
         : new Set();
     }
+    if (name === "computer_set_app_visibility") {
+      const pid = args.pid;
+      return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
+        ? drivenAppsForPids(new Set([pid]))
+        : new Set();
+    }
     if (name === "computer_run") {
       const apps = new Set<string>();
       const windowIds = new Set<string>();
+      const pids = new Set<number>();
       for (const step of Array.isArray(args.steps) ? args.steps : []) {
         if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
         const type = Reflect.get(step, "type");
@@ -1064,13 +1097,18 @@ export function makeAgentGatewayComputerTools(
           type === "activate_window" ||
           type === "set_window_frame" ||
           type === "invoke_menu" ||
-          type === "kill_app"
+          type === "kill_app" ||
+          type === "set_window_minimized"
         ) {
           const windowId = Reflect.get(step, "window_id");
           if (typeof windowId === "string" && windowId.length > 0) windowIds.add(windowId);
+        } else if (type === "set_app_visibility") {
+          const pid = Reflect.get(step, "pid");
+          if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
         }
       }
       for (const app of await drivenAppsForWindows(windowIds)) apps.add(app);
+      for (const app of await drivenAppsForPids(pids)) apps.add(app);
       return apps;
     }
     return new Set();
@@ -1561,12 +1599,14 @@ export function makeAgentGatewayComputerTools(
     perform_action: [...RUN_TARGET_FIELDS, "action"],
     wait: ["duration_ms", "label", "role", "window_id", "windowId"],
     activate_window: ["window_id", "windowId"],
-    launch_app: ["app", "arguments", "wait_for_window"],
+    launch_app: ["app", "arguments", "wait_for_window", "hidden"],
     write_clipboard: ["text"],
     paste: ["text", "window_id", "windowId"],
     set_window_frame: ["window_id", "windowId", "x", "y", "width", "height"],
     invoke_menu: ["window_id", "windowId", "path"],
     kill_app: ["window_id", "windowId"],
+    set_window_minimized: ["window_id", "windowId", "minimized"],
+    set_app_visibility: ["pid", "hidden"],
   };
 
   interface PreparedRunStep {
@@ -1735,7 +1775,9 @@ export function makeAgentGatewayComputerTools(
         const app = readStringArg(step, "app", { required: true })!;
         const appArgs = readStringArrayArg(step, "arguments") ?? [];
         const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
-        return () => manager.launchApp(threadId, app, appArgs, waitMs);
+        const hidden = readBooleanArg(step, "hidden") === true;
+        return () =>
+          manager.launchApp(threadId, app, appArgs, waitMs, hidden ? { hidden: true } : undefined);
       }
       case "write_clipboard": {
         const text = readClipboardText(step);
@@ -1773,6 +1815,28 @@ export function makeAgentGatewayComputerTools(
         const windowId = readWindowIdArg(step);
         if (!windowId) throw new ToolInputError('Step "kill_app" requires "window_id".');
         return () => manager.killApp(threadId, windowId);
+      }
+      case "set_window_minimized": {
+        const windowId = readWindowIdArg(step);
+        if (!windowId) {
+          throw new ToolInputError('Step "set_window_minimized" requires "window_id".');
+        }
+        const minimized = readBooleanArg(step, "minimized");
+        if (minimized === undefined) {
+          throw new ToolInputError('Step "set_window_minimized" requires a boolean "minimized".');
+        }
+        return () => manager.setWindowMinimized(threadId, windowId, minimized);
+      }
+      case "set_app_visibility": {
+        const pid = readNumberArg(step, "pid");
+        if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) {
+          throw new ToolInputError('Step "set_app_visibility" requires a positive integer "pid".');
+        }
+        const hidden = readBooleanArg(step, "hidden");
+        if (hidden === undefined) {
+          throw new ToolInputError('Step "set_app_visibility" requires a boolean "hidden".');
+        }
+        return () => manager.setAppVisibility(threadId, pid, hidden);
       }
       default:
         throw new ToolInputError(`Unknown run step type ${JSON.stringify(type)}.`);
@@ -2359,6 +2423,11 @@ export function makeAgentGatewayComputerTools(
             description:
               "Arguments passed to the application, such as a file path to open. Omit for a plain launch.",
           },
+          hidden: {
+            type: "boolean",
+            description:
+              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to false.",
+          },
         },
         required: ["app"],
         additionalProperties: false,
@@ -2369,6 +2438,7 @@ export function makeAgentGatewayComputerTools(
           readStringArg(args, "app", { required: true })!,
           readStringArrayArg(args, "arguments") ?? [],
           readBooleanArg(args, "wait_for_window") === false ? 0 : 2_000,
+          readBooleanArg(args, "hidden") === true ? { hidden: true } : undefined,
         ),
     ),
     {
@@ -2608,6 +2678,82 @@ export function makeAgentGatewayComputerTools(
         return manager.killApp(context.callerThreadId, windowId);
       },
     ),
+    {
+      // Not actionEntry on purpose: the visibility lifecycle never activates,
+      // so advertising delivery_mode would promise a foreground excursion the
+      // operation's whole contract is built to refuse.
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_set_window_minimized",
+        description: `Minimize or restore the exact window in place — no activation, no focus change, no Space switch. A minimized window stays open and keeps answering the semantic tools (set_value, clicks by label, get_window_state) but takes no coordinate input and is not on screen. The driver reads the minimized state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            window_id: {
+              type: "string",
+              description: "The exact window to minimize or restore.",
+            },
+            minimized: {
+              type: "boolean",
+              description: "true minimizes the window into the dock; false restores it.",
+            },
+          },
+          required: ["window_id", "minimized"],
+          additionalProperties: false,
+        },
+        annotations: { title: "Minimize or restore window", ...WRITE_TOOL_ANNOTATIONS },
+      },
+      handler: handle("computer_set_window_minimized", async (args, context) => {
+        if (readStringArg(args, "delivery_mode") === "foreground")
+          throw new ToolInputError(
+            "computer_set_window_minimized never activates; it takes no delivery_mode.",
+          );
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        const minimized = readBooleanArg(args, "minimized");
+        if (minimized === undefined)
+          throw new ToolInputError("minimized is required and must be a boolean.");
+        return manager.setWindowMinimized(context.callerThreadId, windowId, minimized);
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_set_app_visibility",
+        description: `Hide or unhide a running application by pid — every window stays open but leaves the screen, without activating, focusing, or switching Spaces. Hidden apps keep answering the semantic tools, so this is the workspace that stays out of the user's way. The driver reads the hidden state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            pid: {
+              type: "number",
+              description: "The running application's process id, from computer_list_apps.",
+            },
+            hidden: {
+              type: "boolean",
+              description: "true hides the app's windows; false brings them back on screen.",
+            },
+          },
+          required: ["pid", "hidden"],
+          additionalProperties: false,
+        },
+        annotations: { title: "Hide or unhide app", ...WRITE_TOOL_ANNOTATIONS },
+      },
+      handler: handle("computer_set_app_visibility", async (args, context) => {
+        if (readStringArg(args, "delivery_mode") === "foreground")
+          throw new ToolInputError(
+            "computer_set_app_visibility never activates; it takes no delivery_mode.",
+          );
+        const pid = readNumberArg(args, "pid");
+        if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0)
+          throw new ToolInputError("pid is required and must be a positive integer.");
+        const hidden = readBooleanArg(args, "hidden");
+        if (hidden === undefined)
+          throw new ToolInputError("hidden is required and must be a boolean.");
+        return manager.setAppVisibility(context.callerThreadId, pid, hidden);
+      }),
+    },
     clickEntry(
       "computer_click",
       "Click",
@@ -2983,7 +3129,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, launch_app (app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -3030,6 +3176,9 @@ export function makeAgentGatewayComputerTools(
                 app: { type: "string" },
                 arguments: { type: "array", items: { type: "string" } },
                 wait_for_window: { type: "boolean" },
+                hidden: { type: "boolean" },
+                minimized: { type: "boolean" },
+                pid: { type: "integer", minimum: 1 },
               },
             },
             description:

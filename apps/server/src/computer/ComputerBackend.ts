@@ -397,7 +397,19 @@ export interface ComputerBackend {
   setDrivingAgent?(name: string | null): Promise<void>;
   /** Cosmetic activity only: never activates a window or sends input. */
   setCursorActivity?(text: string | null): Promise<void>;
-  launchApp(app: string, args: readonly string[]): Promise<ComputerLaunchAppResult>;
+  launchApp(
+    app: string,
+    args: readonly string[],
+    options?: {
+      /**
+       * Launch with windows created but never rendered — the `open -j`
+       * posture. Nothing activates and no Space switches; the hidden app's
+       * windows stay addressable for background semantic actions. Absent or
+       * false is an ordinary background launch.
+       */
+      readonly hidden?: boolean;
+    },
+  ): Promise<ComputerLaunchAppResult>;
   /** Fresh exact-window readiness only; never focus, raise, or send input. */
   checkInputReady?(windowId: string): Promise<void>;
   /**
@@ -466,6 +478,25 @@ export interface ComputerBackend {
   getCursorPosition?(
     windowId?: string,
   ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">>;
+  /**
+   * Minimize or restore the exact window without activating it or switching
+   * Spaces. A minimized window keeps its AX surface, so background semantic
+   * actions still reach it — the window-grain half of the hidden-workspace
+   * lifecycle. Backends report `verified` only when the driver's read-back
+   * evidence shows the requested state; anything less is `unconfirmed`, never
+   * silent success.
+   */
+  setWindowMinimized?(
+    windowId: string,
+    minimized: boolean,
+  ): Promise<ComputerBackendActionResult | void>;
+  /**
+   * Hide or unhide a running application by pid without activating it — the
+   * Cmd+H path, not a Space change. A hidden app keeps its windows
+   * addressable for background semantic reads and writes; neither direction
+   * brings it frontmost. Same verification contract as `setWindowMinimized`.
+   */
+  setAppVisibility?(pid: number, hidden: boolean): Promise<ComputerBackendActionResult | void>;
   /**
    * Force-terminate a process by pid — the escalation path after the
    * cooperative close (cmd+q, window close) has already failed. Unsaved state

@@ -108,6 +108,20 @@ function rect(value: unknown): ComputerRect {
 }
 const sameRect = (a: ComputerRect, b: ComputerRect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+/**
+ * The driver's proof a visibility mutation landed: `effect: confirmed` backed
+ * by a `value_readback` evidence row — the AXMinimized/isHidden re-read the
+ * native tool itself took. The bare success text is never trusted on its own,
+ * and the window list exposes no minimized flag to check against, so this
+ * record is the only evidence the verdict can stand on.
+ */
+function confirmedValueReadback(data: Record<string, unknown>): boolean {
+  return (
+    data.effect === "confirmed" &&
+    Array.isArray(data.evidence) &&
+    data.evidence.some((item) => text(record(item).kind) === "value_readback")
+  );
+}
 /** Longest one same-window semantic text write may hold its lane before the
  * caller fails honestly. The underlying write still drains so lane order
  * survives the timeout and nothing is replayed. Same-window writes serialize
@@ -1537,7 +1551,7 @@ export class CuaComputerBackend implements ComputerBackend {
     assertComputerClipboardWriteFits(value);
     await this.call("clipboard_write", { text: value }, true);
   }
-  async launchApp(app: string, args?: readonly string[]) {
+  async launchApp(app: string, args?: readonly string[], options?: { readonly hidden?: boolean }) {
     if (app.startsWith("/"))
       throw new CuaActionError(
         "Use an installed app's name or bundle identifier with Cua.",
@@ -1549,6 +1563,10 @@ export class CuaComputerBackend implements ComputerBackend {
       {
         ...(/^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(app) ? { bundle_id: app } : { name: app }),
         ...(args?.length ? { additional_arguments: args } : {}),
+        // The open -j posture: windows are created but never rendered, and
+        // nothing activates. Only sent when asked — an absent flag is the
+        // ordinary background launch every existing caller expects.
+        ...(options?.hidden === true ? { hidden: true } : {}),
       },
       true,
     );
@@ -1663,6 +1681,59 @@ export class CuaComputerBackend implements ComputerBackend {
       verified: confirmed
         ? "confirmed"
         : data.effect === "unconfirmed"
+          ? "unconfirmed"
+          : "unverifiable",
+      effect: confirmed ? "verified" : "dispatched-unknown",
+    };
+  }
+  async setWindowMinimized(
+    windowId: string,
+    minimized: boolean,
+  ): Promise<ComputerBackendActionResult> {
+    // Fail closed rather than coerce: a non-boolean flag cannot be honored
+    // exactly, and guessing a direction hides the caller's mistake.
+    if (typeof minimized !== "boolean")
+      throw new CuaActionError(
+        "set_window_minimized needs a boolean minimized flag.",
+        "not-dispatched",
+        "invalid_arguments",
+      );
+    const { pid, window_id, window } = await this.target(windowId);
+    const result = await this.call("set_window_minimized", { pid, window_id, minimized }, true);
+    const data = result.structuredContent ?? {};
+    const confirmed = confirmedValueReadback(data);
+    // A minimize or restore changes what is on screen; the cached snapshot
+    // and retained geometry no longer describe it.
+    this.clearCachedImage();
+    this.snapshotAt = 0;
+    return {
+      windowId: window.id,
+      deliveryPath: `cua-${text(data.route, 64) || "window_minimized"}-${text(record(data.delivery).mode, 32) || "background"}`,
+      verified: confirmed
+        ? "confirmed"
+        : data.effect === "unconfirmed" || data.effect === "suspected_noop"
+          ? "unconfirmed"
+          : "unverifiable",
+      effect: confirmed ? "verified" : "dispatched-unknown",
+    };
+  }
+  async setAppVisibility(pid: number, hidden: boolean): Promise<ComputerBackendActionResult> {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || typeof hidden !== "boolean")
+      throw new CuaActionError(
+        "set_app_visibility needs a positive integer pid and a boolean hidden flag.",
+        "not-dispatched",
+        "invalid_arguments",
+      );
+    const result = await this.call("set_app_visibility", { pid, hidden }, true);
+    const data = result.structuredContent ?? {};
+    const confirmed = confirmedValueReadback(data);
+    this.clearCachedImage();
+    this.snapshotAt = 0;
+    return {
+      deliveryPath: `cua-${text(data.route, 64) || "app_visibility"}-${text(record(data.delivery).mode, 32) || "background"}`,
+      verified: confirmed
+        ? "confirmed"
+        : data.effect === "unconfirmed" || data.effect === "suspected_noop"
           ? "unconfirmed"
           : "unverifiable",
       effect: confirmed ? "verified" : "dispatched-unknown",

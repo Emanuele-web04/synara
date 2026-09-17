@@ -51,6 +51,8 @@ describe("computerToolName", () => {
       "computer_set_window_frame",
       "computer_invoke_menu",
       "computer_kill_app",
+      "computer_set_window_minimized",
+      "computer_set_app_visibility",
       "computer_wait",
       "computer_read_clipboard",
       "computer_write_clipboard",
@@ -234,6 +236,44 @@ describe("describeComputerToolCall", () => {
         windows: [SAFARI],
       })?.summary,
     ).toBe("Force-quit an app");
+    // The visibility pair names the direction the flag asks for, not a generic
+    // either/or — an approval must say which half is being requested.
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_set_window_minimized",
+        args: { window_id: "win-7", minimized: true },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Minimize a window in Safari — Google");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_set_window_minimized",
+        args: { window_id: "win-7", minimized: false },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Restore a window in Safari — Google");
+    const hide = describeComputerToolCall({
+      toolName: "computer_set_app_visibility",
+      args: { pid: 42, hidden: true },
+      windows: [{ ...SAFARI, pid: 42 } as ComputerWindow],
+    });
+    expect(hide?.summary).toBe("Hide an app in Safari");
+    expect(hide?.params).toContainEqual({ name: "PID", value: "42" });
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_set_app_visibility",
+        args: { pid: 9_999, hidden: false },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Unhide an app");
+    // A hidden launch keeps its verb but flags the off-screen posture as a
+    // row, so "Open an app" cannot read as ordinary.
+    const hiddenLaunch = describeComputerToolCall({
+      toolName: "computer_launch_app",
+      args: { app: "TextEdit", hidden: true },
+    });
+    expect(hiddenLaunch?.summary).toBe("Open an app TextEdit");
+    expect(hiddenLaunch?.params).toContainEqual({ name: "Hidden", value: "yes" });
     expect(
       describeComputerToolCall({
         toolName: "computer_verify_state",

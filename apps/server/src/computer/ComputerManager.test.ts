@@ -1187,6 +1187,59 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
+  it("consents visibility writes on the app the pid resolves to, or a stable pid key", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app }) => {
+      asked.push(app);
+      return true;
+    });
+    const admit = (app: string) =>
+      manager.admitDrivenApp("thread-1", app, {
+        signal: new AbortController().signal,
+      });
+    try {
+      // First drive admits the terminal's app through its window, unasked.
+      await manager.setWindowMinimized("thread-1", "fake-terminal", true);
+      // pid 1002 resolves to the calculator's name — the boundary asks by it.
+      await expect(manager.setAppVisibility("thread-1", 1_002, true)).rejects.toThrow(
+        /needs its own approval/i,
+      );
+      await admit("Calculator");
+      expect(asked).toEqual(["Calculator"]);
+      await manager.setAppVisibility("thread-1", 1_002, true);
+      expect(backend.callsFor("setAppVisibility")).toHaveLength(1);
+      // A pid nothing resolves to keys on "pid N" — still one stable boundary,
+      // and the backend's own refusal is what surfaces past it.
+      await expect(manager.setAppVisibility("thread-1", 9_999, true)).rejects.toThrow(
+        /needs its own approval/i,
+      );
+      await admit("pid 9999");
+      expect(asked).toEqual(["Calculator", "pid 9999"]);
+      await expect(manager.setAppVisibility("thread-1", 9_999, true)).rejects.toThrow(
+        /No running application has pid 9999/,
+      );
+    } finally {
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
+  it("forwards the hidden launch option to the backend only when asked", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: true });
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
+      await manager.launchApp("thread-1", "kcalc");
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", []]);
+    } finally {
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
   it("still asks for the pane when the agent drives the human's visible desktop", async () => {
     // The preview is wanted there too: the pane renders stills only on a shared
     // display, and the client gates the actual opening on its auto-open

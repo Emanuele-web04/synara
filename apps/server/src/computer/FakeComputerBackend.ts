@@ -249,9 +249,17 @@ export class FakeComputerBackend implements ComputerBackend {
     return this.screenshotOfRegion(region, request.maxDimension);
   }
 
-  async launchApp(app: string, args: readonly string[]): Promise<ComputerLaunchAppResult> {
-    this.record("launchApp", app, args);
+  async launchApp(
+    app: string,
+    args: readonly string[],
+    options?: { readonly hidden?: boolean },
+  ): Promise<ComputerLaunchAppResult> {
+    // Recorded only when present, so every existing assertion on a plain
+    // launch keeps matching its two-argument shape.
+    if (options !== undefined) this.record("launchApp", app, args, options);
+    else this.record("launchApp", app, args);
     this.throwIfFailed("launchApp");
+    const hidden = options?.hidden === true;
     const id = `fake-window-${this.currentWindows.length + 1}`;
     const window: ComputerWindow = {
       id,
@@ -259,12 +267,16 @@ export class FakeComputerBackend implements ComputerBackend {
       appName: app,
       pid: this.nextPid++,
       bounds: { x: 120, y: 80, width: 900, height: 700 },
-      focused: true,
+      // A hidden launch renders nothing and takes no focus: frontmost is
+      // unchanged, which the fake models by leaving every existing flag alone.
+      focused: !hidden,
       minimized: false,
-      visible: true,
+      visible: !hidden,
     };
     this.currentWindows = [
-      ...this.currentWindows.map((item) => ({ ...item, focused: false })),
+      ...(hidden
+        ? this.currentWindows
+        : this.currentWindows.map((item) => ({ ...item, focused: false }))),
       window,
     ];
     this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
@@ -333,6 +345,52 @@ export class FakeComputerBackend implements ComputerBackend {
     return {
       windowId,
       deliveryPath: "fake-menu",
+      verified: "confirmed",
+      effect: "verified",
+    };
+  }
+
+  async setWindowMinimized(
+    windowId: string,
+    minimized: boolean,
+  ): Promise<ComputerBackendActionResult> {
+    this.record("setWindowMinimized", windowId, minimized);
+    this.throwIfFailed("setWindowMinimized");
+    const index = this.currentWindows.findIndex((window) => window.id === windowId);
+    if (index === -1) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    // A minimized window renders nothing; a restored one shows again. The
+    // window stays in the list either way — like the real driver, the fake
+    // keeps it addressable for semantic reads while it is off screen.
+    const window = this.currentWindows[index]!;
+    this.currentWindows[index] = { ...window, minimized, visible: !minimized };
+    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+    this.emit({ type: "windows-changed", windows: this.currentWindows });
+    return {
+      windowId,
+      deliveryPath: "fake-minimize",
+      verified: "confirmed",
+      effect: "verified",
+    };
+  }
+
+  async setAppVisibility(pid: number, hidden: boolean): Promise<ComputerBackendActionResult> {
+    this.record("setAppVisibility", pid, hidden);
+    this.throwIfFailed("setAppVisibility");
+    const app = this.currentApps.find((candidate) => candidate.pid === pid && candidate.running);
+    if (!app) {
+      throw new ComputerBackendError(`No running application has pid ${pid}.`);
+    }
+    // A hidden app renders none of its windows; unhiding restores whatever
+    // is not still minimized.
+    this.currentWindows = this.currentWindows.map((window) =>
+      window.pid === pid ? { ...window, visible: !hidden && !window.minimized } : window,
+    );
+    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+    this.emit({ type: "windows-changed", windows: this.currentWindows });
+    return {
+      deliveryPath: "fake-app-visibility",
       verified: "confirmed",
       effect: "verified",
     };

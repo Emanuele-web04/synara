@@ -1557,6 +1557,97 @@ describe("Cua native boundary", () => {
       effect: "dispatched-unknown",
     });
   });
+  it("sends the hidden launch flag only when the caller asks for it", async () => {
+    const f = fixture();
+    await f.backend.launchApp("TextEdit", [], { hidden: true });
+    expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
+      name: "TextEdit",
+      hidden: true,
+    });
+    f.calls.length = 0;
+    // Absent or false is the ordinary background launch — no flag on the wire.
+    await f.backend.launchApp("TextEdit", [], { hidden: false });
+    expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
+      name: "TextEdit",
+    });
+    f.calls.length = 0;
+    await f.backend.launchApp("TextEdit");
+    expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
+      name: "TextEdit",
+    });
+  });
+  it("minimizes the exact window and trusts only the driver's readback evidence", async () => {
+    const f = fixture();
+    f.onTool("set_window_minimized", () => ({
+      structuredContent: {
+        effect: "confirmed",
+        route: "ax_window_minimized",
+        delivery: { mode: "background" },
+        evidence: [{ kind: "value_readback" }],
+      },
+    }));
+    await expect(f.backend.setWindowMinimized!("cua:10:20", true)).resolves.toMatchObject({
+      windowId: "cua:10:20",
+      verified: "confirmed",
+      effect: "verified",
+    });
+    expect(f.calls.find((call) => call.name === "set_window_minimized")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      minimized: true,
+    });
+    // The same bare confirmed claim without the readback row is not evidence.
+    f.onTool("set_window_minimized", () => ({
+      structuredContent: { effect: "confirmed", route: "ax_window_minimized" },
+    }));
+    await expect(f.backend.setWindowMinimized!("cua:10:20", true)).resolves.toMatchObject({
+      verified: "unverifiable",
+      effect: "dispatched-unknown",
+    });
+    f.onTool("set_window_minimized", () => ({
+      structuredContent: { effect: "unconfirmed" },
+    }));
+    await expect(f.backend.setWindowMinimized!("cua:10:20", false)).resolves.toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
+    });
+  });
+  it("hides and unhides an app by pid on the driver's own readback", async () => {
+    const f = fixture();
+    f.onTool("set_app_visibility", () => ({
+      structuredContent: {
+        effect: "confirmed",
+        route: "ax_app_visibility",
+        delivery: { mode: "background" },
+        evidence: [{ kind: "value_readback" }],
+      },
+    }));
+    await expect(f.backend.setAppVisibility!(10, true)).resolves.toMatchObject({
+      verified: "confirmed",
+      effect: "verified",
+    });
+    expect(f.calls.find((call) => call.name === "set_app_visibility")?.args).toEqual({
+      pid: 10,
+      hidden: true,
+    });
+    f.onTool("set_app_visibility", () => ({
+      structuredContent: { effect: "suspected_noop" },
+    }));
+    await expect(f.backend.setAppVisibility!(10, false)).resolves.toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
+    });
+    // A target that is not a live pid, or a flag that is not a boolean, fails
+    // closed before the driver is ever asked.
+    await expect(f.backend.setAppVisibility!(0, true)).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "invalid_arguments",
+    });
+    await expect(
+      f.backend.setAppVisibility!(10, "yes" as unknown as boolean),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "invalid_arguments" });
+    expect(f.calls.filter((call) => call.name === "set_app_visibility")).toHaveLength(2);
+  });
   it("reads the desktop inventory and scopes it to the scoped window's app", async () => {
     const f = fixture();
     f.onTool("get_accessibility_tree", () => ({

@@ -131,6 +131,14 @@ export class UnavailableComputerBackend implements ComputerBackend {
     return this.refuse();
   }
 
+  setWindowMinimized(): Promise<never> {
+    return this.refuse();
+  }
+
+  setAppVisibility(): Promise<never> {
+    return this.refuse();
+  }
+
   verifyState(): Promise<ComputerVerifyStateResult> {
     return this.refuse();
   }

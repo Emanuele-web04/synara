@@ -219,6 +219,14 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   ),
   synara_computer_invoke_menu: presentComputerTool("invoking a menu item", "invoked a menu item"),
   synara_computer_kill_app: presentComputerTool("force-quitting an app", "force-quit an app"),
+  synara_computer_set_window_minimized: presentComputerTool(
+    "changing a window's visibility",
+    "changed a window's visibility",
+  ),
+  synara_computer_set_app_visibility: presentComputerTool(
+    "changing an app's visibility",
+    "changed an app's visibility",
+  ),
   synara_computer_wait: presentComputerTool("waiting for the desktop", "waited for the desktop"),
   synara_computer_read_clipboard: presentComputerTool(
     "reading the clipboard",

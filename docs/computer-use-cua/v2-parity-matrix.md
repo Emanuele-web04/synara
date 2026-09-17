@@ -94,6 +94,17 @@ The gap summary above predates the decisive input matrix. Verified results:
   foreground scroll delivers real DOM wheel events. The rev-16
   implementation adds the two-axis plus modifier gesture and macOS
   measurement; details below.
+- **Hidden-workspace lifecycle (rev 17) — WIRED.** `launch_app` grew a
+  `hidden` flag (the `open -j` posture), `set_app_visibility` hides/unhides a
+  running app by pid, and `set_window_minimized` minimizes/restores one exact
+  window — all verified live on macOS 26.5.2 without activation, focus steal,
+  or Space switches. Shipped as `computer_launch_app({hidden:true})`,
+  `computer_set_app_visibility`, and `computer_set_window_minimized`, all
+  approval-gated with the same second-app consent as the frame/menu tools;
+  the visibility pair is reported `confirmed` only on the driver's own
+  AXHidden/AXMinimized read-back evidence. Hidden apps and windows keep
+  answering the semantic tools; only the raw coordinate stream still needs a
+  visible target.
 
 ## Driver tool inventory — definitive audit (0.28.2, native rev 16, embedded serve)
 
@@ -219,10 +230,24 @@ tool exposes them.
   own `launch_app` never steal focus; `hidden:true` additionally skips
   rendering entirely.
 - **Hidden-workspace lifecycle (rev 17).** New driver tools:
-  `set_window_minimized` (exact pid+window_id, AXMinimized readback) and
+  `set_window_minimized` (exact pid+window*id, AXMinimized readback) and
   `set_app_visibility` (pid, AXHidden + isHidden readback); `launch_app`
   accepts `hidden`. Verified end-to-end: hidden TextEdit accepted
   `set_value` with `effect:confirmed`, frontmost stayed ghostty.
+  Driver surface inventory (57 tools at rev 17): Synara exposes 32 agent-facing
+  (`computer*\*`) tools after the milestone set. Remaining: reads
+(`health_report`, `get_config`, `get_recording_state`, `get_session`,
+`get_session_state`, `list_sessions`, `check_for_update`, `debug_window_info`,
+`history_status`/`history_query`), mutations (`set_config`,
+`set_agent_cursor_enabled`/`motion`/`theme`,
+`start_session`/`end_session`/`escalate_session`,
+`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`,
+`browser_prepare`), and the browser family (`get_browser_state`,
+`browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
+`browser_dialog`, `browser_download`, `browser_set_input_files`, legacy
+`page`). `get_accessibility_tree`and`get_cursor_position` are allowlisted
+  reads used internally by the backend, not separate agent tools. Browser
+  tools are a distinct feature family needing their own consent model.
 
 ## Evidence
 

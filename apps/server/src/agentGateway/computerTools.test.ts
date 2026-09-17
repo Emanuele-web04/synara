@@ -151,12 +151,12 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — eight native-driver parity tools (list_apps,
-    // verify_state, zoom, get_accessibility_tree, get_cursor_position,
-    // set_window_frame, invoke_menu, kill_app) measure 54,335 chars of schema;
-    // the bound still trips on accidental bloat, so raise it only with the new
-    // surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(56_000);
+    // The catalog grew again — the hidden-workspace lifecycle pair
+    // (set_window_minimized, set_app_visibility) and launch's hidden flag on
+    // top of the eight parity tools measure 56,381 chars of schema; the bound
+    // still trips on accidental bloat, so raise it only with the new surface
+    // measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(58_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -304,6 +304,8 @@ describe("agent gateway computer tools", () => {
       "computer_set_window_frame",
       "computer_invoke_menu",
       "computer_kill_app",
+      "computer_set_window_minimized",
+      "computer_set_app_visibility",
       "computer_click",
       "computer_double_click",
       "computer_triple_click",
@@ -346,6 +348,8 @@ describe("agent gateway computer tools", () => {
         "computer_set_window_frame",
         "computer_invoke_menu",
         "computer_kill_app",
+        "computer_set_window_minimized",
+        "computer_set_app_visibility",
       ]),
     );
     // A hover posts no event, presses nothing, and no longer aims the keyboard,

@@ -130,7 +130,9 @@ describe("cuaDriverProtocol tool boundary", () => {
         "move_cursor",
         "press_key",
         "scroll",
+        "set_app_visibility",
         "set_value",
+        "set_window_minimized",
         "set_window_frame",
         "type_text",
       ].sort(),
@@ -154,10 +156,6 @@ describe("cuaDriverProtocol tool boundary", () => {
         "set_agent_cursor_enabled",
         "set_agent_cursor_motion",
         "set_agent_cursor_theme",
-        // Rev 17 hidden-workspace tools stay unreachable until the audited
-        // allowlist + agent-tool surface lands.
-        "set_app_visibility",
-        "set_window_minimized",
         "get_config",
         "set_config",
         "start_recording",

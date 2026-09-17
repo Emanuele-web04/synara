@@ -308,6 +308,8 @@ describe("deriveReadableToolTitle", () => {
     ["computer_get_accessibility_tree", "List apps and windows"],
     ["computer_get_cursor_position", "Read the cursor position"],
     ["mcp__synara__computer_kill_app", "Force-quit an app"],
+    ["computer_set_window_minimized", "Minimize or restore a window"],
+    ["synara_computer_set_app_visibility", "Hide or unhide an app"],
   ])("uses the curated Computer label for %s", (toolName, expected) => {
     expect(
       deriveReadableToolTitle({
