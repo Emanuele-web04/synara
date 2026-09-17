@@ -118,6 +118,7 @@ import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts
 import Migration0100 from "./Migrations/100_MessageTextChunks.ts";
 import Migration0101 from "./Migrations/101_RemoveTranscriptMarkers.ts";
 import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary.ts";
+import AsyncUserInputMigration from "./Migrations/105_AsyncUserInput.ts";
 import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
 import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.ts";
 
@@ -240,6 +241,7 @@ export const migrationEntries = [
   // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
   [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
+  [105, "AsyncUserInput", AsyncUserInputMigration],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

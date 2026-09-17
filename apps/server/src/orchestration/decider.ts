@@ -7,8 +7,13 @@ import type {
   ThreadGoalAchievement,
 } from "@synara/contracts";
 import {
+  ASYNC_USER_INPUT_ALREADY_ANSWERED,
+  formatAsyncUserInputResponse,
+} from "@synara/shared/asyncUserInput";
+import {
   EventId,
   MAX_PINNED_PROJECTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
@@ -1725,13 +1730,65 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      const questionResponse = command.asyncUserInputResponse;
+      const questionMessage = questionResponse
+        ? targetThread.messages.find((message) => message.id === questionResponse.messageId)
+        : undefined;
+      if (questionResponse) {
+        if (
+          !questionMessage?.asyncUserInput ||
+          questionMessage.role !== "assistant" ||
+          targetThread.modelSelection.provider !== "codex" ||
+          (targetThread.session?.providerName != null &&
+            targetThread.session.providerName !== "codex") ||
+          (command.modelSelection && command.modelSelection.provider !== "codex") ||
+          targetThread.parentThreadId !== null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This asynchronous question is unavailable in this Codex thread.",
+          });
+        }
+        // Serialized command admission makes concurrent answers from multiple
+        // clients a single durable submission, even with different command ids.
+        if (questionMessage.asyncUserInput.response) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: ASYNC_USER_INPUT_ALREADY_ANSWERED,
+          });
+        }
+        if (
+          questionResponse.answers.length !== questionMessage.asyncUserInput.questions.length ||
+          targetThread.messages.some((message) => message.id === command.message.messageId)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Provide one answer per question and a new response message id.",
+          });
+        }
+      }
+      const messageText =
+        questionResponse && questionMessage?.asyncUserInput
+          ? formatAsyncUserInputResponse(
+              questionMessage.asyncUserInput.questions,
+              questionResponse.answers,
+            )
+          : command.message.text;
+      if (messageText.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The question response exceeds the maximum message length.",
+        });
+      }
       // A quit-resume command is planned just before commands are admitted.
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+        command.resumePrecondition === undefined && !questionResponse
+          ? command.runtimeMode
+          : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined
+        command.resumePrecondition === undefined && !questionResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -1750,7 +1807,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceProposedPlan && sourceThread
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
-      const dispatchMode = command.dispatchMode ?? "queue";
+      const dispatchMode = questionResponse ? "steer" : (command.dispatchMode ?? "queue");
       if (sourceProposedPlan && !sourcePlan) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1789,7 +1846,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.message.messageId,
           role: "user",
-          text: command.message.text,
+          text: messageText,
           attachments: command.message.attachments,
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
@@ -1803,7 +1860,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
-          source: "native",
+          source: questionResponse ? "async-user-input" : "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1854,6 +1911,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               createdAt: command.createdAt,
             },
           },
+        ];
+      }
+      if (questionResponse && questionMessage?.asyncUserInput) {
+        return [
+          {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.async-user-input-answered",
+            payload: {
+              threadId: command.threadId,
+              messageId: questionMessage.id,
+              response: {
+                messageId: command.message.messageId,
+                answers: questionResponse.answers,
+              },
+            },
+          },
+          userMessageEvent,
+          queuedEvent,
         ];
       }
       return [userMessageEvent, queuedEvent];
@@ -2573,6 +2653,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
+          ...(command.asyncQuestions
+            ? {
+                asyncUserInput: existingMessage?.asyncUserInput ?? {
+                  questions: command.asyncQuestions,
+                },
+              }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,

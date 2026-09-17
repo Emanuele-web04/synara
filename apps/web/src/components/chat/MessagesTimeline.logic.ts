@@ -822,6 +822,7 @@ function collapseSettledTurns(
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
     const message = row.message;
+    if (message.asyncUserInput) continue;
     // Only the terminal message of a turn owns the collapsed group.
     if (!terminalAssistantMessageIds.has(message.id)) continue;
     // Never collapse the live turn: streaming text or the in-progress turn stays
@@ -847,6 +848,7 @@ function collapseSettledTurns(
         continue;
       }
       if (prev.kind === "message" && prev.message.role === "assistant") {
+        if (prev.message.asyncUserInput) break;
         foldIndices.push(scan);
         continue;
       }

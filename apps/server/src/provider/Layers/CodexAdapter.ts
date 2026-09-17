@@ -7,6 +7,7 @@
  * @module CodexAdapterLive
  */
 import {
+  AsyncUserInputQuestions,
   type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -903,6 +904,19 @@ function mapItemLifecycle(
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
+  const asyncQuestions =
+    itemType === "assistant_message" && Array.isArray(source.questions)
+      ? Schema.decodeUnknownOption(AsyncUserInputQuestions)(
+          source.questions.map((value: unknown) => {
+            const question = asObject(value);
+            return question
+              ? question.options == null
+                ? { title: question.title }
+                : { title: question.title, options: question.options }
+              : value;
+          }),
+        )
+      : Option.none();
 
   return {
     ...(generatedImageReference
@@ -915,6 +929,7 @@ function mapItemLifecycle(
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
+      ...(Option.isSome(asyncQuestions) ? { asyncQuestions: asyncQuestions.value } : {}),
       ...(status ? { status } : {}),
       ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
       ...(generatedImageReference

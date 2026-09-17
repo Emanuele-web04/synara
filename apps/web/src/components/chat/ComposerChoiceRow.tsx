@@ -60,6 +60,7 @@ export function ComposerChoiceRow({
     <button
       type="button"
       disabled={disabled}
+      aria-pressed={selectedProp === undefined ? undefined : selected}
       onClick={onSelect}
       className={cn(
         "group flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",

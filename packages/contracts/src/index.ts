@@ -32,6 +32,7 @@ export * from "./git";
 export * from "./githubProjectProvisioning";
 export * from "./pullRequests";
 export * from "./orchestration";
+export * from "./asyncUserInput";
 export * from "./editor";
 export * from "./environment";
 export * from "./project";

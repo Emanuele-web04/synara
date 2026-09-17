@@ -9,6 +9,10 @@ import {
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
+  clearRemovedAsyncUserInputResponses,
+  mergeAsyncUserInput,
+} from "@synara/shared/asyncUserInput";
+import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
@@ -625,6 +629,10 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
+  const nextAsyncUserInput = mergeAsyncUserInput(
+    existingMessage.asyncUserInput,
+    incomingMessage.asyncUserInput,
+  );
   const nextSkills =
     incomingMessage.skills && incomingMessage.skills.length > 0
       ? incomingMessage.skills
@@ -654,6 +662,7 @@ function mergeStreamingMessage(
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
     providerReferenceArraysEqual(existingMessage.skills, nextSkills) &&
@@ -671,6 +680,7 @@ function mergeStreamingMessage(
   return {
     ...existingMessage,
     text: nextText,
+    ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
     ...(nextAttachments ? { attachments: nextAttachments } : {}),
     ...(nextSkills && nextSkills.length > 0 ? { skills: [...nextSkills] } : {}),
@@ -702,6 +712,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       id: payload.messageId,
       role: payload.role,
       text: payload.text,
+      ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
       dispatchMode: payload.dispatchMode,
       dispatchOrigin: payload.dispatchOrigin,
       startsNewTurn: payload.startsNewTurn,
@@ -1125,6 +1136,28 @@ function applyOrchestrationEvent(
         { ...options, updateSidebarSummary: false },
       );
 
+    case "thread.async-user-input-answered":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === event.payload.messageId && message.asyncUserInput
+              ? {
+                  ...message,
+                  asyncUserInput: mergeAsyncUserInput(message.asyncUserInput, {
+                    ...message.asyncUserInput,
+                    response: event.payload.response,
+                    responseSequence: event.sequence,
+                  }),
+                }
+              : message,
+          ),
+        }),
+        { ...options, updateSidebarSummary: false },
+      );
+
     case "thread.message-sent":
       return applyThreadUpdate(
         state,
@@ -1506,10 +1539,15 @@ function applyOrchestrationEvent(
                 (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER),
             );
           const retainedTurnIds = new Set(turnDiffSummaries.map((entry) => entry.turnId));
-          const messages = retainThreadMessagesAfterRevert(
+          const retainedMessages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             event.payload.turnCount,
+          );
+          const messages = clearRemovedAsyncUserInputResponses(
+            retainedMessages,
+            new Set(retainedMessages.map((message) => message.id)),
+            event.sequence,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -1586,7 +1624,11 @@ function applyOrchestrationEvent(
           return {
             ...thread,
             turnDiffSummaries,
-            messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+            messages: clearRemovedAsyncUserInputResponses(
+              rollback.messages,
+              new Set(rollback.messages.map((message) => message.id)),
+              event.sequence,
+            ).slice(-MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,

@@ -237,6 +237,7 @@ import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
+import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
@@ -870,6 +871,7 @@ export default function ChatView({
   const diffOpen = rawSearch.panel === "diff";
   const browserOpen = rawSearch.panel === "browser";
   const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
+  const onRespondToAsyncUserInput = useAsyncUserInputResponse(threadId);
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   // Read once here so memo bodies depend on the turn id instead of the turn object: a
@@ -2168,7 +2170,9 @@ export default function ChatView({
   const hasNativeUserMessages = useMemo(
     () =>
       activeThread?.messages.some(
-        (message) => message.role === "user" && message.source === "native",
+        (message) =>
+          message.role === "user" &&
+          (message.source === "native" || message.source === "async-user-input"),
       ) ?? false,
     [activeThread?.messages],
   );
@@ -5757,6 +5761,7 @@ export default function ChatView({
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
+                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

@@ -14,6 +14,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { mergeAsyncUserInput } from "@synara/shared/asyncUserInput";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
@@ -550,10 +551,12 @@ export function normalizeChatMessage(
   const previousSkills = previous?.skills ?? [];
   const previousMentions = previous?.mentions ?? [];
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
+  const asyncUserInput = mergeAsyncUserInput(previous?.asyncUserInput, incoming.asyncUserInput);
   if (
     previous &&
     previous.role === incoming.role &&
     previous.text === incoming.text &&
+    previous.asyncUserInput === asyncUserInput &&
     previous.dispatchMode === incoming.dispatchMode &&
     previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.startsNewTurn === incoming.startsNewTurn &&
@@ -574,6 +577,7 @@ export function normalizeChatMessage(
     id: incoming.id,
     role: incoming.role,
     text: incoming.text,
+    ...(asyncUserInput ? { asyncUserInput } : {}),
     ...(incoming.textSegments !== undefined && incoming.textSegments.length > 0
       ? { textSegments: [...incoming.textSegments] }
       : {}),
@@ -639,6 +643,7 @@ function readModelMessageFromChatMessage(
     id: message.id,
     role: message.role,
     text: message.text,
+    ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
     ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
     ...(message.startsNewTurn !== undefined ? { startsNewTurn: message.startsNewTurn } : {}),
@@ -781,6 +786,10 @@ function mergeReadModelMessagesWithLiveHotPath(
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
       startsNewTurn: incomingMessage.startsNewTurn ?? previousMessage.startsNewTurn,
+      asyncUserInput: mergeAsyncUserInput(
+        previousMessage.asyncUserInput,
+        incomingMessage.asyncUserInput,
+      ),
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,

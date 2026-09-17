@@ -315,6 +315,10 @@
     "./searchQuery": {
       "types": "./src/searchQuery.ts",
       "import": "./src/searchQuery.ts"
+    },
+    "./asyncUserInput": {
+      "types": "./src/asyncUserInput.ts",
+      "import": "./src/asyncUserInput.ts"
     }
   },
   "scripts": {
