@@ -1,6 +1,12 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, MessageId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  IsoDateTime,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 import { ProviderKind, RuntimeMode } from "./orchestration";
 
 export const EXTERNAL_MCP_AUDIENCE = "synara.external-mcp" as const;
@@ -19,6 +25,7 @@ export const ExternalMcpCapability = Schema.Literals([
   "tasks:read-project",
   "runtime:local",
   "runtime:full-access",
+  "computer:control",
 ]);
 export type ExternalMcpCapability = typeof ExternalMcpCapability.Type;
 
@@ -49,7 +56,8 @@ export const ExternalMcpStdioConfiguration = Schema.Struct({
   args: Schema.Array(Schema.String),
   env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
-export type ExternalMcpStdioConfiguration = typeof ExternalMcpStdioConfiguration.Type;
+export type ExternalMcpStdioConfiguration =
+  typeof ExternalMcpStdioConfiguration.Type;
 
 export const ExternalMcpIntegration = Schema.Struct({
   integrationId: ExternalMcpIntegrationId,
@@ -77,16 +85,21 @@ export const ExternalMcpCreateIntegrationInput = Schema.Struct({
   // With projectScope "all" the project list is ignored; with "selected"
   // (the default) the service requires at least one project id.
   projectScope: Schema.optional(ExternalMcpProjectScope),
-  projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
+  projectIds: Schema.optional(
+    Schema.Array(ProjectId).check(Schema.isMaxLength(100)),
+  ),
   capabilities: Schema.Array(ExternalMcpCapability)
     .check(Schema.isMinLength(1))
     .check(Schema.isMaxLength(16)),
   expiresInDays: Schema.optional(
-    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(365)),
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(
+      Schema.isLessThanOrEqualTo(365),
+    ),
   ),
   clientKind: Schema.optional(ExternalMcpClientKind),
 });
-export type ExternalMcpCreateIntegrationInput = typeof ExternalMcpCreateIntegrationInput.Type;
+export type ExternalMcpCreateIntegrationInput =
+  typeof ExternalMcpCreateIntegrationInput.Type;
 
 export const ExternalMcpCreateIntegrationResult = Schema.Struct({
   integration: ExternalMcpIntegration,
@@ -95,17 +108,20 @@ export const ExternalMcpCreateIntegrationResult = Schema.Struct({
   setupCommand: TrimmedNonEmptyString,
   stdio: ExternalMcpStdioConfiguration,
 });
-export type ExternalMcpCreateIntegrationResult = typeof ExternalMcpCreateIntegrationResult.Type;
+export type ExternalMcpCreateIntegrationResult =
+  typeof ExternalMcpCreateIntegrationResult.Type;
 
 export const ExternalMcpRevokeIntegrationInput = Schema.Struct({
   integrationId: ExternalMcpIntegrationId,
 });
-export type ExternalMcpRevokeIntegrationInput = typeof ExternalMcpRevokeIntegrationInput.Type;
+export type ExternalMcpRevokeIntegrationInput =
+  typeof ExternalMcpRevokeIntegrationInput.Type;
 
 export const ExternalMcpRefreshPairingInput = Schema.Struct({
   integrationId: ExternalMcpIntegrationId,
 });
-export type ExternalMcpRefreshPairingInput = typeof ExternalMcpRefreshPairingInput.Type;
+export type ExternalMcpRefreshPairingInput =
+  typeof ExternalMcpRefreshPairingInput.Type;
 
 export const ExternalMcpPairInput = Schema.Struct({
   pairingCode: TrimmedNonEmptyString,
@@ -122,16 +138,23 @@ export const ExternalMcpPairResult = Schema.Struct({
 export type ExternalMcpPairResult = typeof ExternalMcpPairResult.Type;
 
 export const ExternalMcpCreateTaskInput = Schema.Struct({
-  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH)),
+  requestId: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH),
+  ),
   projectId: ProjectId,
   provider: ProviderKind,
   model: TrimmedNonEmptyString,
   options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS)),
+  prompt: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS),
+  ),
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(240))),
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
   runtimeMode: Schema.optional(RuntimeMode),
   baseRef: Schema.optional(TrimmedNonEmptyString),
+  // Requires the "computer:control" integration capability. Created tasks get
+  // the computer tool family with per-action approval gating unchanged.
+  enableComputerControl: Schema.optional(Schema.Boolean),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpCreateTaskInput = typeof ExternalMcpCreateTaskInput.Type;
 
@@ -139,15 +162,21 @@ export const ExternalMcpReadTaskInput = Schema.Struct({
   threadId: ThreadId,
   cursor: Schema.optional(Schema.String),
   messageLimit: Schema.optional(
-    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(100)),
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(
+      Schema.isLessThanOrEqualTo(100),
+    ),
   ),
   maxMessageChars: Schema.optional(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(50)).check(
       Schema.isLessThanOrEqualTo(EXTERNAL_MCP_MAX_MESSAGE_CHARS),
     ),
   ),
-  messageIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  messageOffsetChars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  messageIndex: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
+  messageOffsetChars: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
   messageId: Schema.optional(MessageId),
   messageVersion: Schema.optional(TrimmedNonEmptyString),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });

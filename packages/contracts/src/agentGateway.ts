@@ -75,7 +75,12 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   // MCP catalog no longer advertises branch-backed worktree creation.
   baseBranch: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   branchName: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
-  runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+  runtimeMode: Schema.optional(
+    Schema.Literals(["approval-required", "full-access"]),
+  ),
+  // External integrations need the "computer:control" scope; provider sessions
+  // cannot delegate computer control to created threads.
+  enableComputerControl: Schema.optional(Schema.Boolean),
 });
 export type SynaraCreateThreadSpec = typeof SynaraCreateThreadSpec.Type;
 
@@ -108,15 +113,20 @@ export const SynaraGatewayTargetOptionValue = Schema.Union([
   Schema.Number,
   Schema.Boolean,
 ]);
-export type SynaraGatewayTargetOptionValue = typeof SynaraGatewayTargetOptionValue.Type;
+export type SynaraGatewayTargetOptionValue =
+  typeof SynaraGatewayTargetOptionValue.Type;
 
 export const SynaraGatewayTargetOptionRule = Schema.Struct({
   key: Schema.String,
   valueType: Schema.Literals(["string", "number", "boolean"]),
   allowedValues: Schema.Array(SynaraGatewayTargetOptionValue),
-  allowedValuesSource: Schema.Literals(["provider-contract", "model-discovery"]),
+  allowedValuesSource: Schema.Literals([
+    "provider-contract",
+    "model-discovery",
+  ]),
 });
-export type SynaraGatewayTargetOptionRule = typeof SynaraGatewayTargetOptionRule.Type;
+export type SynaraGatewayTargetOptionRule =
+  typeof SynaraGatewayTargetOptionRule.Type;
 
 export const SynaraGatewayTargetConstruction = Schema.Struct({
   modelValueSource: Schema.Literal("providers[].models[].slug"),
@@ -124,13 +134,20 @@ export const SynaraGatewayTargetConstruction = Schema.Struct({
   alternativeOptionKeys: Schema.Array(Schema.String),
   optionSelectionRule: Schema.String,
   providerOptions: Schema.Array(SynaraGatewayTargetOptionRule),
-  optionsByModel: Schema.Record(Schema.String, Schema.Array(SynaraGatewayTargetOptionRule)),
+  optionsByModel: Schema.Record(
+    Schema.String,
+    Schema.Array(SynaraGatewayTargetOptionRule),
+  ),
   exampleTarget: Schema.NullOr(ModelSelection),
 });
-export type SynaraGatewayTargetConstruction = typeof SynaraGatewayTargetConstruction.Type;
+export type SynaraGatewayTargetConstruction =
+  typeof SynaraGatewayTargetConstruction.Type;
 
 export const SynaraCapabilitiesResult = Schema.Struct({
-  targetConstruction: Schema.Record(Schema.String, SynaraGatewayTargetConstruction),
+  targetConstruction: Schema.Record(
+    Schema.String,
+    SynaraGatewayTargetConstruction,
+  ),
   providers: Schema.Array(SynaraProviderCatalog),
   limits: Schema.Struct({
     maxThreadsPerOperation: Schema.Int,
@@ -186,7 +203,14 @@ export type SynaraWaitForThreadsInput = typeof SynaraWaitForThreadsInput.Type;
 export const SynaraWaitedThreadResult = Schema.Struct({
   threadId: ThreadId,
   runId: Schema.NullOr(TurnId),
-  state: Schema.Literals(["idle", "pending", "running", "completed", "error", "interrupted"]),
+  state: Schema.Literals([
+    "idle",
+    "pending",
+    "running",
+    "completed",
+    "error",
+    "interrupted",
+  ]),
   terminal: Schema.Boolean,
   timedOut: Schema.Boolean,
   summary: Schema.NullOr(Schema.String),
