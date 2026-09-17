@@ -1228,12 +1228,15 @@ export class CuaComputerBackend implements ComputerBackend {
     durationMs: number,
     windowId?: string,
   ): Promise<ComputerBackendActionResult> {
-    if (desktopDeliveryMode() !== "foreground")
-      throw new CuaActionError(
-        "Cua 0.28.2 cannot drag in the background on macOS. Use foreground delivery within the authorized Computer task.",
-        "not-dispatched",
-        "foreground_required",
-      );
+    // Both scopes are admitted: a drag is exact-target by construction —
+    // `target()` below requires a live `cua:<pid>:<window_id>` and `local()`
+    // refuses any endpoint outside its bounds. In background mode the native
+    // driver applies its own WindowPointer admission (fresh window ownership,
+    // not-minimized/hidden, current-Space) before posting the window-local
+    // CGEvent gesture, and reports `unverifiable` for surfaces that drop the
+    // events, so the caller still verifies the drop from a fresh screenshot.
+    // A driver build that predates background drag support refuses with
+    // `background_unavailable`; foreground stays the explicit fallback.
     if (durationMs > 10_000)
       throw new CuaActionError(
         "Cua drag duration is limited to 10 seconds.",

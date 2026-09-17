@@ -146,3 +146,78 @@ Verified on this VM under SIP:
 
 Status: blocked at display-attach for creation; window moves are SIP-gated.
 Neither "solved" nor "impossible" is proven; the ABI work continues.
+
+---
+
+## Background drag — verified (native rev 17, 2026-09-22)
+
+Ground truth = a dedicated Cocoa `DragTarget` app (`NSTextView` + local
+`NSEvent` monitor + selection-change logging) so no other agent could touch the
+document. Driver = a 0.28.2 build reporting `synara_native_revision: 17`,
+driven through the embedded socket. "Background" = `ghostty` held the real
+front process for the entire run.
+
+Revision note: the tested build's rev-17 stamp predates the release line's
+rev 17, but the release patch (`388f1693`, commit `77bf7fa1a`) was later
+regenerated from the same working checkout and **does** contain this drag
+change alongside the hidden-workspace lifecycle — verified in the committed
+patch's `drag.rs` hunks and in the staged binary. A driver without the patch
+keeps answering `background_unavailable`, which Synara maps to
+`not-dispatched`, so any older build still fails closed.
+
+| Need                            | Driver call                                                         | Landed? | Front preserved                  |
+| ------------------------------- | ------------------------------------------------------------------- | ------- | -------------------------------- |
+| Select text in inactive window  | `drag` `delivery_mode=background` (window_points + expected bounds) | **YES** | YES — `ghostty` stayed frontmost |
+| Same gesture, reverse direction | `drag` `delivery_mode=background`                                   | **YES** | YES                              |
+
+The app logged the stamped window-local events arriving
+(`EVT 5/1/2 win=371` = move/down/up) and the resulting selection changes:
+
+```text
+SEL loc=4 len=9 [BBBBCCCCD]
+SEL loc=39 len=13 [jjkkkkllllmmm]
+--- front ---
+ghostty
+```
+
+The driver's result was `delivery:{mode:"background"}, effect:"unverifiable",
+route:"synthetic_events"` — honest: the CGEvent drag is posted but the driver
+cannot prove the drop landed, so the caller must verify from a fresh screenshot
+or semantic read-back. `unverifiable` is not a failure signal here.
+
+Safety envelope, enforced at both layers:
+
+- Synara refuses before dispatch unless the target is an exact live
+  `cua:<pid>:<window_id>`, observed geometry still matches, and both endpoints
+  sit inside the window frame (`local()` rejects an endpoint that leaves the
+  bounds).
+- The driver repeats fresh WindowPointer admission (ownership, not
+  minimized/hidden, current Space) immediately before posting, checks both
+  window-local endpoints against the resolved frame, and takes the per-process
+  background mutation lease. A driver that cannot admit the gesture answers a
+  structured refusal (`effect:"refused"`), which Synara maps to
+  `not-dispatched` — no replay, ever.
+
+### Hover verdict — do not expose `computer_hover`
+
+- Stamped background `mouseMoved` events do reach an inactive AppKit process —
+  the monitor logged them and `hitTest` ran.
+- View-level hover does **not** follow: with `acceptsMouseMovedEvents = true`
+  and `NSTrackingArea` installed, no `mouseMoved`/tracking callback fired on
+  the inactive window.
+- On Electron, process-scoped `CGEventPostToPid` mouse movement is dead in
+  every tested form (matrix row above).
+
+Process-level arrival is not a hover contract. No `computer_hover` tool is
+exposed; hover-dependent UI stays a foreground-delivery concern.
+
+### Native delta
+
+The tested patch removes upstream's unconditional `background_unavailable`
+drag gate and mirrors the click path: `resolve_input_frame`, both-endpoint
+bounds check, `gate_background_window_action(WindowPointer)` admission lease
+acquired before cursor animation or dispatch, then the window-local stamped
+CGEvent gesture. Foreground delivery is untouched and remains the explicit
+fallback for surfaces that drop background events.
+
+> > > > > > > 270f5dd6a (feat(computer): background drag tool for exact windows)

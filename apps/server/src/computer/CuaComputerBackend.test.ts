@@ -1940,15 +1940,111 @@ describe("Cua native boundary", () => {
     });
     expect(f.calls.filter((c) => c.name === "click" || isTyping(c.name))).toHaveLength(0);
   });
-  it("refuses background drag before reaching Cua", async () => {
+  it("sends an exact-target background drag as window-local points", async () => {
     const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    await f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
+    expect(f.calls.filter((call) => call.name === "drag")).toEqual([
+      expect.objectContaining({
+        args: {
+          pid: 10,
+          window_id: 20,
+          delivery_mode: "background",
+          from_x: 25,
+          from_y: 10,
+          to_x: 75,
+          to_y: 30,
+          coordinate_space: "window_points",
+          duration_ms: 500,
+          expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
+        },
+      }),
+    ]);
+  });
+  it("refuses a background drag when no fresh observation grounds the frame", async () => {
+    const f = fixture();
+    // No captureScreenshot: the backend has no observed geometry to convert
+    // screen points against, so the drag refuses rather than guess a frame.
     await expect(
-      f.backend.drag({ x: 0, y: 0 }, { x: 10, y: 10 }, 500, "cua:10:20"),
+      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "stale_geometry" });
+    expect(f.calls.some((call) => call.name === "drag")).toBe(false);
+  });
+  it("refuses a background drag whose endpoint leaves the exact window", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    await expect(
+      f.backend.drag({ x: -275, y: 30 }, { x: -90, y: 50 }, 500, "cua:10:20"),
+    ).rejects.toMatchObject({ effect: "not-dispatched" });
+    expect(f.calls.some((call) => call.name === "drag")).toBe(false);
+  });
+  it("refuses a drag that names no exact window before reaching Cua", async () => {
+    const f = fixture();
+    await expect(f.backend.drag({ x: 0, y: 0 }, { x: 10, y: 10 }, 500)).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "window_required",
+    });
+    expect(f.calls.some((call) => call.name === "drag")).toBe(false);
+  });
+  it("propagates the native background admission refusal without replay", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    // A driver that cannot admit the gesture (older builds report
+    // `background_unavailable`; a stale target reports a WindowPointer refusal)
+    // answers with a structured refusal. Synara surfaces it as not-dispatched
+    // and never replays — one native call, one rejection.
+    f.onTool("drag", () => ({
+      isError: true,
+      structuredContent: {
+        effect: "refused",
+        code: "background_unavailable",
+        pid: 10,
+        window_id: 20,
+      },
+      content: [
+        {
+          type: "text",
+          text: 'Background drag is unavailable on this driver; use delivery_mode:"foreground".',
+        },
+      ],
+    }));
+    await expect(
+      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
     ).rejects.toMatchObject({
       effect: "not-dispatched",
-      code: "foreground_required",
+      code: "background_unavailable",
     });
-    expect(f.calls).toHaveLength(0);
+    expect(f.calls.filter((call) => call.name === "drag")).toHaveLength(1);
+  });
+  it("still sends a foreground drag as window-local points", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
+    );
+    expect(f.calls.filter((call) => call.name === "drag")).toEqual([
+      expect.objectContaining({
+        args: expect.objectContaining({
+          delivery_mode: "foreground",
+          from_x: 25,
+          from_y: 10,
+          to_x: 75,
+          to_y: 30,
+        }),
+      }),
+    ]);
   });
 });
 

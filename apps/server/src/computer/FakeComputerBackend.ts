@@ -589,6 +589,7 @@ export class FakeComputerBackend implements ComputerBackend {
     from: ComputerPoint,
     to: ComputerPoint,
     durationMs: number,
+    _windowId?: string,
   ): Promise<ComputerBackendActionResult> {
     this.record("drag", from, to, durationMs);
     this.throwIfFailed("drag");

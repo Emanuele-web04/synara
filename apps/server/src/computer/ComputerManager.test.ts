@@ -515,6 +515,30 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("scopes a drag to the window its origin names", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+
+    // Both endpoints inside fake-calculator (1050,120,420,620). The drag grabs
+    // the named window: its origin's frame is the authority for scoping.
+    await manager.drag(
+      "thread-1",
+      { x: 1_100, y: 200, windowId: "fake-calculator" },
+      { x: 1_200, y: 400, windowId: "fake-calculator" },
+      400,
+    );
+    expect(backend.callsFor("focusWindow").at(-1)?.args).toEqual(["fake-calculator"]);
+    // The Fake records the gesture itself; the focusWindow call above is what
+    // proves the window the drag was scoped to.
+    expect(backend.callsFor("drag").at(-1)?.args).toEqual([
+      { x: 1_100, y: 200 },
+      { x: 1_200, y: 400 },
+      400,
+    ]);
+
+    await manager.dispose();
+  });
+
   it("keeps window targeting working on a backend that cannot raise windows", async () => {
     const backend = new FakeComputerBackend();
     (backend as unknown as { raiseWindow?: undefined }).raiseWindow = undefined;

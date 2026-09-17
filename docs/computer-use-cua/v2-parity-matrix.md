@@ -71,6 +71,16 @@ The gap summary above predates the decisive input matrix. Verified results:
   (short-lived front excursion + restore, operator-invisible): verified for
   keys, clicks (DOM focus + mouseenter), and wheel. Background = semantic AX
   writes only.
+- **Gap 6 (background drag) — LANDS on AppKit (experimental rev 17,
+  2026-09-22).** The driver patch that removes upstream's unconditional
+  `background_unavailable` drag gate is verified: window-local stamped
+  press-drag-release selects text in an inactive Cocoa window with the
+  operator's front process untouched (input-matrix-2026-09-17.md). Synara
+  admits `delivery_mode=background` on `computer_drag` for exact
+  `cua:<pid>:<window_id>` targets with both endpoints in-window; drivers
+  without the patch refuse `background_unavailable` → `not-dispatched`, and
+  foreground stays the fallback for surfaces that drop background events.
+  Electron remains dead — the recharacterization above still holds there.
 - **Gap 4 (menus/frames) — WIRED.** `invoke_menu`, `set_window_frame`,
   `list_apps`, `verify_state`, `zoom`, `kill_app` verified live on TextEdit
   and shipped through protocol/backend/manager/gateway as
