@@ -562,6 +562,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  conversationOnly?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const timelineMessages = input.timelineEntries.flatMap((entry) =>
@@ -728,11 +729,13 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  collapseSettledTurns(nextRows, {
-    terminalAssistantMessageIds,
-    activeTurnInProgress: input.activeTurnInProgress ?? false,
-    activeTurnId: input.activeTurnId ?? null,
-  });
+  if (input.conversationOnly !== true) {
+    collapseSettledTurns(nextRows, {
+      terminalAssistantMessageIds,
+      activeTurnInProgress: input.activeTurnInProgress ?? false,
+      activeTurnId: input.activeTurnId ?? null,
+    });
+  }
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
   // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
@@ -740,6 +743,7 @@ export function deriveMessagesTimelineRows(input: {
   // real start time to count from; the trailing "Thinking" shimmer covers the
   // gap before one exists. Inserted after collapse so folding is untouched.
   if (
+    input.conversationOnly !== true &&
     input.isWorking &&
     input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)

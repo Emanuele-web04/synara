@@ -102,6 +102,7 @@ interface ChatTranscriptPaneProps {
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  conversationOnly?: boolean;
   workspaceRoot: string | undefined;
   keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
   availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
@@ -177,6 +178,7 @@ export function ChatTranscriptPane({
   messageChangeSignal,
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
+  conversationOnly,
   workspaceRoot,
   keybindings,
   availableEditors,
@@ -266,6 +268,7 @@ export function ChatTranscriptPane({
             timelineEntries={timelineEntries}
             messageChangeSignal={messageChangeSignal}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            conversationOnly={conversationOnly === true}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}

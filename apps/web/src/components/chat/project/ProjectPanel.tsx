@@ -1,17 +1,16 @@
 import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
-import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
 import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
 import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { basenameOfPath } from "~/file-icons";
-import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, WorkflowIcon } from "~/lib/icons";
+import { BotIcon, CheckIcon, PauseIcon, PlayIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import {
@@ -20,10 +19,14 @@ import {
   EnvironmentPanelTitle,
   EnvironmentRow,
   EnvironmentSectionDivider,
-  EnvironmentSectionLabel,
 } from "../environment/EnvironmentRow";
 import { ProjectAgentDialog } from "./ProjectAgentDialog";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
+import {
+  partitionProjectFocusRows,
+  projectDigestFocusRows,
+  type ProjectFocusRow,
+} from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
 
 export interface ProjectPanelProps {
@@ -54,8 +57,15 @@ export function ProjectPanel({
   onOpenThread,
 }: ProjectPanelProps) {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  const [taskDraft, setTaskDraft] = useState("");
   const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
+  const focusRows = useMemo(() => partitionProjectFocusRows(agent.tasks), [agent.tasks]);
+  const digestFocus = useMemo(
+    () => projectDigestFocusRows(agent.overview?.digest?.focusItems ?? []),
+    [agent.overview?.digest?.focusItems],
+  );
+  const contextDocuments = PROJECT_CONTEXT_PREVIEW_DOCUMENTS.filter(
+    (document) => document.logicalPath !== "notes.md",
+  );
   const coordinatorName =
     agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
   const folderLabel = basenameOfPath(workspacePath) || workspacePath || projectName;
@@ -134,32 +144,16 @@ export function ProjectPanel({
 
       {configured ? (
         <>
-          {agent.overview?.goal &&
-          (agent.overview.goal.status === "active" || agent.overview.goal.status === "paused") ? (
-            <EnvironmentRow
-              icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-              label={
-                <span className="truncate" title={agent.overview.goal.objective}>
-                  {agent.overview.goal.objective}
-                </span>
-              }
-              trailing={
-                <span className="text-[10px] text-muted-foreground">
-                  {agent.overview.goal.status === "paused" ? "Paused" : "Working"}
-                </span>
-              }
-              onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
-            />
-          ) : null}
-
-          {agent.overview?.digest ? (
-            <>
-              <EnvironmentSectionDivider />
-              <EnvironmentCollapsibleSection label="Summary">
-                <ProjectSummary digest={agent.overview.digest} onOpenThread={onOpenThread} />
-              </EnvironmentCollapsibleSection>
-            </>
-          ) : null}
+          <EnvironmentSectionDivider />
+          <ProjectFocusCard
+            summary={agent.overview?.digest?.summary ?? null}
+            updating={
+              agent.overview?.digest?.generationState === "pending" ||
+              agent.overview?.digest?.generationState === "running"
+            }
+            items={digestFocus.length > 0 ? digestFocus : focusRows.open}
+            onOpenThread={onOpenThread}
+          />
 
           {agent.overview?.blockers.map((blocker) => (
             <p key={blocker.taskId} className="px-2 text-[11px] text-destructive">
@@ -167,10 +161,29 @@ export function ProjectPanel({
             </p>
           ))}
 
-          {PROJECT_CONTEXT_PREVIEW_DOCUMENTS.map((document, index) => (
+          <div className="flex flex-col gap-0.5 px-1 py-1">
+            {focusRows.open.map((row) => (
+              <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
+            ))}
+            {focusRows.done.map((row) => (
+              <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
+            ))}
+          </div>
+
+          {focusRows.archived.length > 0 ? (
+            <EnvironmentCollapsibleSection label="Archived" defaultOpen={false}>
+              <div className="flex flex-col gap-0.5 px-1 pb-1">
+                {focusRows.archived.map((row) => (
+                  <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
+                ))}
+              </div>
+            </EnvironmentCollapsibleSection>
+          ) : null}
+
+          {contextDocuments.map((document) => (
             <div key={document.logicalPath}>
               <EnvironmentSectionDivider />
-              <EnvironmentCollapsibleSection label={document.label} defaultOpen={index === 0}>
+              <EnvironmentCollapsibleSection label={document.label} defaultOpen={false}>
                 <ProjectContextFile
                   logicalPath={document.logicalPath}
                   editable={document.editable}
@@ -181,81 +194,6 @@ export function ProjectPanel({
               </EnvironmentCollapsibleSection>
             </div>
           ))}
-
-          <EnvironmentSectionDivider />
-          <EnvironmentCollapsibleSection label="Work" defaultOpen={false}>
-            <WorkList
-              tasks={agent.tasks}
-              busy={agent.busy}
-              taskDraft={taskDraft}
-              onTaskDraftChange={setTaskDraft}
-              onCreate={() => {
-                if (taskDraft.trim().length === 0) return;
-                void agent.createTask(taskDraft.trim());
-                setTaskDraft("");
-              }}
-              onAccept={(task) => void agent.acceptTask(task)}
-              onArchive={(task) => void agent.archiveTask(task)}
-              onOpenThread={onOpenThread}
-              loadEvidence={agent.loadEvidence}
-            />
-          </EnvironmentCollapsibleSection>
-
-          <EnvironmentSectionDivider />
-          <EnvironmentCollapsibleSection label="Activity" defaultOpen={false}>
-            <div className="flex flex-col gap-1 px-1 py-1">
-              {agent.threads.length > 0 ? (
-                <>
-                  <EnvironmentSectionLabel>Thread coverage</EnvironmentSectionLabel>
-                  {agent.threads.map((thread) => (
-                    <label key={thread.threadId} className="flex items-center gap-2 text-[11px]">
-                      <input
-                        type="checkbox"
-                        checked={!thread.excluded}
-                        onChange={(event) =>
-                          void agent.excludeThread(thread.threadId, !event.target.checked)
-                        }
-                      />
-                      <button
-                        type="button"
-                        className="text-left"
-                        onClick={() => onOpenThread(thread.threadId)}
-                      >
-                        {thread.threadId} ({thread.summaryStatus})
-                      </button>
-                    </label>
-                  ))}
-                  <EnvironmentSectionDivider />
-                </>
-              ) : null}
-              {agent.activity.length === 0 ? (
-                <p className="text-[12px] text-muted-foreground">No activity yet.</p>
-              ) : (
-                agent.activity.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="rounded px-1 py-0.5 text-left text-[11px] hover:bg-[var(--color-background-elevated-secondary)]"
-                    onClick={() => {
-                      if (item.actorThreadId) onOpenThread(item.actorThreadId);
-                    }}
-                  >
-                    {item.summary}
-                  </button>
-                ))
-              )}
-              {agent.activityCursor ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void agent.loadMoreActivity()}
-                >
-                  Load older activity
-                </Button>
-              ) : null}
-            </div>
-          </EnvironmentCollapsibleSection>
         </>
       ) : (
         <p className="px-2 py-1 text-[12px] text-muted-foreground">
@@ -318,156 +256,96 @@ export function ProjectPanel({
   );
 }
 
-function WorkList({
-  tasks,
-  busy,
-  taskDraft,
-  onTaskDraftChange,
-  onCreate,
-  onAccept,
-  onArchive,
+const CONTEXT_TEXTAREA_CLASS_NAME =
+  "relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2";
+
+function ProjectFocusCard({
+  summary,
+  updating,
+  items,
   onOpenThread,
-  loadEvidence,
 }: {
-  tasks: ReturnType<typeof useProjectAgent>["tasks"];
-  busy: boolean;
-  taskDraft: string;
-  onTaskDraftChange: (value: string) => void;
-  onCreate: () => void;
-  onAccept: (task: ReturnType<typeof useProjectAgent>["tasks"][number]) => void;
-  onArchive: (task: ReturnType<typeof useProjectAgent>["tasks"][number]) => void;
+  summary: string | null;
+  updating: boolean;
+  items: ReadonlyArray<ProjectFocusRow>;
   onOpenThread: (threadId: ThreadId) => void;
-  loadEvidence: ReturnType<typeof useProjectAgent>["loadEvidence"];
 }) {
-  const [evidenceByTask, setEvidenceByTask] = useState<Record<string, string>>({});
   return (
-    <div className="flex flex-col gap-1 px-1 py-1">
-      <form
-        className="flex gap-1"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onCreate();
-        }}
-      >
-        <input
-          value={taskDraft}
-          onChange={(event) => onTaskDraftChange(event.target.value)}
-          className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
-          placeholder="New task"
-        />
-        <Button type="submit" size="sm" disabled={busy || taskDraft.trim().length === 0}>
-          Add
-        </Button>
-      </form>
-      {tasks.length === 0 ? (
-        <p className="text-[12px] text-muted-foreground">No tasks yet.</p>
+    <div className="mx-1 mb-1 rounded-xl bg-[var(--color-background-elevated-secondary)] px-2.5 py-2">
+      <p className="px-0.5 pb-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground">
+        Focus
+      </p>
+      {summary ? (
+        <p className="px-0.5 pb-1.5 text-[12px] text-muted-foreground">{summary}</p>
+      ) : updating ? (
+        <p className="px-0.5 pb-1.5 text-[10px] text-muted-foreground">Updating…</p>
+      ) : null}
+      {items.length === 0 && !summary ? (
+        <p className="px-0.5 text-[12px] text-muted-foreground">Nothing in focus yet.</p>
       ) : (
-        tasks.map((task) => (
-          <div key={task.id} className="rounded-md px-1 py-1">
-            <p className="text-[12px]">
-              {task.title} <span className="text-muted-foreground">({task.status})</span>
-            </p>
-            {task.dependsOnTaskIds.length > 0 ? (
-              <p className="text-[10px] text-muted-foreground">
-                Depends on {task.dependsOnTaskIds.length} task
-                {task.dependsOnTaskIds.length === 1 ? "" : "s"}
-              </p>
-            ) : null}
-            {task.assignedThreadId ? (
-              <button
-                type="button"
-                className="text-[11px] text-muted-foreground underline"
-                onClick={() => onOpenThread(task.assignedThreadId!)}
-              >
-                Open worker thread
-              </button>
-            ) : null}
-            {task.status === "review" ? (
-              <div className="flex flex-col gap-1">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    void loadEvidence(task.id).then((evidence) => {
-                      setEvidenceByTask((current) => ({
-                        ...current,
-                        [task.id]:
-                          evidence.map((item) => item.summary).join(" · ") || "No evidence yet",
-                      }));
-                    });
-                  }}
-                >
-                  Show evidence
-                </Button>
-                {evidenceByTask[task.id] ? (
-                  <p className="text-[11px] text-muted-foreground">{evidenceByTask[task.id]}</p>
-                ) : null}
-                <Button type="button" size="sm" onClick={() => onAccept(task)}>
-                  Accept evidence
-                </Button>
-              </div>
-            ) : null}
-            {task.archivedAt ? (
-              <p className="text-[10px] text-muted-foreground">Archived</p>
-            ) : (
-              <Button type="button" size="sm" variant="ghost" onClick={() => onArchive(task)}>
-                Archive
-              </Button>
-            )}
-          </div>
-        ))
+        <ul className="flex flex-col gap-1.5">
+          {items.map((item) => (
+            <li key={item.id} className="flex gap-1.5 text-[12px] leading-snug">
+              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-foreground/45" aria-hidden />
+              <ProjectFocusLink row={item} onOpenThread={onOpenThread} />
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-const CONTEXT_TEXTAREA_CLASS_NAME =
-  "relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2";
-
-function ProjectSummary({
-  digest,
+function ProjectHistoryRow({
+  row,
   onOpenThread,
 }: {
-  digest: NonNullable<ReturnType<typeof useProjectAgent>["overview"]>["digest"];
+  row: ProjectFocusRow;
   onOpenThread: (threadId: ThreadId) => void;
 }) {
-  if (!digest) return null;
-  const updating = digest.generationState === "pending" || digest.generationState === "running";
   return (
-    <div className="flex flex-col gap-1.5 px-2 pb-1.5">
-      {digest.summary ? (
-        <ChatMarkdown
-          text={digest.summary}
-          cwd={undefined}
-          isStreaming={updating}
-          className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
-        />
-      ) : updating ? (
-        <div className="flex flex-col gap-1.5" aria-hidden>
-          <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
-          <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
-        </div>
-      ) : (
-        <p className="text-[12px] text-muted-foreground">No summary yet.</p>
-      )}
-      {updating ? <p className="text-[10px] text-muted-foreground">Updating…</p> : null}
-      {digest.generationState === "failed" ? (
-        <p className="text-[11px] text-muted-foreground" role="status">
-          {digest.lastError ?? "Could not update the summary. It will retry on its own."}
-        </p>
-      ) : null}
-      {digest.focusItems.slice(0, 5).map((item) => (
-        <EnvironmentRow
-          key={item.id}
-          icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-          label={item.title}
-          onClick={() => {
-            if (item.sourceThreadId) onOpenThread(item.sourceThreadId);
-          }}
-        />
-      ))}
+    <div className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+      <span
+        className={cn(
+          "mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+          row.state === "done" || row.state === "archived"
+            ? "border-foreground/35 text-foreground/70"
+            : "border-foreground/30",
+        )}
+        aria-hidden
+      >
+        {row.state === "done" || row.state === "archived" ? (
+          <CheckIcon className="size-2.5" />
+        ) : null}
+      </span>
+      <ProjectFocusLink row={row} onOpenThread={onOpenThread} />
     </div>
+  );
+}
+
+function ProjectFocusLink({
+  row,
+  onOpenThread,
+}: {
+  row: ProjectFocusRow;
+  onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const title = row.threadId ? (
+    <button
+      type="button"
+      className="text-left font-medium text-foreground underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground/60"
+      onClick={() => onOpenThread(row.threadId!)}
+    >
+      {row.title}
+    </button>
+  ) : (
+    <span className="font-medium text-foreground">{row.title}</span>
+  );
+  return (
+    <p className="min-w-0 text-[12px] leading-snug text-muted-foreground">
+      {title}
+      {row.detail ? <> — {row.detail}</> : null}
+    </p>
   );
 }
 

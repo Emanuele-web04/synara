@@ -116,6 +116,7 @@ import {
   resolveThreadFindJumpTarget,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
+import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
@@ -445,6 +446,8 @@ interface MessagesTimelineProps {
   /** Stable source messages, before plans/tools reshape the presentation rows. */
   messageChangeSignal?: unknown;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /** Coordinator/bot chats hide tool rows and keep a text conversation. */
+  conversationOnly?: boolean;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -534,6 +537,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   messageChangeSignal: messageChangeSignalProp,
   turnDiffSummaryByAssistantMessageId,
+  conversationOnly: conversationOnlyProp,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -747,6 +751,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
+  const conversationOnly = conversationOnlyProp === true;
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -759,6 +764,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        conversationOnly,
       }),
     [
       timelineEntries,
@@ -769,6 +775,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      conversationOnly,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -1361,6 +1368,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        !conversationOnly &&
         (() => {
           const groupId = row.id;
           // Creation milestones are reserved for the end-of-turn recap card.
@@ -2123,7 +2131,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </DisclosureRegion>
                 </div>
               )}
-              {hasCollapsedWork && (
+              {hasCollapsedWork && !conversationOnly && (
                 <div className="mb-3">
                   <Collapsible
                     className="group/collapsed-work"
@@ -2171,25 +2179,38 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="group min-w-0 py-0.5">
-                {renderWorkDisplay(leadingWorkDisplay, "leading")}
+                {conversationOnly ? null : renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {messageText !== null ? (
                   <div
                     data-assistant-message-id={row.message.id}
                     data-chat-find-document-id={row.message.id}
                   >
                     <ChatMarkdown
-                      text={messageText}
+                      text={
+                        conversationOnly
+                          ? rewriteThreadIdsAsMarkdownLinks(
+                              messageText,
+                              synaraThreadCreationRecaps.flatMap((creation) =>
+                                creation.threads.map((thread) => ({
+                                  id: thread.threadId,
+                                  title: thread.title,
+                                })),
+                              ),
+                            )
+                          : messageText
+                      }
                       cwd={markdownCwd}
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      {...(conversationOnly && onOpenThread ? { onOpenThread } : {})}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
                 ) : null}
-                {renderWorkDisplay(inlineWorkDisplay, "inline")}
-                {inlineEditedFilesFromTurnSummary.length > 0 && (
+                {conversationOnly ? null : renderWorkDisplay(inlineWorkDisplay, "inline")}
+                {!conversationOnly && inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {inlineEditedFilesFromTurnSummary.map((file) => (
                       <button
@@ -2211,26 +2232,44 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
-                  ? synaraThreadCreationRecaps.map((creation) => (
-                      <div key={creation.operationId} className="mt-2 mb-4">
-                        <SynaraThreadCreationCard
-                          creation={creation}
-                          {...(onOpenThread
-                            ? {
-                                onOpenThread: (createdThreadId) =>
-                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
-                              }
-                            : {})}
-                        />
-                      </div>
-                    ))
+                  ? synaraThreadCreationRecaps.map((creation) =>
+                      conversationOnly ? (
+                        <p
+                          key={creation.operationId}
+                          className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[12px]"
+                        >
+                          {creation.threads.map((thread) => (
+                            <button
+                              key={thread.threadId}
+                              type="button"
+                              className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+                              onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
+                            >
+                              {thread.title}
+                            </button>
+                          ))}
+                        </p>
+                      ) : (
+                        <div key={creation.operationId} className="mt-2 mb-4">
+                          <SynaraThreadCreationCard
+                            creation={creation}
+                            {...(onOpenThread
+                              ? {
+                                  onOpenThread: (createdThreadId) =>
+                                    onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                                }
+                              : {})}
+                          />
+                        </div>
+                      ),
+                    )
                   : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
                   // live-changes strip owns this surface; showing the card too
                   // would duplicate it and pre-empt the strip mid-turn.
-                  if (!turnSummary || row.assistantTurnInProgress) return null;
+                  if (conversationOnly || !turnSummary || row.assistantTurnInProgress) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
@@ -2474,7 +2513,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
-      {row.kind === "working-header" && (
+      {row.kind === "working-header" && !conversationOnly && (
         <div>
           {/* Non-collapsible twin of the settled "Worked for" header: same label
               tone, size, and full-width divider, but counting up live. -ml-0.5

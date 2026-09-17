@@ -294,6 +294,7 @@ import {
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
+import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
 import {
   resolveAuxiliarySurface,
@@ -1624,6 +1625,10 @@ export default function ChatView({
     );
     return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
   }, [activeThread?.messages, optimisticUserMessages]);
+  const { coordinatorThreadIds } = useProjectAgentSummaries();
+  const isCoordinatorConversation = Boolean(
+    activeThread && coordinatorThreadIds.has(activeThread.id),
+  );
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -5807,6 +5812,7 @@ export default function ChatView({
                     timelineEntries={timelineEntries}
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                    conversationOnly={isCoordinatorConversation}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
