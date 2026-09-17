@@ -94,6 +94,15 @@ function rect(value: unknown): ComputerRect {
 }
 const sameRect = (a: ComputerRect, b: ComputerRect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+/** Longest one same-pid semantic text write may hold its lane before the
+ * caller fails honestly. The underlying write still drains so lane order
+ * survives the timeout and nothing is replayed. Same-pid writes serialize
+ * because concurrent AX insertions to one pid race and report success while
+ * nothing sticks (three-window fix spec). */
+export const CUA_SEMANTIC_TEXT_LANE_HOLD_MS = 15_000;
+/** Settle gap the lane holds after each semantic text write, so the next
+ * same-pid insertion starts after AX quiesces. Bounded and inside the lane. */
+export const CUA_SEMANTIC_TEXT_LANE_GAP_MS = 100;
 /** How long an observed element tree may serve internal target resolution.
  * Native dispatch still validates the element token, so expiry is the drift
  * bound for a control that survives but moved or changed meaning. */
@@ -118,6 +127,30 @@ function cuaKey(value: string): string {
     " ": "space",
   };
   return aliases[key] ?? key;
+}
+
+/**
+ * Bounds one same-pid lane write. Rejects past the hold while leaving the
+ * raced write alone: the lane still drains in order, and the error reports
+ * possible partial dispatch so no caller may replay it.
+ */
+function withSemanticTextLaneTimeout<A>(write: Promise<A>, holdMs: number): Promise<A> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new CuaActionError(
+          "Semantic text delivery timed out; the write may have partially dispatched. " +
+            "Observe the target before acting; never retype blindly.",
+          "dispatched-unknown",
+        ),
+      );
+    }, holdMs);
+    timer.unref?.();
+  });
+  return Promise.race([write, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 /** The single macOS backend. Cua owns native actions; Synara owns admission,
@@ -173,11 +206,17 @@ export class CuaComputerBackend implements ComputerBackend {
       endpoint?: string;
       capability?: string | undefined;
       request?: typeof cuaRequest;
+      /** Test injection so lane tests do not wait out the real hold. */
+      semanticTextLaneHoldMs?: number;
+      /** Test injection so lane tests do not sleep for real. */
+      semanticTextLaneGapMs?: number;
     } = {},
   ) {
     this.endpoint = options.endpoint ?? process.env[CUA_HOST_SOCKET_ENV];
     this.capability = options.capability;
     this.request = options.request ?? cuaRequest;
+    this.semanticTextLaneHoldMs = options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
+    this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
     this.stills = new StillFramePublisher({
       capture: async () => {
         // Reuse a recent tool observation; idle panes spend at most one capture
@@ -198,6 +237,13 @@ export class CuaComputerBackend implements ComputerBackend {
     });
   }
   private readonly request: typeof cuaRequest;
+  private readonly semanticTextLaneHoldMs: number;
+  private readonly semanticTextLaneGapMs: number;
+  /**
+   * One tail promise per pid lane. Tails only ever resolve, so a failed write
+   * never wedges its lane-mates; entries are pruned when their owner settles.
+   */
+  private readonly semanticTextLanes = new Map<string, Promise<void>>();
   onEvent(listener: ComputerBackendEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -859,6 +905,82 @@ export class CuaComputerBackend implements ComputerBackend {
       args.semantic_only === true &&
       desktopDeliveryMode() !== "foreground" &&
       point === undefined;
+    if (exactSemanticText) {
+      return this.semanticTextInLane(pid, () =>
+        this.inputDispatch(name, args, windowId, point, preparedBounds, true, {
+          pid,
+          window_id,
+          window,
+          baseline,
+        }),
+      );
+    }
+    return this.inputDispatch(name, args, windowId, point, preparedBounds, false, {
+      pid,
+      window_id,
+      window,
+      baseline,
+    });
+  }
+
+  /**
+   * Serialize background semantic text writes that share a pid. Concurrent AX
+   * insertions to one process race and report success while nothing sticks,
+   * so one lane holds one write at a time; different pids still overlap and
+   * every other tool keeps its own path. Tails only resolve, the map prunes
+   * on settle, and the hold timeout fails the caller honestly while the lane
+   * drains in order behind it.
+   */
+  private async semanticTextInLane(
+    pid: number,
+    write: () => Promise<ComputerBackendActionResult>,
+  ): Promise<ComputerBackendActionResult> {
+    const key = `semantic-text:pid:${pid}`;
+    const predecessor = this.semanticTextLanes.get(key) ?? Promise.resolve();
+    let releaseLane!: () => void;
+    const laneHeld = new Promise<void>((resolve) => {
+      releaseLane = resolve;
+    });
+    this.semanticTextLanes.set(key, laneHeld);
+    const laneWaitStarted = Date.now();
+    try {
+      await predecessor;
+      const laneWaitMs = Date.now() - laneWaitStarted;
+      const deliveryStarted = Date.now();
+      try {
+        const result = await withSemanticTextLaneTimeout(write(), this.semanticTextLaneHoldMs);
+        console.debug("[computer] semantic text lane write", {
+          pid,
+          laneWaitMs,
+          deliveryMs: Date.now() - deliveryStarted,
+          verified: result.verified,
+          effect: result.effect,
+        });
+        return result;
+      } finally {
+        await new Promise((resolve) => setTimeout(resolve, this.semanticTextLaneGapMs));
+      }
+    } finally {
+      releaseLane();
+      if (this.semanticTextLanes.get(key) === laneHeld) this.semanticTextLanes.delete(key);
+    }
+  }
+
+  private async inputDispatch(
+    name: string,
+    args: Record<string, unknown>,
+    windowId: string | undefined,
+    point: ComputerPoint | undefined,
+    preparedBounds: ComputerRect | undefined,
+    exactSemanticText: boolean,
+    resolved: {
+      pid: number;
+      window_id: number;
+      window: ComputerWindow;
+      baseline: number | undefined;
+    },
+  ): Promise<ComputerBackendActionResult> {
+    const { pid, window_id, window, baseline } = resolved;
     if (!window.visible && !exactSemanticText) {
       const message =
         "The target window is not on the current Space or not on screen. Only an exact retained semantic text element may be mutated without activation; pointer, synthetic keyboard, and generic window actions require computer_activate_window followed by fresh state.";
