@@ -1,6 +1,6 @@
 // Trigger cloud probe after workflow registration.\nconst { app, BrowserWindow } = require("electron");
-const repeats = Number(process.argv[2] ?? 5);
-const durationMs = Number(process.argv[3] ?? 30000);
+const numericArgs = process.argv.slice(1).filter((x) => /^\\d+$/.test(x)).map(Number);\nconst repeats = numericArgs.at(-2) ?? 3;
+const durationMs = numericArgs.at(-1) ?? 10000;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function snapshot(){return app.getAppMetrics().map(m=>({pid:m.pid,type:m.type,cpu:m.cpu.cumulativeCPUUsage}));}
 function delta(a,b){const m=new Map(a.map(x=>[x.pid,x]));const rows=b.map(x=>({type:x.type,cpuSeconds:m.has(x.pid)?Math.max(0,x.cpu-m.get(x.pid).cpu):0}));const totalCpuSeconds=rows.reduce((s,x)=>s+x.cpuSeconds,0);return {totalCpuSeconds,averageCorePercent:totalCpuSeconds/(durationMs/1000)*100};}
