@@ -103,14 +103,16 @@ function rect(value: unknown): ComputerRect {
 }
 const sameRect = (a: ComputerRect, b: ComputerRect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-/** Longest one same-pid semantic text write may hold its lane before the
+/** Longest one same-window semantic text write may hold its lane before the
  * caller fails honestly. The underlying write still drains so lane order
- * survives the timeout and nothing is replayed. Same-pid writes serialize
- * because concurrent AX insertions to one pid race and report success while
- * nothing sticks (three-window fix spec). */
+ * survives the timeout and nothing is replayed. Same-window writes serialize
+ * because the native semantic lease is per (pid, window): a second concurrent
+ * lease for one exact window is refused outright (driver rev 12), and AX
+ * insertions plus their readback verification on one element must not
+ * interleave. Different windows — same pid included — overlap. */
 export const CUA_SEMANTIC_TEXT_LANE_HOLD_MS = 15_000;
 /** Settle gap the lane holds after each semantic text write, so the next
- * same-pid insertion starts after AX quiesces. Bounded and inside the lane. */
+ * same-window insertion starts after AX quiesces. Bounded and inside the lane. */
 export const CUA_SEMANTIC_TEXT_LANE_GAP_MS = 100;
 /** How long an observed element tree may serve internal target resolution.
  * Native dispatch still validates the element token, so expiry is the drift
@@ -139,7 +141,7 @@ function cuaKey(value: string): string {
 }
 
 /**
- * Bounds one same-pid lane write. Rejects past the hold while leaving the
+ * Bounds one same-window lane write. Rejects past the hold while leaving the
  * raced write alone: the lane still drains in order, and the error reports
  * possible partial dispatch so no caller may replay it.
  */
@@ -256,8 +258,9 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly semanticTextLaneHoldMs: number;
   private readonly semanticTextLaneGapMs: number;
   /**
-   * One tail promise per pid lane. Tails only ever resolve, so a failed write
-   * never wedges its lane-mates; entries are pruned when their owner settles.
+   * One tail promise per (pid, window) lane. Tails only ever resolve, so a
+   * failed write never wedges its lane-mates; entries are pruned when their
+   * owner settles.
    */
   private readonly semanticTextLanes = new Map<string, Promise<void>>();
   onEvent(listener: ComputerBackendEventListener): () => void {
@@ -940,7 +943,7 @@ export class CuaComputerBackend implements ComputerBackend {
       desktopDeliveryMode() !== "foreground" &&
       point === undefined;
     if (exactSemanticText) {
-      return this.semanticTextInLane(pid, () =>
+      return this.semanticTextInLane(pid, window_id, () =>
         this.inputDispatch(name, args, windowId, point, preparedBounds, true, {
           pid,
           window_id,
@@ -958,18 +961,22 @@ export class CuaComputerBackend implements ComputerBackend {
   }
 
   /**
-   * Serialize background semantic text writes that share a pid. Concurrent AX
-   * insertions to one process race and report success while nothing sticks,
-   * so one lane holds one write at a time; different pids still overlap and
-   * every other tool keeps its own path. Tails only resolve, the map prunes
-   * on settle, and the hold timeout fails the caller honestly while the lane
-   * drains in order behind it.
+   * Serialize background semantic text writes that share one exact window.
+   * The native semantic lease is per (pid, window): a second concurrent lease
+   * on the same window is refused outright, and a web element's
+   * compose-set_value-reread sequence must not interleave with a sibling
+   * write on the same element. Keying the lane on the window — not the pid —
+   * lets distinct windows of one app type truly concurrently while the exact
+   * target keeps ordering. Tails only resolve, the map prunes on settle, and
+   * the hold timeout fails the caller honestly while the lane drains in order
+   * behind it.
    */
   private async semanticTextInLane(
     pid: number,
+    window_id: number,
     write: () => Promise<ComputerBackendActionResult>,
   ): Promise<ComputerBackendActionResult> {
-    const key = `semantic-text:pid:${pid}`;
+    const key = `semantic-text:${pid}:${window_id}`;
     const predecessor = this.semanticTextLanes.get(key) ?? Promise.resolve();
     let releaseLane!: () => void;
     const laneHeld = new Promise<void>((resolve) => {
@@ -985,6 +992,7 @@ export class CuaComputerBackend implements ComputerBackend {
         const result = await withSemanticTextLaneTimeout(write(), this.semanticTextLaneHoldMs);
         console.debug("[computer] semantic text lane write", {
           pid,
+          windowId: `cua:${pid}:${window_id}`,
           laneWaitMs,
           deliveryMs: Date.now() - deliveryStarted,
           verified: result.verified,
@@ -1335,8 +1343,8 @@ export class CuaComputerBackend implements ComputerBackend {
     value: string,
   ): Promise<ComputerBackendActionResult> {
     const windowId = node.windowId!;
-    const { pid } = await this.target(windowId);
-    return this.semanticTextInLane(pid, async () => {
+    const { pid, window_id } = await this.target(windowId);
+    return this.semanticTextInLane(pid, window_id, async () => {
       const before = await this.resolveWebField(windowId, node);
       if (!before)
         throw new CuaActionError(

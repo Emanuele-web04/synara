@@ -44,6 +44,11 @@ function fixture(options?: {
   let afterCapture: (() => void) | undefined;
   let overviewWait: Promise<void> | undefined;
   let typeGate: Promise<void> | undefined;
+  // type_text requests the fake driver is holding at once, so lane tests can
+  // prove writes overlapped at the native boundary rather than merely
+  // resolving in some order.
+  let typingInFlight = 0;
+  let typingMaxInFlight = 0;
   let extraWindows: Array<Record<string, unknown>> = [];
   let toolHandlers: Record<string, (args: Record<string, unknown>) => Record<string, unknown>> = {};
   let setValueSwallowed = false;
@@ -75,21 +80,29 @@ function fixture(options?: {
           },
         },
       };
-    if (isTyping(request.name) && failure) throw failure;
-    if (isTyping(request.name) && typeGate) await typeGate;
-    if (isTyping(request.name) && nativeRefusal)
-      return {
-        ok: true,
-        desktopEpoch: responseEpoch,
-        result: {
-          isError: true,
-          structuredContent: {
-            effect: "refused",
-            code: "same_pid_keyboard_ambiguity",
+    if (isTyping(request.name)) {
+      typingInFlight += 1;
+      typingMaxInFlight = Math.max(typingMaxInFlight, typingInFlight);
+      try {
+        if (failure) throw failure;
+        if (typeGate) await typeGate;
+      } finally {
+        typingInFlight -= 1;
+      }
+      if (nativeRefusal)
+        return {
+          ok: true,
+          desktopEpoch: responseEpoch,
+          result: {
+            isError: true,
+            structuredContent: {
+              effect: "refused",
+              code: "same_pid_keyboard_ambiguity",
+            },
+            content: [{ type: "text", text: "No actuator ran." }],
           },
-          content: [{ type: "text", text: "No actuator ran." }],
-        },
-      };
+        };
+    }
     let data: unknown = {};
     if (request.name === "check_permissions") {
       data = {
@@ -212,6 +225,7 @@ function fixture(options?: {
     gateTypeText: (wait: Promise<void> | undefined) => {
       typeGate = wait;
     },
+    typingMaxInFlight: () => typingMaxInFlight,
     pauseDesktop: (paused: boolean) => {
       desktopPaused = paused;
     },
@@ -474,7 +488,55 @@ describe("Cua native boundary", () => {
     expect(result).toMatchObject({ verified: "unconfirmed", effect: "dispatched-unknown" });
   });
 
-  it("semantic text lane serializes same-pid writes", async () => {
+  it("semantic text lane serializes same-window writes", async () => {
+    const f = fixture({ semanticTextLaneGapMs: 0 });
+    // Two distinct elements in one window still share the lane: the native
+    // semantic lease is per (pid, window), so a second concurrent write to the
+    // window would be refused outright rather than queued.
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+      {
+        role: "AXTextField",
+        label: "Notes",
+        frame: { x: -290, y: 60, width: 120, height: 20 },
+        element_token: "notes-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const firstNode = state.root!.children[0]!;
+    const secondNode = state.root!.children[1]!;
+    const firstTarget = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node: firstNode,
+      point: firstNode.activationPoint!,
+    };
+    const secondTarget = {
+      target: { label: "Notes", windowId: "cua:10:20" },
+      node: secondNode,
+      point: secondNode.activationPoint!,
+    };
+    let releaseGate!: () => void;
+    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+    const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
+
+    const first = f.backend.typeText("alpha", "cua:10:20", firstTarget);
+    await vi.waitFor(() => expect(typeTexts()).toHaveLength(1));
+    const second = f.backend.typeText("bravo", "cua:10:20", secondTarget);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(typeTexts()).toHaveLength(1);
+    expect(f.typingMaxInFlight()).toBe(1);
+    releaseGate!();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
+  });
+
+  it("semantic text lane overlaps same-pid writes to different windows", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0 });
     f.setWindows([
       {
@@ -515,14 +577,14 @@ describe("Cua native boundary", () => {
     const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
 
     const first = f.backend.typeText("alpha", "cua:10:20", firstTarget);
-    await vi.waitFor(() => expect(typeTexts()).toHaveLength(1));
     const second = f.backend.typeText("bravo", "cua:10:21", secondTarget);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(typeTexts()).toHaveLength(1);
+    // Both writes reach the driver while the gate is still held — in flight
+    // together at the native boundary, not queued one behind the other.
+    await vi.waitFor(() => expect(typeTexts()).toHaveLength(2));
+    expect(f.typingMaxInFlight()).toBe(2);
     releaseGate!();
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
   });
 
   it("semantic text lane overlaps different-pid writes", async () => {
@@ -568,9 +630,85 @@ describe("Cua native boundary", () => {
     const first = f.backend.typeText("alpha", "cua:10:20", firstTarget);
     const second = f.backend.typeText("bravo", "cua:11:21", secondTarget);
     await vi.waitFor(() => expect(typeTexts()).toHaveLength(2));
+    expect(f.typingMaxInFlight()).toBe(2);
     releaseGate!();
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("semantic text lane interleaves three same-pid windows truly concurrently", async () => {
+    const f = fixture({ semanticTextLaneGapMs: 0 });
+    // The three-window fixture case: three exact text targets in three windows
+    // of one Electron pid. The lane must let all three reach the driver at
+    // once — only same-window writes serialize.
+    f.setWindows([
+      {
+        pid: 10,
+        window_id: 21,
+        title: "Owned fixture B",
+        bounds: { x: 100, y: 20, width: 200, height: 100 },
+        is_on_screen: true,
+        on_current_space: true,
+        z_index: 0,
+      },
+      {
+        pid: 10,
+        window_id: 22,
+        title: "Owned fixture C",
+        bounds: { x: 500, y: 20, width: 200, height: 100 },
+        is_on_screen: true,
+        on_current_space: true,
+        z_index: 0,
+      },
+    ]);
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+      .children[0]!;
+    f.captureWindow(21);
+    const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
+      .root!.children[0]!;
+    f.captureWindow(22);
+    const thirdNode = (await f.backend.getState({ windowId: "cua:10:22", includeTree: true })).root!
+      .children[0]!;
+    const firstTarget = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node: firstNode,
+      point: firstNode.activationPoint!,
+    };
+    const secondTarget = {
+      target: { label: "Message", windowId: "cua:10:21" },
+      node: secondNode,
+      point: secondNode.activationPoint!,
+    };
+    const thirdTarget = {
+      target: { label: "Message", windowId: "cua:10:22" },
+      node: thirdNode,
+      point: thirdNode.activationPoint!,
+    };
+    let releaseGate!: () => void;
+    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+    const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
+
+    const writes = [
+      f.backend.typeText("alpha", "cua:10:20", firstTarget),
+      f.backend.typeText("bravo", "cua:10:21", secondTarget),
+      f.backend.typeText("charlie", "cua:10:22", thirdTarget),
+    ];
+    // All three writes arrive while the gate is still held: three semantic
+    // writes to one pid in flight at once, not a serialized queue.
+    await vi.waitFor(() => expect(typeTexts()).toHaveLength(3));
+    expect(f.typingMaxInFlight()).toBe(3);
+    releaseGate!();
+
+    await expect(Promise.all(writes)).resolves.toHaveLength(3);
+    expect(typeTexts().map((call) => call.args?.window_id)).toEqual([20, 21, 22]);
   });
 
   it("semantic text lane leaves synthetic keyboard writes alone", async () => {
@@ -622,17 +760,6 @@ describe("Cua native boundary", () => {
 
   it("semantic text lane holds the gap between consecutive writes", async () => {
     const f = fixture({ semanticTextLaneGapMs: 60 });
-    f.setWindows([
-      {
-        pid: 10,
-        window_id: 21,
-        title: "Owned fixture B",
-        bounds: { x: 100, y: 20, width: 200, height: 100 },
-        is_on_screen: true,
-        on_current_space: true,
-        z_index: 0,
-      },
-    ]);
     f.setElements([
       {
         role: "AXTextField",
@@ -641,23 +768,19 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
       .children[0]!;
-    f.captureWindow(21);
-    const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
-      .root!.children[0]!;
+    // Consecutive writes to the same exact element: the second cannot start
+    // until the first's settle gap has elapsed.
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
     const started = Date.now();
     await Promise.all([
-      f.backend.typeText("alpha", "cua:10:20", {
-        target: { label: "Message", windowId: "cua:10:20" },
-        node: firstNode,
-        point: firstNode.activationPoint!,
-      }),
-      f.backend.typeText("bravo", "cua:10:21", {
-        target: { label: "Message", windowId: "cua:10:21" },
-        node: secondNode,
-        point: secondNode.activationPoint!,
-      }),
+      f.backend.typeText("alpha", "cua:10:20", target),
+      f.backend.typeText("bravo", "cua:10:20", target),
     ]);
     expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(2);
     expect(Date.now() - started).toBeGreaterThanOrEqual(40);

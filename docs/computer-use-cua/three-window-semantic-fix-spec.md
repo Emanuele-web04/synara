@@ -124,3 +124,15 @@ Not done from the spec: 10× consecutive stability runs (3 so far). The
 "decisive experiment" it asked for ran differently than planned — instead of
 1-vs-3 windows of the same mechanism, the mechanism itself was replaced after
 the input matrix proved AXSelectedText dead on Chromium.
+
+Lane granularity amendment, 2026-09-18: the `semanticTextInLane` key narrowed
+from `pid` to `(pid, window_id)` — the exact granularity of the native rev-12
+semantic lease. Writes to different windows of one pid now overlap at the
+driver instead of queueing server-side; writes to one exact window still
+serialize (a second concurrent native lease on the same pid+window is refused
+outright, so the lane orders rather than risks a refusal), and the hold/gap
+pacing params are unchanged. The original same-pid race rationale was already
+disproven by the input matrix — the real defect was the dead AXSelectedText
+route — so the pid-wide lane was defence-in-depth, not load-bearing. Server
+unit tests cover same-window ordering, same-pid cross-window overlap, and a
+three-window same-pid interleave.
