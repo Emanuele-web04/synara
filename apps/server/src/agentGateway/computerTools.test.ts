@@ -151,10 +151,11 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — six native-driver parity tools (list_apps,
-    // verify_state, zoom, set_window_frame, invoke_menu, kill_app) measure
-    // 52,272 chars of schema; the bound still trips on accidental bloat, so
-    // raise it only with the new surface measured.
+    // The catalog grew again — eight native-driver parity tools (list_apps,
+    // verify_state, zoom, get_accessibility_tree, get_cursor_position,
+    // set_window_frame, invoke_menu, kill_app) measure 54,335 chars of schema;
+    // the bound still trips on accidental bloat, so raise it only with the new
+    // surface measured.
     expect(JSON.stringify(definitions).length).toBeLessThan(56_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
@@ -298,6 +299,8 @@ describe("agent gateway computer tools", () => {
       "computer_list_apps",
       "computer_verify_state",
       "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
       "computer_set_window_frame",
       "computer_invoke_menu",
       "computer_kill_app",
@@ -1732,7 +1735,9 @@ describe("agent gateway computer tools", () => {
     const description = byName.get("computer_scroll")?.definition.description ?? "";
 
     expect(description).toContain("scroll.traveledY");
-    expect(description).toContain("does not issue corrective retries on macOS");
+    // macOS now measures and gears like the other platforms; the description
+    // must not carry the old "no corrective retries" caveat.
+    expect(description).toContain("pre-divides later requests by what it learned");
     // The advice that replaced scroll-hunting stays.
     expect(description).toContain("computer_get_state");
   });

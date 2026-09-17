@@ -2439,6 +2439,60 @@ export function makeAgentGatewayComputerTools(
         };
       }),
     },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_get_accessibility_tree",
+        description:
+          "Return the driver's lightweight desktop inventory — running apps and their on-screen windows with pid, title and window id — the fast discovery read that works before any OS grant is given. Pass window_id to scope the answer to the app that owns that exact window. It carries no control elements: computer_get_state stays the heavier per-window elements digest.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            window_id: {
+              type: "string",
+              description:
+                "Exact window from computer_list_windows; scopes the snapshot to the app that owns it.",
+            },
+          },
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "List desktop apps and windows",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_get_accessibility_tree", async (args) =>
+        manager.getAccessibilityTree(readWindowIdArg(args)),
+      ),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_get_cursor_position",
+        description:
+          "Read the human cursor's current position in desktop points — top-left origin, the same coordinate space computer_list_windows reports bounds in. Pure read: it never moves the pointer. Pass window_id to also learn whether the point lies inside that window's bounds.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            window_id: {
+              type: "string",
+              description:
+                "Exact window from computer_list_windows; adds whether the cursor is inside its bounds.",
+            },
+          },
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Read cursor position",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_get_cursor_position", async (args) =>
+        manager.getCursorPosition(readWindowIdArg(args)),
+      ),
+    },
     actionEntry(
       "computer_set_window_frame",
       "Set window frame",
@@ -2593,7 +2647,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll at an optional target. The target is resolved before the gesture and is never guessed. Scroll distance is measured in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even when it names no coordinates at all — roughly 80 pixels per notch of a physical wheel in a full-resolution window capture. Each request is limited to half the captured width or height so observations overlap; scroll.limitedTo reports any reduced request in desktop pixels. Read the returned image before scrolling again, because screenshot scales may differ. Applications may travel a different distance from the injected wheel units. On macOS Cua quantizes one operation to 120-pixel notches up to 50 notches, accepts one axis, and does not support modifiers. Synara reports the injected deltas and any measured scroll.traveledY; it does not issue corrective retries on macOS. A traveledY of 0 means the content did not move at all, which usually means the page is already at its edge — a wheel cannot scroll past the top or bottom. If you are scrolling to hunt for a control, stop and call computer_get_state instead: its elements list names the labeled controls on screen, and one of those may already be targetable by label. ${POINTER_COORDINATE_HINT}`,
+      `Scroll at an optional target. The target is resolved before the gesture and is never guessed. Scroll distance is measured in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even when it names no coordinates at all — roughly 80 pixels per notch of a physical wheel in a full-resolution window capture. Both axes may scroll in one request and modifiers may be held during the gesture. Each request is limited to half the captured width or height so observations overlap; scroll.limitedTo reports any reduced request in desktop pixels. Read the returned image before scrolling again, because screenshot scales may differ. Applications may travel a different distance from the injected wheel units; Synara measures what actually moved, reports scroll.traveledY, and pre-divides later requests by what it learned (scroll.gearing). On macOS the wheel is quantized to 120-pixel notches up to 50 notches per axis per dispatch. A traveledY of 0 means the content did not move at all, which usually means the page is already at its edge — a wheel cannot scroll past the top or bottom. If you are scrolling to hunt for a control, stop and call computer_get_state instead: its elements list names the labeled controls on screen, and one of those may already be targetable by label. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {

@@ -23,6 +23,8 @@ export const COMPUTER_TOOL_TITLES = {
   computer_list_apps: "List apps",
   computer_verify_state: "Verify state",
   computer_zoom: "Zoom into a window",
+  computer_get_accessibility_tree: "List apps and windows",
+  computer_get_cursor_position: "Read the cursor position",
   computer_click: "Click",
   computer_double_click: "Double-click",
   computer_triple_click: "Triple-click",

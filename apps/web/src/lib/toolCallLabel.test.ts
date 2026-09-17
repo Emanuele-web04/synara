@@ -305,6 +305,8 @@ describe("deriveReadableToolTitle", () => {
     ["computer_invoke_menu", "Invoke a menu item"],
     ["computer_verify_state", "Verify state"],
     ["computer_zoom", "Zoom into a window"],
+    ["computer_get_accessibility_tree", "List apps and windows"],
+    ["computer_get_cursor_position", "Read the cursor position"],
     ["mcp__synara__computer_kill_app", "Force-quit an app"],
   ])("uses the curated Computer label for %s", (toolName, expected) => {
     expect(

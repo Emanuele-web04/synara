@@ -47,6 +47,10 @@ export function cursorToolActivity(tool: string): string {
       return "Checking state";
     case "computer_zoom":
       return "Zooming in";
+    case "computer_get_accessibility_tree":
+      return "Reading desktop inventory";
+    case "computer_get_cursor_position":
+      return "Reading cursor position";
     case "computer_kill_app":
       return "Force-quitting app";
     case "computer_perform_action":

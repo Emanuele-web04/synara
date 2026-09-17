@@ -6,6 +6,8 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_click",
   "computer_double_click",
   "computer_drag",
+  "computer_get_accessibility_tree",
+  "computer_get_cursor_position",
   "computer_get_screen_size",
   "computer_get_state",
   "computer_hotkey",

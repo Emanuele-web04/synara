@@ -32,6 +32,8 @@ describe("computerToolName", () => {
       "computer_list_apps",
       "computer_verify_state",
       "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
       "computer_click",
       "computer_double_click",
       "computer_triple_click",

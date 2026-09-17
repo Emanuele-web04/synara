@@ -1,8 +1,12 @@
+import { COMPUTER_WINDOW_LIST_MAX_LENGTH } from "@synara/contracts";
 import type {
+  ComputerAccessibilityTreeApp,
+  ComputerAccessibilityTreeWindow,
   ComputerApp,
   ComputerAvailability,
   ComputerBuildSignature,
   ComputerCapabilities,
+  ComputerCursorPosition,
   ComputerHealth,
   ComputerPoint,
   ComputerRect,
@@ -52,6 +56,7 @@ import {
 import { StillFramePublisher } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
+import { currentComputerCall, timedComputerLeg } from "./computerCallContext.ts";
 import { jpegDimensions } from "../jpegHeader.ts";
 import { pngDimensions } from "../pngHeader.ts";
 
@@ -313,23 +318,30 @@ export class CuaComputerBackend implements ComputerBackend {
     // interruption (lock/resume) — even when the reply itself carries the new
     // generation — so it is rejected rather than trusted as current.
     const sendBaseline = this.desktopEpoch;
+    const endpoint = this.endpoint;
     try {
-      const reply = await this.request<CuaReply>(
-        this.endpoint,
-        {
-          ...request,
-          ...(task ? { task } : {}),
-          ...(request.method === "call" &&
-          (request.name === "get_window_state" || request.name === "get_desktop_state")
-            ? { modelObservation: allowModelObservation && isModelDesktopObservationActive() }
-            : {}),
-          capability: this.capability,
-        },
-        {
-          signal: desktopOperationSignal(),
-          mutation,
-          timeoutMs: request.method === "setup" ? CUA_SETUP_TIMEOUT_MS : 35_000,
-        },
+      // The socket round trip, counted and timed on the active call's timing
+      // record when SYNARA_CUA_TIMING_LOG is on — durations only, never the
+      // request or reply payloads.
+      currentComputerCall()?.timing?.count("host_calls");
+      const reply = await timedComputerLeg("host", () =>
+        this.request<CuaReply>(
+          endpoint,
+          {
+            ...request,
+            ...(task ? { task } : {}),
+            ...(request.method === "call" &&
+            (request.name === "get_window_state" || request.name === "get_desktop_state")
+              ? { modelObservation: allowModelObservation && isModelDesktopObservationActive() }
+              : {}),
+            capability: this.capability,
+          },
+          {
+            signal: desktopOperationSignal(),
+            mutation,
+            timeoutMs: request.method === "setup" ? CUA_SETUP_TIMEOUT_MS : 35_000,
+          },
+        ),
       );
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
@@ -373,7 +385,12 @@ export class CuaComputerBackend implements ComputerBackend {
     mutation = false,
     allowModelObservation = true,
   ): Promise<CuaToolResult> {
-    const reply = await this.host({ method: "call", name, args }, mutation, allowModelObservation);
+    // The native operation itself, on the call's timing record — the name is
+    // a fixed driver vocabulary, and nothing from `args` is recorded.
+    currentComputerCall()?.timing?.count("native_calls");
+    const reply = await timedComputerLeg("call", () =>
+      this.host({ method: "call", name, args }, mutation, allowModelObservation),
+    );
     const result = reply.result ?? {};
     if (result.isError || result.structuredContent?.effect === "refused") {
       const structured = result.structuredContent ?? {};
@@ -1089,10 +1106,12 @@ export class CuaComputerBackend implements ComputerBackend {
         ["value_readback", "window_change"].includes(text(record(item).kind)),
       );
     const mode = text(record(data.delivery).mode, 32) || "unknown";
+    // Most tools report `route`; a few (scroll among them) still report `path`.
+    const route = text(data.route, 64) || text(data.path, 64);
     return {
       windowId: window.id,
       ...(point ? { point } : {}),
-      deliveryPath: `cua-${text(data.route, 64) || "unknown"}-${mode}`,
+      deliveryPath: `cua-${route || "unknown"}-${mode}`,
       verified: confirmed
         ? "confirmed"
         : data.effect === "unconfirmed" || data.effect === "suspected_noop"
@@ -1212,25 +1231,27 @@ export class CuaComputerBackend implements ComputerBackend {
       bounds,
     );
   }
+  /**
+   * A scroll is one wheel gesture at the target point. Two axes and held
+   * modifiers ride the same gesture: native rev 16 takes signed per-axis
+   * ticks plus a modifier list and posts them as one pixel-unit wheel stream,
+   * so a diagonal or ctrl-scroll no longer splits into two dispatches.
+   *
+   * When the target carries an element token and the request is an unmodified
+   * vertical scroll, the driver can try its quietest route first — AppKit
+   * scroll-bar AX presses, which never touch the pointer at all — before
+   * falling back to the wheel. Signed-tick mode deliberately skips that path:
+   * the deltas describe a wheel gesture, and mixing AX travel into wheel
+   * gearing would teach the calibration loop a ratio that is neither.
+   */
   async scroll(
     p: ComputerPoint | null,
     dx: number,
     dy: number,
     w?: string,
     modifiers?: readonly ComputerInputModifier[],
+    target?: ComputerResolvedTarget,
   ) {
-    if (dx && dy)
-      throw new CuaActionError(
-        "Cua accepts one scroll axis per operation.",
-        "not-dispatched",
-        "unsupported_operation",
-      );
-    if (modifiers?.length)
-      throw new CuaActionError(
-        "Cua 0.28.2 does not support modified scroll on macOS.",
-        "not-dispatched",
-        "unsupported_operation",
-      );
     if (!p)
       throw new CuaActionError("Scroll requires a screenshot target point.", "not-dispatched");
     if (!dx && !dy)
@@ -1242,25 +1263,43 @@ export class CuaComputerBackend implements ComputerBackend {
         effect: "not-dispatched" as const,
       };
     // Pinned macOS source defines one targeted line-notch as 120 wheel pixels.
-    // Expose the quantization; never multiply a requested pixel into a notch.
-    const amount = Math.max(1, Math.round(Math.abs(dx || dy) / 120));
-    if (amount > 50)
+    // Expose the quantization per axis; never multiply a requested pixel into
+    // a notch. A nonzero axis still delivers at least one notch.
+    const ticksX = dx ? Math.max(1, Math.round(Math.abs(dx) / 120)) : 0;
+    const ticksY = dy ? Math.max(1, Math.round(Math.abs(dy) / 120)) : 0;
+    if (ticksX > 50 || ticksY > 50)
       throw new CuaActionError(
         "Scroll exceeds Cua's 50-notch limit.",
         "not-dispatched",
         "unsupported_operation",
       );
-    const result = await this.input(
-      "scroll",
-      { direction: dx ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up", amount, by: "line" },
-      w,
-      p,
-    );
+    const mods = modifiers?.length ? modifiers.map(cuaKey) : undefined;
+    const token = target ? this.elementTokens.get(target.node) : undefined;
+    const args: Record<string, unknown> =
+      token !== undefined && !dx && mods === undefined
+        ? // AX-first: the driver resolves the token, tries scroll-bar presses,
+          // then falls back to a wheel at the element's centre.
+          {
+            direction: dy > 0 ? "down" : "up",
+            amount: ticksY,
+            by: "line",
+            element_token: token,
+          }
+        : {
+            // Wheel gesture: `direction` stays the schema-required dominant
+            // axis while the signed ticks carry the real per-axis amounts —
+            // including a two-axis diagonal in one dispatch.
+            direction: ticksY ? (dy > 0 ? "down" : "up") : dx > 0 ? "right" : "left",
+            delta_x: ticksX ? Math.sign(dx) * ticksX : 0,
+            delta_y: ticksY ? Math.sign(dy) * ticksY : 0,
+            ...(mods ? { modifiers: mods } : {}),
+          };
+    const result = await this.input("scroll", args, w, p);
     return {
       ...result,
       scrollDelta: {
-        deltaX: dx ? Math.sign(dx) * amount * 120 : 0,
-        deltaY: dy ? Math.sign(dy) * amount * 120 : 0,
+        deltaX: ticksX ? Math.sign(dx) * ticksX * 120 : 0,
+        deltaY: ticksY ? Math.sign(dy) * ticksY * 120 : 0,
       },
     };
   }
@@ -1746,6 +1785,101 @@ export class CuaComputerBackend implements ComputerBackend {
       bytesBase64: image.data,
       windowId: window.id,
       capturedAt: new Date().toISOString(),
+    };
+  }
+  async getAccessibilityTree(windowId?: string): Promise<{
+    readonly apps: readonly ComputerAccessibilityTreeApp[];
+    readonly windows: readonly ComputerAccessibilityTreeWindow[];
+    readonly truncated: boolean;
+  }> {
+    // The driver's snapshot is desktop-wide and takes no arguments at all —
+    // the named tool is the fast no-grant inventory, not a per-window AX
+    // walk. `window_id` scoping is therefore a Synara-side filter to the app
+    // that owns the exact window, resolved through the same fresh target()
+    // every window read uses.
+    const scopedPid = windowId === undefined ? undefined : (await this.target(windowId)).pid;
+    const result = await this.call("get_accessibility_tree");
+    const data = result.structuredContent ?? {};
+    if (!Array.isArray(data.apps) || !Array.isArray(data.windows))
+      throw new CuaActionError(
+        "Cua returned an invalid desktop inventory.",
+        "not-dispatched",
+        "invalid_response",
+      );
+    const apps: ComputerAccessibilityTreeApp[] = [];
+    for (const value of data.apps) {
+      const row = record(value);
+      const pid = number(row.pid);
+      const name = text(row.name);
+      // This inventory only ever lists running apps, so a non-positive pid is
+      // a malformed row, not the not-running marker list_apps uses.
+      if (!Number.isSafeInteger(pid) || pid <= 0 || name.length === 0) continue;
+      if (scopedPid !== undefined && pid !== scopedPid) continue;
+      const bundleId = text(row.bundle_id, 512);
+      apps.push({ pid, name, ...(bundleId ? { bundleId } : {}) });
+    }
+    const windows: ComputerAccessibilityTreeWindow[] = [];
+    for (const value of data.windows) {
+      const row = record(value);
+      const pid = number(row.pid);
+      const wid = number(row.window_id);
+      // Without the driver id pair no Synara window id can be formed, so the
+      // row is unresolvable rather than merely thin.
+      if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(wid) || wid <= 0)
+        continue;
+      if (scopedPid !== undefined && pid !== scopedPid) continue;
+      const appName = text(row.app_name);
+      const bounds = optionalRect(row.bounds);
+      const zIndex = number(row.z_index);
+      windows.push({
+        id: `cua:${pid}:${wid}`,
+        pid,
+        ...(appName ? { appName } : {}),
+        title: text(row.title),
+        ...(bounds ? { bounds } : {}),
+        ...(typeof row.is_on_screen === "boolean" ? { onScreen: row.is_on_screen } : {}),
+        ...(Number.isInteger(zIndex) && zIndex >= 0 ? { zIndex } : {}),
+      });
+    }
+    const truncated = apps.length > 1_024 || windows.length > COMPUTER_WINDOW_LIST_MAX_LENGTH;
+    return {
+      apps: apps.slice(0, 1_024),
+      windows: windows.slice(0, COMPUTER_WINDOW_LIST_MAX_LENGTH),
+      truncated,
+    };
+  }
+  async getCursorPosition(
+    windowId?: string,
+  ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">> {
+    // A scoped read also answers "is the cursor inside this window": the
+    // position itself is desktop-global either way, so scoping resolves the
+    // window's current bounds rather than changing what the driver returns.
+    const window = windowId === undefined ? undefined : (await this.target(windowId)).window;
+    const result = await this.call("get_cursor_position");
+    const data = result.structuredContent ?? {};
+    const x = number(data.x);
+    const y = number(data.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y))
+      throw new CuaActionError(
+        "Cua returned no cursor position.",
+        "not-dispatched",
+        "invalid_response",
+      );
+    const bounds = window?.bounds;
+    return {
+      x,
+      y,
+      capturedAt: new Date().toISOString(),
+      ...(window ? { windowId: window.id } : {}),
+      ...(bounds
+        ? {
+            insideWindow:
+              x >= bounds.x &&
+              x < bounds.x + bounds.width &&
+              y >= bounds.y &&
+              y < bounds.y + bounds.height,
+          }
+        : {}),
     };
   }
   async attachStream(listener: ComputerFrameListener) {

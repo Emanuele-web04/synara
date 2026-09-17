@@ -2,11 +2,14 @@ import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudge
 import {
   COMPUTER_DELIVERY_PATH_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
+  type ComputerAccessibilityTreeApp,
+  type ComputerAccessibilityTreeWindow,
   type ComputerActionResult,
   type ComputerApp,
   type ComputerAvailability,
   type ComputerBuildSignature,
   type ComputerCapabilities,
+  type ComputerCursorPosition,
   type ComputerDeliveryVerification,
   type ComputerHealth,
   type ComputerId,
@@ -440,6 +443,30 @@ export interface ComputerBackend {
    */
   zoomWindow?(windowId: string, region: ComputerRect): Promise<ComputerZoomResult>;
   /**
+   * The driver's desktop-wide inventory — running apps and their on-screen
+   * windows — a cheaper discovery read than a per-window accessibility walk.
+   * `windowId` scopes the answer to the app that owns that exact window; the
+   * driver itself only ever enumerates the whole desktop, so the scoping is
+   * this layer's filter, and the caller still validates the window id exists
+   * before asking. Optional because a compositor plugin may only see windows;
+   * the agent tool refuses when it is absent.
+   */
+  getAccessibilityTree?(windowId?: string): Promise<{
+    readonly apps: readonly ComputerAccessibilityTreeApp[];
+    readonly windows: readonly ComputerAccessibilityTreeWindow[];
+    readonly truncated: boolean;
+  }>;
+  /**
+   * The human cursor's position in desktop points — a read, never a move.
+   * `windowId` scopes the answer with whether the point lies inside that
+   * window's bounds; the position itself is desktop-global either way.
+   * Optional because a backend with a private pointer seat may have no shared
+   * cursor to report; the agent tool refuses when it is absent.
+   */
+  getCursorPosition?(
+    windowId?: string,
+  ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">>;
+  /**
    * Force-terminate a process by pid — the escalation path after the
    * cooperative close (cmd+q, window close) has already failed. Unsaved state
    * is lost; approval-gated at the tool surface.
@@ -495,6 +522,7 @@ export interface ComputerBackend {
     deltaY: number,
     windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
+    target?: ComputerResolvedTarget,
   ): Promise<ComputerBackendActionResult | void>;
   /**
    * Whether an exact semantic text target can be mutated without process

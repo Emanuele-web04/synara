@@ -1427,6 +1427,131 @@ describe("Cua native boundary", () => {
       effect: "dispatched-unknown",
     });
   });
+  it("reads the desktop inventory and scopes it to the scoped window's app", async () => {
+    const f = fixture();
+    f.onTool("get_accessibility_tree", () => ({
+      structuredContent: {
+        apps: [
+          { pid: 10, name: "TextEdit", bundle_id: "com.apple.TextEdit" },
+          { pid: 20, name: "Finder" },
+          { pid: -3, name: "bogus" },
+          { pid: 30 },
+        ],
+        windows: [
+          {
+            window_id: 20,
+            pid: 10,
+            app_name: "TextEdit",
+            title: "Untitled",
+            bounds: { x: -300, y: 20, width: 200, height: 100 },
+            is_on_screen: true,
+            z_index: 0,
+          },
+          { window_id: 21, pid: 10, app_name: "TextEdit", title: "Second", is_on_screen: false },
+          { window_id: 40, pid: 20, app_name: "Finder", title: "" },
+          { window_id: 0, pid: 10, title: "bogus" },
+        ],
+      },
+    }));
+    await expect(f.backend.getAccessibilityTree!()).resolves.toEqual({
+      apps: [
+        { pid: 10, name: "TextEdit", bundleId: "com.apple.TextEdit" },
+        { pid: 20, name: "Finder" },
+      ],
+      windows: [
+        {
+          id: "cua:10:20",
+          pid: 10,
+          appName: "TextEdit",
+          title: "Untitled",
+          bounds: { x: -300, y: 20, width: 200, height: 100 },
+          onScreen: true,
+          zIndex: 0,
+        },
+        { id: "cua:10:21", pid: 10, appName: "TextEdit", title: "Second", onScreen: false },
+        { id: "cua:20:40", pid: 20, appName: "Finder", title: "" },
+      ],
+      truncated: false,
+    });
+    // The driver call is argument-free: window scoping is Synara-side, to the
+    // app that owns the exact window resolved through list_windows.
+    await expect(f.backend.getAccessibilityTree!("cua:10:20")).resolves.toEqual({
+      apps: [{ pid: 10, name: "TextEdit", bundleId: "com.apple.TextEdit" }],
+      windows: [
+        {
+          id: "cua:10:20",
+          pid: 10,
+          appName: "TextEdit",
+          title: "Untitled",
+          bounds: { x: -300, y: 20, width: 200, height: 100 },
+          onScreen: true,
+          zIndex: 0,
+        },
+        { id: "cua:10:21", pid: 10, appName: "TextEdit", title: "Second", onScreen: false },
+      ],
+      truncated: false,
+    });
+    expect(f.calls.find((call) => call.name === "get_accessibility_tree")?.args).toEqual({});
+  });
+  it("caps the inventory rows and refuses a malformed snapshot", async () => {
+    const f = fixture();
+    const manyWindows = Array.from({ length: 600 }, (_, i) => ({
+      window_id: i + 1,
+      pid: 10,
+      app_name: "TextEdit",
+      title: `w${i}`,
+    }));
+    f.onTool("get_accessibility_tree", () => ({
+      structuredContent: {
+        apps: [{ pid: 10, name: "TextEdit" }],
+        windows: manyWindows,
+      },
+    }));
+    const capped = await f.backend.getAccessibilityTree!();
+    expect(capped.windows).toHaveLength(512);
+    expect(capped.truncated).toBe(true);
+    // A snapshot without the row arrays is a malformed driver response, not an
+    // empty desktop — fail closed rather than report nothing.
+    f.onTool("get_accessibility_tree", () => ({ structuredContent: { windows: [] } }));
+    await expect(f.backend.getAccessibilityTree!()).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "invalid_response",
+    });
+    // A scoped read for a dead window refuses before the driver is asked.
+    f.onTool("get_accessibility_tree", () => ({
+      structuredContent: { apps: [], windows: [] },
+    }));
+    await expect(f.backend.getAccessibilityTree!("cua:999:1")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_target",
+    });
+  });
+  it("reads the cursor position in desktop points and reports window containment", async () => {
+    const f = fixture();
+    f.onTool("get_cursor_position", () => ({ structuredContent: { x: -200, y: 60 } }));
+    await expect(f.backend.getCursorPosition!()).resolves.toEqual({
+      x: -200,
+      y: 60,
+      capturedAt: expect.any(String),
+    });
+    // The fixture window spans x -300..-100, y 20..120: (-200, 60) is inside.
+    await expect(f.backend.getCursorPosition!("cua:10:20")).resolves.toMatchObject({
+      x: -200,
+      y: 60,
+      windowId: "cua:10:20",
+      insideWindow: true,
+    });
+    f.onTool("get_cursor_position", () => ({ structuredContent: { x: 50, y: 60 } }));
+    await expect(f.backend.getCursorPosition!("cua:10:20")).resolves.toMatchObject({
+      insideWindow: false,
+    });
+    f.onTool("get_cursor_position", () => ({ structuredContent: { x: "left", y: 60 } }));
+    await expect(f.backend.getCursorPosition!()).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "invalid_response",
+    });
+    expect(f.calls.find((call) => call.name === "get_cursor_position")?.args).toEqual({});
+  });
   it("reads the published action route and requires public verification evidence", async () => {
     const f = fixture();
     f.actionResult({
@@ -1501,14 +1626,78 @@ describe("Cua native boundary", () => {
     expect(result.scrollDelta).toEqual({ deltaX: 0, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
-      amount: 2,
-      by: "line",
+      delta_x: 0,
+      delta_y: 2,
       direction: "down",
     });
-    await expect(
-      f.backend.scroll({ x: -275, y: 30 }, 0, 240, "cua:10:20", ["meta"]),
-    ).rejects.toMatchObject({ effect: "not-dispatched" });
+  });
+  it("carries both axes and modifiers in one wheel gesture", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    const result = await f.backend.scroll({ x: -275, y: 30 }, -140, 250, "cua:10:20", [
+      "meta",
+      "shift",
+    ]);
+    expect(result.scrollDelta).toEqual({ deltaX: -120, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
+    expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
+      delta_x: -1,
+      delta_y: 2,
+      direction: "down",
+      modifiers: ["command", "shift"],
+    });
+  });
+  it("refuses a single axis beyond the 50-notch bound before dispatch", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    await expect(
+      f.backend.scroll({ x: -275, y: 30 }, 0, 61 * 120, "cua:10:20"),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_operation" });
+    await expect(
+      f.backend.scroll({ x: -275, y: 30 }, 61 * 120, 0, "cua:10:20"),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_operation" });
+    expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(0);
+  });
+  it("prefers the AX scroll-bar route for an unmodified vertical element scroll", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXScrollArea",
+        label: "Content",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "scroll-token",
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Content", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    // The point path is geometry-gated: a wheel scroll at a point still needs
+    // a fresh observation of the window it lands in.
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.backend.scroll(target.point, 0, 250, "cua:10:20", undefined, target);
+    expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
+      element_token: "scroll-token",
+      direction: "down",
+      amount: 2,
+      by: "line",
+    });
+    // A horizontal or modified request cannot ride the vertical AX rung.
+    await f.backend.scroll(target.point, -140, 250, "cua:10:20", undefined, target);
+    expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).toMatchObject({
+      delta_x: -1,
+      delta_y: 2,
+    });
+    expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).not.toHaveProperty("element_token");
   });
   it("coalesces physical state across concurrent thread projections", async () => {
     const f = fixture();

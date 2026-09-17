@@ -323,21 +323,21 @@ function meanAbsoluteDeviation(profile: Float64Array): number {
 /** How many windows keep a learned gearing before the oldest is forgotten. */
 const MAX_GEARING_KEYS = 64;
 /** A gearing outside this range is a measurement accident, not a toolkit. */
-const MIN_GEARING = 0.05;
-const MAX_GEARING = 50;
+export const MIN_SCROLL_GEARING = 0.05;
+export const MAX_SCROLL_GEARING = 50;
 /**
  * Below this many injected pixels the travel measurement is dominated by its
  * own row quantization, so the sample says more about the estimator than about
  * the client.
  */
-const MIN_LEARNABLE_INJECTION = 30;
+export const MIN_LEARNABLE_SCROLL_INJECTION = 30;
 /**
  * Weight given to a fresh observation once a window has been measured at least
  * once. Half keeps a page whose gearing genuinely changed — a different site,
  * a different inner scroller — from taking many scrolls to catch up, while
  * still damping a single bad correlation.
  */
-const GEARING_SMOOTHING = 0.5;
+export const SCROLL_GEARING_SMOOTHING = 0.5;
 
 /**
  * Per-window scroll gearing: how many pixels of content travel one requested
@@ -379,9 +379,10 @@ export class ScrollGearingStore {
    * down: on a heavily geared client a small nudge is still a nudge, and
    * injecting zero would silently drop it.
    */
-  plan(key: string | undefined, requested: number): number {
+  plan(key: string | undefined, requested: number, fallback?: number): number {
     if (!Number.isFinite(requested) || requested === 0) return 0;
-    const scaled = requested / this.gearing(key);
+    const scaled =
+      requested / ((key === undefined ? undefined : this.gearings.get(key)) ?? fallback ?? 1);
     if (Math.abs(scaled) < 1) return Math.sign(scaled);
     return scaled;
   }
@@ -400,23 +401,27 @@ export class ScrollGearingStore {
    * travel at all (the page hit its edge), travel opposing the injection (the
    * correlator locked onto the wrong feature), an injection too small to
    * measure, and a ratio no toolkit produces.
+   *
+   * Returns whether the sample was accepted, so a caller keeping a durable
+   * per-app fallback writes only real observations.
    */
-  learn(key: string | undefined, injected: number, traveled: number): void {
-    if (key === undefined) return;
-    if (!Number.isFinite(injected) || !Number.isFinite(traveled)) return;
-    if (traveled === 0 || Math.abs(injected) < MIN_LEARNABLE_INJECTION) return;
-    if (Math.sign(traveled) !== Math.sign(injected)) return;
+  learn(key: string | undefined, injected: number, traveled: number): boolean {
+    if (key === undefined) return false;
+    if (!Number.isFinite(injected) || !Number.isFinite(traveled)) return false;
+    if (traveled === 0 || Math.abs(injected) < MIN_LEARNABLE_SCROLL_INJECTION) return false;
+    if (Math.sign(traveled) !== Math.sign(injected)) return false;
     const observed = traveled / injected;
-    if (observed < MIN_GEARING || observed > MAX_GEARING) return;
+    if (observed < MIN_SCROLL_GEARING || observed > MAX_SCROLL_GEARING) return false;
     const previous = this.gearings.get(key);
     const next =
       previous === undefined
         ? observed
-        : previous * (1 - GEARING_SMOOTHING) + observed * GEARING_SMOOTHING;
+        : previous * (1 - SCROLL_GEARING_SMOOTHING) + observed * SCROLL_GEARING_SMOOTHING;
     if (previous === undefined && this.gearings.size >= MAX_GEARING_KEYS) {
       const oldest = this.gearings.keys().next();
       if (!oldest.done) this.gearings.delete(oldest.value);
     }
-    this.gearings.set(key, Math.min(MAX_GEARING, Math.max(MIN_GEARING, next)));
+    this.gearings.set(key, Math.min(MAX_SCROLL_GEARING, Math.max(MIN_SCROLL_GEARING, next)));
+    return true;
   }
 }

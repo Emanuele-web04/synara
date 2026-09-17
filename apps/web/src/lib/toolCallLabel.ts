@@ -179,6 +179,14 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "checked desktop state",
   ),
   synara_computer_zoom: presentComputerTool("zooming into a window", "zoomed into a window"),
+  synara_computer_get_accessibility_tree: presentComputerTool(
+    "listing apps and windows",
+    "listed apps and windows",
+  ),
+  synara_computer_get_cursor_position: presentComputerTool(
+    "reading the cursor position",
+    "read the cursor position",
+  ),
   synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
   synara_computer_double_click: presentComputerTool(
     "double-clicking the desktop",

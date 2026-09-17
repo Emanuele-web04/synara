@@ -2181,6 +2181,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       injected: { deltaX: 0, deltaY: 57.14 },
       traveledY: 400,
       gearing: 7,
+      routes: ["wheel", "wheel"],
     });
     const legs = backend.callsFor("scroll").map((entry) => entry.args[2]);
     expect(legs[0]).toBe(48);
@@ -2630,12 +2631,12 @@ it("keeps a pause when the thread is re-armed while its readiness probe is in fl
   }
 });
 
-it("takes a single after-capture as the observation for a macOS scroll", async () => {
+it("measures a macOS scroll inside the two-leg, three-capture budget", async () => {
   class MacosFake extends FakeComputerBackend {
     readonly agentDialect = "macos" as const;
   }
   const backend = new MacosFake();
-  const manager = new ComputerManager({ backend });
+  const manager = new ComputerManager({ backend, actionSettleMs: 0 });
   try {
     const { result, observation } = await manager.scrollCalibrated(
       "thread-1",
@@ -2644,16 +2645,21 @@ it("takes a single after-capture as the observation for a macOS scroll", async (
       400,
       { observe: true },
     );
-    // No before-capture for measurement on macOS: one inject, one observation.
-    expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
+    // macOS joins the common loop: probe + corrected remainder = two injects,
+    // before + one after per leg = three captures, the last doubling as the
+    // caller's observation. The fake's canned captures never change, so the
+    // correlator honestly reports zero travel.
+    expect(backend.callsFor("scroll")).toHaveLength(2);
+    expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
     expect(observation).toBeDefined();
-    expect(result.scroll?.traveledY).toBeUndefined();
+    expect(result.scroll?.traveledY).toBe(0);
     expect(result.scroll?.requested).toEqual({ deltaX: 0, deltaY: 400 });
+    expect(result.scroll?.routes).toEqual(["wheel", "wheel"]);
     const unobserved = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
       observe: false,
     });
     expect(unobserved.observation).toBeUndefined();
-    expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
+    expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
   } finally {
     await manager.dispose();
   }

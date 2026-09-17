@@ -437,7 +437,7 @@ index a26a6bf..490f9ed 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..754906f 100644
+index 67e123b..43bb5a2 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -452,7 +452,7 @@ index 67e123b..754906f 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(15);
++        metadata["synara_native_revision"] = serde_json::json!(16);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -4144,7 +4144,7 @@ index 7411233..f0f4456 100644
  pub mod keyboard;
  pub mod mouse;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-index 8ace326..ebcf19d 100644
+index 8ace326..0f24d55 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 @@ -92,6 +92,23 @@ pub fn click_at_xy_desktop_with_modifiers_preserving_cursor(
@@ -4871,7 +4871,16 @@ index 8ace326..ebcf19d 100644
      }
  }
  
-@@ -1255,7 +1414,7 @@ pub fn scroll_wheel_at_xy(
+@@ -1232,6 +1391,8 @@ pub fn scroll_wheel_at_xy(
+     delta_y_per_tick: i32,
+     delta_x_per_tick: i32,
+     ticks: usize,
++    flags: CGEventFlags,
++    pixel_units: bool,
+ ) -> anyhow::Result<()> {
+     use core_graphics::event::ScrollEventUnit;
+ 
+@@ -1255,20 +1416,35 @@ pub fn scroll_wheel_at_xy(
          ),
          MousePostMode::Both,
      );
@@ -4880,7 +4889,42 @@ index 8ace326..ebcf19d 100644
  
      for _ in 0..ticks.max(1) {
          // Fresh source per event, matching the click primitives.
-@@ -1294,10 +1453,9 @@ pub fn scroll_wheel_at_xy(
+         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+             .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+         // wheel_count = 2 → both axes carried (vertical = wheel1/axis-1,
+-        // horizontal = wheel2/axis-2). Convert the driver's pixel-tuned step
+-        // into a bounded line delta for the event API.
+-        let wheel_y = (delta_y_per_tick / 120).clamp(-10, 10);
+-        let wheel_x = (delta_x_per_tick / 120).clamp(-10, 10);
+-        let event =
+-            CGEvent::new_scroll_event(source, ScrollEventUnit::LINE, 2, wheel_y, wheel_x, 0)
+-                .map_err(|_| anyhow::anyhow!("CGEvent::new_scroll_event failed"))?;
++        // horizontal = wheel2/axis-2). Notch mode converts the driver's
++        // pixel-tuned step into a bounded line delta; signed-tick mode posts
++        // pixel-unit deltas directly so a fractional minor axis is not lost
++        // to line quantization.
++        let (unit, wheel_y, wheel_x) = if pixel_units {
++            (
++                ScrollEventUnit::PIXEL,
++                delta_y_per_tick.clamp(-600, 600),
++                delta_x_per_tick.clamp(-600, 600),
++            )
++        } else {
++            (
++                ScrollEventUnit::LINE,
++                (delta_y_per_tick / 120).clamp(-10, 10),
++                (delta_x_per_tick / 120).clamp(-10, 10),
++            )
++        };
++        let event = CGEvent::new_scroll_event(source, unit, 2, wheel_y, wheel_x, 0)
++            .map_err(|_| anyhow::anyhow!("CGEvent::new_scroll_event failed"))?;
++        if flags != CGEventFlags::CGEventFlagNull {
++            event.set_flags(flags);
++        }
+ 
+         let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
+ 
+@@ -1294,10 +1470,9 @@ pub fn scroll_wheel_at_xy(
  
          // Belt+suspenders post: SkyLight reaches backgrounded Chromium/Catalyst;
          // the public path lands on AppKit/WKWebView. Mouse-class → no auth envelope.
@@ -4893,7 +4937,16 @@ index 8ace326..ebcf19d 100644
      }
      Ok(())
  }
-@@ -1325,3 +1483,7 @@ fn parse_modifier_flags(modifiers: &[&str]) -> CGEventFlags {
+@@ -1312,7 +1487,7 @@ extern "C" {
+     fn CGEventSetLocation(event: *mut std::ffi::c_void, x: f64, y: f64);
+ }
+ 
+-fn parse_modifier_flags(modifiers: &[&str]) -> CGEventFlags {
++pub(crate) fn parse_modifier_flags(modifiers: &[&str]) -> CGEventFlags {
+     let mut flags = CGEventFlags::CGEventFlagNull;
+     for m in modifiers {
+         match m.to_lowercase().as_str() {
+@@ -1325,3 +1500,7 @@ fn parse_modifier_flags(modifiers: &[&str]) -> CGEventFlags {
      }
      flags
  }
@@ -6653,7 +6706,7 @@ index 19d54df..37008fb 100644
          WindowPxFrame {
              bounds: WindowBounds {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
-index 64b98e1..4e3019b 100644
+index 64b98e1..953c421 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 @@ -79,6 +79,8 @@ fn def() -> &'static ToolDef {
@@ -6665,7 +6718,101 @@ index 64b98e1..4e3019b 100644
                  "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
                  "pid": { "type": "integer" },
                  "direction": {
-@@ -420,7 +422,12 @@ impl Tool for ScrollTool {
+@@ -97,6 +99,23 @@ fn def() -> &'static ToolDef {
+                     "maximum": 50,
+                     "description": "Pixel-wheel path: number of wheel notches. Keystroke path: number of keystroke repetitions. Default: 3."
+                 },
++                "delta_x": {
++                    "type": "integer",
++                    "minimum": -50,
++                    "maximum": 50,
++                    "description": "Signed horizontal wheel ticks (−50..50). With `delta_y` delivers one two-axis pixel-wheel gesture and overrides `direction`; requires an element or x,y target."
++                },
++                "delta_y": {
++                    "type": "integer",
++                    "minimum": -50,
++                    "maximum": 50,
++                    "description": "Signed vertical wheel ticks (−50..50). See `delta_x`."
++                },
++                "modifiers": {
++                    "type": "array",
++                    "items": {"type": "string"},
++                    "description": "Modifier keys held during the wheel gesture: cmd, shift, option/alt, ctrl."
++                },
+                 "window_id": { "type": "integer" },
+                 "element_index": cua_driver_core::tool_schema::element_index_schema(),
+                 "element_token": cua_driver_core::tool_schema::element_token_schema(),
+@@ -186,6 +205,15 @@ impl Tool for ScrollTool {
+         };
+         let by = args.str_or("by", "line");
+         let amount = args.u64_or("amount", 3) as usize;
++        // Synara: optional signed per-axis wheel ticks plus held modifiers.
++        // delta_x/delta_y form one two-axis pixel-wheel gesture at the target;
++        // either present switches the wheel path off the direction mapping.
++        let delta_x_arg = args.opt_i64("delta_x");
++        let delta_y_arg = args.opt_i64("delta_y");
++        let has_axis_deltas = delta_x_arg.is_some() || delta_y_arg.is_some();
++        let modifiers_arg = args.str_array("modifiers");
++        let modifier_refs: Vec<&str> = modifiers_arg.iter().map(String::as_str).collect();
++        let scroll_flags = crate::input::mouse::parse_modifier_flags(&modifier_refs);
+         // Surface 6: element_token / element_index precedence.
+         let element_token_arg = args.opt_str("element_token");
+         let window_id_arg = args.opt_u64("window_id");
+@@ -213,7 +241,7 @@ impl Tool for ScrollTool {
+         // AppKit exposes vertical scroll-bar buttons beneath the text area's
+         // AXScrollArea parent. Pressing those controls is a true
+         // background-safe scroll: no activation, z-order change, or cursor move.
+-        if matches!(direction.as_str(), "up" | "down") {
++        if matches!(direction.as_str(), "up" | "down") && !has_axis_deltas {
+             if let (Some(element_guard), Some(wid)) = (pre_focus_guard.clone(), window_id) {
+                 if !delivery_mode.is_foreground() {
+                     if let Some(lease) = _mutation_lease.as_ref() {
+@@ -324,12 +352,38 @@ impl Tool for ScrollTool {
+         } else {
+             WHEEL_STEP_LINE_PX
+         };
+-        let (delta_y, delta_x): (i32, i32) = match direction.as_str() {
+-            "down" => (-step, 0),
+-            "up" => (step, 0),
+-            "right" => (0, -step),
+-            "left" => (0, step),
+-            _ => (-step, 0),
++        // Signed-tick mode: both axes ride one gesture as pixel-unit wheel
++        // deltas sized so each axis completes inside `ticks` events. Line
++        // units cannot express a fractional per-tick minor axis, and pixel
++        // units are what a trackpad posts — nested scrollers honor them.
++        let mut ticks = amount;
++        let mut pixel_units = false;
++        let mut axis_ticks: Option<(i32, i32)> = None;
++        let (delta_y, delta_x): (i32, i32) = if has_axis_deltas {
++            let ty = delta_y_arg.unwrap_or(0).clamp(-50, 50) as i32;
++            let tx = delta_x_arg.unwrap_or(0).clamp(-50, 50) as i32;
++            if ty == 0 && tx == 0 {
++                return ToolResult::error(
++                    "scroll: delta_x/delta_y supplied but both resolve to zero ticks."
++                        .to_string(),
++                )
++                .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
++            }
++            ticks = ty.abs().max(tx.abs()) as usize;
++            pixel_units = true;
++            axis_ticks = Some((tx, ty));
++            (
++                ty * WHEEL_STEP_LINE_PX / ticks as i32,
++                tx * WHEEL_STEP_LINE_PX / ticks as i32,
++            )
++        } else {
++            match direction.as_str() {
++                "down" => (-step, 0),
++                "up" => (step, 0),
++                "right" => (0, -step),
++                "left" => (0, step),
++                _ => (-step, 0),
++            }
+         };
+ 
+         // Resolve a screen-space wheel target, if a target was supplied.
+@@ -420,7 +474,12 @@ impl Tool for ScrollTool {
              // click pixel path — undo any session downscale, then translate
              // through the shared window frame (which refuses a window with no
              // live frame rather than scrolling at screen-absolute coords).
@@ -6679,7 +6826,7 @@ index 64b98e1..4e3019b 100644
                  cx *= ratio;
                  cy *= ratio;
              }
-@@ -431,7 +438,7 @@ impl Tool for ScrollTool {
+@@ -431,7 +490,7 @@ impl Tool for ScrollTool {
                      "window_id is required when scrolling by window-local x,y pixels.".to_string(),
                  );
              };
@@ -6688,6 +6835,72 @@ index 64b98e1..4e3019b 100644
                  Ok(frame) => {
                      let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
                      Some(WheelTarget {
+@@ -521,7 +580,6 @@ impl Tool for ScrollTool {
+                 win_local,
+                 wid,
+             } = target;
+-            let amount_ticks = amount;
+             let fg = delivery_mode.is_foreground() && wid.is_some();
+             let result = focus_guard::with_focus_suppressed(
+                 Some(pid),
+@@ -538,7 +596,9 @@ impl Tool for ScrollTool {
+                                 wid,
+                                 delta_y,
+                                 delta_x,
+-                                amount_ticks,
++                                ticks,
++                                scroll_flags,
++                                pixel_units,
+                             )
+                         };
+                         // Foreground rung: brief front → wheel → restore prior frontmost.
+@@ -566,20 +626,37 @@ impl Tool for ScrollTool {
+                 ""
+             };
+             return match result {
+-                Ok(Ok(())) => ToolResult::text(format!(
+-                    "✅ Sent {direction} scroll by {by} × {amount} via pixel wheel at \
+-                     ({screen_x:.0}, {screen_y:.0}){mode_label} (background CGEvent; not \
+-                     driver-verified — confirm via screenshot).{}",
+-                    changes.result_suffix()
+-                ))
+-                .with_structured(serde_json::json!({
+-                    "path": if fg { "cgevent_fg" } else { "cgevent" }, "verified": false, "effect": "unverifiable"
+-                })),
++                Ok(Ok(())) => {
++                    let describe = match axis_ticks {
++                        Some((tx, ty)) => {
++                            format!("scroll delta_x={tx} delta_y={ty} × {ticks} ticks")
++                        }
++                        None => format!("{direction} scroll by {by} × {amount}"),
++                    };
++                    ToolResult::text(format!(
++                        "✅ Sent {describe} via pixel wheel at \
++                         ({screen_x:.0}, {screen_y:.0}){mode_label} (background CGEvent; not \
++                         driver-verified — confirm via screenshot).{}",
++                        changes.result_suffix()
++                    ))
++                    .with_structured(serde_json::json!({
++                        "path": if fg { "cgevent_fg" } else { "cgevent" }, "verified": false, "effect": "unverifiable"
++                    }))
++                }
+                 Ok(Err(e)) => ToolResult::error(format!("Wheel scroll failed: {e}")),
+                 Err(e)     => ToolResult::error(format!("Task error: {e}")),
+             };
+         }
+ 
++        if has_axis_deltas || scroll_flags != core_graphics::event::CGEventFlags::CGEventFlagNull {
++            return ToolResult::error(
++                "scroll: delta_x/delta_y/modifiers require an element or window-local x,y \
++                 target (wheel path); the focused keystroke path cannot carry them."
++                    .to_string(),
++            )
++            .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
++        }
++
+         let key = match (by.as_str(), direction.as_str()) {
+             ("page", "down") | (_, "down") if by == "page" => "pagedown",
+             ("page", "up") | (_, "up") if by == "page" => "pageup",
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 index 79bcca1..17e31c0 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs

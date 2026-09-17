@@ -15,9 +15,12 @@
  * two descriptions of the same fault.
  */
 import type {
+  ComputerAccessibilityTreeApp,
+  ComputerAccessibilityTreeWindow,
   ComputerApp,
   ComputerAvailability,
   ComputerCapabilities,
+  ComputerCursorPosition,
   ComputerHealth,
   ComputerId,
   ComputerLaunchAppResult,
@@ -133,6 +136,18 @@ export class UnavailableComputerBackend implements ComputerBackend {
   }
 
   zoomWindow(): Promise<ComputerZoomResult> {
+    return this.refuse();
+  }
+
+  getAccessibilityTree(): Promise<{
+    readonly apps: readonly ComputerAccessibilityTreeApp[];
+    readonly windows: readonly ComputerAccessibilityTreeWindow[];
+    readonly truncated: boolean;
+  }> {
+    return this.refuse();
+  }
+
+  getCursorPosition(): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">> {
     return this.refuse();
   }
 

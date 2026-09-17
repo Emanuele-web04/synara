@@ -730,6 +730,80 @@ export const ComputerZoomResult = Schema.Struct({
 });
 export type ComputerZoomResult = typeof ComputerZoomResult.Type;
 
+/**
+ * One running regular app in the driver's lightweight desktop inventory.
+ *
+ * Deliberately thinner than `ComputerApp`: the driver answers this read
+ * without a perception grant, so it reports only what the OS publishes to
+ * anyone — pid, name, bundle id — and none of the running/active state the
+ * fuller app list carries.
+ */
+export const ComputerAccessibilityTreeApp = Schema.Struct({
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
+  name: Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
+  bundleId: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+});
+export type ComputerAccessibilityTreeApp = typeof ComputerAccessibilityTreeApp.Type;
+
+/**
+ * One on-screen window in the driver's lightweight desktop inventory — the
+ * row the driver publishes grant-free, carrying an id and optional bounds
+ * rather than the focus/minimized state `ComputerWindow` needs a grant to
+ * learn.
+ */
+export const ComputerAccessibilityTreeWindow = Schema.Struct({
+  /** The Synara id (`cua:<pid>:<wid>`) the other computer tools take. */
+  id: ComputerWindowId,
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
+  appName: Schema.optional(Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH))),
+  title: Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
+  bounds: Schema.optional(ComputerRect),
+  onScreen: Schema.optional(Schema.Boolean),
+  zIndex: Schema.optional(NonNegativeInt),
+});
+export type ComputerAccessibilityTreeWindow = typeof ComputerAccessibilityTreeWindow.Type;
+
+/**
+ * `computer_get_accessibility_tree` — the driver's fast desktop inventory of
+ * running apps and on-screen windows, not a window's control tree.
+ *
+ * The driver read is desktop-wide and takes no arguments, so the bounding the
+ * result promises lives in the row caps rather than in driver parameters.
+ * `windowId`, when given, scopes the answer to the app that owns that exact
+ * window — Synara-side filtering on top of the same desktop snapshot.
+ */
+export const ComputerAccessibilityTreeResult = Schema.Struct({
+  computerId: ComputerId,
+  apps: Schema.Array(ComputerAccessibilityTreeApp).check(Schema.isMaxLength(1_024)),
+  windows: Schema.Array(ComputerAccessibilityTreeWindow).check(
+    Schema.isMaxLength(COMPUTER_WINDOW_LIST_MAX_LENGTH),
+  ),
+  /** The window the snapshot was scoped to its owning app by, when one was. */
+  windowId: Schema.optional(ComputerWindowId),
+  /** The driver reported more rows than the row caps above carry. */
+  truncated: Schema.Boolean,
+  availability: ComputerAvailability,
+});
+export type ComputerAccessibilityTreeResult = typeof ComputerAccessibilityTreeResult.Type;
+
+/**
+ * `computer_get_cursor_position` — where the human's pointer sits, in desktop
+ * points with the same top-left origin every window `bounds` uses. A read
+ * only: it never moves the cursor.
+ */
+export const ComputerCursorPosition = Schema.Struct({
+  computerId: ComputerId,
+  x: Schema.Finite,
+  y: Schema.Finite,
+  capturedAt: IsoDateTime,
+  availability: ComputerAvailability,
+  /** The window the read was scoped by, when one was given and still exists. */
+  windowId: Schema.optional(ComputerWindowId),
+  /** Whether the point lies inside the scoped window's bounds, when known. */
+  insideWindow: Schema.optional(Schema.Boolean),
+});
+export type ComputerCursorPosition = typeof ComputerCursorPosition.Type;
+
 export const ComputerGetStateInput = Schema.Struct({
   includeScreenshot: Schema.optional(Schema.Boolean),
   includeText: Schema.optional(Schema.Boolean),
@@ -1013,6 +1087,15 @@ export const ComputerActionResult = Schema.Struct({
       limitedTo: Schema.optional(Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite })),
       traveledY: Schema.optional(Schema.Finite),
       gearing: Schema.optional(Schema.Finite),
+      /**
+       * The delivery rung each injected leg took — `ax` for a scroll-bar
+       * action, `wheel` for a synthesized wheel gesture — in dispatch order.
+       * Gearing is learned per route because the two move different distances
+       * for the same request.
+       */
+      routes: Schema.optional(
+        Schema.Array(Schema.String.check(Schema.isMaxLength(32))).check(Schema.isMaxLength(4)),
+      ),
     }),
   ),
   /**

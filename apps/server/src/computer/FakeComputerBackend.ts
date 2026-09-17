@@ -1,8 +1,11 @@
 import type {
+  ComputerAccessibilityTreeApp,
+  ComputerAccessibilityTreeWindow,
   ComputerApp,
   ComputerAvailability,
   ComputerBuildSignature,
   ComputerCapabilities,
+  ComputerCursorPosition,
   ComputerHealth,
   ComputerId,
   ComputerInputModifier,
@@ -125,6 +128,7 @@ export class FakeComputerBackend implements ComputerBackend {
   private frameApplies = true;
   private readonly refusedMenuPaths = new Map<string, Error>();
   private verifySatisfied = true;
+  private cursorPosition: ComputerPoint = { x: 0, y: 0 };
   private disposed = false;
 
   constructor(options: FakeComputerBackendOptions = {}) {
@@ -408,6 +412,105 @@ export class FakeComputerBackend implements ComputerBackend {
     };
   }
 
+  /**
+   * Mirrors the driver's grant-free snapshot: only running apps and the
+   * on-screen window subset appear there, so minimized and hidden windows are
+   * filtered out rather than reported as a different "not visible" flag.
+   */
+  async getAccessibilityTree(windowId?: string): Promise<{
+    readonly apps: readonly ComputerAccessibilityTreeApp[];
+    readonly windows: readonly ComputerAccessibilityTreeWindow[];
+    readonly truncated: boolean;
+  }> {
+    if (windowId === undefined) this.record("getAccessibilityTree");
+    else this.record("getAccessibilityTree", windowId);
+    this.throwIfFailed("getAccessibilityTree");
+    let scopedPid: number | undefined;
+    if (windowId !== undefined) {
+      const window = this.currentWindows.find((candidate) => candidate.id === windowId);
+      if (!window) {
+        throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+      }
+      scopedPid = window.pid;
+    }
+    const apps = this.currentApps
+      .filter(
+        (app) => app.running && app.pid > 0 && (scopedPid === undefined || app.pid === scopedPid),
+      )
+      .map(
+        (app): ComputerAccessibilityTreeApp => ({
+          pid: app.pid,
+          name: app.name,
+          ...(app.bundleId ? { bundleId: app.bundleId } : {}),
+        }),
+      )
+      .slice(0, 1_024);
+    const windows = this.currentWindows
+      .filter(
+        (window) =>
+          window.visible &&
+          !window.minimized &&
+          window.pid !== undefined &&
+          window.pid > 0 &&
+          (scopedPid === undefined || window.pid === scopedPid),
+      )
+      .map(
+        (window): ComputerAccessibilityTreeWindow => ({
+          id: window.id,
+          pid: window.pid!,
+          ...(window.appName ? { appName: window.appName } : {}),
+          title: window.title,
+          ...(window.bounds ? { bounds: { ...window.bounds } } : {}),
+          onScreen: true,
+          ...(window.stackingIndex !== undefined ? { zIndex: window.stackingIndex } : {}),
+        }),
+      )
+      .slice(0, 512);
+    return { apps, windows, truncated: false };
+  }
+
+  /**
+   * The fake tracks where its own pointer actions last left the cursor, so a
+   * `moveCursor` followed by this read round-trips the way the real driver
+   * does.
+   */
+  async getCursorPosition(
+    windowId?: string,
+  ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">> {
+    if (windowId === undefined) this.record("getCursorPosition");
+    else this.record("getCursorPosition", windowId);
+    this.throwIfFailed("getCursorPosition");
+    const window =
+      windowId === undefined
+        ? undefined
+        : this.currentWindows.find((candidate) => candidate.id === windowId);
+    if (windowId !== undefined && !window) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    const { x, y } = this.cursorPosition;
+    const bounds = window?.bounds;
+    return {
+      x,
+      y,
+      capturedAt: this.now(),
+      ...(window ? { windowId: window.id } : {}),
+      ...(bounds
+        ? {
+            insideWindow:
+              x >= bounds.x &&
+              x < bounds.x + bounds.width &&
+              y >= bounds.y &&
+              y < bounds.y + bounds.height,
+          }
+        : {}),
+    };
+  }
+
+  /** Places the fake cursor directly, for tests that need a known point. */
+  setCursorPosition(point: ComputerPoint): void {
+    this.cursorPosition = { ...point };
+  }
+
   /** Makes the next setWindowFrame report the dispatched-unverified shape. */
   setFrameApplies(applies: boolean): void {
     this.frameApplies = applies;
@@ -491,6 +594,7 @@ export class FakeComputerBackend implements ComputerBackend {
     this.throwIfFailed("drag");
     this.validatePoint(from);
     this.validatePoint(to);
+    this.cursorPosition = { ...to };
     return { point: to };
   }
 
@@ -696,6 +800,7 @@ export class FakeComputerBackend implements ComputerBackend {
     else this.record(method, point);
     this.throwIfFailed(method);
     this.validatePoint(point);
+    this.cursorPosition = { ...point };
     return { point };
   }
 

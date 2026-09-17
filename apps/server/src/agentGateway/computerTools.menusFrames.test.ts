@@ -371,6 +371,147 @@ describe("computer_invoke_menu", () => {
   });
 });
 
+describe("computer_get_accessibility_tree", () => {
+  it("returns the desktop inventory without an approval gate", async () => {
+    const approval = vi.fn(async () => true);
+    const backend = new FakeComputerBackend();
+    const { call, byName } = await setup(backend, approval);
+    const definition = byName.get("computer_get_accessibility_tree")?.definition;
+    expect(definition?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(COMPUTER_APPROVAL_REQUIRED_TOOLS.has("computer_get_accessibility_tree")).toBe(false);
+
+    const result = await call("computer_get_accessibility_tree", {});
+    expect(result.isError).not.toBe(true);
+    const payload = resultJson(result) as {
+      apps: Array<Record<string, unknown>>;
+      windows: Array<Record<string, unknown>>;
+      truncated: boolean;
+      availability: { kind: string };
+      computerId: string;
+    };
+    expect(payload.computerId).toBe("desktop");
+    expect(payload.truncated).toBe(false);
+    // The default fake desktop: two running apps and their on-screen windows.
+    expect(payload.apps.map((app) => app.pid)).toEqual([1_001, 1_002]);
+    expect(payload.windows.map((window) => window.id)).toEqual([
+      "fake-terminal",
+      "fake-calculator",
+    ]);
+    expect(approval).not.toHaveBeenCalled();
+    expect(backend.callsFor("getAccessibilityTree")).toHaveLength(1);
+    expect(backend.callsFor("getAccessibilityTree")[0]?.args).toEqual([]);
+  });
+
+  it("scopes the snapshot to the app owning the exact window", async () => {
+    const backend = new FakeComputerBackend();
+    const { call } = await setup(backend);
+    const scoped = await call("computer_get_accessibility_tree", {
+      window_id: "fake-calculator",
+    });
+    expect(scoped.isError).not.toBe(true);
+    const payload = resultJson(scoped) as {
+      windowId?: string;
+      apps: Array<{ pid: number }>;
+      windows: Array<{ id: string }>;
+    };
+    expect(payload.windowId).toBe("fake-calculator");
+    expect(payload.apps).toEqual([expect.objectContaining({ pid: 1_002 })]);
+    expect(payload.windows.map((window) => window.id)).toEqual(["fake-calculator"]);
+    expect(backend.callsFor("getAccessibilityTree")[0]?.args).toEqual(["fake-calculator"]);
+
+    const missing = await call("computer_get_accessibility_tree", {
+      window_id: "no-such-window",
+    });
+    expect(missing.isError).toBe(true);
+    // The existence check fails before the backend is asked again.
+    expect(backend.callsFor("getAccessibilityTree")).toHaveLength(1);
+  });
+
+  it("refuses cleanly on a backend without the read and carries the unavailable message", async () => {
+    const stripped = new Proxy(new FakeComputerBackend(), {
+      get: (target, property, receiver) =>
+        property === "getAccessibilityTree" ? undefined : Reflect.get(target, property, receiver),
+    });
+    const { call } = await setup(stripped);
+    const result = await call("computer_get_accessibility_tree", {});
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("cannot read the desktop inventory");
+
+    const unavailable = await setup(
+      new UnavailableComputerBackend("the display link is gone") as never,
+    );
+    const refused = await unavailable.call("computer_get_accessibility_tree", {});
+    expect(refused.isError).toBe(true);
+    expect(resultText(refused)).toContain("the display link is gone");
+  });
+});
+
+describe("computer_get_cursor_position", () => {
+  it("reads the pointer without an approval gate or a control lease", async () => {
+    const approval = vi.fn(async () => true);
+    const backend = new FakeComputerBackend();
+    backend.setCursorPosition({ x: 410, y: 240 });
+    const { call, byName } = await setup(backend, approval);
+    const definition = byName.get("computer_get_cursor_position")?.definition;
+    expect(definition?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(COMPUTER_APPROVAL_REQUIRED_TOOLS.has("computer_get_cursor_position")).toBe(false);
+
+    const result = await call("computer_get_cursor_position", {});
+    expect(result.isError).not.toBe(true);
+    expect(resultJson(result)).toMatchObject({
+      computerId: "desktop",
+      x: 410,
+      y: 240,
+    });
+    expect(approval).not.toHaveBeenCalled();
+    // A read takes no lease: the desktop control path was never entered.
+    expect(backend.callsFor("getCursorPosition")).toHaveLength(1);
+  });
+
+  it("reports containment when scoped to a window, and refuses a dead one", async () => {
+    const backend = new FakeComputerBackend();
+    // fake-calculator spans x 1050..1470, y 120..740.
+    backend.setCursorPosition({ x: 1_100, y: 200 });
+    const { call } = await setup(backend);
+    const inside = await call("computer_get_cursor_position", {
+      window_id: "fake-calculator",
+    });
+    expect(inside.isError).not.toBe(true);
+    expect(resultJson(inside)).toMatchObject({
+      windowId: "fake-calculator",
+      insideWindow: true,
+    });
+    backend.setCursorPosition({ x: 10, y: 10 });
+    const outside = await call("computer_get_cursor_position", {
+      window_id: "fake-calculator",
+    });
+    expect(resultJson(outside)).toMatchObject({ insideWindow: false });
+
+    const missing = await call("computer_get_cursor_position", {
+      window_id: "no-such-window",
+    });
+    expect(missing.isError).toBe(true);
+  });
+
+  it("refuses cleanly on a backend without the read and carries the unavailable message", async () => {
+    const stripped = new Proxy(new FakeComputerBackend(), {
+      get: (target, property, receiver) =>
+        property === "getCursorPosition" ? undefined : Reflect.get(target, property, receiver),
+    });
+    const { call } = await setup(stripped);
+    const result = await call("computer_get_cursor_position", {});
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("cannot read the cursor position");
+
+    const unavailable = await setup(
+      new UnavailableComputerBackend("the display link is gone") as never,
+    );
+    const refused = await unavailable.call("computer_get_cursor_position", {});
+    expect(refused.isError).toBe(true);
+    expect(resultText(refused)).toContain("the display link is gone");
+  });
+});
+
 describe("tool-name registry", () => {
   it("owns every served tool name in all three provider spellings", async () => {
     const { byName } = await setup();
@@ -380,6 +521,8 @@ describe("tool-name registry", () => {
       "computer_invoke_menu",
       "computer_verify_state",
       "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
       "computer_kill_app",
     ]) {
       // A served tool that the registry does not own dies two ways: the
