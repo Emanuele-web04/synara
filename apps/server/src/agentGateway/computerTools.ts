@@ -2988,7 +2988,7 @@ export function makeAgentGatewayComputerTools(
           key: {
             type: "string",
             description:
-              'One key name, such as "enter", "escape", "tab", "backspace", "arrowdown", "f5", or a single printable character.',
+              'One key name: "enter", "escape", "tab", "backspace", "delete" (forward delete), "home", "end", "pageup", "pagedown", an arrow ("arrowdown" or "down"), "f1"-"f12", a modifier ("command", "shift", "option", "ctrl", "fn", "capslock"), or a single printable character. xdotool spellings such as "page_up" and "caps_lock" are accepted. "insert" is refused — macOS has no Insert key; "kp_*" keypad keys, "f13"-"f20", "menu" and "help" need the extended native keymap.',
           },
           ...keyboardTargetProperties,
         },
@@ -3245,7 +3245,7 @@ function hotkeyFormNote(dialect: ComputerAgentDialect): string {
 
 function hotkeyKeysNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? 'The chord, modifiers first: any of "meta" (Command), "ctrl", "alt" (Option) and "shift", then exactly one other key such as "s", "tab" or "arrowleft".'
+    ? 'The chord, modifiers first: any of "meta" (Command), "ctrl", "alt" (Option), "shift" and "fn", then exactly one other key such as "s", "tab", "arrowleft" or "f5".'
     : 'The chord, modifiers first: any of "ctrl", "alt", "shift" and "meta" (Super), then the key they apply to, such as "s", "tab" or "arrowleft".';
 }
 

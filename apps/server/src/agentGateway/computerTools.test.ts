@@ -1522,6 +1522,21 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("hotkey")).toHaveLength(1);
   });
 
+  it("passes xdotool-style key spellings through to the backend unchanged", async () => {
+    const { backend, call } = await setup();
+
+    // The tool layer validates shape only; name mapping and refusal belong to
+    // the backend (cuaKey) and the driver keymap, so an xdotool spelling and a
+    // not-yet-native name must arrive verbatim.
+    const pressed = await call("computer_press_key", { key: "Page_Up" });
+    expect(pressed.isError).not.toBe(true);
+    expect(backend.callsFor("pressKey").map((entry) => entry.args)).toEqual([["Page_Up"]]);
+
+    const chord = await call("computer_hotkey", { keys: ["meta", "KP_Enter"] });
+    expect(chord.isError).not.toBe(true);
+    expect(backend.callsFor("hotkey").map((entry) => entry.args)).toEqual([[["meta", "KP_Enter"]]]);
+  });
+
   it("refuses control-off mutations even for a gated provider without touching the backend", async () => {
     const { backend, manager, call } = await setup();
     try {

@@ -1992,6 +1992,60 @@ describe("Cua native boundary", () => {
     });
     expect(() => f.backend.hotkey(["meta", "a", "s"], "cua:10:20")).toThrow("exactly one");
   });
+  it("maps xdotool-style key spellings onto driver keynames", async () => {
+    const f = fixture();
+    const mapped: Array<readonly [string, string]> = [
+      ["Page_Up", "pageup"],
+      ["Prior", "pageup"],
+      ["pgup", "pageup"],
+      ["Page_Down", "pagedown"],
+      ["Next", "pagedown"],
+      ["pgdn", "pagedown"],
+      ["Caps_Lock", "capslock"],
+      ["Super_L", "command"],
+      ["Win", "command"],
+      ["Shift_L", "shift"],
+      ["Control_L", "ctrl"],
+      ["Alt_L", "alt"],
+      ["Option_L", "alt"],
+    ];
+    for (const [name, driver] of mapped) {
+      f.calls.length = 0;
+      await f.backend.pressKey(name, "cua:10:20");
+      expect(f.calls.find((c) => c.name === "press_key")?.args).toMatchObject({ key: driver });
+    }
+    // Names the pinned keymap lacks pass through untouched so the driver's own
+    // "Unknown key name" refusal stays the gate until the keymap revision
+    // lands them (native-keymap.diff: kp_*, f13-f20, menu, help).
+    for (const name of ["kp_5", "KP_Enter", "F13", "Menu", "Help", "Shift_R"]) {
+      f.calls.length = 0;
+      await f.backend.pressKey(name, "cua:10:20");
+      expect(f.calls.find((c) => c.name === "press_key")?.args).toMatchObject({
+        key: name.toLowerCase(),
+      });
+    }
+    f.calls.length = 0;
+    await f.backend.hotkey(["meta", "Page_Up"], "cua:10:20");
+    expect(f.calls.find((c) => c.name === "hotkey")?.args).toMatchObject({
+      keys: ["command", "pageup"],
+    });
+    f.calls.length = 0;
+    await f.backend.hotkey(["Control_L", "c"], "cua:10:20");
+    expect(f.calls.find((c) => c.name === "hotkey")?.args).toMatchObject({
+      keys: ["ctrl", "c"],
+    });
+  });
+  it("refuses Insert spellings and still refuses modifier-only chords", async () => {
+    const f = fixture();
+    for (const name of ["insert", "Insert", "ins"])
+      expect(() => f.backend.pressKey(name, "cua:10:20")).toThrow("no Insert key mapping");
+    expect(() => f.backend.hotkey(["meta", "ins"], "cua:10:20")).toThrow("no Insert key mapping");
+    // A chord of nothing but modifiers still has no base key, whether the
+    // modifier arrives under a driver or a left-side spelling.
+    expect(() => f.backend.hotkey(["meta", "shift"], "cua:10:20")).toThrow("exactly one");
+    expect(() => f.backend.hotkey(["meta", "shift_l"], "cua:10:20")).toThrow("exactly one");
+    expect(f.calls.filter((c) => c.name === "press_key" || c.name === "hotkey")).toHaveLength(0);
+  });
   it("converts pixel deltas to one bounded wheel operation", async () => {
     const f = fixture();
     await f.backend.captureScreenshot({

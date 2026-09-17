@@ -179,15 +179,25 @@ function cuaElementAction(
 
 function cuaKey(value: string): string {
   const key = value.toLowerCase();
-  if (key === "insert")
+  if (key === "insert" || key === "ins")
     throw new CuaActionError(
       "Cua 0.28.2 has no Insert key mapping on macOS.",
       "not-dispatched",
       "unsupported_operation",
     );
+  // Synara-side spellings that already resolve to a driver keyname. Only
+  // entries whose target the pinned keymap accepts may live here: a name with
+  // no driver mapping (keypad keys, f13-f20, menu, help) passes through
+  // untouched so the driver's own "Unknown key name" refusal stays the honest
+  // gate and an extended keymap revision lights them up without a Synara
+  // change. Left-side modifier spellings resolve to the one physical code the
+  // driver posts for that modifier; right-side spellings stay refused until
+  // the keymap carries the right-key codes.
   const aliases: Record<string, string> = {
     meta: "command",
     super: "command",
+    super_l: "command",
+    win: "command",
     delete: "forward_delete",
     del: "forward_delete",
     arrowleft: "left",
@@ -195,6 +205,18 @@ function cuaKey(value: string): string {
     arrowup: "up",
     arrowdown: "down",
     " ": "space",
+    page_up: "pageup",
+    pgup: "pageup",
+    prior: "pageup",
+    page_down: "pagedown",
+    pgdn: "pagedown",
+    next: "pagedown",
+    caps_lock: "capslock",
+    shift_l: "shift",
+    ctrl_l: "ctrl",
+    control_l: "ctrl",
+    alt_l: "alt",
+    option_l: "alt",
   };
   return aliases[key] ?? key;
 }

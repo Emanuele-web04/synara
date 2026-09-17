@@ -171,6 +171,45 @@ export async function runCancellationFixture(
       stopMilliseconds: keyStopMilliseconds,
       outcome: keyOutcome,
     });
+
+    // Key-vocabulary probe: three names admitted only through Synara-side
+    // spelling aliases (page_up/pagedown→driver pageup/pagedown, shift_l→the
+    // generic shift code) must still produce real balanced key transitions in
+    // the owned window. caps_lock is deliberately absent — macOS reports the
+    // keyup only when Caps disengages, so a paired down/up count cannot prove
+    // it; names without a driver keycode (kp_*, f13+, menu) are absent until
+    // the extended native keymap lands.
+    await observe();
+    await window.webContents.executeJavaScript(
+      "document.querySelector('#text').focus();document.querySelector('#text').select()",
+    );
+    const vocabBaseline = { down: state.keyDown, up: state.keyUp };
+    const vocab: Array<Record<string, unknown>> = [];
+    for (const key of ["Page_Up", "Page_Down", "Shift_L"]) {
+      const outcome = await backend.pressKey(key, target.id).then(
+        (result) => ({ result }),
+        (error) => ({ error: String(error) }),
+      );
+      vocab.push({ key, ...outcome });
+    }
+    const vocabSawKeys = await waitFor(
+      () => state.keyDown - vocabBaseline.down >= 3 && state.keyUp - vocabBaseline.up >= 3,
+    );
+    await pause(100);
+    const vocabAfter = { ...state };
+    cases.push({
+      name: "press-key-vocabulary",
+      status:
+        vocabSawKeys &&
+        vocabAfter.keyDown - vocabBaseline.down === 3 &&
+        vocabAfter.keyUp - vocabBaseline.up === 3 &&
+        vocab.every((entry) => entry.result)
+          ? "passed"
+          : "failed",
+      before: vocabBaseline,
+      after: vocabAfter,
+      keys: vocab,
+    });
     if (process.env.SYNARA_CUA_FIXTURE_FOREGROUND_CANCEL === "approved-once") {
       for (const mode of ["drag", "modified-click"] as const) {
         await observe();
