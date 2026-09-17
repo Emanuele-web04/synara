@@ -1,6 +1,8 @@
 import type { OrchestrationEvent, ProjectId, ThreadId } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
-import { Cause, Effect, Layer, Stream } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule, Stream } from "effect";
+
+import { PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS } from "../workerHealth.ts";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectAgentReactor } from "../Services/ProjectAgentReactor.ts";
@@ -12,6 +14,7 @@ const SETTLE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.user-input-response-requested",
   "thread.turn-interrupt-requested",
   "thread.session-set",
+  "thread.session-stop-requested",
 ]);
 
 const make = Effect.gen(function* () {
@@ -24,6 +27,18 @@ const make = Effect.gen(function* () {
         cause: Cause.pretty(cause),
       }),
     ),
+  );
+
+  const inspectWorkerHealthSafely = projectAgent.inspectWorkerHealth().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("project agent worker health inspect failed", {
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
+  yield* inspectWorkerHealthSafely.pipe(
+    Effect.repeat(Schedule.spaced(Duration.millis(PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS))),
+    Effect.forkScoped,
   );
 
   const worker = yield* makeDrainableWorker((event: OrchestrationEvent) =>

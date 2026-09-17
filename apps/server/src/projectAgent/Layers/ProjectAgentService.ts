@@ -73,6 +73,11 @@ import {
 } from "../principal.ts";
 import { PROJECT_BOT_PLAYBOOK, PROJECT_BOT_PLAYBOOK_PATH } from "../projectBotPlaybook.ts";
 import {
+  formatWorkerWatchLine,
+  isFailedWorkerSessionStatus,
+  isManagedWorkerThread,
+} from "../workerHealth.ts";
+import {
   ProjectAgentService,
   type ProjectAgentServiceShape,
 } from "../Services/ProjectAgentService.ts";
@@ -631,7 +636,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* repository
             .saveDigest({
               projectId: input.projectId,
-              summary: "Coordinator is configured. Start a goal to begin bounded coordination.",
+              summary: "Coordinator is configured.",
               focusItems: [],
               coverageFromSequence: 0,
               coverageToSequence: 0,
@@ -650,7 +655,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               sourceThreadId: coordinatorThreadId,
               name: `${coordinatorName} events`,
               prompt:
-                "Continue the assigned project goal using current durable project state. Do not expand scope. Review worker outcomes; never mark a task done from a provider turn.",
+                "Watch this project's workers. When a worker finishes, review the outcome and update decisions.md. When a worker dies, errors, hits a quota limit, or is interrupted, do not wait: redelegate the work or choose an alternate path. Do not expand scope.",
               schedule: { type: "project-event", projectId: input.projectId },
               enabled: true,
               modelSelection: input.coordinatorModelSelection,
@@ -1413,10 +1418,47 @@ export const makeProjectAgentService = Effect.gen(function* () {
             logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
           })
           .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        const index = yield* repository
+          .listThreadIndex(principal.projectId)
+          .pipe(Effect.catch(() => Effect.succeed([])));
+        const config = yield* repository
+          .getConfig(principal.projectId)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        const coordinatorThreadId = Option.isSome(config) ? config.value.coordinatorThreadId : null;
+        const workerLines: string[] = [];
+        for (const entry of index) {
+          if (
+            !coordinatorThreadId ||
+            !isManagedWorkerThread({
+              threadId: entry.threadId,
+              coordinatorThreadId,
+              index,
+            })
+          ) {
+            continue;
+          }
+          const shell = yield* snapshotQuery
+            .getThreadShellById(entry.threadId)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          workerLines.push(
+            formatWorkerWatchLine({
+              title: Option.isSome(shell) ? shell.value.title : "Worker thread",
+              status: Option.isSome(shell) ? shell.value.session?.status : "missing",
+              lastError: Option.isSome(shell) ? shell.value.session?.lastError : "thread is gone",
+            }),
+          );
+        }
         const budget = truncateToContextBudget([
           {
             label: "Playbook",
             text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+          },
+          {
+            label: "Workers",
+            text:
+              workerLines.length > 0
+                ? `${workerLines.join("\n")}\nIf a worker is error/interrupted/stopped, redelegate or choose an alternate. Do not wait.`
+                : "No workers yet.",
           },
           { label: "Goal", text: packet.goal?.objective ?? "No active goal." },
           { label: "Instructions", text: packet.instructions },
@@ -1708,11 +1750,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const configByCoordinator = yield* repository
           .getConfigByCoordinatorThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator for event.")));
+        const shell = yield* snapshotQuery
+          .getThreadShellById(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to resolve thread for event.")));
         const projectId = Option.isSome(task)
           ? task.value.projectId
           : Option.isSome(configByCoordinator)
             ? configByCoordinator.value.projectId
-            : null;
+            : Option.isSome(shell)
+              ? shell.value.projectId
+              : null;
         if (projectId === null) return;
         const config = yield* repository
           .getConfig(projectId)
@@ -1732,7 +1779,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
           });
           return;
         }
-        const eligibleWake = Option.isSome(task);
+        const index = yield* repository
+          .listThreadIndex(projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
+        const managedWorker = isManagedWorkerThread({
+          threadId: input.threadId,
+          coordinatorThreadId: config.value.coordinatorThreadId,
+          index,
+        });
+        const eligibleWake = Option.isSome(task) || managedWorker;
         const inserted = yield* repository
           .insertInboxEvent({
             id: branded.inbox(),
@@ -1771,17 +1826,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const goal = yield* repository
           .getActiveGoal(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
-        if (Option.isNone(goal) || goal.value.status !== "active") return;
-        if (goal.value.continuationCount >= goal.value.limits.maxAutomaticContinuationsPerGoal) {
+        const activeGoal =
+          Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+        if (
+          activeGoal &&
+          activeGoal.continuationCount >= activeGoal.limits.maxAutomaticContinuationsPerGoal
+        ) {
           yield* repository
             .saveGoal(
               {
-                ...goal.value,
+                ...activeGoal,
                 status: "paused",
-                revision: goal.value.revision + 1,
+                revision: activeGoal.revision + 1,
                 updatedAt: isoNow(),
               },
-              goal.value.revision,
+              activeGoal.revision,
             )
             .pipe(Effect.mapError(toServiceError("Failed to pause exhausted goal.")));
           yield* appendActivity({
@@ -1789,7 +1848,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             kind: "goal-paused",
             actorKind: "system",
             actorThreadId: null,
-            goalId: goal.value.id,
+            goalId: activeGoal.id,
             taskId: null,
             source: null,
             summary:
@@ -1840,22 +1899,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
             updatedAt: isoNow(),
           })
           .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
-        const latestGoal = yield* repository
-          .getActiveGoal(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to re-check goal before wake.")));
-        if (Option.isNone(latestGoal) || latestGoal.value.status !== "active") {
-          yield* repository
-            .saveCursor({
-              projectId,
-              processedThroughInboxId: cursor.processedThroughInboxId,
-              frozenFromInboxId: null,
-              frozenToInboxId: null,
-              coordinatorBusy: false,
-              updatedAt: isoNow(),
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to unfreeze stale wake.")));
-          return;
-        }
         let runId = Option.isSome(existingWake)
           ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
           : undefined;
@@ -1865,17 +1908,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
           runId = run.run.id;
           yield* storeReceipt(receiptId, projectId, "wake", { runId });
-          yield* repository
-            .saveGoal(
-              {
-                ...latestGoal.value,
-                continuationCount: latestGoal.value.continuationCount + 1,
-                revision: latestGoal.value.revision + 1,
-                updatedAt: isoNow(),
-              },
-              latestGoal.value.revision,
-            )
-            .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+          if (activeGoal) {
+            yield* repository
+              .saveGoal(
+                {
+                  ...activeGoal,
+                  continuationCount: activeGoal.continuationCount + 1,
+                  revision: activeGoal.revision + 1,
+                  updatedAt: isoNow(),
+                },
+                activeGoal.revision,
+              )
+              .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+          }
         }
         yield* repository
           .saveCursor({
@@ -1892,13 +1937,58 @@ export const makeProjectAgentService = Effect.gen(function* () {
           kind: "wake-enqueued",
           actorKind: "system",
           actorThreadId: config.coordinatorThreadId,
-          goalId: latestGoal.value.id,
+          goalId: activeGoal?.id ?? null,
           taskId: eligible[0]?.taskId ?? null,
           source: null,
           summary: `Dispatched coordinator continuation ${runId}. Later events remain queued.`,
           createdAt: isoNow(),
         });
         yield* impl.scheduleDigest(projectId);
+      }),
+
+    inspectWorkerHealth: () =>
+      Effect.gen(function* () {
+        const configs = yield* repository
+          .listConfigs()
+          .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+        for (const config of configs) {
+          if (!config.enabled) continue;
+          const index = yield* repository
+            .listThreadIndex(config.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
+          for (const entry of index) {
+            if (
+              !isManagedWorkerThread({
+                threadId: entry.threadId,
+                coordinatorThreadId: config.coordinatorThreadId,
+                index,
+              })
+            ) {
+              continue;
+            }
+            const shell = yield* snapshotQuery
+              .getThreadShellById(entry.threadId)
+              .pipe(Effect.mapError(toServiceError("Failed to inspect worker thread.")));
+            if (Option.isNone(shell)) {
+              yield* impl.ingestSettledThreadEvent({
+                threadId: entry.threadId,
+                sourceEventId: `worker-health:${entry.threadId}:missing`,
+                eventType: "worker.missing",
+                createdAt: isoNow(),
+              });
+              continue;
+            }
+            const status = shell.value.session?.status ?? null;
+            if (!isFailedWorkerSessionStatus(status)) continue;
+            const updatedAt = shell.value.session?.updatedAt ?? shell.value.updatedAt;
+            yield* impl.ingestSettledThreadEvent({
+              threadId: entry.threadId,
+              sourceEventId: `worker-health:${entry.threadId}:${status}:${updatedAt}`,
+              eventType: `worker.${status}`,
+              createdAt: isoNow(),
+            });
+          }
+        }
       }),
 
     resolvePrincipalForThread: (threadId) =>

@@ -812,6 +812,7 @@ function makeHarnessLayer(
     recordManagedWorkerThreads: () => Effect.void,
     scheduleDigest: () => Effect.void,
     reconcilePendingWakes: () => Effect.void,
+    inspectWorkerHealth: () => Effect.void,
     listEvidence: () => Effect.succeed({ evidence: [] }),
     listThreadIndex: () => Effect.succeed({ threads: [] }),
     excludeThread: () => Effect.fail(new Error("not configured")),

@@ -145,6 +145,7 @@ export interface ProjectAgentServiceShape {
     readonly titles: ReadonlyArray<string>;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly reconcilePendingWakes: () => Effect.Effect<void, ProjectAgentServiceError>;
+  readonly inspectWorkerHealth: () => Effect.Effect<void, ProjectAgentServiceError>;
   readonly reportResult: (
     input: ProjectAgentReportResultInput,
     principal: ProjectAgentPrincipal,
