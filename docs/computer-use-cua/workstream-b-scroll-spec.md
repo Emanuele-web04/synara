@@ -1,5 +1,40 @@
 # Scroll v2 spec (workstream B)
 
+## Status: implemented 2026-09-17 (native rev 16, commit `78bc88bae`)
+
+Shipped and live-verified on TextEdit on this VM. What landed matches this
+spec with these measured facts:
+
+- Two axes plus held modifiers ride one wheel gesture: the driver takes
+  signed `delta_x`/`delta_y` ticks (±50 per axis per dispatch) and a modifier
+  list, and posts pixel-unit (`ScrollEventUnit::PIXEL`) wheel deltas with the
+  modifier flags set on each event. Requests still quantize to 120-pixel
+  notches per axis.
+- AX scrollbar presses are tried first only for an unmodified vertical
+  scroll carrying an element token; horizontal, diagonal, modified, or
+  non-semantic requests go straight to the wheel path. Gearing is keyed per
+  route (`window|ax` vs `window|wheel`) so the two never share a ratio.
+- macOS now runs the common before/after measurement loop inside the agreed
+  budget: at most two injected legs (48 px probe plus corrected remainder)
+  and at most three captures including the caller observation. Wrong-way or
+  zero-travel measurements are suppressed, never learned, never replayed.
+- Gearing persists in `computer-scroll-gearing.json` beside control state
+  (64-entry cap, versioned envelope; a corrupt or missing file degrades to
+  gearing 1, never to a failure).
+- Live on TextEdit: background pixel scrolls land both directions; a
+  two-axis-plus-modifier request dispatches as one event; a pid-only scroll
+  refuses closed.
+- Measured limitation, stated honestly: TextEdit ignores horizontal wheel
+  deltas. NSScrollView wants continuous trackpad deltas for horizontal
+  travel, so `delta_x` is a no-op there. This is a toolkit limitation, not a
+  refusal.
+- The driver's keystroke scroll path is unreachable through Synara
+  admission (an exact pid plus window_id is required), so its refusal of
+  delta/modifier requests is defense-in-depth rather than a live gate.
+
+The "Current state" section below describes the rev-15 baseline this spec
+was written against; it is kept for history.
+
 ## Problem
 
 macOS scroll is quantized, single axis, and unmeasured. One operation maps to 120 pixel notches with a cap of 50. Two axis requests are refused. Modified scrolls are refused. No travel is measured on macOS, so no correction is learned. Kartik reports the agent has trouble scrolling: large requests land far from target, small requests vanish into notch rounding, and the loop cannot see what moved.

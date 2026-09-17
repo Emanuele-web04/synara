@@ -696,3 +696,43 @@ Consolidated from section 6.6, with a recommended default so work can proceed if
 ---
 
 _End of handoff. If you are the next agent: read section 0, then 3, then 4, then 6, then 11. Do not run compiled binaries from the assistant sandbox (implementers in normal local terminals can). Confirm the section 11.3 decisions with Kartik, or proceed on the recommended defaults in writing. Keep this document accurate as you go._
+
+---
+
+# UPDATE 2026-09-17 (evening): rev 16 shipped
+
+> Appended after the rev-16 commits landed. Where earlier text disagrees,
+> this block wins.
+
+- **Driver is now native revision 16** on the same 0.28.2 source pin;
+  patch sha `46f7a8cfbb51d18eb3eb91da88b488e5c42fc92bfa91a717dae3fadd43050ee0`.
+  Commits `7eeb083d4` (six milestone tools) and `78bc88bae` (scroll v2)
+  landed on the branch.
+- **Scroll v2 is implemented and live-verified on TextEdit.** Signed
+  `delta_x`/`delta_y` ticks (±50 per axis) plus modifiers post as one
+  pixel-unit wheel gesture; unmodified vertical element scrolls prefer AX
+  scrollbar presses; macOS measures before/after travel inside a
+  2-leg/3-capture budget and learns route-keyed gearing with a durable
+  per-app file. Known limit: TextEdit ignores horizontal wheel deltas
+  (NSScrollView wants continuous trackpad deltas). The section-0 weakness
+  "macOS scroll is quantized and unmeasured" is no longer current.
+- **The three-window typing failure (G5) is closed** via verified
+  `set_value` compose on web-content elements; the fixture passed 10x with
+  sentinel focus held. See
+  `docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17-notes.md`.
+- **Belief work is dead by experiment** (input matrix): six stages
+  including a real front-process flip cannot manufacture a key window, and
+  process-scoped CGEvent never reaches an inactive renderer. Electron
+  background scroll/type via CGEvent is likewise dead; the `browser_*` CDP
+  surface is the fix path and is being built separately.
+- **Space creation is in progress, blocked at display-attach:**
+  `SLSSpaceCreate` yields orphaned type-3 spaces that `SLSShowSpaces` does
+  not attach; SLS move/add/compat-id calls are silent no-ops on foreign
+  windows under SIP. `open -g -n -a` is verified as the silent launch
+  form; `open -n -a` steals focus (fixture bug, fix in flight).
+- **Agent-facing tool count is 31** (the six milestone tools plus
+  `computer_get_accessibility_tree` and `computer_get_cursor_position`,
+  now exposed as read tools).
+- This machine has a provenance quirk: a freshly built binary can be
+  killed by Gatekeeper (`Killed: 9`) until the file is rewritten
+  (`cat f > t && mv t f`). One line, real debugging time.

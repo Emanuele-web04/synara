@@ -91,3 +91,48 @@ foreground` performs a short-lived front-process switch and restores the
 
 Evidence: probe app `/private/tmp/cua-exp/probe-app`, driver client
 `/private/tmp/cua-exp/driverctl*.py`, DOM logs in `/private/tmp/cua-exp/out.ndjson`.
+
+---
+
+## Addendum: scroll v2, launch, and Space findings (2026-09-17, native rev 16)
+
+Driver staged at rev 16, patch sha
+`46f7a8cfbb51d18eb3eb91da88b488e5c42fc92bfa91a717dae3fadd43050ee0`, commit
+`78bc88bae`.
+
+### Scroll v2, verified live on TextEdit
+
+| Need                                  | Result                                           | Notes                                                                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background vertical scroll (TextEdit) | **LANDS both directions**; scrollbar thumb moved | Window-local pixel-wheel post; `effect:unverifiable` stays honest, confirm via screenshot/AX                                                                                     |
+| Two-axis + modifier gesture           | **Dispatches as one event**                      | `delta_x`/`delta_y` signed ticks (±50 per axis) + `modifiers` → one PIXEL-unit `CGEvent` wheel stream with flags                                                                 |
+| Pid-only scroll                       | **Refused closed**                               | Delta mode requires an element or window-local target; admission requires exact pid + window_id                                                                                  |
+| Horizontal wheel delta (TextEdit)     | **Ignored by the app**                           | NSScrollView wants continuous trackpad deltas for horizontal travel; toolkit limitation, not a refusal                                                                           |
+| Keystroke scroll path                 | **Unreachable under Synara admission**           | The driver's delta/modifier refusal on that path is defense-in-depth, not a live gate                                                                                            |
+| Electron background scroll/type       | **Dead**                                         | Upstream refuses background scroll for Electron; process-scoped CGEvent never reaches an inactive renderer. The fix path is the `browser_*` CDP surface (in progress separately) |
+
+macOS now joins the before/after measurement loop: a 48 px probe leg plus a
+corrected remainder, at most two legs and three captures per request.
+Learned travel is stored per window per route (`ax` vs `wheel`) and spills
+into a durable per-app file (`computer-scroll-gearing.json` beside control
+state, 64 entries, corrupt file degrades to gearing 1).
+
+### Launch behavior (verified)
+
+- `open -g -n -a` launches an app without stealing focus or switching the
+  operator's Space. This is the correct silent-launch form.
+- `open -n -a` steals focus. The fixture launch line that used it is a known
+  bug; a fix is in flight separately.
+
+### Space management: in progress, blocked at display-attach
+
+Verified on this VM under SIP:
+
+- `SLSSpaceCreate` produces orphaned type-3 spaces that `SLSShowSpaces` does
+  not attach to any display, so created spaces are unreachable.
+- `SLSMoveWindowsToManagedSpace`, `SLSAddWindowsToSpaces`,
+  `SpaceAddWindowsAndRemoveFromSpaces`, and the compat-id trick are all
+  silent no-ops on foreign windows under SIP.
+
+Status: blocked at display-attach for creation; window moves are SIP-gated.
+Neither "solved" nor "impossible" is proven; the ABI work continues.

@@ -154,3 +154,45 @@ build-space-ctl.sh}`
 - Apps: `~/Applications/Synara Cua Fixture.app` (rebuilt, ungranted, lane
   fix inside), `Synara Cua Fixture.app.bak-2026-09-17` (old granted build),
   `Synara Cua Canary.app` (fixed build, awaiting grant)
+
+---
+
+## Correction, 2026-09-17 (later same day, appended)
+
+The handoff above is left as written. Several "still pending" items have
+since been resolved on this machine; the current state is:
+
+- **G5 is closed.** The three-window semantic-text fixture passes: web
+  content `typeText` composes `existing + text` through `set_value` and
+  re-reads independently; 10 consecutive green runs with sentinel focus
+  held. Evidence:
+  `docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17-notes.md`.
+- **The belief canary question is answered without the live run:** no
+  synthetic stage is needed. `AXValue` writes are already focus-neutral on
+  Electron, and `delivery_mode=foreground` performs the short-lived
+  activate-and-restore natively. The Option-C sidecar reduces to optional
+  theft sampling; do not wire belief stages.
+- **Scroll v2 landed** in commit `78bc88bae` (native rev 16): two axes
+  plus held modifiers in one pixel-unit wheel gesture, AX scrollbar
+  preference for unmodified vertical element scrolls, macOS before/after
+  measurement inside a 2-leg/3-capture budget, and route-keyed gearing
+  with a durable per-app file. Verified live on TextEdit both directions.
+  TextEdit ignores horizontal wheel deltas, an NSScrollView limitation,
+  not a refusal.
+- **The milestone tools shipped** in `7eeb083d4`: `computer_list_apps`,
+  `computer_verify_state`, `computer_zoom`, `computer_set_window_frame`,
+  `computer_invoke_menu`, `computer_kill_app`. Agent-facing tool count is
+  31 at rev 16, adding `computer_get_accessibility_tree` and
+  `computer_get_cursor_position`.
+- **`space_ctl` update:** move/add are not merely mis-ABI'd. The SLS
+  move/add/compat-id calls are silent no-ops on foreign windows under SIP
+  on this VM, and `SLSSpaceCreate` produces orphaned type-3 spaces that
+  `SLSShowSpaces` never attaches to a display. Space work is in progress,
+  blocked at display-attach; moves are SIP-gated. Neither "solved" nor
+  "impossible" is proven.
+- **`open -g -n -a` is verified**: it launches without stealing focus or
+  switching Spaces. `open -n -a` steals focus; the fixture launch line
+  using it is a known bug being fixed separately.
+- **Commits exist now.** The no-commit standing order above applied to
+  that session; the milestone and scroll work landed on the branch as
+  `7eeb083d4` and `78bc88bae`.

@@ -55,4 +55,4 @@ Computer guidance requires observation before action, exact window IDs, semantic
 
 ## Remaining certification boundary
 
-The source and focused contract suites cover the routing, exact-target, concurrency, cancellation, Space, and freshness policies. Final claims about three simultaneous real-app targets, human foreground focus, and off-Space semantic input require a freshly packaged revision-14 application with newly granted macOS permissions. The canonical Cua macOS harness additionally requires its documented SIP-disabled Lume maintainer environment and signing keychain; local smoke evidence is not a substitute.
+The source and focused contract suites cover the routing, exact-target, concurrency, cancellation, Space, and freshness policies. Final claims about three simultaneous real-app targets, human foreground focus, and off-Space semantic input require a freshly packaged revision-16 application with newly granted macOS permissions. The canonical Cua macOS harness additionally requires its documented SIP-disabled Lume maintainer environment and signing keychain; local smoke evidence is not a substitute.

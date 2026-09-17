@@ -52,6 +52,9 @@ whether any canary window held OS focus; the expectation is none ever does.
    the canary never becomes frontmost and never pulls the operator's Space.
    Never direct-exec the binary (`Contents/MacOS/Electron`): LaunchServices
    attribution matters.
+3. Provenance quirk on this machine: a freshly built binary can be killed by
+   Gatekeeper (`Killed: 9`) on exec until the file is rewritten once
+   (`cat f > t && mv t f`). If a new build dies instantly, rewrite it first.
 
 ## Run
 

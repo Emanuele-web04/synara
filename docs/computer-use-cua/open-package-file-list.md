@@ -69,5 +69,5 @@ Per the spec and the parity matrix, these remain product code or internal
 surfaces: raw session tools, raw recording tools, driver configuration, cursor
 ownership, the `browser_*` family, locked use, and history surfaces
 (`docs/computer-use-cua/capability-audit-2026-09-16.md` "Deliberately
-constrained native tools"; `v2-parity-matrix.md:52`). Raw recording stays
+constrained native tools"; `v2-parity-matrix.md:54`). Raw recording stays
 internal until a privacy policy exists.

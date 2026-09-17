@@ -30,7 +30,7 @@ These guardrails ship WITH the code, not after it. Visible session state: the us
 
 Where the tree stands on each guardrail today: per action approval exists, always allow does not, and the matrix flags that as a safety tradeoff needing a decision (`docs/computer-use-cua/v2-parity-matrix.md:27`). Pause on lock exists, operation while locked does not. The audit log, kill switch UI, and denylist are build items. No guardrail may be cut to hit a date. A missing guardrail blocks the open release.
 
-This spec agrees with gap item 14 of the parity matrix. Locked use and history stay out of the first open milestone (`docs/computer-use-cua/v2-parity-matrix.md:52`). Raw recording tools stay internal until a privacy policy exists (`docs/computer-use-cua/capability-audit-2026-09-16.md:28`, `docs/computer-use-cua/v2-parity-matrix.md:31`). No recording or history surface ships open before that policy lands.
+This spec agrees with gap item 14 of the parity matrix. Locked use and history stay out of the first open milestone (`docs/computer-use-cua/v2-parity-matrix.md:54`). Raw recording tools stay internal until a privacy policy exists (`docs/computer-use-cua/capability-audit-2026-09-16.md:28`, `docs/computer-use-cua/v2-parity-matrix.md:31`). No recording or history surface ships open before that policy lands.
 
 The malware risk conclusion is carried per handoff section 5.7 and is unverified by this spec author. The stated conclusion: this capability class has been public for a decade, the abuse bottleneck is TCC consent plus distribution, neither is changed by this code, so the marginal risk of open sourcing is low, and the design still resists misuse. Do not cite this as a proven fact. Treat it as a per handoff claim that a reviewer must still check.
 
@@ -123,7 +123,7 @@ Kartik decides the boundary. Each item has a recommendation and a safe default. 
 
 Scope: produce the extraction plan and the guardrail build list. No code changes in this task. No new capabilities. No bypasses.
 
-Read first: handoff sections 5.7 and 11.3 item 2 (per handoff source), then `docs/computer-use-cua/README.md:1` through `docs/computer-use-cua/README.md:76` for contracts and limits, then `docs/computer-use-cua/capability-audit-2026-09-16.md:1` through `docs/computer-use-cua/capability-audit-2026-09-16.md:38` for the exposure line, then `docs/computer-use-cua/v2-parity-matrix.md:29` through `docs/computer-use-cua/v2-parity-matrix.md:52` for locked use and history, then `docs/release.md:5` through `docs/release.md:27` for the signed versus unsigned policy.
+Read first: handoff sections 5.7 and 11.3 item 2 (per handoff source), then `docs/computer-use-cua/README.md:1` through `docs/computer-use-cua/README.md:76` for contracts and limits, then `docs/computer-use-cua/capability-audit-2026-09-16.md:1` through `docs/computer-use-cua/capability-audit-2026-09-16.md:38` for the exposure line, then `docs/computer-use-cua/v2-parity-matrix.md:29` through `docs/computer-use-cua/v2-parity-matrix.md:54` for locked use and history, then `docs/release.md:5` through `docs/release.md:27` for the signed versus unsigned policy.
 
 Deliver: a file list for the open package matching the Interfaces table, a guardrail gap list naming what exists versus what must be built, a draft disclosure file, and a decision sheet for the ten open decisions with the recommendation and safe default for each. Mark every claim you could not verify as unverified. Keep sentences short and plain. Propose no code, no bypasses, no new capabilities.
 

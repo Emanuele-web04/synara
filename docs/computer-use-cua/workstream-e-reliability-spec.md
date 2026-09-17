@@ -19,7 +19,7 @@ Exact tally across the 8 electron cases:
 - Not run, correct, 1: explicit-foreground-text, because no approved-once flag was set (`docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:27`).
 - Failed, 1: three-window-focus-neutral-semantic-text. All 3 concurrent typeText calls returned effect dispatched-unknown with verified unverifiable. Fields stayed empty. Focus never left the sentinel. Durations grew per target (`docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:30`). The report records all three per-window dispatched-unknown results (`docs/computer-use-cua/evidence/rev15-electron-2026-09-17-report.json:69`).
 
-What the run left open: no live, gateway, or cancellation sections ran in that invocation (`docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:37`). The open-launch screenshot gap is unresolved. The three-window failure has its own fix spec (`docs/computer-use-cua/three-window-semantic-fix-spec.md:1`) and blocks the core promise of background typing, which is parity Gap item 1 (`docs/computer-use-cua/v2-parity-matrix.md:39`). This spec agrees with parity Gap item 8: screenshots and Spaces behavior exists in source but is uncertified at revision 15 (`docs/computer-use-cua/v2-parity-matrix.md:46`).
+What the run left open: no live, gateway, or cancellation sections ran in that invocation (`docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:37`). The open-launch screenshot gap is unresolved. The three-window failure has its own fix spec (`docs/computer-use-cua/three-window-semantic-fix-spec.md:1`) and blocks the core promise of background typing, which is parity Gap item 1 (`docs/computer-use-cua/v2-parity-matrix.md:41`). This spec agrees with parity Gap item 8: screenshots and Spaces behavior exists in source but is uncertified at revision 15 (`docs/computer-use-cua/v2-parity-matrix.md:48`).
 
 ## Approach
 
@@ -108,3 +108,15 @@ Ordered steps.
 8. Run real-app proof on the 3 operator-approved apps. One background action each. Before and after PNGs plus notes per app.
 9. Check every acceptance item. Any fail or missing evidence blocks sign-off. The three-window case stays blocked until its fix lands.
 10. Run source checks last: `bun run test`, format, lint, typecheck (`docs/computer-use-cua/README.md:120`). Report what ran, what passed, and what stays unverified.
+
+## Correction, 2026-09-17 (later same day, appended)
+
+- The `open -n -a` launch form this spec requires is now known to steal
+  focus and can switch the operator's Space. The verified silent form is
+  `open -g -n -a` (background flag). The fixture launch line is a known
+  bug being fixed separately; certification runs should use `-g -n -a`
+  and still record the exact launch path.
+- The three-window case this spec blocks on is closed: web-content
+  `typeText` routes through verified `set_value` compose, and the G5
+  fixture passed 10x (`docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17-notes.md`).
+- Certification now targets native revision 16, not 15.

@@ -1,6 +1,6 @@
 # Workstream D: capability parity plus spec
 
-Milestone one scope is settled. Menus and window frames are in. The Chrome CDP path is deferred. Locked use, record and replay history, and the Intel slice are out of milestone one. This spec agrees with `docs/computer-use-cua/v2-parity-matrix.md:32` and `docs/computer-use-cua/v2-parity-matrix.md:33` and Gap items 4 (`docs/computer-use-cua/v2-parity-matrix.md:42`), 10 and 11 (`docs/computer-use-cua/v2-parity-matrix.md:48`), 12 and 13 (`docs/computer-use-cua/v2-parity-matrix.md:50`), 14 and 15 (`docs/computer-use-cua/v2-parity-matrix.md:52`).
+Milestone one scope is settled. Menus and window frames are in. The Chrome CDP path is deferred. Locked use, record and replay history, and the Intel slice are out of milestone one. This spec agrees with `docs/computer-use-cua/v2-parity-matrix.md:32` and `docs/computer-use-cua/v2-parity-matrix.md:33` and Gap items 4 (`docs/computer-use-cua/v2-parity-matrix.md:44`), 10 and 11 (`docs/computer-use-cua/v2-parity-matrix.md:50`), 12 and 13 (`docs/computer-use-cua/v2-parity-matrix.md:52`), 14 and 15 (`docs/computer-use-cua/v2-parity-matrix.md:54`).
 
 ## Problem
 
@@ -142,10 +142,22 @@ Hover default. Recommendation is real hover where certified, overlay only elsewh
 
 ## Implementer brief
 
-Read these first. The parity matrix rows and Gap items in `docs/computer-use-cua/v2-parity-matrix.md:35`. The audit decisions in `docs/computer-use-cua/capability-audit-2026-09-16.md:24`. The handoff workstream D seed and the decision shortlist, plus the focus workstream for the background dependency. Then read the gateway targeting and approval code around `apps/server/src/agentGateway/computerTools.ts:2320` and `apps/server/src/agentGateway/computerTools.ts:1064`, the backend drag and cursor code around `apps/server/src/computer/CuaComputerBackend.ts:1138`, and the host cursor setup in `apps/desktop/src/cuaDriverHost.ts:719`.
+Read these first. The parity matrix rows and Gap items in `docs/computer-use-cua/v2-parity-matrix.md:37`. The audit decisions in `docs/computer-use-cua/capability-audit-2026-09-16.md:24`. The handoff workstream D seed and the decision shortlist, plus the focus workstream for the background dependency. Then read the gateway targeting and approval code around `apps/server/src/agentGateway/computerTools.ts:2320` and `apps/server/src/agentGateway/computerTools.ts:1064`, the backend drag and cursor code around `apps/server/src/computer/CuaComputerBackend.ts:1138`, and the host cursor setup in `apps/desktop/src/cuaDriverHost.ts:719`.
 
 Build order. First the shared bounds policy and menu path resolution as pure units with tests. Then computer_invoke_menu behind the approval gate with effect reporting. Then computer_set_window_frame with visible approval copy and read back. Then computer_hover with the certified or overlay only flag. Then cursor identity rendering. Then the P2 small gaps. Keep background drag refused until the focus workstream certifies it.
 
 Do not change the settled scope. Do not add the Chrome path. Do not add locked use. Do not add recording history. Do not touch the Intel slice. Keep beyond parity ideas out of the milestone one diff.
 
 Done proof. The affected Vitest suites pass. The new fixtures pass on a scratch AppKit app. The AppKit and Electron matrix passes in a signed app with fresh permissions. Evidence folders hold arguments, approvals, effects, and images per run. The report states what ran, what passed, and what stays unverified or uncertified.
+
+## Status note, 2026-09-17 (appended)
+
+The milestone-one exposure items this spec planned have landed:
+`computer_invoke_menu`, `computer_set_window_frame`, `computer_kill_app`,
+`computer_list_apps`, `computer_verify_state`, and `computer_zoom` shipped
+in `7eeb083d4`, verified live on TextEdit, approval-gated with Synara-side
+read-back. `computer_get_accessibility_tree` and
+`computer_get_cursor_position` followed in `78bc88bae`. The "still lacks
+menus and window frame control" framing in the Problem section and the
+build order below predate that landing; hover, cursor identity, and the
+P2 coverage items remain open.

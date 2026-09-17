@@ -91,7 +91,7 @@ default. Verification notes record what was checked in the tree on branch
 - Safe default: out, with raw tools staying internal.
 - Verification: locked operation does not exist; pause on lock does
   (`computerDesktopLifecycle.ts:26`–`:35`, `v2-parity-matrix.md:29`). Gap item
-  14 targets Later (`v2-parity-matrix.md:52`). Acceptance 14 requires these
+  14 targets Later (`v2-parity-matrix.md:54`). Acceptance 14 requires these
   surfaces absent from the package.
 
 ## 10. Release reuse

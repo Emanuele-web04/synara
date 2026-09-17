@@ -22,7 +22,7 @@ Screenshots cost pixels and bytes. The model image budget caps the long side at 
 
 Preview work runs beside the action path. Stills capture a whole desktop PNG every 2 s (`apps/server/src/computer/CuaComputerBackend.ts:236`), reusing a tool observation younger than 1500 ms when one exists (`apps/server/src/computer/CuaComputerBackend.ts:225`). The native frame tap captures at 960 px or less with a 15 fps cap (`docs/computer-use-cua/native-preview.md:28`) and measured 12.5 fps with 75 of 75 valid JPEG frames at about 91 KB average in the live socket test (`docs/computer-use-cua/native-preview.md:39`). No JPEG quality knob was found in server or host source, so encode tuning lives in the native helper and is unverified.
 
-This matches the parity matrix. Gap item 5 says fixed 300 ms settle plus no AX observer settle slows every turn and weakens read back (`docs/computer-use-cua/v2-parity-matrix.md:43`). This spec is the build plan for that gap.
+This matches the parity matrix. Gap item 5 says fixed 300 ms settle plus no AX observer settle slows every turn and weakens read back (`docs/computer-use-cua/v2-parity-matrix.md:45`). This spec is the build plan for that gap.
 
 ## Approach
 

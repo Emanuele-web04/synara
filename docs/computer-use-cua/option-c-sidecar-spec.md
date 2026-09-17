@@ -6,13 +6,13 @@ Decision context, settled. Kartik chose option C. The patched Rust cua-driver st
 
 The agent cannot type into a background app while the human types elsewhere. The two input streams conflict. The frontmost window can lose focus. The handoff describes this in section 5.2 as the core isolation problem, and section 4.1 documents how Codex answers it with per-process delivery plus synthetic focus belief.
 
-Some apps demand active state before they accept input. Electron class apps are the known hard case. They check key window or active app state and drop events that a plain background post delivers. This matches parity Gap summary item 2 on synthetic focus belief in `docs/computer-use-cua/v2-parity-matrix.md:40`, which unlocks the click, Electron, and key window gaps.
+Some apps demand active state before they accept input. Electron class apps are the known hard case. They check key window or active app state and drop events that a plain background post delivers. This matches parity Gap summary item 2 on synthetic focus belief in `docs/computer-use-cua/v2-parity-matrix.md:42`, which unlocks the click, Electron, and key window gaps.
 
-The typing isolation gap is proven, not theoretical. The parity matrix records that three window typing failed at rev 15 with effect dispatched-unknown in `docs/computer-use-cua/v2-parity-matrix.md:39`. Synthetic key activation without raising is Gap item 7 in `docs/computer-use-cua/v2-parity-matrix.md:45`. Electron click masking is Gap item 11 in `docs/computer-use-cua/v2-parity-matrix.md:49`. This spec must agree with all four rows.
+The typing isolation gap is proven, not theoretical. The parity matrix records that three window typing failed at rev 15 with effect dispatched-unknown in `docs/computer-use-cua/v2-parity-matrix.md:41`. Synthetic key activation without raising is Gap item 7 in `docs/computer-use-cua/v2-parity-matrix.md:47`. Electron click masking is Gap item 11 in `docs/computer-use-cua/v2-parity-matrix.md:51`. This spec must agree with all four rows.
 
 ## Current state
 
-The driver pin is cua-driver 0.28.2 at native revision 15, per `packages/shared/src/cuaDriverRelease.json:2` and `packages/shared/src/cuaDriverRelease.json:5`. The protocol constants derive from that manifest in `packages/shared/src/cuaDriverProtocol.ts:4`.
+The driver pin is cua-driver 0.28.2 at native revision 16, per `packages/shared/src/cuaDriverRelease.json:2` and `packages/shared/src/cuaDriverRelease.json:5`. The protocol constants derive from that manifest in `packages/shared/src/cuaDriverProtocol.ts:4`.
 
 The gate facts from rev 1 still hold, per `apps/desktop/patches/cua-driver/README.md:10` and `apps/desktop/patches/cua-driver/README.md:14`. Input admission closes irreversibly per driver process. Keyboard and mouse guards prepare matching releases before a down event. Release runs on return, failure, cancellation, and unwind. The private cancel_input path accepts only the authenticated embedded parent and the exact child PID. Cleanup acknowledgement requires zero pending input and drained contexts. The host never kills or replaces a generation without that acknowledgement when input was ever dispatched.
 

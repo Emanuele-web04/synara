@@ -318,3 +318,24 @@ Repo checks (after `bun install --frozen-lockfile`):
   exists only in the test at both HEAD and `bb7eb421c`. Fix is a one-line test
   expectation update (or restoring the old copy).
 - `node_modules` and the generated `.source` were removed again after the checks.
+
+---
+
+## 10. Correction, 2026-09-17 (later same day, appended)
+
+The verified state above was true at native rev 15. Since then:
+
+- The driver is staged at **native revision 16** (same 0.28.2 source;
+  patch sha `46f7a8cfbb51d18eb3eb91da88b488e5c42fc92bfa91a717dae3fadd43050ee0`).
+- The section-1 scroll limits are obsolete: scroll now takes two axes plus
+  held modifiers as one pixel-unit wheel gesture, and macOS runs the
+  before/after measurement loop. Live-verified on TextEdit; the remaining
+  limit is that NSScrollView ignores horizontal wheel deltas.
+- The "deliberately unexposed" milestone tools shipped: `computer_list_apps`,
+  `computer_verify_state`, `computer_zoom`, `computer_set_window_frame`,
+  `computer_invoke_menu`, `computer_kill_app`; plus the reads
+  `computer_get_accessibility_tree` and `computer_get_cursor_position`.
+  Agent-facing `computer_*` tools now number 31.
+- The three-window `type_text` failure is closed via verified `set_value`
+  compose on web-content elements (fixture evidence under
+  `docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17-*`).

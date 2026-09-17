@@ -2,7 +2,7 @@
 
 ## Problem
 
-Three concurrent `typeText` calls to three windows of one Electron pid all return `effect=dispatched-unknown` with `verified=unverifiable`, and all three fields stay empty. The rev 15 run proves this in `docs/computer-use-cua/evidence/rev15-electron-2026-09-17-report.json:69`. Expected texts were `agent-a-background`, `agent-b-background`, `agent-c-background`. Actual values were `"", "", ""`. Focus never left the sentinel: 2951 of 2951 samples on window id 4. The three spans overlapped, with durations 1.6 s, 2.67 s, and 3.75 s. This is parity Gap item 1 in `docs/computer-use-cua/v2-parity-matrix.md:39`. It blocks the core promise of focus neutral background typing. The solo semantic paths passed in the same run, so the failure is specific to concurrent same-pid writes (unverified as the only trigger until the decisive experiment runs).
+Three concurrent `typeText` calls to three windows of one Electron pid all return `effect=dispatched-unknown` with `verified=unverifiable`, and all three fields stay empty. The rev 15 run proves this in `docs/computer-use-cua/evidence/rev15-electron-2026-09-17-report.json:69`. Expected texts were `agent-a-background`, `agent-b-background`, `agent-c-background`. Actual values were `"", "", ""`. Focus never left the sentinel: 2951 of 2951 samples on window id 4. The three spans overlapped, with durations 1.6 s, 2.67 s, and 3.75 s. This is parity Gap item 1 in `docs/computer-use-cua/v2-parity-matrix.md:41`. It blocks the core promise of focus neutral background typing. The solo semantic paths passed in the same run, so the failure is specific to concurrent same-pid writes (unverified as the only trigger until the decisive experiment runs).
 
 ## Current state
 
@@ -38,7 +38,7 @@ What happens to readback attribution: each write reads back its own window throu
 
 Non goals: no change to the input admission gate, no change to cleanup acknowledgement, no automatic replay of uncertain effects, no foreground promotion, no masking, no belief synthesis. Those belong to the sidecar spec and stay out of this fix.
 
-Consistency: this spec agrees with Gap item 1 in `docs/computer-use-cua/v2-parity-matrix.md:39` and with the sidecar acceptance starting point in `docs/computer-use-cua/option-c-sidecar-spec.md:74`. The sidecar ladder still starts from AX actioning with zero activation. This fix only makes the AX rung correct under same-pid concurrency.
+Consistency: this spec agrees with Gap item 1 in `docs/computer-use-cua/v2-parity-matrix.md:41` and with the sidecar acceptance starting point in `docs/computer-use-cua/option-c-sidecar-spec.md:74`. The sidecar ladder still starts from AX actioning with zero activation. This fix only makes the AX rung correct under same-pid concurrency.
 
 ## Interfaces
 
@@ -124,6 +124,13 @@ Not done from the spec: 10× consecutive stability runs (3 so far). The
 "decisive experiment" it asked for ran differently than planned — instead of
 1-vs-3 windows of the same mechanism, the mechanism itself was replaced after
 the input matrix proved AXSelectedText dead on Chromium.
+
+## Correction, 2026-09-17 (appended)
+
+The `open -n -a` launch form cited above is now known to steal focus; the
+verified silent form is `open -g -n -a`. The fixture launch line is a known
+bug being fixed separately. Launch-path skew remains a real certification
+concern; only the flag choice changes.
 
 Lane granularity amendment, 2026-09-18: the `semanticTextInLane` key narrowed
 from `pid` to `(pid, window_id)` — the exact granularity of the native rev-12
