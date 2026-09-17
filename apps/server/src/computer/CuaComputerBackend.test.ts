@@ -45,6 +45,7 @@ function fixture(options?: {
   let overviewWait: Promise<void> | undefined;
   let typeGate: Promise<void> | undefined;
   let extraWindows: Array<Record<string, unknown>> = [];
+  let setValueSwallowed = false;
   let actionResult: Record<string, unknown> = {
     route: "synthetic_events",
     delivery: { mode: "background" },
@@ -160,6 +161,14 @@ function fixture(options?: {
       afterCapture?.();
       return { ok: true, result, desktopEpoch: responseEpoch };
     }
+    if (request.name === "set_value" && !setValueSwallowed) {
+      const token = (request.args as Record<string, unknown> | undefined)?.element_token;
+      const written = (request.args as Record<string, unknown> | undefined)?.value;
+      const target = elements.find(
+        (element) => element.element_token === token,
+      );
+      if (target && typeof written === "string") target.value = written;
+    }
     if (isTyping(request.name)) data = actionResult;
     return {
       ok: true,
@@ -181,6 +190,9 @@ function fixture(options?: {
     backend,
     setElements: (value: Record<string, unknown>[]) => {
       elements = value;
+    },
+    swallowSetValue: () => {
+      setValueSwallowed = true;
     },
     setWindows: (value: Array<Record<string, unknown>>) => {
       extraWindows = value;
@@ -377,6 +389,77 @@ describe("Cua native boundary", () => {
       text: "keyboard",
       force_synthetic: true,
     });
+  });
+
+  it("types into web content through a composed set_value and verifies on re-read", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "web-token",
+        element_index: 2,
+        in_web_content: true,
+        value: "seed",
+      },
+    ]);
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+
+    const result = await f.backend.typeText("-typed", "cua:10:20", target);
+    // Chromium-family fields never honour AXSelectedText: the write must be a
+    // composed AXValue set, not a semantic insert.
+    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
+    const write = f.calls.find((call) => call.name === "set_value");
+    expect(write?.args).toMatchObject({
+      element_token: "web-token",
+      element_index: 2,
+      value: "seed-typed",
+      pid: 10,
+      window_id: 20,
+    });
+    // The independent re-read saw the DOM value land.
+    expect(result).toMatchObject({ verified: "confirmed", effect: "verified" });
+  });
+
+  it("reports dispatched-unknown when a web set_value does not land", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "web-token",
+        element_index: 2,
+        in_web_content: true,
+        value: "seed",
+      },
+    ]);
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+
+    // The driver accepts the write but the element's value never changes —
+    // the re-read must catch that and refuse to call it verified.
+    f.swallowSetValue();
+    const result = await f.backend.typeText("-typed", "cua:10:20", target);
+    expect(result).toMatchObject({ verified: "unconfirmed", effect: "dispatched-unknown" });
   });
 
   it("semantic text lane serializes same-pid writes", async () => {

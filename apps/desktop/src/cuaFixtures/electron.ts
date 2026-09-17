@@ -271,11 +271,18 @@ async function main() {
       await target.browser.webContents.executeJavaScript(
         "(()=>{const input=document.querySelector('#text');input.value='';input.setSelectionRange(0,0)})()",
       );
-      const observed = await backend!.getState({
-        windowId: target.window.id,
-        includeTree: true,
-      });
-      const node = findNode(observed.root, target.label);
+      // Chromium publishes the web accessibility tree asynchronously after
+      // load; a first walk can legitimately miss the field. Re-walk briefly
+      // before declaring the target absent.
+      let node: ReturnType<typeof findNode>;
+      for (let attempt = 0; attempt < 8 && !node?.activationPoint; attempt += 1) {
+        if (attempt) await pause(250);
+        const observed = await backend!.getState({
+          windowId: target.window.id,
+          includeTree: true,
+        });
+        node = findNode(observed.root, target.label);
+      }
       if (!node?.activationPoint)
         throw new Error(`Exact semantic fixture target ${target.label} is unavailable.`);
       return {

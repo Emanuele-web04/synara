@@ -183,6 +183,13 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly elementTokens = new WeakMap<ComputerUiNode, string>();
   private readonly pressableElements = new WeakSet<ComputerUiNode>();
   /**
+   * Elements living inside Chromium-family web content. AXSelectedText
+   * inserts never reach their DOM (verified against Electron 43), so text
+   * writes to these route through `set_value` with an independent re-read
+   * instead of the semantic-insert path native controls honour.
+   */
+  private readonly webContentElements = new WeakSet<ComputerUiNode>();
+  /**
    * Element trees observed within the last few seconds, keyed by window id.
    * Internal target resolution reuses them: the element tokens bound to these
    * nodes are validated natively at dispatch, so an aged-out element refuses
@@ -829,6 +836,7 @@ export class CuaComputerBackend implements ComputerBackend {
         };
         if (typeof element.element_token === "string") {
           this.elementTokens.set(node, element.element_token);
+          if (element.in_web_content === true) this.webContentElements.add(node);
           if (Array.isArray(element.actions) && element.actions.includes("AXPress"))
             this.pressableElements.add(node);
         }
@@ -1255,6 +1263,8 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
+    if (token && this.webContentElements.has(target!.node))
+      return this.webContentTypeText(target!.node, value);
     return this.input(
       "type_text",
       {
@@ -1263,6 +1273,95 @@ export class CuaComputerBackend implements ComputerBackend {
       },
       target?.node.windowId ?? w,
     );
+  }
+  /**
+   * Type into a Chromium-family web element. `AXSelectedText` writes dispatch
+   * successfully yet never reach the DOM (verified: Electron 43, inactive and
+   * frontmost alike), so the write composes `existing + text` through an
+   * `AXValue` set — which lands, fires `input`, and leaves the operator's front
+   * process untouched — then confirms the DOM value on a fresh read instead of
+   * trusting the dispatch reply.
+   */
+  private async webContentTypeText(
+    node: ComputerUiNode,
+    value: string,
+  ): Promise<ComputerBackendActionResult> {
+    const windowId = node.windowId!;
+    const { pid } = await this.target(windowId);
+    return this.semanticTextInLane(pid, async () => {
+      const before = await this.resolveWebField(windowId, node);
+      if (!before)
+        throw new CuaActionError(
+          "The web text element is no longer present; observe fresh state.",
+          "not-dispatched",
+          "stale_target",
+        );
+      const composed = (before.value ?? "") + value;
+      assertDesktopOperationActive();
+      return await this.webSetValue(node, windowId, before, composed);
+    });
+  }
+  /**
+   * Write an `AXValue` into a web element and confirm it on a fresh read. The
+   * driver's own read-back runs before Chromium publishes the new value and so
+   * reports `unverifiable` on writes that landed; verification here re-resolves
+   * the element and compares its DOM-visible value.
+   */
+  private async webSetValue(
+    node: ComputerUiNode,
+    windowId: string,
+    field: { token: string; index: number },
+    value: string,
+  ): Promise<ComputerBackendActionResult> {
+    const result = await this.inputDispatch(
+      "set_value",
+      { element_token: field.token, element_index: field.index, value },
+      windowId,
+      undefined,
+      undefined,
+      true,
+      await this.target(windowId),
+    );
+    assertDesktopOperationActive();
+    const after = await this.resolveWebField(windowId, node);
+    if (after?.value === value) return { ...result, verified: "confirmed", effect: "verified" };
+    return { ...result, verified: "unconfirmed", effect: "dispatched-unknown" };
+  }
+  /**
+   * Re-observe one window and return the record for the same web element.
+   * Tokens are snapshot-scoped, so identity matches on role + label + frame,
+   * the stable tuple an unchanged element keeps across driver snapshots.
+   */
+  private async resolveWebField(
+    windowId: string,
+    node: ComputerUiNode,
+  ): Promise<{ token: string; index: number; value: string | null } | undefined> {
+    const { pid, window_id } = await this.target(windowId);
+    const result = await this.call("get_window_state", {
+      pid,
+      window_id,
+      include_accessibility_tree: true,
+      max_elements: 1024,
+      max_depth: 25,
+    });
+    const elements = result.structuredContent?.elements;
+    if (!Array.isArray(elements)) return undefined;
+    for (const value of elements) {
+      const element = record(value);
+      if (element.in_web_content !== true) continue;
+      if (text(element.role, 128) !== node.role) continue;
+      if ((text(element.label) || null) !== node.label) continue;
+      const frame = optionalRect(element.frame);
+      if (!frame || !sameRect(frame, node.frame)) continue;
+      if (typeof element.element_token !== "string") continue;
+      const index = number(element.element_index);
+      return {
+        token: element.element_token,
+        index: Number.isFinite(index) ? index : 0,
+        value: typeof element.value === "string" ? element.value : null,
+      };
+    }
+    return undefined;
   }
   pressKey(key: string, w?: string) {
     return this.input("press_key", { key: cuaKey(key) }, w);
@@ -1295,6 +1394,16 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
+    if (this.webContentElements.has(target.node)) {
+      const field = await this.resolveWebField(target.node.windowId, target.node);
+      if (!field)
+        throw new CuaActionError(
+          "The web text element is no longer present; observe fresh state.",
+          "not-dispatched",
+          "stale_target",
+        );
+      return this.webSetValue(target.node, target.node.windowId, field, value);
+    }
     return this.input("set_value", { element_token: token, value }, target.node.windowId);
   }
   supportsAction(target: ComputerResolvedTarget, action: string): boolean {
