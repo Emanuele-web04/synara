@@ -60,8 +60,9 @@
    - `move` SEGFAULTS and `add` returns garbage (ABI/signature wrong at the
      `SLSMoveWindowsToManagedSpace` / `SLSAddWindowsToSpaces` call sites).
      Fix before using. All operations are reversible.
-   - Candidate simpler fix to try first: launch agent apps with `open -g -n`
-     (suppresses activation and Space switch). Untested.
+   - Confirmed fix: launch agent apps with `open -g -n` (suppresses
+     activation and Space switch). Verified — frontmost stays unchanged, and
+     this is now the standard fixture/agent launch form.
 6. TCC landmine (learned the hard way): every rebuild changes the cdhash, so
    Accessibility + Screen Recording grants must be removed and re-added in
    System Settings. The stale entry does not match the new build; toggling is
@@ -77,7 +78,7 @@
    node scripts/computer-use-fixtures/build-canary.mjs      # canary build ok
    node scripts/computer-use-fixtures/belief-canary.mjs --check
    rm -rf /private/tmp/synara-cua-implementation/canary-run-1
-   open -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
+   open -g -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
      --env SYNARA_CUA_CANARY_DIR=/private/tmp/synara-cua-implementation/canary-run-1
    ```
    Read the report: `report.json` → `summary` is the first phase whose exact
@@ -92,12 +93,14 @@
    event delivery with verified readback. Also revisit whether the server
    should use the driver's synthetic route with a settled readback instead of
    AX insertion for Electron.
-4. **Fix `space_ctl` move/add ABI** (or use `open -g -n` first) so agent
-   apps stop switching Kartik's Space. Acceptance: launch an app while he is
-   fullscreen in another Space; his Space must not move.
+4. **Fix `space_ctl` move/add ABI** (the `open -g -n` launch form already
+   stops the Space switch and is now standard) so agent apps stop switching
+   Kartik's Space. Acceptance: launch an app while he is fullscreen in
+   another Space; his Space must not move.
 5. **G5 cert run** for the lane fix, once the typing mechanism works:
    `.unlazy/cu-fix3w/GATES.md` G5 + `three-window-semantic-fix-spec.md`
-   acceptance (10x repeat, sentinel focus 100%).
+   acceptance (10x repeat, zero fixture-window focus samples — the fixture
+   app must never hold OS focus).
 
 ## Landmines (learned, do not relearn)
 

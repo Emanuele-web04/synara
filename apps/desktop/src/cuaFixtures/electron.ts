@@ -35,7 +35,7 @@ app.setName("Synara Cua Fixture");
 app.on("window-all-closed", () => undefined);
 const nonce = `Synara Cua Fixture ${process.pid}`;
 const report: Record<string, unknown> = {
-  fixtureRevision: 11,
+  fixtureRevision: 12,
   fixture: nonce,
   pid: process.pid,
   runtime: process.versions,
@@ -304,10 +304,13 @@ async function main() {
   });
   await sentinel.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
-      `<!doctype html><title>${nonce} Focus Guard</title><style>body{font:22px system-ui;padding:24px}</style><h1>Foreground focus guard</h1><p>The traffic lights must stay active while A, B and C receive text.</p>`,
+      `<!doctype html><title>${nonce} Focus Guard</title><style>body{font:22px system-ui;padding:24px}</style><h1>Background focus guard</h1><p>No fixture window may hold focus while A, B and C receive text; the app must never become frontmost.</p>`,
     )}`,
   );
-  sentinel.focus();
+  // Never call focus(): BrowserWindow.focus() activates the app even under an
+  // `open -g` launch, which is exactly the focus theft this case guards
+  // against. The invariant is now stronger — no fixture window may hold OS
+  // focus at all, so every sample must be null.
   await pause(300);
   const focusSamples: Array<number | null> = [];
   const sampleFocus = () => focusSamples.push(BrowserWindow.getFocusedWindow()?.id ?? null);
@@ -348,7 +351,7 @@ async function main() {
       !semanticError &&
       semanticValues.every((value, index) => value === semanticTargets[index]!.text) &&
       focusSamples.length > 1 &&
-      focusSamples.every((id) => id === sentinel.id) &&
+      focusSamples.every((id) => id === null) &&
       overlap
         ? "passed"
         : "failed",
@@ -357,6 +360,7 @@ async function main() {
     expected: semanticTargets.map((target) => target.text),
     actual: semanticValues,
     sentinelWindowId: sentinel.id,
+    focusInvariant: "no fixture window ever held OS focus",
     focusSamples,
     spans,
     overlap,

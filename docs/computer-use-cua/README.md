@@ -106,12 +106,17 @@ Launch the actual Synara GUI bundle. In Settings → Computer use, select Set up
 Install a copy in `~/Applications`, preserve any earlier fixture build, register/launch that copy through LaunchServices and grant only its two required permissions. Running `Contents/MacOS/Electron` directly from a terminal can attribute Screen Recording to the terminal host instead.
 
 ```sh
-open -n -W -a "$HOME/Applications/Synara Cua Fixture.app" \
+open -g -n -W -a "$HOME/Applications/Synara Cua Fixture.app" \
   --env SYNARA_CUA_FIXTURE_DIR=/private/tmp/synara-cua-implementation/fixture-run \
   --env SYNARA_CUA_FIXTURE_LIVE= \
   --env SYNARA_CUA_FIXTURE_FOREGROUND= \
   --env SYNARA_CUA_FIXTURE_FOREGROUND_CANCEL=
 ```
+
+The `-g` flag is required: it launches the fixture without activating it, so
+the app never becomes frontmost and never switches the operator's Space. The
+fixture also never calls `BrowserWindow.focus()` internally for the same
+reason.
 
 Use a fresh output directory per run. The runner refuses input unless its exact window title, process PID and native window ID agree. It saves window-only screenshots, application state, individual case results and timings; it never intentionally types into personal applications. Missing grants stop the suite before input. Reports distinguish refusal, skipped work and failed assertions. Process exit by itself is not a passing suite.
 

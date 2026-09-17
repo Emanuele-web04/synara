@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Canary runner. No Electron here: it preflights the staged app, checks the
 // built bundle, prints the operator's LaunchServices command, and (with no
-// flags) launches the canary app from /private/tmp, waits for it, and reports
-// the readback table from its report.json.
+// flags) launches the canary app from /private/tmp in the background — the
+// app never becomes frontmost and never switches the operator's Space —
+// waits for it, and reports the readback table from its report.json.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -111,9 +112,19 @@ function checkBundle() {
   return 0;
 }
 
+// The canary must launch without becoming frontmost or switching the
+// operator's Space: -g suppresses activation, -n forces a new instance, -W
+// makes `open` wait for the run to exit. One flag list feeds both the
+// printed operator command and the real spawn so they can never diverge.
+const CANARY_OPEN_FLAGS = ["-g", "-n", "-W"];
+
+export function canaryOpenArgs(app, envAssignment) {
+  return [...CANARY_OPEN_FLAGS, "-a", app, "--env", envAssignment];
+}
+
 function printLaunchCommand() {
   console.log(
-    `open -n -W -a "$HOME/Applications/Synara Cua Canary.app" --env SYNARA_CUA_CANARY_DIR=${runDir}`,
+    `open ${canaryOpenArgs('"$HOME/Applications/Synara Cua Canary.app"', `SYNARA_CUA_CANARY_DIR=${runDir}`).join(" ")}`,
   );
 }
 
@@ -123,7 +134,7 @@ function launch() {
   mkdirSync(runDir, { recursive: true });
   const launched = spawnSync(
     "/usr/bin/open",
-    ["-n", "-W", "-a", appPath, "--env", `SYNARA_CUA_CANARY_DIR=${runDir}`],
+    canaryOpenArgs(appPath, `SYNARA_CUA_CANARY_DIR=${runDir}`),
     { stdio: "inherit" },
   );
   if (launched.error) {
@@ -154,16 +165,23 @@ function launch() {
   return 0;
 }
 
-const mode = process.argv[2];
-if (mode === undefined) process.exit(launch());
-if (mode === "--check") process.exit(checkPrereqs());
-if (mode === "--check-bundle") process.exit(checkBundle());
-if (mode === "--print") {
-  printLaunchCommand();
-  process.exit(0);
+function cli() {
+  const mode = process.argv[2];
+  if (mode === undefined) process.exit(launch());
+  if (mode === "--check") process.exit(checkPrereqs());
+  if (mode === "--check-bundle") process.exit(checkBundle());
+  if (mode === "--print") {
+    printLaunchCommand();
+    process.exit(0);
+  }
+  console.error(`belief-canary: unknown argument ${mode}`);
+  console.error(
+    "usage: node scripts/computer-use-fixtures/belief-canary.mjs [--check|--check-bundle|--print]",
+  );
+  process.exit(2);
 }
-console.error(`belief-canary: unknown argument ${mode}`);
-console.error(
-  "usage: node scripts/computer-use-fixtures/belief-canary.mjs [--check|--check-bundle|--print]",
-);
-process.exit(2);
+
+// Importing this module for its launch-argument helpers must never launch.
+const invokedAsScript =
+  process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsScript) cli();

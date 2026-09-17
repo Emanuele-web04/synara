@@ -1303,6 +1303,11 @@ describe("Cua native boundary", () => {
     expect(f.calls.find((call) => call.name === "launch_app")?.args).toEqual({
       name: "Calculator",
     });
+    // The launch goes through the driver's background `launch_app` only —
+    // never an activation tool that would make the app frontmost.
+    expect(
+      f.calls.filter((call) => call.name === "bring_to_front" || call.name === "activate"),
+    ).toHaveLength(0);
     f.calls.length = 0;
     await expect(
       f.backend.launchApp("com.apple.Calculator", ["--new-window"]),

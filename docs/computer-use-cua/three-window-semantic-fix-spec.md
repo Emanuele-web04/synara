@@ -6,7 +6,7 @@ Three concurrent `typeText` calls to three windows of one Electron pid all retur
 
 ## Current state
 
-The server truly overlaps independent exact-target writes. `typeTextAt` scopes each write by window id in `apps/server/src/computer/ComputerManager.ts:2298`. `runScoped` orders calls that share a key and overlaps calls with different keys in `apps/server/src/computer/DesktopOperationQueue.ts:140`. The fixture fires all three writes under one `Promise.all` in `apps/desktop/src/cuaFixtures/electron.ts:313`. The pass condition needs exact text in each field plus full sentinel focus plus span overlap in `apps/desktop/src/cuaFixtures/electron.ts:339`.
+The server truly overlaps independent exact-target writes. `typeTextAt` scopes each write by window id in `apps/server/src/computer/ComputerManager.ts:2298`. `runScoped` orders calls that share a key and overlaps calls with different keys in `apps/server/src/computer/DesktopOperationQueue.ts:140`. The fixture fires all three writes under one `Promise.all` in `apps/desktop/src/cuaFixtures/electron.ts:313`. The pass condition needs exact text in each field plus zero fixture-window focus samples (the app never becomes frontmost) plus span overlap in `apps/desktop/src/cuaFixtures/electron.ts:339`.
 
 The driver admits concurrent lanes but paces each exact target through character AX requests. The generation gate validates every active target before character-paced AX requests, per `apps/desktop/patches/cua-driver/README.md:74`. Rev 11 made exact semantic text concurrently admissible across exact windows in the same file at `apps/desktop/patches/cua-driver/README.md:74`. Rev 12 rejects a second concurrent native lease for the same exact pid and window in `apps/desktop/patches/cua-driver/README.md:82`. Rev 15 rebased this stack onto driver 0.28.2 in `apps/desktop/patches/cua-driver/README.md:100`.
 
@@ -51,15 +51,15 @@ Contract changes are minimal and server-side only. No driver protocol change. No
 
 ## Acceptance criteria
 
-- The in-tree case `three-window-focus-neutral-semantic-text` passes: exact text in each of the three fields, focus samples all on the sentinel, spans recorded. Case definition lives in `apps/desktop/src/cuaFixtures/electron.ts:339`.
-- The same run passes 10 times in a row with zero failures and zero focus theft. Focus theft means any sample off the sentinel during the overlapped section.
+- The in-tree case `three-window-focus-neutral-semantic-text` passes: exact text in each of the three fields, every focus sample null (no fixture window ever holds OS focus — `BrowserWindow.focus()` is never called because it activates the app even under `open -g`), spans recorded. Case definition lives in `apps/desktop/src/cuaFixtures/electron.ts:339`.
+- The same run passes 10 times in a row with zero failures and zero focus theft. Focus theft means any non-null focus sample during the overlapped section, or the fixture app ever becoming frontmost.
 - Solo paths are unregressed. The five rev 15 passing cases still pass: one-click-one-effect, single-window-identical-text, ax-set-value, moved-target refusal, closed-target refusal. Provenance for that list is `docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:24`.
 - Timing budget: the three-window run completes within 30 s wall clock. Each single write completes within 15 s including lane wait. The budget is proposed, unverified until the 10x run measures it.
 - No gate regressions. Admission, cleanup acknowledgement, and never-replay-uncertain hold on every path. A refused or uncertain write never retries automatically and never promotes to foreground.
 
 ## Tests and evidence
 
-Method caveat, stated honestly: the rev 15 run launched by direct binary exec, not the documented `open -n -a` path. Screen Recording attribution fell to the launching terminal, not the app bundle, and the run stole the operator fullscreen Space and focus. Do not treat rev 15 as a focus isolation pass. Focus samples stayed on the sentinel only because the suite focuses its own windows. Screenshot behavior differs by launch path, for reasons still unresolved. Full detail is in `docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:20`.
+Method caveat, stated honestly: the rev 15 run launched by direct binary exec, not the documented `open -g -n -a` path. Screen Recording attribution fell to the launching terminal, not the app bundle, and the run stole the operator fullscreen Space and focus. Do not treat rev 15 as a focus isolation pass. Focus samples stayed on the sentinel only because the suite focuses its own windows. Screenshot behavior differs by launch path, for reasons still unresolved. Full detail is in `docs/computer-use-cua/evidence/rev15-electron-2026-09-17-notes.md:20`.
 
 - Decisive experiment first. Add per-call accepted and readback logging to the fixture path in `apps/desktop/src/cuaFixtures/electron.ts:313`. Run 1-window, then 3-window, same pid, same build. Save both report JSON files as evidence. The 1-vs-3 contrast decides race versus broken single path.
 - Fix proof. Run the three-window case 10 times in a signed app with fresh permissions. Save each report JSON plus before and after images under the existing evidence dir pattern. Each run records driver version and native revision, per-call lane wait, per-window readback, and focus samples.
@@ -73,7 +73,7 @@ Method caveat, stated honestly: the rev 15 run launched by direct binary exec, n
 - Lane head-of-line blocking. One slow write delays its pid siblings. Mitigation: the 15 s max hold bounds the delay, and cross-pid work is unaffected.
 - Wrong lane key. If pid parsing misattributes a window, two same-pid writes could still overlap or two independent writes could serialize needlessly. Mitigation: unit tests on key derivation plus lane wait logs in every run.
 - Timing budget miss. AX settle on slow machines may exceed the 100 ms gap or the 15 s hold. Mitigation: budgets are config, and misses fail honestly with logs instead of writing through.
-- Launch path skew. Direct exec versus `open -n -a` changes capture and focus behavior, so green under one path does not certify the other. Mitigation: certify under the signed app path and mark the rest uncertified.
+- Launch path skew. Direct exec versus `open -g -n -a` changes capture and focus behavior, so green under one path does not certify the other. Mitigation: certify under the signed app path and mark the rest uncertified.
 
 ## Open decisions
 

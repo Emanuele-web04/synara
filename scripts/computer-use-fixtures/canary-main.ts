@@ -146,10 +146,12 @@ async function main(): Promise<void> {
   });
   await sentinel.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
-      `<!doctype html><title>${nonce} Canary Sentinel</title><style>body{font:18px system-ui;padding:24px}</style><h1>Canary sentinel</h1><p>The sentinel window stays focused while the target receives text.</p>`,
+      `<!doctype html><title>${nonce} Canary Sentinel</title><style>body{font:18px system-ui;padding:24px}</style><h1>Canary sentinel</h1><p>No canary window may hold focus; the app must never become frontmost while the target receives text.</p>`,
     )}`,
   );
-  sentinel.focus();
+  // Never call focus(): BrowserWindow.focus() activates the app even under an
+  // `open -g` launch — the exact focus theft the canary must not cause. The
+  // phase records below report that every canary window stayed unfocused.
 
   const target = new BrowserWindow({
     title: `${nonce} Canary Target`,
@@ -217,7 +219,9 @@ async function main(): Promise<void> {
     // signal before any input is sent.
     if (stage !== null) await pause(1500);
 
-    sentinel.focus();
+    // Never re-focus the sentinel: activating the app would steal the
+    // operator's focus. The field records whether any canary window holds OS
+    // focus — the expectation is that none ever does.
     await pause(300);
     const sentinelFocusedBefore = BrowserWindow.getFocusedWindow()?.id === sentinel.id;
 

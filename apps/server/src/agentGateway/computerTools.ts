@@ -3066,7 +3066,7 @@ function hotkeyKeysNote(dialect: ComputerAgentDialect): string {
 
 function launchAppNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Names an application the way macOS does."
+    ? "Names an application the way macOS does. The app launches in the background: it does not come to the foreground, does not take focus and does not switch Spaces — call computer_activate_window on its window to bring it forward."
     : "Names an executable on PATH or a desktop application id.";
 }
 

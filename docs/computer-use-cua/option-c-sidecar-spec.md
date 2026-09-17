@@ -22,7 +22,7 @@ The driver and host split is clean. The host spawns one embedded daemon per gene
 
 There is no focus enforcer today. The only focus repair is foreground restore. ComputerManager raises the target, runs the input, then puts the prior frontmost window back, per `apps/server/src/computer/ComputerManager.ts:1410`. Nothing tells a background app it is active or key. Nothing synthesizes focus belief. Nothing masks activation. Nothing instruments focus theft.
 
-The fixtures already cover the failure shape. The electron fixture runs three background semantic targets against a foreground focus guard sentinel in `apps/desktop/src/cuaFixtures/electron.ts:291`, and scores the three window focus neutral case in `apps/desktop/src/cuaFixtures/electron.ts:338`. The native fixture admits input only after PID, title, and WindowServer id agree, per `apps/desktop/src/cuaFixtures/native.ts:23`. The cancellation fixture proves release through app owned event counts, per `apps/desktop/src/cuaFixtures/cancellation.ts:9`.
+The fixtures already cover the failure shape. The electron fixture runs three background semantic targets while sampling OS focus — every sample must stay null, since the app must never become frontmost — in `apps/desktop/src/cuaFixtures/electron.ts:291`, and scores the three window focus neutral case in `apps/desktop/src/cuaFixtures/electron.ts:338`. The native fixture admits input only after PID, title, and WindowServer id agree, per `apps/desktop/src/cuaFixtures/native.ts:23`. The cancellation fixture proves release through app owned event counts, per `apps/desktop/src/cuaFixtures/cancellation.ts:9`.
 
 ## Approach
 

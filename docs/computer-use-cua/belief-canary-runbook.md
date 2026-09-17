@@ -30,12 +30,17 @@ The helper posts these stages in order (each stage is one invocation):
 
 ## Phase ladder in the app
 
-For each phase the app (a) focuses its own sentinel window, (b) runs the
-helper stage when the phase has one, (c) sends `typeText("canary-<phase>")`
-to its own background target window, then (d) reads the target field back two
-ways: the Electron value and the driver's AX tree value. A phase passes only
-when the Electron readback equals the exact typed string. The ladder stops at
-the first passing phase. The report records every phase either way.
+For each phase the app (a) runs the helper stage when the phase has one,
+(b) sends `typeText("canary-<phase>")` to its own background target window,
+then (c) reads the target field back two ways: the Electron value and the
+driver's AX tree value. A phase passes only when the Electron readback equals
+the exact typed string. The ladder stops at the first passing phase. The
+report records every phase either way.
+
+The app never focuses its own sentinel — `BrowserWindow.focus()` activates
+the app even under an `open -g` launch, which is the exact focus theft the
+canary must not cause. `sentinelFocusedBefore`/`focusAfterType` record
+whether any canary window held OS focus; the expectation is none ever does.
 
 ## Prerequisites
 
@@ -43,8 +48,10 @@ the first passing phase. The report records every phase either way.
    `~/Applications/Synara Cua Canary.app` (System Settings, the same flow as
    the fixture app). A rebuilt bundle changes the cdhash and needs the grant
    again; stale grants have to be removed and re-added.
-2. An empty Space is available; the launch happens there. Never direct-exec
-   the binary (`Contents/MacOS/Electron`): LaunchServices attribution matters.
+2. The launch is always `open -g -n -W -a`: `-g` suppresses activation, so
+   the canary never becomes frontmost and never pulls the operator's Space.
+   Never direct-exec the binary (`Contents/MacOS/Electron`): LaunchServices
+   attribution matters.
 
 ## Run
 
@@ -65,11 +72,12 @@ For a run into a fresh evidence directory:
 
 ```sh
 rm -rf /private/tmp/synara-cua-implementation/canary-run-1
-open -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
+open -g -n -W -a "$HOME/Applications/Synara Cua Canary.app" \
   --env SYNARA_CUA_CANARY_DIR=/private/tmp/synara-cua-implementation/canary-run-1
 ```
 
-If the run pulls Kartik's Space or focus, kill it immediately
+A correct run never steals focus or switches Spaces. If the run still pulls
+Kartik's Space or focus, kill it immediately
 (`pkill -f "Synara Cua Canary"`), record the alarm, and stop. Do not iterate
 on his screen.
 

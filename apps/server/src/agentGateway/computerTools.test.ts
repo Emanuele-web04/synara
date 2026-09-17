@@ -2092,9 +2092,11 @@ describe("agent gateway computer tools", () => {
     expect(macHotkey).toContain("More than one non-modifier key is refused");
     const macActions = schemaEnum(mac.byName, "computer_perform_action", "action");
     expect(macActions).toEqual(["AXPress"]);
-    expect(mac.byName.get("computer_launch_app")?.definition.description).toContain(
-      "the way macOS does",
-    );
+    const macLaunchAppDescription =
+      mac.byName.get("computer_launch_app")?.definition.description ?? "";
+    expect(macLaunchAppDescription).toContain("the way macOS does");
+    // Launch is non-activating by contract: the app never becomes frontmost.
+    expect(macLaunchAppDescription).toContain("does not come to the foreground");
     const macLaunchApp = schemaPropertyDescription(mac.byName, "computer_launch_app", "app");
     expect(macLaunchApp).toContain("com.apple.Safari");
     expect(macLaunchApp).not.toContain("/Applications/Safari.app");
