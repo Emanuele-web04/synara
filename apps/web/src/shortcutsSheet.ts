@@ -169,6 +169,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the composer reasoning and trait controls.",
   },
   {
+    command: "settings.usage",
+    label: "Open usage settings",
+    description: "Open Settings → Usage for provider quota and token totals.",
+  },
+  {
     command: "composer.focus.toggle",
     label: "Focus composer",
     description: "Focus or blur the chat prompt composer.",
@@ -182,6 +187,41 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",
+  },
+  {
+    command: "terminal.split",
+    label: "Split terminal",
+    description: "Split the focused terminal, adding a new pane beside it.",
+  },
+  {
+    command: "terminal.splitRight",
+    label: "Split terminal right",
+    description: "Split the focused terminal, placing the new pane to the right.",
+  },
+  {
+    command: "terminal.splitLeft",
+    label: "Split terminal left",
+    description: "Split the focused terminal, placing the new pane to the left.",
+  },
+  {
+    command: "terminal.splitDown",
+    label: "Split terminal down",
+    description: "Split the focused terminal, placing the new pane below.",
+  },
+  {
+    command: "terminal.splitUp",
+    label: "Split terminal up",
+    description: "Split the focused terminal, placing the new pane above.",
+  },
+  {
+    command: "terminal.new",
+    label: "New terminal tab",
+    description: "Open a new tab in the focused terminal.",
+  },
+  {
+    command: "terminal.close",
+    label: "Close terminal tab",
+    description: "Close the focused terminal tab.",
   },
   {
     command: "diff.toggle",
