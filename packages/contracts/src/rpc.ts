@@ -1379,11 +1379,14 @@ export const WsProjectAgentExcludeThreadRpc = Rpc.make(WS_METHODS.projectAgentEx
   success: ProjectThreadIndexEntry,
   error: WsRpcError,
 });
-export const WsProjectAgentBackfillSummariesRpc = Rpc.make(WS_METHODS.projectAgentBackfillSummaries, {
-  payload: ProjectAgentBackfillInput,
-  success: ProjectAgentOverview,
-  error: WsRpcError,
-});
+export const WsProjectAgentBackfillSummariesRpc = Rpc.make(
+  WS_METHODS.projectAgentBackfillSummaries,
+  {
+    payload: ProjectAgentBackfillInput,
+    success: ProjectAgentOverview,
+    error: WsRpcError,
+  },
+);
 export const WsProjectAgentListActivityRpc = Rpc.make(WS_METHODS.projectAgentListActivity, {
   payload: ProjectAgentListActivityInput,
   success: ProjectAgentListActivityResult,

@@ -163,7 +163,9 @@ export interface ProjectAgentServiceShape {
     readonly callerThreadId: ThreadId;
     readonly targetThreadId: ThreadId;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
-  readonly onProjectDeleted: (projectId: ProjectId) => Effect.Effect<void, ProjectAgentServiceError>;
+  readonly onProjectDeleted: (
+    projectId: ProjectId,
+  ) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly streamEvents: (
     input: ProjectAgentSubscribeInput,
   ) => Stream.Stream<ProjectAgentStreamEvent, ProjectAgentServiceError>;

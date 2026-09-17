@@ -2698,18 +2698,23 @@ export default function ChatView({
     },
     [setEnvironmentPanelOpenPreference],
   );
-  const setProjectFromAuxiliary = useCallback((open: boolean) => {
-    setAuxiliarySurface((current) => resolveAuxiliarySurface({ current, next: "project" }) && open
-      ? "project"
-      : open
-        ? "project"
-        : current === "project"
-          ? null
-          : current);
-    if (open) {
-      setEnvironmentPanelOpenPreference(false);
-    }
-  }, [setEnvironmentPanelOpenPreference]);
+  const setProjectFromAuxiliary = useCallback(
+    (open: boolean) => {
+      setAuxiliarySurface((current) =>
+        resolveAuxiliarySurface({ current, next: "project" }) && open
+          ? "project"
+          : open
+            ? "project"
+            : current === "project"
+              ? null
+              : current,
+      );
+      if (open) {
+        setEnvironmentPanelOpenPreference(false);
+      }
+    },
+    [setEnvironmentPanelOpenPreference],
+  );
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );

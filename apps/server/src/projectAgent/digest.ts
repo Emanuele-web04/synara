@@ -51,5 +51,8 @@ export function mergePinnedFocusItems(
   pinned: ReadonlyArray<ProjectDigestFocusItem>,
 ): ReadonlyArray<ProjectDigestFocusItem> {
   const seen = new Set(pinned.map((item) => item.id));
-  return [...pinned.map((item) => ({ ...item, pinned: true })), ...generated.filter((item) => !seen.has(item.id))];
+  return [
+    ...pinned.map((item) => ({ ...item, pinned: true })),
+    ...generated.filter((item) => !seen.has(item.id)),
+  ];
 }

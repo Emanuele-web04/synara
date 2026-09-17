@@ -836,7 +836,8 @@ export function createWsNativeApi(): NativeApi {
       listEvidence: (input) => transport.request(WS_METHODS.projectAgentListEvidence, input),
       listThreadIndex: (input) => transport.request(WS_METHODS.projectAgentListThreadIndex, input),
       excludeThread: (input) => transport.request(WS_METHODS.projectAgentExcludeThread, input),
-      backfillSummaries: (input) => transport.request(WS_METHODS.projectAgentBackfillSummaries, input),
+      backfillSummaries: (input) =>
+        transport.request(WS_METHODS.projectAgentBackfillSummaries, input),
       listActivity: (input) => transport.request(WS_METHODS.projectAgentListActivity, input),
       listDocuments: (input) => transport.request(WS_METHODS.projectAgentListDocuments, input),
       readDocument: (input) => transport.request(WS_METHODS.projectAgentReadDocument, input),

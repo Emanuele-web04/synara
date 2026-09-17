@@ -340,9 +340,9 @@ export type ProjectAgentOverview = typeof ProjectAgentOverview.Type;
 
 export const ProjectAgentListPage = Schema.Struct({
   cursor: Schema.optional(TrimmedNonEmptyString),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX))).pipe(
-    Schema.withDecodingDefault(() => 50),
-  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX)),
+  ).pipe(Schema.withDecodingDefault(() => 50)),
   includeArchived: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ProjectAgentListPage = typeof ProjectAgentListPage.Type;
@@ -364,7 +364,9 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   ),
   captureEnabled: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
   expectedRevision: Schema.optional(ProjectAgentRevision),
-  importedInstructions: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_AGENT_DOCUMENT_MAX_BYTES))),
+  importedInstructions: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_AGENT_DOCUMENT_MAX_BYTES)),
+  ),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;
 
@@ -383,7 +385,9 @@ export const ProjectAgentUpdateGoalInput = Schema.Struct({
   goalId: ProjectGoalId,
   expectedRevision: ProjectAgentRevision,
   objective: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
-  acceptanceCriteria: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(16_000)))),
+  acceptanceCriteria: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMaxLength(16_000))),
+  ),
   scopeVersion: Schema.optional(PositiveInt),
 });
 export type ProjectAgentUpdateGoalInput = typeof ProjectAgentUpdateGoalInput.Type;
@@ -400,9 +404,9 @@ export const ProjectAgentListTasksInput = Schema.Struct({
   projectId: ProjectId,
   goalId: Schema.optional(ProjectGoalId),
   cursor: Schema.optional(TrimmedNonEmptyString),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX))).pipe(
-    Schema.withDecodingDefault(() => 50),
-  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX)),
+  ).pipe(Schema.withDecodingDefault(() => 50)),
   includeArchived: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ProjectAgentListTasksInput = typeof ProjectAgentListTasksInput.Type;
@@ -420,7 +424,9 @@ export const ProjectAgentUpdateTaskInput = Schema.Struct({
   expectedRevision: ProjectAgentRevision,
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(240))),
   description: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(16_000)))),
-  acceptanceCriteria: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(16_000)))),
+  acceptanceCriteria: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMaxLength(16_000))),
+  ),
   status: Schema.optional(ProjectTaskStatus),
   dependsOnTaskIds: Schema.optional(Schema.Array(ProjectTaskId)),
   archived: Schema.optional(Schema.Boolean),
@@ -431,9 +437,9 @@ export type ProjectAgentUpdateTaskInput = typeof ProjectAgentUpdateTaskInput.Typ
 export const ProjectAgentListActivityInput = Schema.Struct({
   projectId: ProjectId,
   cursor: Schema.optional(TrimmedNonEmptyString),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX))).pipe(
-    Schema.withDecodingDefault(() => 50),
-  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIST_PAGE_MAX)),
+  ).pipe(Schema.withDecodingDefault(() => 50)),
 });
 export type ProjectAgentListActivityInput = typeof ProjectAgentListActivityInput.Type;
 

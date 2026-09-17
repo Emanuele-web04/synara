@@ -1003,7 +1003,9 @@ export interface NativeApi {
     excludeThread: (input: ProjectAgentExcludeThreadInput) => Promise<ProjectThreadIndexEntry>;
     backfillSummaries: (input: ProjectAgentBackfillInput) => Promise<ProjectAgentOverview>;
     listActivity: (input: ProjectAgentListActivityInput) => Promise<ProjectAgentListActivityResult>;
-    listDocuments: (input: ProjectAgentListDocumentsInput) => Promise<ProjectAgentListDocumentsResult>;
+    listDocuments: (
+      input: ProjectAgentListDocumentsInput,
+    ) => Promise<ProjectAgentListDocumentsResult>;
     readDocument: (input: ProjectAgentReadDocumentInput) => Promise<ProjectAgentReadDocumentResult>;
     writeDocument: (input: ProjectAgentWriteDocumentInput) => Promise<ProjectDocumentRevision>;
     exportDocuments: (

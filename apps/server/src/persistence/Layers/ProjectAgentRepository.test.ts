@@ -13,7 +13,9 @@ import { ProjectAgentRepository } from "../Services/ProjectAgentRepository.ts";
 import { ProjectAgentRepositoryLive } from "./ProjectAgentRepository.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 
-const layer = it.layer(ProjectAgentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)));
+const layer = it.layer(
+  ProjectAgentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+);
 
 const projectId = ProjectId.makeUnsafe("project-coord-1");
 const coordinatorThreadId = ThreadId.makeUnsafe("thread-coordinator");

@@ -42,7 +42,11 @@ export function makeProjectAgentTools(
         const principal = yield* resolvePrincipal(context.callerThreadId);
         const overview = yield* projectAgent
           .getOverview(
-            { projectId: ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!) },
+            {
+              projectId: ProjectId.makeUnsafe(
+                readStringArg(args, "projectId", { required: true })!,
+              ),
+            },
             principal,
           )
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
@@ -71,7 +75,9 @@ export function makeProjectAgentTools(
         const result = yield* projectAgent
           .listTasks(
             {
-              projectId: ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+              projectId: ProjectId.makeUnsafe(
+                readStringArg(args, "projectId", { required: true })!,
+              ),
               includeArchived: readBooleanArg(args, "includeArchived") ?? false,
             },
             principal,
@@ -103,7 +109,9 @@ export function makeProjectAgentTools(
         const result = yield* projectAgent
           .readDocument(
             {
-              projectId: ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+              projectId: ProjectId.makeUnsafe(
+                readStringArg(args, "projectId", { required: true })!,
+              ),
               logicalPath: readStringArg(args, "logicalPath", { required: true })!,
             },
             principal,
@@ -140,7 +148,9 @@ export function makeProjectAgentTools(
           .writeDocument(
             {
               requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+              projectId: ProjectId.makeUnsafe(
+                readStringArg(args, "projectId", { required: true })!,
+              ),
               logicalPath: readStringArg(args, "logicalPath", { required: true })!,
               content: readStringArg(args, "content", { required: true })!,
               ...(typeof args.expectedRevision === "number"
@@ -180,7 +190,9 @@ export function makeProjectAgentTools(
           .reportResult(
             {
               requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+              projectId: ProjectId.makeUnsafe(
+                readStringArg(args, "projectId", { required: true })!,
+              ),
               taskId: ProjectTaskId.makeUnsafe(readStringArg(args, "taskId", { required: true })!),
               summary: readStringArg(args, "summary", { required: true })!,
             },

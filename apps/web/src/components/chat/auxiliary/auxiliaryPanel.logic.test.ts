@@ -15,12 +15,12 @@ describe("auxiliary panel slot", () => {
   });
 
   it("hides Project for Chats and Studio containers", () => {
-    expect(
-      resolveProjectPanelEnabled({ environmentEnabled: true, isOrdinaryProject: false }),
-    ).toBe(false);
-    expect(
-      resolveProjectPanelEnabled({ environmentEnabled: true, isOrdinaryProject: true }),
-    ).toBe(true);
+    expect(resolveProjectPanelEnabled({ environmentEnabled: true, isOrdinaryProject: false })).toBe(
+      false,
+    );
+    expect(resolveProjectPanelEnabled({ environmentEnabled: true, isOrdinaryProject: true })).toBe(
+      true,
+    );
   });
 
   it("never displays another project's cached content", () => {

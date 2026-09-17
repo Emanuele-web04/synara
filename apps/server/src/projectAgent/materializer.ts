@@ -15,7 +15,11 @@ export function hashDocumentContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-export function materializeDocumentPath(stateDir: string, projectId: string, logicalPath: string): string {
+export function materializeDocumentPath(
+  stateDir: string,
+  projectId: string,
+  logicalPath: string,
+): string {
   const normalized = normalizeProjectDocumentPath(logicalPath);
   const root = projectContextRoot(stateDir, projectId);
   const resolved = path.resolve(root, normalized);

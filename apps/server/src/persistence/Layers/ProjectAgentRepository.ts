@@ -337,7 +337,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     `,
   });
 
-  const replaceDependencies = (taskId: ProjectTaskId, projectId: ProjectId, dependsOn: ReadonlyArray<ProjectTaskId>) =>
+  const replaceDependencies = (
+    taskId: ProjectTaskId,
+    projectId: ProjectId,
+    dependsOn: ReadonlyArray<ProjectTaskId>,
+  ) =>
     Effect.gen(function* () {
       yield* sql`DELETE FROM project_agent_task_dependencies WHERE task_id = ${taskId}`.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.replaceDependencies:delete")),
@@ -346,7 +350,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         yield* sql`
           INSERT INTO project_agent_task_dependencies (task_id, depends_on_task_id, project_id)
           VALUES (${taskId}, ${dependsOnTaskId}, ${projectId})
-        `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.replaceDependencies:insert")));
+        `.pipe(
+          Effect.mapError(
+            toPersistenceSqlError("ProjectAgentRepository.replaceDependencies:insert"),
+          ),
+        );
       }
     });
 
@@ -407,7 +415,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     getConfig: (projectId) =>
       getConfigRow({ projectId }).pipe(
         Effect.map(Option.map(toConfig)),
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.getConfig", "config")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.getConfig", "config"),
+        ),
       ),
     listConfigs: () =>
       SqlSchema.findAll({
@@ -433,13 +443,18 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         `,
       })({}).pipe(
         Effect.map((rows) => rows.map(toConfig)),
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config"),
+        ),
       ),
     getConfigByCoordinatorThread: (threadId) =>
       getConfigByCoordinatorRow({ threadId }).pipe(
         Effect.map(Option.map(toConfig)),
         Effect.mapError(
-          toPersistenceSqlOrDecodeError("ProjectAgentRepository.getConfigByCoordinatorThread", "config"),
+          toPersistenceSqlOrDecodeError(
+            "ProjectAgentRepository.getConfigByCoordinatorThread",
+            "config",
+          ),
         ),
       ),
     saveConfig: (config, expectedRevision) => {
@@ -451,16 +466,26 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         );
       }
       return updateConfig({ row, expectedRevision }).pipe(
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveConfig:update", "changed")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveConfig:update", "changed"),
+        ),
         Effect.flatMap((result) =>
-          result.changed === 1 ? Effect.succeed(config) : Effect.fail(toPersistenceSqlError("ProjectAgentRepository.saveConfig")(revisionMismatch("config"))),
+          result.changed === 1
+            ? Effect.succeed(config)
+            : Effect.fail(
+                toPersistenceSqlError("ProjectAgentRepository.saveConfig")(
+                  revisionMismatch("config"),
+                ),
+              ),
         ),
       );
     },
     getActiveGoal: (projectId) =>
       getActiveGoalRow({ projectId }).pipe(
         Effect.map(Option.map(toGoal)),
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.getActiveGoal", "goal")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.getActiveGoal", "goal"),
+        ),
       ),
     getGoal: (goalId) =>
       getGoalRow({ goalId }).pipe(
@@ -475,9 +500,15 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         );
       }
       return updateGoal({ row: goal, expectedRevision }).pipe(
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveGoal:update", "changed")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveGoal:update", "changed"),
+        ),
         Effect.flatMap((result) =>
-          result.changed === 1 ? Effect.succeed(goal) : Effect.fail(toPersistenceSqlError("ProjectAgentRepository.saveGoal")(revisionMismatch("goal"))),
+          result.changed === 1
+            ? Effect.succeed(goal)
+            : Effect.fail(
+                toPersistenceSqlError("ProjectAgentRepository.saveGoal")(revisionMismatch("goal")),
+              ),
         ),
       );
     },
@@ -544,11 +575,15 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         );
       }
       return updateTask({ row, expectedRevision }).pipe(
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveTask:update", "changed")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.saveTask:update", "changed"),
+        ),
         Effect.flatMap((result) =>
           result.changed === 1
             ? persistDeps.pipe(Effect.as(task))
-            : Effect.fail(toPersistenceSqlError("ProjectAgentRepository.saveTask")(revisionMismatch("task"))),
+            : Effect.fail(
+                toPersistenceSqlError("ProjectAgentRepository.saveTask")(revisionMismatch("task")),
+              ),
         ),
       );
     },
@@ -563,7 +598,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           }
           return edges as ReadonlyMap<ProjectTaskId, ReadonlyArray<ProjectTaskId>>;
         }),
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.listTaskEdges", "deps")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listTaskEdges", "deps"),
+        ),
       ),
     saveAttempt: (attempt) =>
       sql`
@@ -598,7 +635,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           rows[0]
             ? Schema.decodeUnknownEffect(ProjectTaskAttempt)(rows[0]).pipe(
                 Effect.map(Option.some),
-                Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.getAttemptByRequestId")),
+                Effect.mapError(
+                  toPersistenceDecodeError("ProjectAgentRepository.getAttemptByRequestId"),
+                ),
               )
             : Effect.succeed(Option.none()),
         ),
@@ -618,7 +657,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.flatMap((rows) =>
           Effect.forEach(rows, (row) =>
             Schema.decodeUnknownEffect(ProjectTaskAttempt)(row).pipe(
-              Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listAttemptsForTask")),
+              Effect.mapError(
+                toPersistenceDecodeError("ProjectAgentRepository.listAttemptsForTask"),
+              ),
             ),
           ),
         ),
@@ -634,7 +675,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           ${evidence.authorThreadId}, ${evidence.sourceThreadId}, ${evidence.sourceMessageId},
           ${evidence.sourceTurnId}, ${evidence.summary}, ${evidence.createdAt}
         )
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveEvidence")), Effect.as(evidence)),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveEvidence")),
+        Effect.as(evidence),
+      ),
     listEvidenceForTask: (taskId) =>
       sql<ProjectEvidence>`
         SELECT
@@ -650,7 +694,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.flatMap((rows) =>
           Effect.forEach(rows, (row) =>
             Schema.decodeUnknownEffect(ProjectEvidence)(row).pipe(
-              Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listEvidenceForTask")),
+              Effect.mapError(
+                toPersistenceDecodeError("ProjectAgentRepository.listEvidenceForTask"),
+              ),
             ),
           ),
         ),
@@ -693,7 +739,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             Schema.decodeUnknownEffect(ProjectDocumentHead)({
               ...row,
               conflictPending: row.conflictPending === true || row.conflictPending === 1,
-            }).pipe(Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listDocumentHeads"))),
+            }).pipe(
+              Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listDocumentHeads")),
+            ),
           ),
         ),
       ),
@@ -720,7 +768,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               : (row as { sources?: unknown }).sources;
           return Schema.decodeUnknownEffect(ProjectDocumentRevision)({ ...row, sources }).pipe(
             Effect.map(Option.some),
-            Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.readDocumentRevision")),
+            Effect.mapError(
+              toPersistenceDecodeError("ProjectAgentRepository.readDocumentRevision"),
+            ),
           );
         }),
       ),
@@ -737,14 +787,18 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         const { revision, expectedRevision } = input;
         if (expectedRevision !== null && expectedRevision !== revision.revision - 1) {
           return yield* Effect.fail(
-            toPersistenceSqlError("ProjectAgentRepository.writeDocument")(revisionMismatch("document")),
+            toPersistenceSqlError("ProjectAgentRepository.writeDocument")(
+              revisionMismatch("document"),
+            ),
           );
         }
         if (expectedRevision !== null) {
           const head = yield* impl.getDocumentHead(revision.projectId, revision.logicalPath);
           if (Option.isNone(head) || head.value.revision !== expectedRevision) {
             return yield* Effect.fail(
-              toPersistenceSqlError("ProjectAgentRepository.writeDocument")(revisionMismatch("document")),
+              toPersistenceSqlError("ProjectAgentRepository.writeDocument")(
+                revisionMismatch("document"),
+              ),
             );
           }
         }
@@ -757,7 +811,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             ${revision.content}, ${revision.contentHash}, ${revision.authorKind},
             ${revision.authorThreadId}, ${JSON.stringify(revision.sources)}, ${revision.createdAt}
           )
-        `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.writeDocument:insert")));
+        `.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.writeDocument:insert")),
+        );
         yield* sql`
           INSERT INTO project_agent_document_heads (
             project_id, logical_path, revision, content_hash, disk_hash, conflict_pending, updated_at
@@ -793,7 +849,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           ${activity.actorKind}, ${activity.actorThreadId}, ${activity.goalId}, ${activity.taskId},
           ${JSON.stringify(activity.source)}, ${activity.summary}, ${activity.createdAt}
         )
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.appendActivity")), Effect.as(activity)),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.appendActivity")),
+        Effect.as(activity),
+      ),
     listActivity: (input) =>
       sql<ProjectActivity>`
         SELECT
@@ -873,7 +932,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           last_good_at = excluded.last_good_at,
           last_error = excluded.last_error,
           pinned_focus_json = excluded.pinned_focus_json
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveDigest")), Effect.as(digest)),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveDigest")),
+        Effect.as(digest),
+      ),
     upsertThreadIndex: (entry) =>
       sql`
         INSERT INTO project_agent_thread_index (
@@ -888,7 +950,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           summary_status = excluded.summary_status,
           last_updated_at = excluded.last_updated_at,
           last_summarized_at = excluded.last_summarized_at
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.upsertThreadIndex")), Effect.asVoid),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.upsertThreadIndex")),
+        Effect.asVoid,
+      ),
     listThreadIndex: (projectId) =>
       sql<Record<string, unknown>>`
         SELECT
@@ -906,7 +971,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               ...row,
               excluded: row.excluded === 1 || row.excluded === true,
               archived: row.archived === 1 || row.archived === true,
-            }).pipe(Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listThreadIndex"))),
+            }).pipe(
+              Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listThreadIndex")),
+            ),
           ),
         ),
       ),
@@ -942,7 +1009,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             Schema.decodeUnknownEffect(ProjectInboxEvent)({
               ...row,
               eligibleWake: row.eligibleWake === 1 || row.eligibleWake === true,
-            }).pipe(Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listInboxAfter"))),
+            }).pipe(
+              Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listInboxAfter")),
+            ),
           ),
         ),
       ),
@@ -987,7 +1056,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           frozen_to_inbox_id = excluded.frozen_to_inbox_id,
           coordinator_busy = excluded.coordinator_busy,
           updated_at = excluded.updated_at
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveCursor")), Effect.asVoid),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveCursor")),
+        Effect.asVoid,
+      ),
     getReceipt: (requestId) =>
       sql<ProjectAgentReceipt>`
         SELECT request_id AS "requestId", project_id AS "projectId", operation,
@@ -1010,7 +1082,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         INSERT INTO project_agent_receipts (request_id, project_id, operation, result_json, created_at)
         VALUES (${receipt.requestId}, ${receipt.projectId}, ${receipt.operation}, ${receipt.resultJson}, ${receipt.createdAt})
         ON CONFLICT (request_id) DO NOTHING
-      `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveReceipt")), Effect.asVoid),
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveReceipt")),
+        Effect.asVoid,
+      ),
     countRunningWorkers: (projectId) =>
       sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
@@ -1028,7 +1103,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             onSome: (row) => withTaskDeps(row).pipe(Effect.map(Option.some)),
           }),
         ),
-        Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.findTaskByAssignedThread", "task")),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.findTaskByAssignedThread", "task"),
+        ),
       ),
   };
 

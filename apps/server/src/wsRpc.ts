@@ -2153,9 +2153,9 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: `projectAgent.events:${input.projectId}` },
-            projectAgentService.streamEvents(input).pipe(
-              Stream.mapError((cause) => toWsRpcError(cause, "Project event stream failed")),
-            ),
+            projectAgentService
+              .streamEvents(input)
+              .pipe(Stream.mapError((cause) => toWsRpcError(cause, "Project event stream failed"))),
           ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(

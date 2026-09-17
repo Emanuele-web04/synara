@@ -171,7 +171,12 @@ export function ProjectPanel({
                   <p className="text-[12px]">{agent.overview.goal.objective}</p>
                   <p className="text-[11px] text-muted-foreground">{agent.overview.goal.status}</p>
                   {agent.overview.goal.status === "active" ? (
-                    <Button type="button" size="sm" variant="ghost" onClick={() => void agent.stopGoal()}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void agent.stopGoal()}
+                    >
                       Stop goal
                     </Button>
                   ) : null}
@@ -196,7 +201,11 @@ export function ProjectPanel({
                     className="min-h-16 rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
                     placeholder="What should the coordinator accomplish?"
                   />
-                  <Button type="submit" size="sm" disabled={agent.busy || goalDraft.trim().length === 0}>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={agent.busy || goalDraft.trim().length === 0}
+                  >
                     <PlayIcon className="size-3.5" />
                     Start goal
                   </Button>
@@ -209,16 +218,22 @@ export function ProjectPanel({
                   <p className="text-[12px]">{agent.overview.digest.summary}</p>
                   {agent.overview.digest.generationState === "failed" ? (
                     <p className="text-[11px] text-destructive" role="alert">
-                      {agent.overview.digest.lastError ?? "Summary refresh failed. Last good summary is shown."}
+                      {agent.overview.digest.lastError ??
+                        "Summary refresh failed. Last good summary is shown."}
                     </p>
                   ) : null}
                   {agent.overview.digest.historicalCoverage === "partial" ? (
                     <div className="flex flex-col gap-1">
                       <p className="text-[11px] text-muted-foreground">
-                        Historical coverage is partial. {agent.overview.digest.pendingThreadCount} threads
-                        remain unsummarized.
+                        Historical coverage is partial. {agent.overview.digest.pendingThreadCount}{" "}
+                        threads remain unsummarized.
                       </p>
-                      <Button type="button" size="sm" variant="ghost" onClick={() => void agent.backfillSummaries()}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void agent.backfillSummaries()}
+                      >
                         Backfill remaining threads
                       </Button>
                     </div>
@@ -233,7 +248,12 @@ export function ProjectPanel({
                       }}
                     />
                   ))}
-                  <Button type="button" size="sm" variant="ghost" onClick={() => void agent.refreshDigest()}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void agent.refreshDigest()}
+                  >
                     Refresh summary
                   </Button>
                 </>
@@ -265,11 +285,7 @@ export function ProjectPanel({
           ) : null}
 
           {view === "context" ? (
-            <ContextDocuments
-              projectId={projectId}
-              enabled={open}
-              agent={agent}
-            />
+            <ContextDocuments projectId={projectId} enabled={open} agent={agent} />
           ) : null}
 
           {view === "activity" ? (
@@ -286,7 +302,11 @@ export function ProjectPanel({
                           void agent.excludeThread(thread.threadId, !event.target.checked)
                         }
                       />
-                      <button type="button" className="text-left" onClick={() => onOpenThread(thread.threadId)}>
+                      <button
+                        type="button"
+                        className="text-left"
+                        onClick={() => onOpenThread(thread.threadId)}
+                      >
                         {thread.threadId} ({thread.summaryStatus})
                       </button>
                     </label>
@@ -311,7 +331,12 @@ export function ProjectPanel({
                 ))
               )}
               {agent.activityCursor ? (
-                <Button type="button" size="sm" variant="ghost" onClick={() => void agent.loadMoreActivity()}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void agent.loadMoreActivity()}
+                >
                   Load older activity
                 </Button>
               ) : null}
@@ -370,7 +395,8 @@ function SetupForm({
         className="rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
       />
       <p className="text-[11px] text-muted-foreground">
-        Provider/model: {defaultModelSelection?.provider ?? "none"} / {defaultModelSelection?.model ?? "none"}
+        Provider/model: {defaultModelSelection?.provider ?? "none"} /{" "}
+        {defaultModelSelection?.model ?? "none"}
       </p>
       <p className="text-[11px] text-muted-foreground">
         Default limits: {DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers} concurrent workers,{" "}
@@ -501,7 +527,8 @@ function WorkList({
                     void loadEvidence(task.id).then((evidence) => {
                       setEvidenceByTask((current) => ({
                         ...current,
-                        [task.id]: evidence.map((item) => item.summary).join(" · ") || "No evidence yet",
+                        [task.id]:
+                          evidence.map((item) => item.summary).join(" · ") || "No evidence yet",
                       }));
                     });
                   }}
@@ -543,7 +570,9 @@ function ContextDocuments({
   const [mode, setMode] = useState<"preview" | "source">("preview");
   const [body, setBody] = useState("");
   const [revision, setRevision] = useState(0);
-  const [history, setHistory] = useState<ReadonlyArray<{ revision: number; createdAt: string }>>([]);
+  const [history, setHistory] = useState<ReadonlyArray<{ revision: number; createdAt: string }>>(
+    [],
+  );
   const [conflict, setConflict] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const generationRef = useRef(0);
@@ -588,10 +617,20 @@ function ContextDocuments({
         </button>
       ))}
       <div className="flex gap-1">
-        <Button type="button" size="sm" variant={mode === "preview" ? "default" : "ghost"} onClick={() => setMode("preview")}>
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "preview" ? "default" : "ghost"}
+          onClick={() => setMode("preview")}
+        >
           Preview
         </Button>
-        <Button type="button" size="sm" variant={mode === "source" ? "default" : "ghost"} onClick={() => setMode("source")}>
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "source" ? "default" : "ghost"}
+          onClick={() => setMode("source")}
+        >
           Source
         </Button>
       </div>

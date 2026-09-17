@@ -68,7 +68,10 @@ import {
   isUserPrincipal,
   type ProjectAgentPrincipal,
 } from "../principal.ts";
-import { ProjectAgentService, type ProjectAgentServiceShape } from "../Services/ProjectAgentService.ts";
+import {
+  ProjectAgentService,
+  type ProjectAgentServiceShape,
+} from "../Services/ProjectAgentService.ts";
 
 const fail = (message: string, code?: ProjectAgentServiceError["code"]) =>
   new ProjectAgentServiceError({ message, ...(code ? { code } : {}) });
@@ -110,13 +113,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const digestPending = yield* Ref.make(new Set<string>());
   const digestTimer = yield* Ref.make(new Set<string>());
 
-  const publish = (event: ProjectAgentStreamEvent) => PubSub.publish(events, event).pipe(Effect.asVoid);
+  const publish = (event: ProjectAgentStreamEvent) =>
+    PubSub.publish(events, event).pipe(Effect.asVoid);
   const toServiceError = (message: string) => (cause: unknown) =>
     new ProjectAgentServiceError({
-      message: cause instanceof Error && cause.message.includes("revision mismatch")
-        ? "This project record changed. Reload and retry with the latest revision."
-        : message,
-      code: cause instanceof Error && cause.message.includes("revision mismatch") ? "conflict" : "invalid",
+      message:
+        cause instanceof Error && cause.message.includes("revision mismatch")
+          ? "This project record changed. Reload and retry with the latest revision."
+          : message,
+      code:
+        cause instanceof Error && cause.message.includes("revision mismatch")
+          ? "conflict"
+          : "invalid",
       cause,
     });
 
@@ -138,7 +146,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             });
             return ordinary
               ? Effect.succeed(project)
-              : Effect.fail(fail("Project Coordinator is only available on ordinary projects.", "forbidden"));
+              : Effect.fail(
+                  fail("Project Coordinator is only available on ordinary projects.", "forbidden"),
+                );
           },
         }),
       ),
@@ -247,14 +257,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const index = yield* repository
         .listThreadIndex(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
-      const summarizedThreadCount = index.filter((entry) => entry.summaryStatus === "covered").length;
+      const summarizedThreadCount = index.filter(
+        (entry) => entry.summaryStatus === "covered",
+      ).length;
       const pendingThreadCount = index.filter(
         (entry) => !entry.excluded && entry.summaryStatus === "pending",
       ).length;
       return { summarizedThreadCount, pendingThreadCount };
     });
 
-  const buildOverview = (projectId: ProjectId): Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError> =>
+  const buildOverview = (
+    projectId: ProjectId,
+  ): Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError> =>
     Effect.gen(function* () {
       const config = yield* repository
         .getConfig(projectId)
@@ -317,7 +331,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.map((option) => (Option.isSome(option) ? decode(option.value.resultJson) : null)),
     );
 
-  const storeReceipt = (requestId: string, projectId: ProjectId, operation: string, result: unknown) =>
+  const storeReceipt = (
+    requestId: string,
+    projectId: ProjectId,
+    operation: string,
+    result: unknown,
+  ) =>
     repository
       .saveReceipt({
         requestId,
@@ -358,7 +377,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const assertSameProject = (principal: ProjectAgentPrincipal, projectId: ProjectId) => {
     if (principal.kind === "user") return Effect.void;
     if (principal.projectId !== projectId) {
-      return Effect.fail(fail("This thread cannot access another project's coordinator.", "forbidden"));
+      return Effect.fail(
+        fail("This thread cannot access another project's coordinator.", "forbidden"),
+      );
     }
     return Effect.void;
   };
@@ -399,7 +420,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
         focusItems: lastGood?.focusItems ?? [],
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
         coverageToSequence: activity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
-        historicalCoverage: coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+        historicalCoverage:
+          coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
         pendingThreadCount: coverage.pendingThreadCount,
         generationState: "running" as const,
@@ -407,7 +429,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         lastGoodAt: lastGood?.lastGoodAt ?? null,
         lastError: null,
       };
-      yield* repository.saveDigest(running).pipe(Effect.mapError(toServiceError("Failed to mark digest running.")));
+      yield* repository
+        .saveDigest(running)
+        .pipe(Effect.mapError(toServiceError("Failed to mark digest running.")));
       const project = yield* snapshotQuery
         .getProjectShellById(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load project for digest.")));
@@ -440,7 +464,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           })),
           Effect.catch((error) =>
             Effect.succeed({
-              summary: lastGood?.summary ?? "Project summary is unavailable until the next successful refresh.",
+              summary:
+                lastGood?.summary ??
+                "Project summary is unavailable until the next successful refresh.",
               focusItems: lastGood?.focusItems ?? [],
               error: error instanceof Error ? error.message : "Project digest generation failed.",
             }),
@@ -452,15 +478,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
         focusItems: generated.focusItems,
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
         coverageToSequence: activity[0]?.sequence ?? 0,
-        historicalCoverage: coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+        historicalCoverage:
+          coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
         pendingThreadCount: coverage.pendingThreadCount,
         generationState: generated.error ? ("failed" as const) : ("idle" as const),
-        generatedAt: generated.error ? lastGood?.generatedAt ?? null : isoNow(),
-        lastGoodAt: generated.error ? lastGood?.lastGoodAt ?? null : isoNow(),
+        generatedAt: generated.error ? (lastGood?.generatedAt ?? null) : isoNow(),
+        lastGoodAt: generated.error ? (lastGood?.lastGoodAt ?? null) : isoNow(),
         lastError: generated.error,
       };
-      yield* repository.saveDigest(digest).pipe(Effect.mapError(toServiceError("Failed to save digest.")));
+      yield* repository
+        .saveDigest(digest)
+        .pipe(Effect.mapError(toServiceError("Failed to save digest.")));
       yield* publish({ type: "digest-upserted", digest });
       yield* Ref.update(digestInflight, (current) => {
         const next = new Set(current);
@@ -491,9 +520,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
     configure: (input, principal) =>
       Effect.gen(function* () {
         if (!canConfigureProject(principal)) {
-          return yield* Effect.fail(fail("Only the user can configure Project Coordinator.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Only the user can configure Project Coordinator.", "forbidden"),
+          );
         }
-        const existingReceipt = yield* replayReceipt(input.requestId, (json) => JSON.parse(json) as ProjectAgentOverview);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          (json) => JSON.parse(json) as ProjectAgentOverview,
+        );
         if (existingReceipt) return existingReceipt;
         const project = yield* requireOrdinaryProject(input.projectId);
         const existing = yield* repository
@@ -505,8 +539,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
         let automationId: ProjectAgentConfig["automationId"] = null;
         let revision = 1;
         if (Option.isSome(existing)) {
-          if (input.expectedRevision !== undefined && input.expectedRevision !== existing.value.revision) {
-            return yield* Effect.fail(fail("Coordinator settings changed. Reload and retry.", "conflict"));
+          if (
+            input.expectedRevision !== undefined &&
+            input.expectedRevision !== existing.value.revision
+          ) {
+            return yield* Effect.fail(
+              fail("Coordinator settings changed. Reload and retry.", "conflict"),
+            );
           }
           coordinatorThreadId = existing.value.coordinatorThreadId;
           automationId = existing.value.automationId;
@@ -556,7 +595,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
               goalId: null,
               taskId: null,
               source: { path: "instructions.md" },
-              summary: "Imported existing project instructions without overwriting newer server content.",
+              summary:
+                "Imported existing project instructions without overwriting newer server content.",
               createdAt: now,
             });
           }
@@ -624,9 +664,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
     startGoal: (input, principal) =>
       Effect.gen(function* () {
         if (!canStartGoal(principal)) {
-          return yield* Effect.fail(fail("Goal authorization can originate only from a user action.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Goal authorization can originate only from a user action.", "forbidden"),
+          );
         }
-        const existingReceipt = yield* replayReceipt(input.requestId, (json) => JSON.parse(json) as ProjectGoal);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          (json) => JSON.parse(json) as ProjectGoal,
+        );
         if (existingReceipt) return existingReceipt;
         yield* requireOrdinaryProject(input.projectId);
         const config = yield* requireConfig(input.projectId);
@@ -634,7 +679,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getActiveGoal(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load project goal.")));
         if (Option.isSome(open)) {
-          return yield* Effect.fail(fail("This project already has an active or paused goal.", "conflict"));
+          return yield* Effect.fail(
+            fail("This project already has an active or paused goal.", "conflict"),
+          );
         }
         const now = isoNow();
         const goal: ProjectGoal = {
@@ -675,9 +722,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
     updateGoal: (input, principal) =>
       Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
-          return yield* Effect.fail(fail("Changing authorized goal scope is a user action.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Changing authorized goal scope is a user action.", "forbidden"),
+          );
         }
-        const existingReceipt = yield* replayReceipt(input.requestId, (json) => JSON.parse(json) as ProjectGoal);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          (json) => JSON.parse(json) as ProjectGoal,
+        );
         if (existingReceipt) return existingReceipt;
         const current = yield* repository.getGoal(input.goalId).pipe(
           Effect.mapError(toServiceError("Failed to load project goal.")),
@@ -695,7 +747,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           ...current,
           objective: input.objective ?? current.objective,
           acceptanceCriteria:
-            input.acceptanceCriteria === undefined ? current.acceptanceCriteria : input.acceptanceCriteria,
+            input.acceptanceCriteria === undefined
+              ? current.acceptanceCriteria
+              : input.acceptanceCriteria,
           scopeVersion: input.scopeVersion ?? current.scopeVersion,
           revision: current.revision + 1,
           updatedAt: isoNow(),
@@ -720,7 +774,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }),
 
     pauseGoal: (input, principal) =>
-      updateGoalStatus(input, principal, "paused", "goal-paused", "Paused the project goal. Current tasks may settle."),
+      updateGoalStatus(
+        input,
+        principal,
+        "paused",
+        "goal-paused",
+        "Paused the project goal. Current tasks may settle.",
+      ),
     resumeGoal: (input, principal) =>
       updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
     stopGoal: (input, principal) =>
@@ -765,7 +825,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (!canAcceptTask(principal, input.projectId) && principal.kind !== "coordinator") {
           return yield* Effect.fail(fail("Workers cannot create tasks.", "forbidden"));
         }
-        const existingReceipt = yield* replayReceipt(input.requestId, (json) => JSON.parse(json) as ProjectTask);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          (json) => JSON.parse(json) as ProjectTask,
+        );
         if (existingReceipt) return existingReceipt;
         const goal = yield* repository.getGoal(input.goalId).pipe(
           Effect.mapError(toServiceError("Failed to load project goal.")),
@@ -780,7 +843,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           return yield* Effect.fail(fail("Goal does not belong to this project.", "forbidden"));
         }
         if (goal.status !== "active") {
-          return yield* Effect.fail(fail("Tasks can only be created for an active goal.", "invalid"));
+          return yield* Effect.fail(
+            fail("Tasks can only be created for an active goal.", "invalid"),
+          );
         }
         const edges = yield* repository
           .listTaskEdges(input.projectId)
@@ -800,7 +865,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .getTask(dependencyId)
             .pipe(Effect.mapError(toServiceError("Failed to load task dependency.")));
           if (Option.isNone(dependency) || dependency.value.projectId !== input.projectId) {
-            return yield* Effect.fail(fail("Task dependencies must belong to the same project.", "invalid"));
+            return yield* Effect.fail(
+              fail("Task dependencies must belong to the same project.", "invalid"),
+            );
           }
         }
         const ready =
@@ -847,7 +914,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
     updateTask: (input, principal) =>
       Effect.gen(function* () {
         yield* assertSameProject(principal, input.projectId);
-        const existingReceipt = yield* replayReceipt(input.requestId, (json) => JSON.parse(json) as ProjectTask);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          (json) => JSON.parse(json) as ProjectTask,
+        );
         if (existingReceipt) return existingReceipt;
         const current = yield* repository.getTask(input.taskId).pipe(
           Effect.mapError(toServiceError("Failed to load project task.")),
@@ -864,11 +934,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (input.accept) {
           if (!canAcceptTask(principal, input.projectId)) {
             return yield* Effect.fail(
-              fail("A worker cannot mark a task accepted. Acceptance requires the coordinator or user.", "forbidden"),
+              fail(
+                "A worker cannot mark a task accepted. Acceptance requires the coordinator or user.",
+                "forbidden",
+              ),
             );
           }
-          if (current.status !== "review" && current.status !== "ready" && current.status !== "running") {
-            return yield* Effect.fail(fail("Only reviewed work can be accepted against recorded evidence.", "invalid"));
+          if (
+            current.status !== "review" &&
+            current.status !== "ready" &&
+            current.status !== "running"
+          ) {
+            return yield* Effect.fail(
+              fail("Only reviewed work can be accepted against recorded evidence.", "invalid"),
+            );
           }
           const evidence = yield* repository
             .listEvidenceForTask(current.id)
@@ -879,7 +958,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         if (principal.kind === "worker" && input.status === "done") {
           return yield* Effect.fail(
-            fail("A finished provider turn updates an attempt. It cannot mark a task done.", "forbidden"),
+            fail(
+              "A finished provider turn updates an attempt. It cannot mark a task done.",
+              "forbidden",
+            ),
           );
         }
         const dependsOnTaskIds = input.dependsOnTaskIds ?? current.dependsOnTaskIds;
@@ -899,20 +981,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const nextStatus: ProjectTaskStatus = input.accept
           ? "done"
-          : input.status ?? current.status;
+          : (input.status ?? current.status);
         const updated: ProjectTask = {
           ...current,
           title: input.title ?? current.title,
           description: input.description === undefined ? current.description : input.description,
           acceptanceCriteria:
-            input.acceptanceCriteria === undefined ? current.acceptanceCriteria : input.acceptanceCriteria,
+            input.acceptanceCriteria === undefined
+              ? current.acceptanceCriteria
+              : input.acceptanceCriteria,
           status: nextStatus,
           dependsOnTaskIds,
           archivedAt:
             input.archived === undefined
               ? current.archivedAt
               : input.archived
-                ? current.archivedAt ?? isoNow()
+                ? (current.archivedAt ?? isoNow())
                 : null,
           revision: current.revision + 1,
           updatedAt: isoNow(),
@@ -927,7 +1011,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* appendActivity({
           projectId: input.projectId,
           kind: input.accept ? "task-accepted" : "task-updated",
-          actorKind: principal.kind === "worker" ? "worker" : principal.kind === "coordinator" ? "coordinator" : "user",
+          actorKind:
+            principal.kind === "worker"
+              ? "worker"
+              : principal.kind === "coordinator"
+                ? "coordinator"
+                : "user",
           actorThreadId: principal.kind === "user" ? null : principal.threadId,
           goalId: saved.goalId,
           taskId: saved.id,
@@ -1033,7 +1122,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (existingReceipt) return existingReceipt;
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
         if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
-          return yield* Effect.fail(fail("Generated views cannot be overwritten directly.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Generated views cannot be overwritten directly.", "forbidden"),
+          );
         }
         if (isUserOwnedDocumentPath(logicalPath) && !canWriteUserOwnedDocuments(principal)) {
           return yield* Effect.fail(
@@ -1043,21 +1134,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (isInboxDocumentPath(logicalPath) && principal.kind === "worker") {
           const expectedPrefix = `inbox/${principal.threadId}/`;
           if (!logicalPath.startsWith(expectedPrefix)) {
-            return yield* Effect.fail(fail("Workers can only write their own inbox entries.", "forbidden"));
+            return yield* Effect.fail(
+              fail("Workers can only write their own inbox entries.", "forbidden"),
+            );
           }
         }
-        if (
-          isCoordinatorCuratedDocumentPath(logicalPath) &&
-          principal.kind === "worker"
-        ) {
-          return yield* Effect.fail(fail("Workers cannot rewrite curated project knowledge.", "forbidden"));
+        if (isCoordinatorCuratedDocumentPath(logicalPath) && principal.kind === "worker") {
+          return yield* Effect.fail(
+            fail("Workers cannot rewrite curated project knowledge.", "forbidden"),
+          );
         }
         const head = yield* repository
           .getDocumentHead(input.projectId, logicalPath)
           .pipe(Effect.mapError(toServiceError("Failed to load document head.")));
         const currentRevision = Option.isSome(head) ? head.value.revision : 0;
         if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
-          return yield* Effect.fail(fail("Document changed. Reload and retry with the latest revision.", "conflict"));
+          return yield* Effect.fail(
+            fail("Document changed. Reload and retry with the latest revision.", "conflict"),
+          );
         }
         const disk = yield* readProjectDocumentMirror({
           stateDir: serverConfig.stateDir,
@@ -1087,7 +1181,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           revision: currentRevision + 1,
           content,
           contentHash: hashDocumentContent(content),
-          authorKind: principal.kind === "user" ? "user" : principal.kind === "coordinator" ? "coordinator" : "worker",
+          authorKind:
+            principal.kind === "user"
+              ? "user"
+              : principal.kind === "coordinator"
+                ? "coordinator"
+                : "worker",
           authorThreadId: principal.kind === "user" ? null : principal.threadId,
           sources: input.sources,
           createdAt: now,
@@ -1136,7 +1235,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
     exportDocuments: (input, principal) =>
       Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
-          return yield* Effect.fail(fail("Exporting project documents is a user action.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Exporting project documents is a user action.", "forbidden"),
+          );
         }
         if (input.logicalPaths.length > 50) {
           return yield* Effect.fail(fail("Export at most 50 documents at a time.", "invalid"));
@@ -1150,7 +1251,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           if (Option.isNone(document)) continue;
           const destination = path.resolve(input.destinationDirectory, logicalPath);
           if (!destination.startsWith(path.resolve(input.destinationDirectory))) {
-            return yield* Effect.fail(fail("Export destination escaped the chosen directory.", "invalid"));
+            return yield* Effect.fail(
+              fail("Export destination escaped the chosen directory.", "invalid"),
+            );
           }
           yield* Effect.tryPromise({
             try: async () => {
@@ -1226,7 +1329,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           threadId: input.threadId,
           excluded: input.excluded,
           archived: current?.archived ?? false,
-          summaryStatus: input.excluded ? ("skipped" as const) : (current?.summaryStatus ?? "pending"),
+          summaryStatus: input.excluded
+            ? ("skipped" as const)
+            : (current?.summaryStatus ?? "pending"),
           lastUpdatedAt: isoNow(),
           lastSummarizedAt: current?.lastSummarizedAt ?? null,
         };
@@ -1245,7 +1350,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const index = yield* repository
           .listThreadIndex(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load pending threads.")));
-        const pending = index.filter((entry) => !entry.excluded && entry.summaryStatus === "pending");
+        const pending = index.filter(
+          (entry) => !entry.excluded && entry.summaryStatus === "pending",
+        );
         for (const entry of pending.slice(0, PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT)) {
           yield* repository
             .upsertThreadIndex({
@@ -1295,7 +1402,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
         if (Option.isNone(goal) || goal.value.status !== "active") {
           return yield* Effect.fail(
-            fail("The coordinator can create workers only while a user-authorized goal is active.", "forbidden"),
+            fail(
+              "The coordinator can create workers only while a user-authorized goal is active.",
+              "forbidden",
+            ),
           );
         }
         const running = yield* repository
@@ -1317,7 +1427,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ),
           );
         }
-        if (goal.value.workerCreationCount + input.requestedCount > goal.value.limits.maxWorkerCreationsPerGoal) {
+        if (
+          goal.value.workerCreationCount + input.requestedCount >
+          goal.value.limits.maxWorkerCreationsPerGoal
+        ) {
           return yield* Effect.fail(
             fail(
               `This goal allows at most ${goal.value.limits.maxWorkerCreationsPerGoal} worker creations.`,
@@ -1403,7 +1516,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     reportResult: (input, principal) =>
       Effect.gen(function* () {
-        if (principal.kind !== "worker" && principal.kind !== "coordinator" && principal.kind !== "user") {
+        if (
+          principal.kind !== "worker" &&
+          principal.kind !== "coordinator" &&
+          principal.kind !== "user"
+        ) {
           return yield* Effect.fail(fail("Unknown principal.", "forbidden"));
         }
         yield* assertSameProject(principal, input.projectId);
@@ -1566,7 +1683,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             goalId: null,
             taskId: null,
             source: null,
-            summary: "Unrelated project thread updated activity without granting execution authority.",
+            summary:
+              "Unrelated project thread updated activity without granting execution authority.",
             createdAt: input.createdAt,
           });
         }
@@ -1618,9 +1736,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
         const eligible = pending.filter((event) => event.eligibleWake);
         if (eligible.length === 0) return;
-        const coordinator = yield* snapshotQuery.getThreadShellById(config.coordinatorThreadId).pipe(
-          Effect.mapError(toServiceError("Failed to load coordinator thread.")),
-        );
+        const coordinator = yield* snapshotQuery
+          .getThreadShellById(config.coordinatorThreadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
         if (Option.isSome(coordinator)) {
           const liveTurn = coordinator.value.latestTurn?.state === "running";
           const busy = liveTurn || coordinator.value.hasPendingApprovals === true;
@@ -1731,9 +1849,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             taskId: task.value.id,
           };
         }
-        const shell = yield* snapshotQuery.getThreadShellById(threadId).pipe(
-          Effect.mapError(toServiceError("Failed to resolve thread project.")),
-        );
+        const shell = yield* snapshotQuery
+          .getThreadShellById(threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to resolve thread project.")));
         if (Option.isNone(shell)) {
           return yield* Effect.fail(fail("Thread was not found.", "not-found"));
         }
@@ -1758,7 +1876,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           ),
         );
         if (caller.kind === "worker") {
-          return yield* Effect.fail(fail("Workers cannot create further workers by default.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Workers cannot create further workers by default.", "forbidden"),
+          );
         }
         if (caller.kind === "coordinator") {
           const goal = yield* repository
@@ -1766,7 +1886,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
           if (Option.isNone(goal) || goal.value.status !== "active") {
             return yield* Effect.fail(
-              fail("The coordinator may drive only threads associated with its active authorized goal.", "forbidden"),
+              fail(
+                "The coordinator may drive only threads associated with its active authorized goal.",
+                "forbidden",
+              ),
             );
           }
           if (targetShell.projectId !== caller.projectId) {
@@ -1777,7 +1900,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .pipe(Effect.mapError(toServiceError("Failed to load managed worker association.")));
           if (Option.isNone(assigned) || assigned.value.goalId !== goal.value.id) {
             return yield* Effect.fail(
-              fail("The coordinator may drive only threads associated with its active authorized goal.", "forbidden"),
+              fail(
+                "The coordinator may drive only threads associated with its active authorized goal.",
+                "forbidden",
+              ),
             );
           }
         }
@@ -1798,7 +1924,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         yield* repository
           .saveConfig(disabled, config.value.revision)
-          .pipe(Effect.mapError(toServiceError("Failed to disable coordinator after project deletion.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to disable coordinator after project deletion."),
+            ),
+          );
         const goal = yield* repository
           .getActiveGoal(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load goal for deletion.")));
@@ -1825,7 +1955,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (event.type === "config-upserted") return event.config.projectId === input.projectId;
             if (event.type === "goal-upserted") return event.goal.projectId === input.projectId;
             if (event.type === "task-upserted") return event.task.projectId === input.projectId;
-            if (event.type === "activity-appended") return event.activity.projectId === input.projectId;
+            if (event.type === "activity-appended")
+              return event.activity.projectId === input.projectId;
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
@@ -1852,8 +1983,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
       for (const task of tasks) {
         if (task.status !== "planned" && task.status !== "blocked") continue;
         if (!task.dependsOnTaskIds.includes(accepted.id)) continue;
-        const prerequisites = yield* Effect.forEach(task.dependsOnTaskIds, (id) => repository.getTask(id));
-        const ready = prerequisites.every((option) => Option.isSome(option) && option.value.status === "done");
+        const prerequisites = yield* Effect.forEach(task.dependsOnTaskIds, (id) =>
+          repository.getTask(id),
+        );
+        const ready = prerequisites.every(
+          (option) => Option.isSome(option) && option.value.status === "done",
+        );
         if (!ready) continue;
         const updated: ProjectTask = {
           ...task,
@@ -1877,7 +2012,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       if (!isUserPrincipal(principal) && !isCoordinatorPrincipal(principal, input.projectId)) {
-        return yield* Effect.fail(fail("Goal controls require the user or coordinator.", "forbidden"));
+        return yield* Effect.fail(
+          fail("Goal controls require the user or coordinator.", "forbidden"),
+        );
       }
       if (status === "stopped" && !isUserPrincipal(principal)) {
         return yield* Effect.fail(fail("Stopping a goal is a user action.", "forbidden"));
@@ -1914,10 +2051,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           } as OrchestrationCommand)
           .pipe(Effect.catch(() => Effect.void));
         const tasks = yield* repository
-          .listTasks({ projectId: input.projectId, goalId: saved.id, includeArchived: false, limit: 100 })
+          .listTasks({
+            projectId: input.projectId,
+            goalId: saved.id,
+            includeArchived: false,
+            limit: 100,
+          })
           .pipe(Effect.mapError(toServiceError("Failed to list managed workers.")));
         for (const task of tasks) {
-          if (!task.assignedThreadId || task.status === "done" || task.status === "cancelled") continue;
+          if (!task.assignedThreadId || task.status === "done" || task.status === "cancelled")
+            continue;
           yield* orchestrationEngine
             .dispatch({
               type: "thread.turn.interrupt",
@@ -1945,8 +2088,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   return {
     ...impl,
-    pauseGoal: (input, principal) => updateGoalStatus(input, principal, "paused", "goal-paused", "Paused the project goal. Current tasks may settle."),
-    resumeGoal: (input, principal) => updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
+    pauseGoal: (input, principal) =>
+      updateGoalStatus(
+        input,
+        principal,
+        "paused",
+        "goal-paused",
+        "Paused the project goal. Current tasks may settle.",
+      ),
+    resumeGoal: (input, principal) =>
+      updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
     stopGoal: (input, principal) =>
       updateGoalStatus(
         input,

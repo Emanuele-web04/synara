@@ -7,14 +7,14 @@ Approved spec: [PROJECT_COORDINATOR_PLAN.md](PROJECT_COORDINATOR_PLAN.md)
 
 ## Status
 
-| Increment | Status | Notes |
-|---|---|---|
-| 1. Contracts, persistence, authorization | repaired | Unmanaged MCP principals are not user; worker drive requires active-goal association |
-| 2. Context workspace | repaired | Context Save uses CAS; preview/source/history/export; Environment instructions use server doc when configured |
-| 3. Project interface | repaired | Editable setup/settings; Work evidence/archive; activity pagination; thread exclusion |
-| 4. Observation and summaries | repaired | `generateProjectDigest` with 60s debounce, one inflight, source validation, last-good retention |
-| 5. Bounded coordination | repaired | Wake event-range receipts + restart reconcile; creationCoordinator goal/limit hook; context packet injected at provider turn dispatch |
-| 6. Integration and rollout | in progress | Focused Vitest; isolated preview owned by root; no fmt/lint/typecheck |
+| Increment                                | Status      | Notes                                                                                                                                 |
+| ---------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Contracts, persistence, authorization | repaired    | Unmanaged MCP principals are not user; worker drive requires active-goal association                                                  |
+| 2. Context workspace                     | repaired    | Context Save uses CAS; preview/source/history/export; Environment instructions use server doc when configured                         |
+| 3. Project interface                     | repaired    | Editable setup/settings; Work evidence/archive; activity pagination; thread exclusion                                                 |
+| 4. Observation and summaries             | repaired    | `generateProjectDigest` with 60s debounce, one inflight, source validation, last-good retention                                       |
+| 5. Bounded coordination                  | repaired    | Wake event-range receipts + restart reconcile; creationCoordinator goal/limit hook; context packet injected at provider turn dispatch |
+| 6. Integration and rollout               | in progress | Focused Vitest; isolated preview owned by root; no fmt/lint/typecheck                                                                 |
 
 Feature stays disabled until a project is configured. Autonomous work starts only after a user starts a goal.
 
@@ -52,4 +52,4 @@ Feature stays disabled until a project is configured. Autonomous work starts onl
 
 - `Effect.service` / `forkDaemon` / stream `Queue` APIs must match this Effect build in preview
 - Digest generation depends on TextGeneration availability; failures keep last-good and mark `generationState: failed`
-- Unmanaged MCP threads can still *read* their own project's overview; they cannot write user-owned docs or start goals
+- Unmanaged MCP threads can still _read_ their own project's overview; they cannot write user-owned docs or start goals

@@ -27,9 +27,7 @@ export function normalizeProjectDocumentPath(rawPath: string): string {
   if (trimmed.startsWith("/") || WINDOWS_DRIVE.test(trimmed) || trimmed.startsWith("//")) {
     throw new ProjectAgentPathError("absolute", "Document path must be relative.");
   }
-  const segments = trimmed
-    .split("/")
-    .filter((segment) => segment.length > 0 && segment !== ".");
+  const segments = trimmed.split("/").filter((segment) => segment.length > 0 && segment !== ".");
   if (segments.length === 0) {
     throw new ProjectAgentPathError("empty", "Document path is empty.");
   }
@@ -91,7 +89,11 @@ export function truncateToContextBudget(
   const marker = "\n\n[truncated]";
   const keep = Math.max(0, budget - marker.length);
   const packet = `${full.slice(0, keep)}${marker}`;
-  return { packet: packet.slice(0, budget), characterCount: Math.min(packet.length, budget), truncated: true };
+  return {
+    packet: packet.slice(0, budget),
+    characterCount: Math.min(packet.length, budget),
+    truncated: true,
+  };
 }
 
 export function encodeProjectAgentListCursor(input: {

@@ -9,9 +9,7 @@ import {
 } from "~/components/ui/sheet";
 import { DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import { cn } from "~/lib/utils";
-import {
-  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
+import { COMPOSER_SURFACE_SHADOW_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 
 export const AUXILIARY_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 

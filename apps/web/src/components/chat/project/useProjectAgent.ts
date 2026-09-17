@@ -103,7 +103,12 @@ export function useProjectAgent(input: {
   }, [input.enabled, input.projectId, load]);
 
   const runMutation = useCallback(
-    async (work: (api: NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"], projectId: ProjectId) => Promise<void>) => {
+    async (
+      work: (
+        api: NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"],
+        projectId: ProjectId,
+      ) => Promise<void>,
+    ) => {
       const api = readNativeApi();
       const projectId = projectIdRef.current;
       if (!api?.projectAgent || !projectId) return;
@@ -125,15 +130,17 @@ export function useProjectAgent(input: {
   const configure = useCallback(
     async (input: {
       modelSelection: ModelSelection;
-      coordinatorName?: string;
-      workerRouting?: ProjectAgentWorkerRouting;
-      limits?: ProjectAgentOverview["config"] extends infer C
-        ? C extends { limits: infer L }
-          ? L
-          : never
-        : never;
-      importedInstructions?: string;
-      expectedRevision?: number;
+      coordinatorName?: string | undefined;
+      workerRouting?: ProjectAgentWorkerRouting | undefined;
+      limits?:
+        | (ProjectAgentOverview["config"] extends infer C
+            ? C extends { limits: infer L }
+              ? L
+              : never
+            : never)
+        | undefined;
+      importedInstructions?: string | undefined;
+      expectedRevision?: number | undefined;
     }) =>
       runMutation(async (projectAgent, projectId) => {
         await projectAgent.configure({
@@ -339,17 +346,20 @@ export function useProjectAgent(input: {
     [],
   );
 
-  const exportDocuments = useCallback(async (logicalPaths: ReadonlyArray<string>, destinationDirectory: string) => {
-    const api = readNativeApi();
-    const projectId = projectIdRef.current;
-    if (!api?.projectAgent || !projectId) return;
-    await api.projectAgent.exportDocuments({
-      requestId: crypto.randomUUID(),
-      projectId,
-      logicalPaths: [...logicalPaths],
-      destinationDirectory,
-    });
-  }, []);
+  const exportDocuments = useCallback(
+    async (logicalPaths: ReadonlyArray<string>, destinationDirectory: string) => {
+      const api = readNativeApi();
+      const projectId = projectIdRef.current;
+      if (!api?.projectAgent || !projectId) return;
+      await api.projectAgent.exportDocuments({
+        requestId: crypto.randomUUID(),
+        projectId,
+        logicalPaths: [...logicalPaths],
+        destinationDirectory,
+      });
+    },
+    [],
+  );
 
   return {
     overview,
@@ -381,5 +391,7 @@ export function useProjectAgent(input: {
   };
 }
 
-export type LoadedDocument = Awaited<ReturnType<ReturnType<typeof useProjectAgent>["readDocument"]>>;
+export type LoadedDocument = Awaited<
+  ReturnType<ReturnType<typeof useProjectAgent>["readDocument"]>
+>;
 export type SavedDocument = ProjectDocumentRevision;

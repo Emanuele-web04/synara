@@ -137,6 +137,7 @@ export function scheduleKindFromSchedule(schedule: AutomationSchedule): Schedule
     case "interval":
       return schedule.everySeconds === 3600 ? "hourly" : "custom";
     case "manual":
+    case "project-event":
       return "manual";
     case "once":
       return "once";
@@ -262,6 +263,8 @@ export function formatSchedule(schedule: AutomationSchedule): string {
   switch (schedule.type) {
     case "manual":
       return "Manual";
+    case "project-event":
+      return "Project events";
     case "once":
       return `Once ${formatDateTime(schedule.runAt)}`;
     case "interval":
@@ -289,6 +292,8 @@ export function formatCadence(schedule: AutomationSchedule): string {
   switch (schedule.type) {
     case "manual":
       return "Manual";
+    case "project-event":
+      return "On project events";
     case "once":
       return formatDateTime(schedule.runAt);
     case "interval":

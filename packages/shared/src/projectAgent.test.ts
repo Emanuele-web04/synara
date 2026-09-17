@@ -17,7 +17,9 @@ describe("normalizeProjectDocumentPath", () => {
   it("rejects traversal and absolute paths", () => {
     expect(() => normalizeProjectDocumentPath("../secret.md")).toThrow(ProjectAgentPathError);
     expect(() => normalizeProjectDocumentPath("/etc/passwd")).toThrow(ProjectAgentPathError);
-    expect(() => normalizeProjectDocumentPath("docs/../../escape.md")).toThrow(ProjectAgentPathError);
+    expect(() => normalizeProjectDocumentPath("docs/../../escape.md")).toThrow(
+      ProjectAgentPathError,
+    );
   });
 });
 

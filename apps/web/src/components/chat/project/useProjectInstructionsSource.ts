@@ -77,7 +77,9 @@ export function useProjectInstructionsSource(projectId: ProjectId | null) {
           })
           .catch((cause: unknown) => {
             if (projectIdRef.current !== nextProjectId) return;
-            setConflict(cause instanceof Error ? cause.message : "Failed to save project instructions.");
+            setConflict(
+              cause instanceof Error ? cause.message : "Failed to save project instructions.",
+            );
           });
         return;
       }

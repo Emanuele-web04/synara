@@ -36,7 +36,10 @@ export interface ProjectAgentRepositoryShape {
   readonly getConfig: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ProjectAgentConfig>, ProjectAgentRepositoryError>;
-  readonly listConfigs: () => Effect.Effect<ReadonlyArray<ProjectAgentConfig>, ProjectAgentRepositoryError>;
+  readonly listConfigs: () => Effect.Effect<
+    ReadonlyArray<ProjectAgentConfig>,
+    ProjectAgentRepositoryError
+  >;
   readonly getConfigByCoordinatorThread: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectAgentConfig>, ProjectAgentRepositoryError>;
@@ -70,7 +73,10 @@ export interface ProjectAgentRepositoryShape {
   ) => Effect.Effect<ProjectTask, ProjectAgentRepositoryError>;
   readonly listTaskEdges: (
     projectId: ProjectId,
-  ) => Effect.Effect<ReadonlyMap<ProjectTaskId, ReadonlyArray<ProjectTaskId>>, ProjectAgentRepositoryError>;
+  ) => Effect.Effect<
+    ReadonlyMap<ProjectTaskId, ReadonlyArray<ProjectTaskId>>,
+    ProjectAgentRepositoryError
+  >;
   readonly saveAttempt: (
     attempt: ProjectTaskAttempt,
   ) => Effect.Effect<ProjectTaskAttempt, ProjectAgentRepositoryError>;
@@ -102,7 +108,9 @@ export interface ProjectAgentRepositoryShape {
     readonly projectId: ProjectId;
     readonly logicalPath: string;
   }) => Effect.Effect<
-    ReadonlyArray<Pick<ProjectDocumentRevision, "revision" | "contentHash" | "authorKind" | "createdAt">>,
+    ReadonlyArray<
+      Pick<ProjectDocumentRevision, "revision" | "contentHash" | "authorKind" | "createdAt">
+    >,
     ProjectAgentRepositoryError
   >;
   readonly writeDocument: (input: {
@@ -136,7 +144,10 @@ export interface ProjectAgentRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<ProjectThreadIndexEntry>, ProjectAgentRepositoryError>;
   readonly insertInboxEvent: (
     event: ProjectInboxEvent,
-  ) => Effect.Effect<{ readonly inserted: boolean; readonly event: ProjectInboxEvent }, ProjectAgentRepositoryError>;
+  ) => Effect.Effect<
+    { readonly inserted: boolean; readonly event: ProjectInboxEvent },
+    ProjectAgentRepositoryError
+  >;
   readonly listInboxAfter: (input: {
     readonly projectId: ProjectId;
     readonly afterId?: string | null;

@@ -1,4 +1,5 @@
 PLEASE IMPLEMENT THIS PLAN:
+
 # Synara Project Coordinator
 
 **Summary**
@@ -21,15 +22,15 @@ Your screenshots show the complementary interface: a Focus summary, linked work 
 
 Synara already has much of the infrastructure:
 
-| Capability | Current Synara implementation | Required addition |
-|---|---|---|
-| Projects and threads | Persistent project IDs, workspace roots, thread relationships | Coordinator identity and project configuration |
-| Right-panel interface | Environment panel with docked and floating layouts | Shared panel host with a Project surface |
-| Agent delegation | Gateway thread creation, messages, provider discovery, durable operations | Goal ownership and project-scoped authorization |
-| Background execution | Automation runs, leases, recovery, queued turns | Project-event triggers |
-| Summaries | Browser-cached thread recaps | Durable project summaries with evidence |
-| Task tracking | Kanban columns derived from thread runtime state | Explicit task outcomes, dependencies, and acceptance |
-| Project instructions | Browser local storage | Shared server-backed instructions for enabled projects |
+| Capability            | Current Synara implementation                                             | Required addition                                      |
+| --------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Projects and threads  | Persistent project IDs, workspace roots, thread relationships             | Coordinator identity and project configuration         |
+| Right-panel interface | Environment panel with docked and floating layouts                        | Shared panel host with a Project surface               |
+| Agent delegation      | Gateway thread creation, messages, provider discovery, durable operations | Goal ownership and project-scoped authorization        |
+| Background execution  | Automation runs, leases, recovery, queued turns                           | Project-event triggers                                 |
+| Summaries             | Browser-cached thread recaps                                              | Durable project summaries with evidence                |
+| Task tracking         | Kanban columns derived from thread runtime state                          | Explicit task outcomes, dependencies, and acceptance   |
+| Project instructions  | Browser local storage                                                     | Shared server-backed instructions for enabled projects |
 
 These conclusions come from the checkout at `779cd649e060c17a57ede329b51fbe67e6b02663`, including [ChatView](<file:///Users/dilipreddy/Open Source Contributions/synara/apps/web/src/components/ChatView.tsx>), [Gateway creation](<file:///Users/dilipreddy/Open Source Contributions/synara/apps/server/src/agentGateway/creationCoordinator.ts>), [automation service](<file:///Users/dilipreddy/Open Source Contributions/synara/apps/server/src/automation/Services/AutomationService.ts>), and [Kanban derivation](<file:///Users/dilipreddy/Open Source Contributions/synara/apps/web/src/components/kanban/kanban.logic.ts>).
 
@@ -73,12 +74,12 @@ Saving creates the configuration and coordinator thread. Assigned work starts on
 
 ### Four panel views
 
-| View | Contents |
-|---|---|
+| View         | Contents                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
 | **Overview** | Coordinator status, active goal, up to five Focus items, blockers, recent outcomes, last summary update |
-| **Work** | Tasks, dependencies, assigned threads, review state, evidence, archived items |
-| **Context** | Browsable shared documents, Markdown preview/source editing, revision history |
-| **Activity** | Chronological decisions, task transitions, worker outcomes, context updates, and errors |
+| **Work**     | Tasks, dependencies, assigned threads, review state, evidence, archived items                           |
+| **Context**  | Browsable shared documents, Markdown preview/source editing, revision history                           |
+| **Activity** | Chronological decisions, task transitions, worker outcomes, context updates, and errors                 |
 
 The panel header provides **Open coordinator**, **Pause**, and a settings menu. “Open coordinator” navigates to the persistent main-chat thread while preserving the current worker’s draft.
 
@@ -151,16 +152,16 @@ For enabled projects, import existing browser-stored project instructions once w
 
 Add schema-only definitions in `packages/contracts/src/projectAgent.ts`. Put runtime helpers in explicit `packages/shared` subpaths and server behavior under `apps/server/src/projectAgent/`.
 
-| Type | Required information |
-|---|---|
-| `ProjectAgentConfig` | Project ID, coordinator thread/name, model selections, limits, enabled state, revision |
-| `ProjectGoal` | Objective, user authorization, scope version, acceptance criteria, limits, lifecycle |
-| `ProjectTask` | Goal, title, dependencies, acceptance criteria, status, archive timestamp |
-| `ProjectTaskAttempt` | Task, worker thread, Gateway operation, attempt number, runtime outcome |
-| `ProjectEvidence` | Source IDs, evidence kind, author, observed/reported/user-confirmed classification |
-| `ProjectDocumentRevision` | Logical path, content, revision, hash, author, sources |
-| `ProjectActivity` | Ordered event, actor, related goal/task/thread, source reference |
-| `ProjectDigest` | Focus items, summary, source coverage, generation state and timestamp |
+| Type                      | Required information                                                                   |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `ProjectAgentConfig`      | Project ID, coordinator thread/name, model selections, limits, enabled state, revision |
+| `ProjectGoal`             | Objective, user authorization, scope version, acceptance criteria, limits, lifecycle   |
+| `ProjectTask`             | Goal, title, dependencies, acceptance criteria, status, archive timestamp              |
+| `ProjectTaskAttempt`      | Task, worker thread, Gateway operation, attempt number, runtime outcome                |
+| `ProjectEvidence`         | Source IDs, evidence kind, author, observed/reported/user-confirmed classification     |
+| `ProjectDocumentRevision` | Logical path, content, revision, hash, author, sources                                 |
+| `ProjectActivity`         | Ordered event, actor, related goal/task/thread, source reference                       |
+| `ProjectDigest`           | Focus items, summary, source coverage, generation state and timestamp                  |
 
 Task states:
 
@@ -236,13 +237,13 @@ User messages take priority over undispatched automatic continuations. Never int
 
 ### Defaults
 
-| Limit | Default |
-|---|---:|
-| Concurrent workers per project | 2 |
-| New workers per coordinator turn | 4 |
-| Worker creations per goal | 12 |
-| Automatic coordinator continuations per goal | 20 |
-| Repair rounds per task | 2 |
+| Limit                                        | Default |
+| -------------------------------------------- | ------: |
+| Concurrent workers per project               |       2 |
+| New workers per coordinator turn             |       4 |
+| Worker creations per goal                    |      12 |
+| Automatic coordinator continuations per goal |      20 |
+| Repair rounds per task                       |       2 |
 
 Existing global capacity and Gateway limits also apply. Exhausted limits pause the goal with a clear continuation action.
 
