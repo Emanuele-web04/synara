@@ -9,6 +9,52 @@ export const CUA_HOST_SOCKET_ENV = "SYNARA_CUA_HOST_SOCKET";
 // Setup includes native input retirement and a bounded, user-facing permission request.
 export const CUA_SETUP_TIMEOUT_MS = 120_000;
 export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
+/**
+ * Host protocol notes for the pinned driver.
+ *
+ * The GUI host speaks newline-delimited JSON over the per-generation unix
+ * socket `cuaRequest` dials: one request, one response, connection closed.
+ * Two request shapes matter beyond the SDK tool calls in {@link CUA_READ_TOOLS}
+ * and {@link CUA_ACTION_TOOLS}.
+ *
+ * `metadata` — the handshake. A fresh generation answers
+ * `synara_native_revision`, which the host compares to
+ * {@link CUA_NATIVE_REVISION} before any action tool may be dispatched: a
+ * driver that cannot prove the patched cancellation revision is retired
+ * seconds after spawn rather than trusted with held OS input.
+ *
+ * `cancel_input` — the private teardown method, accepted only from the
+ * authenticated embedded parent connection and only for the exact child PID
+ * the host spawned. The host sends `{method:"cancel_input", args:
+ * {expected_pid}}` when a live generation must drain held input before
+ * retirement. The driver's reply `result` is the cleanup acknowledgement:
+ *
+ * - `pid`: echoes the child PID that cleaned up. The host requires it to
+ *   equal the spawned child's PID so a response cannot vouch for a process
+ *   it did not clean.
+ * - `input_admission_closed`: `true` once the driver's in-gate has stopped
+ *   admitting new input — the point past which nothing else can begin.
+ * - `cleanup_complete`: `true` once every registered input release and
+ *   action context has drained; `false` while any is still pending.
+ * - `pending_input`: the count of releases/contexts still outstanding; the
+ *   acknowledgement is complete only at `0`.
+ *
+ * The host accepts the acknowledgement only when all four hold:
+ * `pid === child.pid && input_admission_closed === true &&
+ * cleanup_complete === true && pending_input === 0`. When the acknowledgement
+ * is absent or invalid the host does not kill or replace the generation —
+ * an unverifiable driver may still be holding OS input, so admission closes
+ * for the host's lifetime instead of compounding the uncertainty with a
+ * replacement process. A generation that exits mid-input without the
+ * acknowledgement fails closed the same way unless an OS-level held-input
+ * release can be confirmed.
+ *
+ * Every dispatch carries the control-session id the generation minted
+ * (`session_id` / the `session` arg), and replies may report a
+ * `desktopEpoch` — the host's interruption generation — so a stale reply
+ * from before a Space change or revocation cannot be mistaken for a live
+ * one.
+ */
 export interface CuaComputerTask {
   threadId: string;
   turnId?: string;
@@ -39,6 +85,22 @@ export function parseCuaComputerTask(value: unknown): CuaComputerTask | undefine
     ...(typeof task.label === "string" ? { label: task.label.slice(0, 160) } : {}),
   };
 }
+/**
+ * How far a mutating call is known to have gone — the honesty taxonomy every
+ * computer action reports instead of guessing:
+ *
+ * - `not-dispatched`: the call provably never reached the driver — refused,
+ *   cancelled, or failed before dispatch. Nothing happened; retrying is safe.
+ * - `dispatched-unknown`: the call crossed the dispatch boundary but its
+ *   landing is unproven — a lost connection, an unverifiable delivery rung,
+ *   a cancelled mid-flight write. It may have taken effect; it must never be
+ *   replayed silently.
+ * - `verified`: the backend observed the effect it was asked to produce —
+ *   the click's target state, the frame it moved, the value it wrote.
+ *
+ * The audit log records the same three values for completed calls, plus
+ * `refused`/`error` outcomes for calls that never produced a delivery verdict.
+ */
 export type CuaEffect = "not-dispatched" | "dispatched-unknown" | "verified";
 export class CuaTransportError extends Error {
   constructor(
@@ -144,8 +206,14 @@ export interface CuaReply {
   ok: boolean;
   /** GUI-host desktop interruption generation; absent on direct native replies. */
   desktopEpoch?: number;
+  /**
+   * The tool's MCP-shaped result — and, for `cancel_input`, the cleanup
+   * acknowledgement object (`pid`, `input_admission_closed`,
+   * `cleanup_complete`, `pending_input`) documented above.
+   */
   result?: CuaToolResult & Record<string, unknown>;
   error?: string;
+  /** The delivery verdict a failed or uncertain action reports; see {@link CuaEffect}. */
   effect?: CuaEffect;
 }
 export const CUA_READ_TOOLS = new Set([
