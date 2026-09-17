@@ -11,15 +11,15 @@ This file is the flag reference. The rationale and budget targets live in
 
 ## Flag table
 
-| Flag                             | Default | Effect when set                                                                                  | Lives in                                          |
-| -------------------------------- | ------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| `SYNARA_CUA_TIMING_LOG`          | off     | Emits one `[computer-timing]` line per computer call: per-leg ms, counters, total.               | `apps/server/src/computer/computerCallContext.ts` |
-| `SYNARA_CUA_ACTION_SETTLE_MS`    | `300`   | Overrides the fixed post-action settle sleep; `0` removes it. Invalid values fall back to `300`. | `apps/server/src/computer/ComputerManager.ts`     |
-| `SYNARA_CUA_CONDITIONAL_SETTLE`  | off     | Skips the settle sleep only when the action's delivery verdict already proves its effect.        | `apps/server/src/computer/ComputerManager.ts`     |
-| `SYNARA_CUA_AX_ONLY_GET_STATE`   | off     | Omits `include_screenshot`/`max_dimension` from `get_window_state` on tree-only reads.           | `apps/server/src/computer/CuaComputerBackend.ts`  |
-| `SYNARA_CUA_CAPTURE_REUSE`       | off     | Explicit reads return the previous `screenshotId` when the fresh capture is byte-identical.      | `apps/server/src/agentGateway/computerTools.ts`   |
-| `SYNARA_CUA_PREVIEW_STILL_MS`    | `2000`  | Overrides the pane still-capture cadence; clamped to the publisher's 100 ms floor.               | `apps/server/src/computer/CuaComputerBackend.ts`  |
-| `SYNARA_CUA_WARM_ON_FIRST_TOUCH` | off     | Spawns the driver and runs the validated handshake on the first probe or permission check.       | `apps/desktop/src/cuaDriverHost.ts`               |
+| Flag                             | Default | Effect when set                                                                                                                              | Lives in                                          |
+| -------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `SYNARA_CUA_TIMING_LOG`          | off     | Emits one `[computer-timing]` line per computer call: per-leg ms, counters, total.                                                           | `apps/server/src/computer/computerCallContext.ts` |
+| `SYNARA_CUA_ACTION_SETTLE_MS`    | `300`   | Overrides the fixed post-action settle sleep; `0` removes it. Invalid values fall back to `300`.                                             | `apps/server/src/computer/ComputerManager.ts`     |
+| `SYNARA_CUA_CONDITIONAL_SETTLE`  | off     | Skips the settle sleep only when the action's delivery verdict already proves its effect — or a scroll leg's measured travel proves arrival. | `apps/server/src/computer/ComputerManager.ts`     |
+| `SYNARA_CUA_AX_ONLY_GET_STATE`   | off     | Omits `include_screenshot`/`max_dimension` from `get_window_state` on tree-only reads.                                                       | `apps/server/src/computer/CuaComputerBackend.ts`  |
+| `SYNARA_CUA_CAPTURE_REUSE`       | off     | Explicit reads return the previous `screenshotId` when the fresh capture is byte-identical.                                                  | `apps/server/src/agentGateway/computerTools.ts`   |
+| `SYNARA_CUA_PREVIEW_STILL_MS`    | `2000`  | Overrides the pane still-capture cadence; clamped to the publisher's 100 ms floor.                                                           | `apps/server/src/computer/CuaComputerBackend.ts`  |
+| `SYNARA_CUA_WARM_ON_FIRST_TOUCH` | off     | Spawns the driver and runs the validated handshake on the first probe or permission check.                                                   | `apps/desktop/src/cuaDriverHost.ts`               |
 
 Boolean flags accept `1`, `true`, `on`, `yes` (case-insensitive, trimmed);
 everything else — including `0`, `false`, `off`, `no` — counts as unset.
@@ -55,8 +55,24 @@ for `dispatched-unknown`, `unconfirmed`, `unverifiable`, or a missing verdict
 — those are exactly the surfaces the fixed wait exists for. The verdict is
 carried on the call context and consumed once by the post-action observer, so
 it cannot waive a later call's settle, and a second action's verdict replaces
-the first inside one call. Scroll legs keep the configured settle either way;
-the spec's open question on probe-leg skips stays defaulted to "no".
+the first inside one call.
+
+The same flag covers the settle each scroll leg pays inside the measure loop.
+A leg whose route already carries a learned gearing has a predicted travel —
+injected × gearing — so it is captured _before_ the wait, and a measurement
+landing on that prediction (within `SCROLL_SETTLE_ARRIVAL_TOLERANCE`, floored
+by `SCROLL_SETTLE_ARRIVAL_MIN_PX`) is itself the settle evidence: the wait is
+waived and counted as `settle_skipped`. Everything else keeps the settle and
+measures on a settled frame: no early capture, a refused correlation, zero
+travel (the end of a page, which is also what feeds the unchanged-scroll
+refusal), a suppressed wrong-way reading, travel off the prediction (still
+animating, or a gearing that drifted), and every leg on a route with nothing
+learned — a probe leg's settle is what makes its first measurement
+trustworthy, so it can never waive itself. An off-prediction early reading is
+dropped, never learned, and the settled recapture still measures against the
+leg's own before-frame. Worst case the flag costs one extra capture per leg —
+exactly when the speculation fails — while the best case removes the settle
+from every leg after a window's first.
 
 ### `SYNARA_CUA_AX_ONLY_GET_STATE` (added with this change)
 
@@ -128,7 +144,13 @@ not remove it.
 
 Landed and covered by unit tests: all seven flags above, each verified
 off-by-default and on. The conditional-settle tests include the disagreeing
-read-back case the spec calls out (`unconfirmed` keeps the settle).
+read-back case the spec calls out (`unconfirmed` keeps the settle), plus the
+scroll-leg cases: a measured leg whose early travel lands on the gearing
+prediction skips its settle, unmeasured and refused legs keep it, an
+off-prediction early reading is never learned, and a waived settle cannot
+upgrade a `dispatched-unknown` verdict. The scroll-leg skip also resolves the
+spec's open decision on probe legs in the direction it recommended: only when
+measured travel already proves arrival.
 
 Landed evidence:
 
@@ -145,9 +167,6 @@ Landed evidence:
 
 Still open per the spec's acceptance criteria:
 
-- **Scroll probe-leg settle.** The spec's recommendation ("only when measured
-  travel already proves arrival") is not implemented; scroll legs keep the
-  configured settle.
 - **JPEG quality/size review (step 7).** No capture size or quality changed;
   the 1536 px budget stands because the last shrink cost aim precision.
 - **App-launch prefetch.** Deliberately rejected by the spec: warm covers the

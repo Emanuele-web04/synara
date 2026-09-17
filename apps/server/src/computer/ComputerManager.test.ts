@@ -2639,6 +2639,215 @@ describe("ComputerManager and FakeComputerBackend", () => {
 
     await manager.dispose();
   });
+
+  describe("the scroll-leg conditional settle", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * The scripted-measurement fixture with a nonzero settle, so whether the
+     * leg waited is visible on the timer. Screenshots are queued one per
+     * capture so byte identity cannot short-circuit the measurement before it
+     * runs.
+     */
+    function settleScrollFixture(
+      travels: readonly (number | undefined)[],
+      backend = new FakeComputerBackend(),
+      screenshotCount = 16,
+    ) {
+      const queue = [...travels];
+      const manager = new ComputerManager({
+        backend,
+        actionSettleMs: 60,
+        measureScrollTravel: () => queue.shift(),
+      });
+      backend.queueScreenshots(
+        Array.from({ length: screenshotCount }, (_unused, index) => `capture-${index}`),
+      );
+      return { backend, manager };
+    }
+
+    const settleWaited = (spy: {
+      readonly mock: { readonly calls: readonly (readonly unknown[])[] };
+    }) => spy.mock.calls.filter((call) => call[1] === 60).length;
+
+    /**
+     * One scroll that teaches the window's gearing the settled way — the flag
+     * is off, so the probe and the remainder both wait — after which the route
+     * carries a real prediction and further legs can prove arrival early.
+     */
+    const teachGearing = async (manager: ComputerManager) => {
+      await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, { observe: true });
+    };
+
+    it("waives the leg settle when measured travel already proves arrival", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const { backend, manager } = settleScrollFixture([336, 64, 400]);
+      await teachGearing(manager);
+      const capturesBefore = backend.callsFor("captureScreenshot").length;
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // The measured window is trusted in one delivery: injected 400/7, and the
+      // early capture measured the predicted 400 — the pixels are the settle
+      // evidence, so the 60 ms wait never ran.
+      expect(settleWaited(spy)).toBe(0);
+      expect(result.result.scroll?.traveledY).toBe(400);
+      expect(result.result.scroll?.gearing).toBe(7);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(capturesBefore + 2);
+      expect(result.observation !== undefined && "screenshot" in result.observation).toBe(true);
+
+      await manager.dispose();
+    });
+
+    it("keeps the settle when the correlation refuses the early capture", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const { backend, manager } = settleScrollFixture([336, 64, undefined, undefined]);
+      await teachGearing(manager);
+      const capturesBefore = backend.callsFor("captureScreenshot").length;
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // A refused measurement is not arrival: the leg pays the settle and
+      // re-measures on a settled frame, which also refuses — delivered and
+      // unmeasured, exactly the outcome the fixed wait exists for.
+      expect(settleWaited(spy)).toBe(1);
+      expect(result.result.scroll?.traveledY).toBeUndefined();
+      expect(result.result.scroll?.gearing).toBe(7);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(capturesBefore + 3);
+
+      await manager.dispose();
+    });
+
+    it("keeps the settle when early travel misses the prediction, and never learns it", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const { backend, manager } = settleScrollFixture([336, 64, 250, 400]);
+      await teachGearing(manager);
+      const capturesBefore = backend.callsFor("captureScreenshot").length;
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // 250 against a predicted 400 is a mid-animation frame, not arrival: the
+      // leg settles and measures the settled 400. Had the early sample been
+      // learned it would have dragged the smoothed gearing toward ~5.7; the
+      // reported 7 proves it was dropped.
+      expect(settleWaited(spy)).toBe(1);
+      expect(result.result.scroll?.traveledY).toBe(400);
+      expect(result.result.scroll?.gearing).toBe(7);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(capturesBefore + 3);
+
+      await manager.dispose();
+    });
+
+    it("keeps the probe leg's settle — an unmeasured route has no prediction to prove", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const { backend, manager } = settleScrollFixture([336, 64]);
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // The probe's own measurement is what establishes the gearing, so its
+      // settle is exactly the wait that must not be waived. The remainder it
+      // just taught — predicted travel 64 — is the leg that skips.
+      expect(settleWaited(spy)).toBe(1);
+      expect(result.result.scroll?.traveledY).toBe(400);
+      expect(result.result.scroll?.gearing).toBe(7);
+      expect(result.result.scroll?.routes).toEqual(["wheel", "wheel"]);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
+
+      await manager.dispose();
+    });
+
+    it("keeps every settle and takes no early capture while the flag is unset", async () => {
+      const { backend, manager } = settleScrollFixture([336, 64, 400]);
+      await teachGearing(manager);
+      const capturesBefore = backend.callsFor("captureScreenshot").length;
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // Bit-identical to the pre-flag path: settle, then one capture to
+      // measure and observe with — never the speculative early capture.
+      expect(settleWaited(spy)).toBe(1);
+      expect(result.result.scroll?.traveledY).toBe(400);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(capturesBefore + 2);
+
+      await manager.dispose();
+    });
+
+    it("keeps the settle on an unchanged scroll and still reports traveledY 0", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      // Exactly three queued screenshots cover the teaching scroll's captures;
+      // everything after returns the one fixture image, which is what the end
+      // of a page looks like — byte-identical, so measurement answers 0.
+      const { backend, manager } = settleScrollFixture([336, 64], new FakeComputerBackend(), 3);
+      await teachGearing(manager);
+      const capturesBefore = backend.callsFor("captureScreenshot").length;
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // Zero measured travel is the edge-of-page signal, not arrival: the leg
+      // settles, re-measures the same zero, and reports it — the signal the
+      // tool layer's fourth-unchanged refusal feeds on must survive the flag.
+      expect(settleWaited(spy)).toBe(1);
+      expect(result.result.scroll?.traveledY).toBe(0);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(capturesBefore + 3);
+
+      await manager.dispose();
+    });
+
+    it("does not let a waived settle upgrade a dispatched-unknown verdict", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      class UnknownScrollBackend extends FakeComputerBackend {
+        override async scroll(...args: Parameters<FakeComputerBackend["scroll"]>) {
+          await super.scroll(...args);
+          return {
+            deliveryPath: "fake-scroll",
+            verified: "unconfirmed" as const,
+            effect: "dispatched-unknown" as const,
+          };
+        }
+      }
+      const { manager } = settleScrollFixture([336, 64, 400], new UnknownScrollBackend());
+      await teachGearing(manager);
+      const spy = vi.spyOn(globalThis, "setTimeout");
+
+      const result = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
+        observe: true,
+      });
+
+      // The measured arrival waives the wait, but the backend's own verdict
+      // stands: the observation proving travel is not the driver reporting
+      // the delivery verified.
+      expect(settleWaited(spy)).toBe(0);
+      expect(result.result.scroll?.traveledY).toBe(400);
+      expect(result.result.delivery).toEqual({
+        path: "fake-scroll",
+        verified: "unconfirmed",
+        effect: "dispatched-unknown",
+      });
+
+      await manager.dispose();
+    });
+  });
 });
 
 it("holds refused input until a scoped observation establishes readiness", async () => {

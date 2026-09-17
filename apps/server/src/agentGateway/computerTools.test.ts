@@ -1283,6 +1283,31 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("scroll").length).toBeGreaterThan(3);
   });
 
+  it("still refuses a fourth unchanged scroll with SYNARA_CUA_CONDITIONAL_SETTLE set", async () => {
+    // The conditional-settle flag lets a scroll leg skip its wait only when
+    // measured travel proves arrival; an unchanged scroll proves nothing, so
+    // the zero-travel signal — and the refusal it feeds — must survive it.
+    vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+    try {
+      const { backend, call, see } = await setup();
+      await see();
+      const args = { window_id: "fake-calculator", delta_x: 0, delta_y: 20 };
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await call("computer_scroll", args);
+        expect(result.isError).not.toBe(true);
+      }
+
+      const fourth = await call("computer_scroll", args);
+      expect(fourth.isError).toBe(true);
+      const failure = fourth.content.find((entry) => entry.type === "text");
+      expect(failure?.type === "text" ? failure.text : "").toContain("no visible movement");
+      expect(backend.callsFor("scroll")).toHaveLength(3);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("tells the model the observation is downscaled and what unchanged means", async () => {
     const { byName } = await setup();
     const notes = computerToolInstructions();

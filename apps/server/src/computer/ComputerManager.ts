@@ -171,6 +171,16 @@ export const SCROLL_PROBE_PX = 48;
 export const SCROLL_PROBE_TRIGGER_PX = SCROLL_PROBE_PX;
 
 /**
+ * How close a leg's measured travel must land to its predicted distance before
+ * that measurement itself counts as the settle evidence
+ * (`SYNARA_CUA_CONDITIONAL_SETTLE`): the relative slack covers animation and
+ * delivery residue on long legs, the floor covers the correlator's row
+ * quantization on short ones.
+ */
+export const SCROLL_SETTLE_ARRIVAL_TOLERANCE = 0.15;
+export const SCROLL_SETTLE_ARRIVAL_MIN_PX = 4;
+
+/**
  * How long recordError waits before republishing the threads it touched, so an
  * outage that fails ten calls in a burst costs one publish, not ten.
  */
@@ -2221,6 +2231,21 @@ export class ComputerManager {
    * One injected leg's perception: settle, recapture, measure against `from`,
    * and teach the store what the window did with the injection. A capture or
    * correlation that fails leaves the leg unmeasured, never undelivered.
+   *
+   * `SYNARA_CUA_CONDITIONAL_SETTLE` extends to legs whose route already
+   * carries a learned gearing, because a learned ratio is a prediction of how
+   * far this injection should move the content. The leg is captured before
+   * the wait, and a measurement landing on that prediction is itself the
+   * settle evidence — the content provably arrived, so the fixed sleep is
+   * waived and counted. Everything else keeps the settle and measures on a
+   * settled frame: no capture, a refused correlation, zero travel (the end of
+   * a page), a suppressed wrong-way reading, travel off the prediction (still
+   * animating, or a gearing that drifted), and every leg on a route with
+   * nothing learned — a leg with no predicted distance has no arrival to
+   * prove, which is the probe's whole job. An off-prediction early reading is
+   * dropped, never learned, and the settled capture still measures against
+   * `from`, never against the early frame, whose displacement would only
+   * count the animation's tail.
    */
   private async settleAndMeasure(
     windowId: string | undefined,
@@ -2232,6 +2257,34 @@ export class ComputerManager {
     readonly capture?: ComputerCapturedWindow;
     readonly traveled?: number;
   }> {
+    if (this.actionSettleMs > 0 && injectedY !== 0 && cuaConditionalSettleEnabled()) {
+      const predictedGearing = this.scrollGearing.has(windowKey)
+        ? this.scrollGearing.gearing(windowKey)
+        : this.scrollGearingFile.get(appKey);
+      if (predictedGearing !== undefined) {
+        const expectedY = injectedY * predictedGearing;
+        const early = await this.captureForMeasurement(windowId);
+        if (early) {
+          const traveled = await this.measureLegTravel(
+            from.screenshot,
+            early.screenshot,
+            injectedY,
+          );
+          if (
+            traveled !== undefined &&
+            Math.abs(traveled - expectedY) <=
+              Math.max(
+                SCROLL_SETTLE_ARRIVAL_MIN_PX,
+                Math.abs(expectedY) * SCROLL_SETTLE_ARRIVAL_TOLERANCE,
+              )
+          ) {
+            this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
+            currentComputerCall()?.timing?.count("settle_skipped");
+            return { capture: early, traveled };
+          }
+        }
+      }
+    }
     if (this.actionSettleMs > 0) {
       await timedComputerLeg(
         "settle",
@@ -2243,24 +2296,47 @@ export class ComputerManager {
     }
     const capture = await this.captureForMeasurement(windowId);
     if (!capture) return {};
-    const measured = await this.measureTravel(from.screenshot, capture.screenshot);
-    // A travel opposing the injection is the correlator locking onto the wrong
-    // feature — repetitive content aliases — not a page that scrolled
-    // backwards. The store would refuse the sample anyway; suppressing it here
-    // keeps the caller's traveledY from asserting a direction nothing moved in.
-    const traveled =
-      measured !== undefined &&
+    const traveled = await this.measureLegTravel(from.screenshot, capture.screenshot, injectedY);
+    this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
+    return { capture, ...(traveled === undefined ? {} : { traveled }) };
+  }
+
+  /**
+   * The travel one capture pair supports, in logical pixels, or nothing the
+   * caller cannot trust. A travel opposing the injection is the correlator
+   * locking onto the wrong feature — repetitive content aliases — not a page
+   * that scrolled backwards. The store would refuse the sample anyway;
+   * suppressing it here keeps the caller's traveledY from asserting a
+   * direction nothing moved in.
+   */
+  private async measureLegTravel(
+    from: ComputerScreenshot,
+    to: ComputerScreenshot,
+    injectedY: number,
+  ): Promise<number | undefined> {
+    const measured = await this.measureTravel(from, to);
+    return measured !== undefined &&
       measured !== 0 &&
       injectedY !== 0 &&
       Math.sign(measured) !== Math.sign(injectedY)
-        ? undefined
-        : measured;
-    if (traveled !== undefined && injectedY !== 0) {
-      // The durable app fallback only records samples the hot store accepted.
-      if (this.scrollGearing.learn(windowKey ?? windowId, injectedY, traveled))
-        this.scrollGearingFile.learn(appKey, injectedY, traveled);
+      ? undefined
+      : measured;
+  }
+
+  /**
+   * Folds one accepted measurement into the gearing stores; the durable app
+   * fallback only records samples the hot store took.
+   */
+  private learnLegTravel(
+    key: string | undefined,
+    appKey: string | undefined,
+    injectedY: number,
+    traveled: number | undefined,
+  ): void {
+    if (traveled === undefined || injectedY === 0) return;
+    if (this.scrollGearing.learn(key, injectedY, traveled)) {
+      this.scrollGearingFile.learn(appKey, injectedY, traveled);
     }
-    return { capture, ...(traveled === undefined ? {} : { traveled }) };
   }
 
   /** The agent seat's focus target, when it has one; never the human's. */
