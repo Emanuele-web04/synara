@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
-index 87bc75ea7..c9b0db961 100644
+index 87bc75ea7..0af084cdf 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 @@ -207,6 +207,7 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
@@ -10,7 +10,18 @@ index 87bc75ea7..c9b0db961 100644
          | "get_screen_size"
          | "get_cursor_position"
          | "screenshot"
-@@ -234,8 +235,16 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
+@@ -226,7 +227,9 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
+ 
+         "drag" | "browser_drag" => CursorAction::Drag,
+         "scroll" | "browser_scroll" => CursorAction::Scroll,
+-        "type_text" | "set_value" | "browser_type" | "browser_fill" => CursorAction::Text,
++        "type_text" | "set_value" | "select_text" | "browser_type" | "browser_fill" => {
++            CursorAction::Text
++        }
+         "press_key" | "hotkey" | "browser_press_key" | "browser_hotkey" => CursorAction::Key,
+ 
+         "move_cursor" | "browser_navigate" | "browser_go_back" | "browser_go_forward"
+@@ -234,8 +237,16 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
              CursorAction::Navigate
          }
  
@@ -29,11 +40,96 @@ index 87bc75ea7..c9b0db961 100644
  
          "upload_file" | "download_file" | "copy_file" | "move_file" => CursorAction::Transfer,
  
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
+index ef089ba10..7f955d172 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
+@@ -90,6 +90,7 @@ pub const ACTION_RESULT_TOOLS: &[&str] = &[
+     "press_key",
+     "hotkey",
+     "set_value",
++    "select_text",
+     "set_window_frame",
+     "invoke_menu",
+     "browser_click",
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
+index 18004509d..cd1766bf1 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
+@@ -629,7 +629,10 @@ fn browser_refusal_escalation(code: &str) -> Option<ActionEscalation> {
+ /// explicit accessibility read-back evidence, as the macOS collection-item
+ /// selection fallback does after observing `AXSelected`.
+ fn legacy_has_publishable_readback(tool_name: &str, structured: &serde_json::Value) -> bool {
+-    let value_readback_tool = matches!(tool_name, "type_text" | "type_text_chars" | "set_value");
++    let value_readback_tool = matches!(
++        tool_name,
++        "type_text" | "type_text_chars" | "set_value" | "select_text"
++    );
+     let click_selection_readback = tool_name == "click"
+         && structured
+             .get("evidence")
+@@ -658,19 +661,28 @@ fn transport_from_legacy(
+     let transport = match path {
+         "ax" | "ax_fg" => {
+             if cfg!(target_os = "macos") {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::MacosAxValue
+                 } else {
+                     ActionTransport::MacosAxAction
+                 }
+             } else if cfg!(target_os = "windows") {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::WindowsUiaValue
+                 } else {
+                     ActionTransport::WindowsUiaInvoke
+                 }
+             } else {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::LinuxAtSpiValue
+                 } else {
+                     ActionTransport::LinuxAtSpiAction
+@@ -802,7 +814,7 @@ fn transport_from_legacy(
+                 ActionTransport::LinuxXSendEvent
+             }
+         }
+-        "" if tool_name == "set_value" => {
++        "" if matches!(tool_name, "set_value" | "select_text") => {
+             if cfg!(target_os = "macos") {
+                 ActionTransport::MacosAxValue
+             } else if cfg!(target_os = "windows") {
+@@ -1871,6 +1883,7 @@ mod tests {
+             "press_key",
+             "hotkey",
+             "set_value",
++            "select_text",
+             "browser_click",
+             "browser_pointer",
+             "browser_type",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-index 2625ee2ff..1cbd7e16a 100644
+index 2625ee2ff..5d31fafb0 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-@@ -869,6 +869,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+@@ -282,6 +282,7 @@ const DESKTOP_INPUT_OPERATIONS: &[&str] = &[
+     "press_key",
+     "hotkey",
+     "set_value",
++    "select_text",
+     "bring_to_front",
+     "set_window_frame",
+ ];
+@@ -869,6 +870,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
          | "get_session_state"
          | "get_agent_cursor_state"
          | "get_recording_state"
@@ -42,7 +138,12 @@ index 2625ee2ff..1cbd7e16a 100644
          | "check_for_update"
          | "health_report"
          | "probe" => RiskClass::R0,
-@@ -893,6 +895,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+@@ -889,10 +892,13 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+         | "press_key"
+         | "hotkey"
+         | "set_value"
++        | "select_text"
+         | "invoke_menu"
          | "launch_app"
          | "bring_to_front"
          | "set_window_frame"
@@ -51,7 +152,7 @@ index 2625ee2ff..1cbd7e16a 100644
          | "start_session"
          | "end_session"
          | "set_agent_cursor_enabled"
-@@ -1162,6 +1166,43 @@ pub fn authorize_tool_call_with_context(
+@@ -1162,6 +1168,43 @@ pub fn authorize_tool_call_with_context(
                  )))
              }
          }
@@ -95,7 +196,12 @@ index 2625ee2ff..1cbd7e16a 100644
      }
      Ok(risk)
  }
-@@ -1191,6 +1232,8 @@ fn enforce_hard_invariants(
+@@ -1187,10 +1230,13 @@ fn enforce_hard_invariants(
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+             | "kill_app"
              | "bring_to_front"
              | "get_accessibility_tree"
              | "get_window_state"
@@ -104,7 +210,7 @@ index 2625ee2ff..1cbd7e16a 100644
              | "verify_state"
              | "page"
              | "browser_prepare"
-@@ -1519,6 +1562,105 @@ mod tests {
+@@ -1519,6 +1565,105 @@ mod tests {
          assert!(!risk.operation_sensitive);
      }
  
@@ -305,11 +411,49 @@ index cfd35d264..5e16b8319 100644
      /// Minimized/hidden targets retain exact semantic AX actions; raw keys and
      /// the routed pointer refuse rather than restoring the window.
      #[test]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
+index 3711b192f..22df2e9d2 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
+@@ -175,6 +175,7 @@ fn is_scoped_action(tool_name: &str) -> bool {
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+     )
+ }
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
+index 4fa445fb1..56c09ad44 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
+@@ -985,6 +985,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
+                 "press_key",
+                 "hotkey",
+                 "set_value",
++                "select_text",
+                 "mouse_button_down",
+                 "mouse_button_up",
+                 "mouse_drag",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d20..ad8c114f5 100644
+index d93bf6d20..9fcd77a62 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-@@ -334,6 +334,10 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -321,6 +321,13 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+             "input.keyboard.type",
+             "accessibility.element_tokens",
+         ],
++        "select_text" => &[
++            // Exact-range selection on an editable field's
++            // AXSelectedTextRange — a semantic AX write, never key or
++            // pointer events.
++            "accessibility.text.selection",
++            "accessibility.element_tokens",
++        ],
+ 
+         // ── screen / capture ─────────────────────────────────────────
+         // Note: the regular `screenshot` tool was removed from the
+@@ -334,6 +341,10 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
          ],
          // ── accessibility / window state ─────────────────────────────
          "get_accessibility_tree" => &["accessibility.tree", "accessibility.tree.structured"],
@@ -320,7 +464,7 @@ index d93bf6d20..ad8c114f5 100644
          "get_window_state" => &[
              "accessibility.window_state",
              "accessibility.tree",
-@@ -356,6 +360,8 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -356,6 +367,8 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
          "list_windows" => &["window.list"],
          "bring_to_front" => &["window.activate"],
          "set_window_frame" => &["window.frame.set"],
@@ -329,7 +473,35 @@ index d93bf6d20..ad8c114f5 100644
          "debug_window_info" => &["window.debug_info"],
  
          // ── permissions / config ─────────────────────────────────────
-@@ -5067,6 +5073,7 @@ mod capability_tests {
+@@ -2567,6 +2580,7 @@ fn is_physical_desktop_action(tool: &str) -> bool {
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+             | "bring_to_front"
+             | "set_window_frame"
+     )
+@@ -4918,6 +4932,11 @@ fn synthesize_action_label(tool_name: &str, args: &Value) -> String {
+         ),
+         "drag" => "drag".into(),
+         "set_value" => arg("value").unwrap_or_default(),
++        "select_text" => format!(
++            "start={} length={}",
++            arg("start").unwrap_or_else(|| "0".into()),
++            arg("length").unwrap_or_else(|| "0".into())
++        ),
+         "launch_app" => arg("bundle_id").or_else(|| arg("name")).unwrap_or_default(),
+         _ => String::new(),
+     };
+@@ -5059,6 +5078,7 @@ mod capability_tests {
+         "press_key",
+         "hotkey",
+         "set_value",
++        "select_text",
+         // screen
+         "zoom",
+         "get_screen_size",
+@@ -5067,6 +5087,7 @@ mod capability_tests {
          // accessibility
          "get_accessibility_tree",
          "get_window_state",
@@ -337,7 +509,7 @@ index d93bf6d20..ad8c114f5 100644
          // app / window
          "launch_app",
          "list_apps",
-@@ -5146,6 +5153,7 @@ mod capability_tests {
+@@ -5146,6 +5167,7 @@ mod capability_tests {
          "accessibility.tree.structured",
          "accessibility.tree.bounded",
          "accessibility.window_state",
@@ -345,6 +517,14 @@ index d93bf6d20..ad8c114f5 100644
          // Surface 6 — claimed by tools that accept the opaque
          // `element_token` arg + get_window_state which emits them.
          "accessibility.element_tokens",
+@@ -5384,6 +5406,7 @@ mod capability_tests {
+             "type_text_chars",
+             "press_key",
+             "set_value",
++            "select_text",
+             // get_window_state emits the tokens — same capability
+             // claim, from the other side of the contract.
+             "get_window_state",
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 index 5d6ac1f14..e772ddaf6 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
@@ -365,10 +545,10 @@ index 5d6ac1f14..e772ddaf6 100644
                  })
                  .expect("spawn serve thread");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-index a26a6bfe9..e12b1d304 100644
+index a26a6bfe9..064d69170 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-@@ -12,6 +12,33 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
+@@ -12,6 +12,39 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
  use cua_driver_sdk::{CuaDriver, CuaDriverSession, TrustedSessionOptions};
  use serde_json::{json, Value};
  
@@ -395,14 +575,20 @@ index a26a6bfe9..e12b1d304 100644
 +    // explicitly permits for AxSemantic.
 +    matches!(
 +        name,
-+        "set_value" | "click" | "double_click" | "right_click" | "type_text" | "scroll"
++        "set_value"
++            | "select_text"
++            | "click"
++            | "double_click"
++            | "right_click"
++            | "type_text"
++            | "scroll"
 +    ) && (arguments.get("element_token").is_some() || arguments.get("element_index").is_some())
 +}
 +
  #[derive(Default)]
  struct PublicSessionState {
      scopes: HashMap<String, CaptureScope>,
-@@ -172,7 +199,117 @@ impl SdkAdapter {
+@@ -172,7 +205,119 @@ impl SdkAdapter {
          daemon_tools_list_from(&self.tools_list)
      }
  
@@ -441,6 +627,7 @@ index a26a6bfe9..e12b1d304 100644
 +                | "press_key"
 +                | "hotkey"
 +                | "set_value"
++                | "select_text"
 +                | "bring_to_front"
 +        ) {
 +            let target_args = arguments.clone();
@@ -488,6 +675,7 @@ index a26a6bfe9..e12b1d304 100644
 +                | "press_key"
 +                | "hotkey"
 +                | "set_value"
++                | "select_text"
 +                | "clipboard_read"
 +                | "clipboard_write"
 +                | "launch_app"
@@ -521,7 +709,7 @@ index a26a6bfe9..e12b1d304 100644
          let _lifecycle = if matches!(name, "start_session" | "end_session") {
              Some(self.session_lifecycle.lock().await)
          } else {
-@@ -453,6 +590,33 @@ impl ToolProvider for SdkAdapter {
+@@ -453,6 +598,42 @@ impl ToolProvider for SdkAdapter {
  mod tests {
      use super::*;
  
@@ -536,6 +724,10 @@ index a26a6bfe9..e12b1d304 100644
 +            "type_text",
 +            &json!({"semantic_only": true})
 +        ));
++        assert!(uses_stable_space_membership(
++            "select_text",
++            &json!({"element_token": "tok"})
++        ));
 +        for (name, arguments) in [
 +            (
 +                "type_text",
@@ -543,6 +735,11 @@ index a26a6bfe9..e12b1d304 100644
 +            ),
 +            ("type_text", json!({"semantic_only": false})),
 +            ("set_value", json!({"semantic_only": true})),
++            ("select_text", json!({})),
++            (
++                "select_text",
++                json!({"element_token": "tok", "delivery_mode": "foreground"}),
++            ),
 +            ("press_key", json!({"semantic_only": true})),
 +        ] {
 +            assert!(
@@ -556,7 +753,7 @@ index a26a6bfe9..e12b1d304 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..284bc4aa7 100644
+index 67e123bc7..c0848eaa7 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -571,7 +768,7 @@ index 67e123bc7..284bc4aa7 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(19);
++        metadata["synara_native_revision"] = serde_json::json!(20);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -1138,7 +1335,7 @@ index 7893a0132..b0ec2ca7e 100644
          if !cfg.arguments.is_empty() {
              let strs: Vec<Retained<NSString>> = cfg
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
-index 02ba09c01..b99c08277 100644
+index 02ba09c01..67ce4b258 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 @@ -13,6 +13,7 @@
@@ -1254,7 +1451,83 @@ index 02ba09c01..b99c08277 100644
      pub fn AXValueGetType(value: AXValueRef) -> AXValueType;
      pub fn AXValueGetValue(
          value: AXValueRef,
-@@ -661,10 +725,23 @@ pub unsafe fn set_size_attr(
+@@ -655,16 +719,99 @@ pub unsafe fn set_size_attr(
+     result
+ }
+ 
++/// Range payload for AX attributes typed `kAXValueCFRangeType`, such as
++/// `AXSelectedTextRange`. `CFIndex` is a signed pointer-width integer —
++/// `i64` on every supported Apple target.
++#[repr(C)]
++struct CFRangeValue {
++    location: i64,
++    length: i64,
++}
++
++/// Set an AX CFRange attribute such as `AXSelectedTextRange`.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
++pub unsafe fn set_range_attr(
++    element: AXUIElementRef,
++    attr_name: &str,
++    location: i64,
++    length: i64,
++) -> AXError {
++    let attr = CFStr::new(attr_name);
++    let range = CFRangeValue { location, length };
++    let value = AXValueCreate(
++        kAXValueCFRangeType,
++        &range as *const CFRangeValue as *const c_void,
++    );
++    if value.is_null() {
++        return kAXErrorFailure;
++    }
++    let result =
++        AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), value as CFTypeRef);
++    CFRelease(value as CFTypeRef);
++    result
++}
++
++/// Copy an AX CFRange attribute such as `AXSelectedTextRange`. Returns `None`
++/// on any error or when the attribute is not a CFRange-typed AXValue — which
++/// is also how an element whose selection surface is only
++/// `AXSelectedTextMarkerRange` (a different payload type) reads back here.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
++pub unsafe fn copy_range_attr(element: AXUIElementRef, attr_name: &str) -> Option<(i64, i64)> {
++    let attr = CFStr::new(attr_name);
++    let mut value: CFTypeRef = std::ptr::null();
++    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);
++    if err != kAXErrorSuccess || value.is_null() {
++        return None;
++    }
++    let result = if core_foundation::base::CFGetTypeID(value) == AXValueGetTypeID()
++        && AXValueGetType(value as AXValueRef) == kAXValueCFRangeType
++    {
++        let mut range = CFRangeValue {
++            location: 0,
++            length: 0,
++        };
++        AXValueGetValue(
++            value as AXValueRef,
++            kAXValueCFRangeType,
++            &mut range as *mut CFRangeValue as *mut c_void,
++        )
++        .then_some((range.location, range.length))
++    } else {
++        None
++    };
++    CFRelease(value);
++    result
++}
++
+ /// Set an AX attribute to a CFBoolean true value.
+ ///
+ /// # Safety
  ///
  /// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
  pub unsafe fn set_bool_attr_true(element: AXUIElementRef, attr_name: &str) -> AXError {
@@ -1280,7 +1553,7 @@ index 02ba09c01..b99c08277 100644
  }
  
  /// Signal to a Chromium/Electron application root that a real assistive client
-@@ -748,6 +825,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
+@@ -748,6 +895,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
          .collect()
  }
  
@@ -7068,13 +7341,14 @@ index 6085da994..22db22e6d 100644
                  });
                  // Only emit `self_activation_suppressed` when the
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-index 5b2ce9ed5..bae724262 100644
+index 5b2ce9ed5..a35497ea8 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-@@ -15,14 +15,18 @@ mod list_windows;
+@@ -15,14 +15,19 @@ mod list_windows;
  mod press_key;
  mod right_click;
  mod scroll;
++mod select_text;
 +mod set_app_visibility;
  mod set_value;
  mod set_window_frame;
@@ -7090,7 +7364,7 @@ index 5b2ce9ed5..bae724262 100644
  mod check_permissions;
  mod cursor_tools;
  mod get_accessibility_tree;
-@@ -235,7 +239,7 @@ pub(crate) fn background_refusal_result(
+@@ -235,7 +240,7 @@ pub(crate) fn background_refusal_result(
  /// target-bound verification.
  pub(crate) struct BackgroundMutationLease {
      pid: i32,
@@ -7099,7 +7373,7 @@ index 5b2ce9ed5..bae724262 100644
  }
  
  impl BackgroundMutationLease {
-@@ -305,6 +309,16 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
+@@ -305,6 +310,16 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
      }
  }
  
@@ -7116,7 +7390,7 @@ index 5b2ce9ed5..bae724262 100644
  /// Finish the post-action observation window. Embedded interactive clients
  /// that already observe the target continuously may opt out through the
  /// private registry argument to avoid adding a one-second acknowledgement
-@@ -320,15 +334,96 @@ pub(crate) async fn finish_window_observation(
+@@ -320,15 +335,96 @@ pub(crate) async fn finish_window_observation(
      {
          drop(snapshot);
          crate::window_change_detector::Changes::no_change()
@@ -7213,7 +7487,7 @@ index 5b2ce9ed5..bae724262 100644
      #[tokio::test]
      async fn embedded_interactive_input_can_finish_without_polling() {
          let snapshot = crate::window_change_detector::WindowChangeDetector::snapshot(None);
-@@ -931,6 +1026,8 @@ pub fn register_all(
+@@ -931,6 +1027,8 @@ pub fn register_all(
          &pid_window_candidates,
      ));
      registry.register(Box::new(set_window_frame::SetWindowFrameTool));
@@ -7222,7 +7496,21 @@ index 5b2ce9ed5..bae724262 100644
      registry.register(Box::new(invoke_menu::InvokeMenuTool));
      registry.register(pid_window_guarded(
          click::ClickTool::new(state.clone()),
-@@ -981,6 +1078,10 @@ pub fn register_all(
+@@ -964,6 +1062,13 @@ pub fn register_all(
+         set_value::SetValueTool::new(state.clone()),
+         &pid_window_candidates,
+     ));
++    // Exact-range AXSelectedTextRange write — semantic element addressing,
++    // same admission path as set_value; never synthesizes pointer or key
++    // events and refuses targets without a settable selection attribute.
++    registry.register(pid_window_guarded(
++        select_text::SelectTextTool::new(state.clone()),
++        &pid_window_candidates,
++    ));
+     registry.register(pid_window_guarded(
+         scroll::ScrollTool::new(state.clone()),
+         &pid_window_candidates,
+@@ -981,6 +1086,10 @@ pub fn register_all(
      // register the MCP server under the `cua-computer-use` name, which is what
      // triggers Claude Code's computer-use beta-tool injection (see cli.rs).
      let _ = compat;

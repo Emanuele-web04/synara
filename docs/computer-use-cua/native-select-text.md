@@ -114,7 +114,8 @@ not proof the renderer selected anything.
   (element-addressed → `prepare_exact_semantic` + concurrent semantic
   lease), the `native_target` prepare list, the `_native_input` lease list,
   and the membership test vectors.
-- `cua-driver/src/serve.rs` — `synara_native_revision` literal `18 → 19`.
+- `cua-driver/src/serve.rs` — `synara_native_revision` literal `18 → 19`
+  (authored intent; actually applied `19 → 20` — see "As applied" below).
 
 The tool is deliberately absent from `cua-driver-contract/src/desktop.rs`
 (portable contract manifest) and `libs/cua-driver/contract/manifest.json`:
@@ -123,22 +124,24 @@ regenerated only when a portable contract is added.
 
 ## Base and application
 
-- Base: native revision 18 — the `wait_for_settle` / `InputGeneration`
-  working tree at upstream `fc188250` (`d2c9c68` in the Synara checkout),
-  i.e. `0001-synara-native.patch` **after** the axsettle workstream's
-  revision-18 update. Hunks anchor on rev-18 symbols (`mod wait_for_settle;`,
-  `InputGeneration` call sites, the `json!(18)` literal) and fail loudly on
-  a revision 17 tree rather than silently misapplying.
+- Authored base: native revision 18 — the `wait_for_settle` /
+  `InputGeneration` working tree at upstream `fc188250` (`d2c9c68` in the
+  Synara checkout). Hunks anchor on rev-18 symbols (`mod wait_for_settle;`,
+  `InputGeneration` call sites) and fail loudly on a revision 17 tree
+  rather than silently misapplying.
 - Apply: `git apply -p1 apps/desktop/patches/cua-driver/0002-select-text.patch`
   at the driver source root.
-- The bump to `synara_native_revision = 19` follows the rule in the patch
-  README: the literal and `cuaDriverRelease.json.nativeRevision` must move
-  together when the packaged binary is rebuilt, or the metadata handshake
-  retires the daemon. The diff's own sha256 is
-  `641f7af9c0f3c981651442426c1e218a04c807e805031c76733ae7b855e302da`;
-  `source`/`sha256`/`patchSha256` in `cuaDriverRelease.json` only change
-  when the packaged binary is rebuilt and must be set by whichever
-  workstream performs that rebuild.
+- **As applied 2026-09-23**: the rev-19 keymap stream had already landed
+  by the time this patch was staged, so it was applied on top of the
+  staged rev-19 tree — every hunk except the `synara_native_revision`
+  literal applied clean, and the literal was bumped `19 → 20` by hand
+  (exactly the concurrency case `native-keymap-notes.md` documents). The
+  change is folded into `0001-synara-native.patch` (sha
+  `a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b`);
+  `cuaDriverRelease.json` pins `nativeRevision: 20` and the packaged
+  binary is the rev-20 arm64 build. This file remains the authored record;
+  `0002-select-text.patch` is kept beside `0001` as the readable delta the
+  same way `native-keymap.diff` records the rev-19 change.
 
 ## Verified
 
@@ -154,7 +157,15 @@ regenerated only when a portable contract is added.
   files `set_app_visibility.rs`/`wait_for_settle.rs` already carry their
   own diffs).
 
-Not verified: live selection against real applications — TextEdit fields,
-Chrome/Electron AXWebArea content (expected refusal), Safari, and
-collapsed-caret behavior — requires a GUI qualification run on the built
-driver, same as every prior revision bump.
+Live GUI qualification on the rev-20 packaged driver (2026-09-23, trusted
+host against a hidden TextEdit document, operator front `ghostty`
+throughout): `select_text {5,3}` on `"0123456789ABCDEF"` returned
+`effect:"confirmed"` with `evidence:[{kind:"value_readback"}]` via
+`route:"accessibility"`, and an independent System Events read of
+`AXSelectedText` on the exact target window reported `"567"` — the
+selected string matches the requested range; sibling windows showed empty
+selections. `{8,0}` collapsed-caret also confirmed. An out-of-bounds range
+(`{0,9999}` on a 23-unit value) was refused `ax_action_refused` before
+dispatch — never clamped. Still unverified: Chrome/Electron AXWebArea
+content (expected marker-range refusal), Safari, and selection on a
+foreground/key window.

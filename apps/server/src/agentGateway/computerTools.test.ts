@@ -1672,7 +1672,6 @@ describe("agent gateway computer tools", () => {
     ]);
   });
 
-
   it("refuses malformed select_text ranges and x/y targets before the backend", async () => {
     const { backend, call } = await setup();
 

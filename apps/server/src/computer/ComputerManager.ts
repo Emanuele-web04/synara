@@ -3035,7 +3035,7 @@ export class ComputerManager {
         this.resolveSemanticTarget(target, true),
       );
       await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(semanticPointTarget(resolved)),
+        this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
       );
       assertDesktopOperationActive();
       const result = await timedComputerLeg("dispatch", () =>

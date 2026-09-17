@@ -163,13 +163,18 @@ seconds after spawn. Bump the literal in the same edit that bumps the manifest,
 then confirm the staged binary reports it (`metadata` over a live socket, or
 `strings` on the binary) before packaging.
 
-`0002-select-text.patch` is a separate diff that layers on top of the
-revision 18 native tree (the `wait_for_settle` / input-generation base); it is
-not folded into `0001-synara-native.patch` and its hunks intentionally fail on
-a revision 17 base. It adds the `select_text` tool — an exact-range
-`AXSelectedTextRange` write on a resolved element token with attribute
-read-back as the only confirmation path — and bumps the
-`synara_native_revision` literal to 19. Registration spans the platform-macos
+`0002-select-text.patch` is the authored delta record of the `select_text`
+tool, kept beside `0001-synara-native.patch` the same way
+`native-keymap.diff` records the rev-19 keymap change. It was written against
+the revision 18 tree (`wait_for_settle` / input-generation base) but applied
+on top of the staged rev-19 keymap tree — every hunk except the
+`synara_native_revision` literal applied clean, and the literal was bumped
+19 → 20 by hand, exactly the concurrency case `native-keymap-notes.md`
+documents. The folded `0001-synara-native.patch` regenerates at sha
+`a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b` and
+`cuaDriverRelease.json` pins `nativeRevision: 20`. The tool writes an
+exact-range `AXSelectedTextRange` on a resolved element token with attribute
+read-back as the only confirmation path. Registration spans the platform-macos
 tool registry, `ACTION_RESULT_TOOLS`, the legacy action-record normalization
 lists, authorization/capture-scope/session-manifest tool inventories, the SDK
 adapter's stable-Space-membership and input-lease lists, and the cursor
