@@ -42,7 +42,7 @@ import {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
-  GitHubRepositoryInput,
+  GitRepositoryInput,
   GitHandoffThreadInput,
   GitPreparePullRequestThreadInput,
   GitCreateWorktreeInput,
@@ -161,10 +161,7 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
-import {
-  GitHubProjectProvisionInput,
-  GitHubProjectProvisionProgressEvent,
-} from "./githubProjectProvisioning";
+import { ProjectProvisionInput, ProjectProvisionProgressEvent } from "./projectProvisioning";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -186,7 +183,7 @@ export const WS_METHODS = {
   projectsStopDevServer: "projects.stopDevServer",
   projectsListDevServers: "projects.listDevServers",
   subscribeProjectDevServerEvents: "projects.subscribeDevServerEvents",
-  projectsProvisionFromGitHub: "projects.provisionFromGitHub",
+  projectsProvisionFromRepository: "projects.provisionFromRepository",
 
   // Studio methods
   studioListThreadOutputs: "studio.listThreadOutputs",
@@ -199,7 +196,7 @@ export const WS_METHODS = {
 
   // Git methods
   gitPull: "git.pull",
-  gitGithubRepository: "git.githubRepository",
+  gitRepository: "git.repository",
   gitStatus: "git.status",
   gitReadWorkingTreeDiff: "git.readWorkingTreeDiff",
   gitBlameLine: "git.blameLine",
@@ -383,7 +380,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsStopDevServer, ProjectStopDevServerInput),
   tagRequestBody(WS_METHODS.projectsListDevServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.subscribeProjectDevServerEvents, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.projectsProvisionFromGitHub, GitHubProjectProvisionInput),
+  tagRequestBody(WS_METHODS.projectsProvisionFromRepository, ProjectProvisionInput),
 
   // Filesystem browse
   // Studio
@@ -418,7 +415,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
-  tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
+  tagRequestBody(WS_METHODS.gitRepository, GitRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
   tagRequestBody(WS_METHODS.gitReadWorkingTreeDiff, GitReadWorkingTreeDiffInput),
   tagRequestBody(WS_METHODS.gitBlameLine, GitBlameLineInput),
@@ -554,7 +551,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.gitWorktreeSetupProgress]: typeof GitWorktreeSetupProgressEvent.Type;
-  readonly [WS_CHANNELS.projectProvisionProgress]: typeof GitHubProjectProvisionProgressEvent.Type;
+  readonly [WS_CHANNELS.projectProvisionProgress]: typeof ProjectProvisionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [WS_CHANNELS.projectDevServerEvent]: typeof ProjectDevServerEvent.Type;
   readonly [DEVICE_WS_CHANNELS.event]: typeof DeviceEvent.Type;
@@ -608,7 +605,7 @@ export const WsPushGitWorktreeSetupProgress = makeWsPushSchema(
 );
 export const WsPushProjectProvisionProgress = makeWsPushSchema(
   WS_CHANNELS.projectProvisionProgress,
-  GitHubProjectProvisionProgressEvent,
+  ProjectProvisionProgressEvent,
 );
 export const WsPushTerminalEvent = makeWsPushSchema(WS_CHANNELS.terminalEvent, TerminalEvent);
 export const WsPushProjectDevServerEvent = makeWsPushSchema(

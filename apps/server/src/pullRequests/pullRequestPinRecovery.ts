@@ -8,8 +8,8 @@ import type {
 } from "@synara/contracts";
 import { Effect } from "effect";
 
-import type { GitHubCliError } from "../git/Errors";
-import type { GitHubPullRequestListItem } from "../git/Services/GitHubCli";
+import type { GitHostCliError } from "../git/Errors";
+import type { GitHostPullRequestListItem } from "../git/Services/GitHostCli";
 import {
   PROJECT_PULL_REQUEST_PIN_LIMIT,
   type ProjectPullRequestPin,
@@ -28,7 +28,7 @@ export const PULL_REQUEST_PIN_RECOVERY_LIMIT = PROJECT_PULL_REQUEST_PIN_LIMIT + 
 export const PULL_REQUEST_REVIEW_MATCH_LIMIT = 1_000;
 
 export type RecoveredPullRequest =
-  | { readonly _tag: "found"; readonly item: GitHubPullRequestListItem }
+  | { readonly _tag: "found"; readonly item: GitHostPullRequestListItem }
   | { readonly _tag: "not-found" };
 
 export type ReviewRequestedMatches = {
@@ -59,20 +59,20 @@ export function recoverPinnedPullRequests(input: {
   repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   projectById: ReadonlyMap<ProjectId, OrchestrationProject>;
   // Deliberately boolean, not a type predicate: callers check values already typed
-  // GitHubCliError, and a predicate would narrow the false branch to `never`.
+  // GitHostCliError, and a predicate would narrow the false branch to `never`.
   isGlobalError: (error: unknown) => boolean;
   invalidateReviewMatches: (repository: string, viewer: string) => Effect.Effect<void, never>;
   loadReviewMatches: (
     cwd: string,
     repository: string,
     viewer: string,
-  ) => Effect.Effect<ReviewRequestedMatches, GitHubCliError>;
+  ) => Effect.Effect<ReviewRequestedMatches, GitHostCliError>;
   invalidateItem: (identityKey: string) => Effect.Effect<void, never>;
   loadItem: (
     cwd: string,
     repository: string,
     number: number,
-  ) => Effect.Effect<RecoveredPullRequest, GitHubCliError>;
+  ) => Effect.Effect<RecoveredPullRequest, GitHostCliError>;
 }) {
   return Effect.gen(function* () {
     const errors = new Map<string, PullRequestListError>();
@@ -157,7 +157,7 @@ export function recoverPinnedPullRequests(input: {
     }
     const reviewMatches = new Map<
       string,
-      ReviewRequestedMatches & { error: GitHubCliError | null }
+      ReviewRequestedMatches & { error: GitHostCliError | null }
     >(
       yield* Effect.forEach(
         reviewMatchInputs,
@@ -190,7 +190,7 @@ export function recoverPinnedPullRequests(input: {
             project,
             result.error
               ? `Review-requested pin recovery failed for ${repositoryKey}: ${result.error.message}`
-              : `Review-requested pin recovery for ${repositoryKey} reached GitHub's ` +
+              : `Review-requested pin recovery for ${repositoryKey} reached the host's ` +
                   `${PULL_REQUEST_REVIEW_MATCH_LIMIT.toLocaleString("en-US")}-item limit ` +
                   "and may be incomplete.",
           );
@@ -221,7 +221,7 @@ export function recoverPinnedPullRequests(input: {
     }
     const recoveredByLookup = new Map<
       string,
-      { result: RecoveredPullRequest | null; error: GitHubCliError | null }
+      { result: RecoveredPullRequest | null; error: GitHostCliError | null }
     >(
       yield* Effect.forEach(
         lookupInputs,

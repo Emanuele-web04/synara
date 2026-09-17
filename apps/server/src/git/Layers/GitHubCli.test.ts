@@ -339,9 +339,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.example.test",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       });
@@ -366,7 +364,7 @@ layer("GitHubCliLive", (it) => {
           "api",
           "graphql",
           "--hostname",
-          "github.example.test",
+          "github.com",
           "-F",
           "owner=o",
           "-F",
@@ -464,9 +462,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       });
@@ -526,9 +522,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       });
@@ -583,9 +577,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       });
@@ -642,9 +634,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       });
@@ -679,9 +669,7 @@ layer("GitHubCliLive", (it) => {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequestReviewComments({
           cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
+          repository: "o/r",
           number: 42,
         });
       }).pipe(Effect.flip);
@@ -1688,12 +1676,22 @@ layer("GitHubCliLive", (it) => {
         .mockRejectedValueOnce(new Error("not logged in; run gh auth login"))
         .mockRejectedValueOnce(new Error("gh: Bad credentials (HTTP 401)"));
       const gh = yield* GitHubCli;
-      const missing = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
-      const unauthenticated = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
-      const badCredentials = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
+      const missing = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
+      const unauthenticated = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
+      const badCredentials = yield* gh
+        .getViewerLogin({ cwd: "/repo", host: "github.com" })
+        .pipe(Effect.flip);
       assert.equal(missing.reason, "not-installed");
       assert.equal(unauthenticated.reason, "not-authenticated");
       assert.equal(badCredentials.reason, "not-authenticated");
+      assert.deepStrictEqual(
+        [missing.host, unauthenticated.host, badCredentials.host],
+        ["github", "github", "github"],
+      );
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
         "api",
         "user",

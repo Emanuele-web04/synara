@@ -4,10 +4,8 @@ import type {
   PullRequestListEntry,
   PullRequestState,
 } from "@synara/contracts";
-import {
-  coalescePullRequestListEntries,
-  isValidGitHubRepositoryNameWithOwner,
-} from "@synara/shared/githubRepository";
+import { isValidRepositoryReference } from "@synara/shared/gitHostRepository";
+import { coalescePullRequestListEntries } from "@synara/shared/pullRequestList";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
@@ -123,8 +121,7 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
-    ...(typeof raw.selectedRepo === "string" &&
-    isValidGitHubRepositoryNameWithOwner(raw.selectedRepo)
+    ...(typeof raw.selectedRepo === "string" && isValidRepositoryReference(raw.selectedRepo)
       ? { selectedRepo: raw.selectedRepo.trim() }
       : {}),
     ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0

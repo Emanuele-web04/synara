@@ -33,16 +33,19 @@ export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCh
 }
 
 /**
- * GitHubCliError - GitHub CLI execution or authentication failed.
+ * GitHostCliError - Git-forge CLI execution or authentication failed.
  */
-export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
+export class GitHostCliError extends Schema.TaggedErrorClass<GitHostCliError>()("GitHostCliError", {
   operation: Schema.String,
   detail: Schema.String,
-  reason: Schema.optional(Schema.Literals(["not-installed", "not-authenticated", "other"])),
+  host: Schema.Literals(["github", "gitlab"]),
+  reason: Schema.optional(
+    Schema.Literals(["not-installed", "not-authenticated", "not-found", "other"]),
+  ),
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {
-    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+    return `${this.host === "github" ? "GitHub" : "GitLab"} CLI failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -82,5 +85,5 @@ export type GitManagerServiceError =
   | GitManagerError
   | GitCommandError
   | GitCheckoutDirtyWorktreeError
-  | GitHubCliError
+  | GitHostCliError
   | TextGenerationError;

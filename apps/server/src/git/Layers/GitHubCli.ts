@@ -21,17 +21,16 @@ import {
 } from "@synara/shared/githubRepository";
 
 import { runProcess } from "../../processRunner";
-import { GitHubCliError } from "../Errors.ts";
+import { GitHostCliError } from "../Errors.ts";
+import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import {
-  GitHubCli,
-  PULL_REQUEST_SUMMARY_JSON_FIELDS,
-  type GitHubRepositoryCloneUrls,
-  type GitHubCliShape,
-  type GitHubPullRequestDetailData,
-  type GitHubPullRequestListBatch,
-  type GitHubPullRequestListItem,
-  type GitHubPullRequestSummary,
-} from "../Services/GitHubCli.ts";
+  type GitHostRepositoryCloneUrls,
+  type GitHostCliShape,
+  type GitHostPullRequestDetailData,
+  type GitHostPullRequestListBatch,
+  type GitHostPullRequestListItem,
+  type GitHostPullRequestSummary,
+} from "../Services/GitHostCli.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
@@ -42,10 +41,11 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
   "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
 
-function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
+function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHostCliError {
   if (error instanceof Error) {
     if (error.message.includes("Command not found: gh")) {
-      return new GitHubCliError({
+      return new GitHostCliError({
+        host: "github",
         operation,
         detail: "GitHub CLI (`gh`) is required but not available on PATH.",
         reason: "not-installed",
@@ -63,7 +63,8 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
       lower.includes("http 401") ||
       lower.includes("401 unauthorized")
     ) {
-      return new GitHubCliError({
+      return new GitHostCliError({
+        host: "github",
         operation,
         detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
         reason: "not-authenticated",
@@ -77,7 +78,8 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
       lower.includes("no pull requests found for branch") ||
       lower.includes("pull request not found")
     ) {
-      return new GitHubCliError({
+      return new GitHostCliError({
+        host: "github",
         operation,
         detail: "Pull request not found. Check the PR number or URL and try again.",
         reason: "other",
@@ -85,7 +87,8 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
       });
     }
 
-    return new GitHubCliError({
+    return new GitHostCliError({
+      host: "github",
       operation,
       detail: `GitHub CLI command failed: ${error.message}`,
       reason: "other",
@@ -93,7 +96,8 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
     });
   }
 
-  return new GitHubCliError({
+  return new GitHostCliError({
+    host: "github",
     operation,
     detail: "GitHub CLI command failed.",
     reason: "other",
@@ -549,7 +553,7 @@ const RawAsyncMergeResultSchema = Schema.Struct({
 
 function normalizePullRequestSummary(
   raw: Schema.Schema.Type<typeof RawGitHubPullRequestSchema>,
-): GitHubPullRequestSummary {
+): GitHostPullRequestSummary {
   const headRepositoryNameWithOwner = raw.headRepository?.nameWithOwner ?? null;
   const headRepositoryOwnerLogin =
     raw.headRepositoryOwner?.login ??
@@ -664,7 +668,7 @@ function nonNegativeCount(value: number | null | undefined): number {
 
 function normalizePullRequestListItem(
   raw: Schema.Schema.Type<typeof RawPullRequestListItemSchema>,
-): GitHubPullRequestListItem {
+): GitHostPullRequestListItem {
   return {
     number: raw.number,
     title: raw.title,
@@ -750,7 +754,7 @@ function normalizeDetailComments(
 
 function normalizePullRequestDetail(
   raw: Schema.Schema.Type<typeof RawPullRequestDetailSchema>,
-): GitHubPullRequestDetailData {
+): GitHostPullRequestDetailData {
   const reviewers = new Map<string, PullRequestActor>();
   for (const actor of [
     ...(raw.reviewRequests ?? []),
@@ -790,7 +794,7 @@ const decodeRawPullRequestListItem = Schema.decodeUnknownSync(RawPullRequestList
 
 export function decodeRepositoryPullRequestListJson(
   raw: string,
-): Effect.Effect<GitHubPullRequestListBatch, GitHubCliError> {
+): Effect.Effect<GitHostPullRequestListBatch, GitHostCliError> {
   const trimmed = raw.trim();
   if (!trimmed) return Effect.succeed({ entries: [], rawCount: 0 });
   return decodeGitHubJson(
@@ -867,11 +871,12 @@ function normalizePullRequestStack(
   raw: RawPullRequestStackResponse,
   selectedPullRequestNumber: number,
   rawEntries = raw.data?.repository?.pullRequest?.stack?.entries.nodes ?? [],
-): Effect.Effect<PullRequestStack | null, GitHubCliError> {
+): Effect.Effect<PullRequestStack | null, GitHostCliError> {
   const graphQlErrorDetail = getGraphQlErrorDetail(raw);
   if (graphQlErrorDetail) {
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "getPullRequestStack",
         detail: graphQlErrorDetail,
         reason: "other",
@@ -885,7 +890,8 @@ function normalizePullRequestStack(
   if (!stack && !selectedEntry) return Effect.succeed(null);
   if (!stack || !selectedEntry) {
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "getPullRequestStack",
         detail: "GitHub returned incomplete pull request stack metadata.",
         reason: "other",
@@ -922,7 +928,8 @@ function normalizePullRequestStack(
     entries[selectedEntry.position - 1]?.number !== selectedPullRequestNumber
   ) {
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "getPullRequestStack",
         detail: "GitHub returned a partial or inconsistent pull request stack.",
         reason: "other",
@@ -953,11 +960,12 @@ function getPullRequestStackPageInfo(raw: RawPullRequestStackResponse): {
 function normalizePullRequestStackSummaries(
   raw: Schema.Schema.Type<typeof RawPullRequestStackSummariesResponseSchema>,
   numbers: ReadonlyArray<number>,
-): Effect.Effect<ReadonlyMap<number, PullRequestStackSummary>, GitHubCliError> {
+): Effect.Effect<ReadonlyMap<number, PullRequestStackSummary>, GitHostCliError> {
   const graphQlErrorDetail = getGraphQlErrorDetail(raw);
   if (graphQlErrorDetail) {
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "listRepositoryPullRequests",
         detail: graphQlErrorDetail,
         reason: "other",
@@ -968,7 +976,8 @@ function normalizePullRequestStackSummaries(
   const repository = raw.data?.repository;
   if (!repository) {
     return Effect.fail(
-      new GitHubCliError({
+      new GitHostCliError({
+        host: "github",
         operation: "listRepositoryPullRequests",
         detail: "GitHub returned incomplete pull request stack summaries.",
         reason: "other",
@@ -994,7 +1003,7 @@ function normalizePullRequestStackSummaries(
 
 function normalizeRepositoryCloneUrls(
   raw: Schema.Schema.Type<typeof RawGitHubRepositoryCloneUrlsSchema>,
-): GitHubRepositoryCloneUrls {
+): GitHostRepositoryCloneUrls {
   return {
     nameWithOwner: raw.nameWithOwner,
     url: raw.url,
@@ -1020,11 +1029,12 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getRepositoryMergeCapabilities"
     | "runPullRequestAction",
   invalidDetail: string,
-): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
+): Effect.Effect<S["Type"], GitHostCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
     Effect.mapError(
       (error) =>
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation,
           detail: error instanceof Error ? `${invalidDetail}: ${error.message}` : invalidDetail,
           cause: error,
@@ -1045,7 +1055,7 @@ const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestS
 export function decodePullRequestListJson(
   raw: string,
   operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
-): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
+): Effect.Effect<ReadonlyArray<GitHostPullRequestSummary>, GitHostCliError> {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return Effect.succeed([]);
@@ -1069,7 +1079,7 @@ export function decodePullRequestListJson(
 }
 
 const makeGitHubCli = Effect.sync(() => {
-  const execute: GitHubCliShape["execute"] = (input) =>
+  const execute: GitHostCliShape["execute"] = (input) =>
     Effect.tryPromise({
       try: (signal) =>
         runProcess("gh", input.args, {
@@ -1169,7 +1179,7 @@ const makeGitHubCli = Effect.sync(() => {
     cwd: string,
     repository: string,
     number: number,
-  ): Effect.Effect<{ patch: string; truncated: boolean }, GitHubCliError> =>
+  ): Effect.Effect<{ patch: string; truncated: boolean }, GitHostCliError> =>
     Effect.gen(function* () {
       const meta = yield* execute({
         cwd,
@@ -1185,7 +1195,8 @@ const makeGitHubCli = Effect.sync(() => {
       const [baseRef, baseSha, headSha] = meta.stdout.trim().split(/\s+/);
       if (!baseRef || !baseSha || !headSha) {
         return yield* Effect.fail(
-          new GitHubCliError({
+          new GitHostCliError({
+            host: "github",
             operation: "getPullRequestDiff",
             detail: "Could not resolve the pull request's base and head commits.",
             reason: "other",
@@ -1212,7 +1223,7 @@ const makeGitHubCli = Effect.sync(() => {
           ],
           timeoutMs: 120_000,
         });
-      const deepenShallowHistoryAndDiff = (fetchSource: string, initialError: GitHubCliError) =>
+      const deepenShallowHistoryAndDiff = (fetchSource: string, initialError: GitHostCliError) =>
         Effect.gen(function* () {
           let lastError = initialError;
           for (const deepenBy of PULL_REQUEST_DIFF_DEEPEN_STEPS) {
@@ -1267,12 +1278,13 @@ const makeGitHubCli = Effect.sync(() => {
   const validateRepository = (
     repository: string,
     operation: string,
-  ): Effect.Effect<string, GitHubCliError> => {
+  ): Effect.Effect<string, GitHostCliError> => {
     const normalized = repository.trim();
     return isValidGitHubRepositoryNameWithOwner(normalized)
       ? Effect.succeed(normalized)
       : Effect.fail(
-          new GitHubCliError({
+          new GitHostCliError({
+            host: "github",
             operation,
             detail: "Invalid GitHub repository identity.",
             reason: "other",
@@ -1284,8 +1296,8 @@ const makeGitHubCli = Effect.sync(() => {
   const enrichPullRequestListItemsWithStack = (input: {
     cwd: string;
     repository: string;
-    entries: ReadonlyArray<GitHubPullRequestListItem>;
-  }): Effect.Effect<ReadonlyArray<GitHubPullRequestListItem>> => {
+    entries: ReadonlyArray<GitHostPullRequestListItem>;
+  }): Effect.Effect<ReadonlyArray<GitHostPullRequestListItem>> => {
     const numbers = [...new Set(input.entries.map((entry) => entry.number))];
     if (numbers.length === 0) return Effect.succeed(input.entries);
     const [owner = "", repo = ""] = input.repository.split("/");
@@ -1356,7 +1368,8 @@ const makeGitHubCli = Effect.sync(() => {
   const decodeAsyncMergeResult = (result: Awaited<ReturnType<typeof runProcess>>) => {
     if (result.timedOut) {
       return Effect.fail(
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation: "runPullRequestAction",
           detail: "GitHub's asynchronous merge request timed out.",
           reason: "other",
@@ -1365,7 +1378,8 @@ const makeGitHubCli = Effect.sync(() => {
     }
     if (!result.stdout.trim()) {
       return Effect.fail(
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation: "runPullRequestAction",
           detail:
             result.stderr.trim() ||
@@ -1389,7 +1403,7 @@ const makeGitHubCli = Effect.sync(() => {
     readonly mergeMethod: "merge" | "squash" | "rebase";
   }): Effect.Effect<
     { readonly mergeOutcome: "merged" | "enqueued" | "unavailable" },
-    GitHubCliError
+    GitHostCliError
   > =>
     Effect.gen(function* () {
       const endpoint = `repos/${input.repository}/pulls/${input.number}/merge-async`;
@@ -1419,7 +1433,8 @@ const makeGitHubCli = Effect.sync(() => {
             return { mergeOutcome: "enqueued" };
           case "failed":
             return yield* Effect.fail(
-              new GitHubCliError({
+              new GitHostCliError({
+                host: "github",
                 operation: "runPullRequestAction",
                 detail:
                   result.details.message?.trim() || "GitHub could not merge the pull request.",
@@ -1430,7 +1445,8 @@ const makeGitHubCli = Effect.sync(() => {
             const uuid = result.details.uuid?.trim();
             if (!uuid) {
               return yield* Effect.fail(
-                new GitHubCliError({
+                new GitHostCliError({
+                  host: "github",
                   operation: "runPullRequestAction",
                   detail: "GitHub returned a pending merge request without an identifier.",
                   reason: "other",
@@ -1449,7 +1465,8 @@ const makeGitHubCli = Effect.sync(() => {
       }
 
       return yield* Effect.fail(
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation: "runPullRequestAction",
           detail: "GitHub's asynchronous merge did not finish within five minutes.",
           reason: "other",
@@ -1469,7 +1486,8 @@ const makeGitHubCli = Effect.sync(() => {
           return login.length > 0
             ? Effect.succeed(login)
             : Effect.fail(
-                new GitHubCliError({
+                new GitHostCliError({
+                  host: "github",
                   operation: "getViewerLogin",
                   detail: "GitHub CLI returned an empty viewer login.",
                   reason: "other",
@@ -1543,7 +1561,8 @@ const makeGitHubCli = Effect.sync(() => {
               Effect.try({
                 try: () => normalizePullRequestListItem(decodeRawPullRequestListItem(entry)),
                 catch: () =>
-                  new GitHubCliError({
+                  new GitHostCliError({
+                    host: "github",
                     operation: "getPullRequestListItem",
                     detail: "GitHub CLI returned an unrecognized pull request shape.",
                     reason: "other",
@@ -1652,7 +1671,8 @@ const makeGitHubCli = Effect.sync(() => {
             const graphQlErrorDetail = getGraphQlErrorDetail(page);
             if (graphQlErrorDetail) {
               return yield* Effect.fail(
-                new GitHubCliError({
+                new GitHostCliError({
+                  host: "github",
                   operation: "getPullRequestStack",
                   detail: graphQlErrorDetail,
                   reason: "other",
@@ -1675,7 +1695,8 @@ const makeGitHubCli = Effect.sync(() => {
           }
           if (pageInfo.endCursor === null || seenCursors.has(pageInfo.endCursor)) {
             return yield* Effect.fail(
-              new GitHubCliError({
+              new GitHostCliError({
+                host: "github",
                 operation: "getPullRequestStack",
                 detail: "GitHub returned invalid pull request stack pagination metadata.",
                 reason: "other",
@@ -1760,7 +1781,7 @@ const makeGitHubCli = Effect.sync(() => {
             repository,
           ): Effect.Effect<
             { readonly mergeOutcome: "merged" | "enqueued" | null },
-            GitHubCliError
+            GitHostCliError
           > => {
             const reference = String(input.number);
             const repoArgs = ["--repo", repositorySelector(repository)];
@@ -1885,6 +1906,8 @@ const makeGitHubCli = Effect.sync(() => {
       ),
     getPullRequestReviewComments: (input) =>
       Effect.gen(function* () {
+        // The reference already identifies a GitHub repository, so `owner/repo` is a plain split.
+        const [owner = "", repo = ""] = input.repository.split("/");
         const comments: GitPullRequestComment[] = [];
         let after: string | null = null;
         let fetchedPages = 0;
@@ -1896,13 +1919,13 @@ const makeGitHubCli = Effect.sync(() => {
             "api",
             "graphql",
             "--hostname",
-            input.host,
+            GITHUB_HOST,
             "-f",
             `query=${PULL_REQUEST_REVIEW_THREADS_QUERY}`,
             "-F",
-            `owner=${input.owner}`,
+            `owner=${owner}`,
             "-F",
-            `repo=${input.repo}`,
+            `repo=${repo}`,
             "-F",
             `number=${input.number}`,
             "-F",
@@ -1922,7 +1945,8 @@ const makeGitHubCli = Effect.sync(() => {
           const errorDetail = getGraphQlErrorDetail(decoded);
           if (errorDetail) {
             return yield* Effect.fail(
-              new GitHubCliError({
+              new GitHostCliError({
+                host: "github",
                 operation: "getPullRequestReviewComments",
                 detail: errorDetail,
               }),
@@ -2011,7 +2035,7 @@ const makeGitHubCli = Effect.sync(() => {
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
-  } satisfies GitHubCliShape;
+  } satisfies GitHostCliShape;
 
   return service;
 });

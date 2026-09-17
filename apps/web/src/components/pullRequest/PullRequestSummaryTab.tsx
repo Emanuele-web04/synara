@@ -7,6 +7,7 @@
 // Exports: PullRequestSummaryTab
 
 import type { PullRequestDetail } from "@synara/contracts";
+import { gitHostDisplayName, gitHostKindForRepository } from "@synara/shared/gitHostRepository";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -110,6 +111,7 @@ function DisclosureSection({
 }
 
 export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
+  const hostName = gitHostDisplayName(gitHostKindForRepository(detail.repository) ?? "github");
   return (
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
@@ -220,8 +222,8 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
           {detail.commentsTruncated || detail.commentsIncomplete ? (
             <PullRequestWarningNote>
               {detail.commentsIncomplete
-                ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
-                : "More unresolved review comments may be available on GitHub."}
+                ? `Some unresolved review comments could not be loaded. Check ${hostName} for the complete review.`
+                : `More unresolved review comments may be available on ${hostName}.`}
             </PullRequestWarningNote>
           ) : null}
           {detail.comments.length === 0 ? (

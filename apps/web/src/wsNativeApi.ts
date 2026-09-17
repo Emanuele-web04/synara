@@ -25,7 +25,7 @@ import {
   type ThreadBrowserState,
   type GitActionProgressEvent,
   type GitWorktreeSetupProgressEvent,
-  type GitHubProjectProvisionProgressEvent,
+  type ProjectProvisionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -136,8 +136,7 @@ const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycle
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
-const projectProvisionProgressListeners =
-  createListenerRegistry<GitHubProjectProvisionProgressEvent>();
+const projectProvisionProgressListeners = createListenerRegistry<ProjectProvisionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -545,8 +544,8 @@ export function createWsNativeApi(): NativeApi {
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
       listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
       onDevServerEvent: projectDevServerEventListeners.subscribe,
-      provisionFromGitHub: (input, options) =>
-        transport.request(WS_METHODS.projectsProvisionFromGitHub, input, {
+      provisionFromRepository: (input, options) =>
+        transport.request(WS_METHODS.projectsProvisionFromRepository, input, {
           timeoutMs: null,
           ...(options?.signal ? { signal: options.signal } : {}),
         }),
@@ -583,7 +582,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
-      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
+      repository: (input) => transport.request(WS_METHODS.gitRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),

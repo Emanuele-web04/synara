@@ -17,7 +17,7 @@ import {
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
-import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import { parsePullRequestUrl, type GitHostKind } from "@synara/shared/gitHostRepository";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
 
@@ -62,27 +62,28 @@ function interactionModeForGatewayTarget(target: ModelSelection): ProviderIntera
 
 interface PullRequestSelector {
   readonly number: number;
-  readonly repositoryNameWithOwner?: string;
+  readonly host: GitHostKind;
+  readonly repository?: string;
 }
 
 function parsePullRequestSelector(ref: string): PullRequestSelector | null {
   const trimmed = ref.trim();
-  const shorthandMatch = /^#(\d+)$/u.exec(trimmed);
-  const urlMatch = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/iu.exec(
-    trimmed,
-  );
-  const rawNumber = shorthandMatch?.[1] ?? urlMatch?.[1];
-  if (!rawNumber) return null;
-  const value = Number(rawNumber);
-  if (!Number.isSafeInteger(value) || value <= 0) return null;
-  const repositoryNameWithOwner = urlMatch
-    ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(trimmed)
+  // `#12` selects a GitHub PR, `!12` a GitLab MR; a full URL carries its own host.
+  const shorthandMatch = /^([#!])(\d+)$/u.exec(trimmed);
+  if (shorthandMatch) {
+    const value = Number(shorthandMatch[2]);
+    if (!Number.isSafeInteger(value) || value <= 0) return null;
+    return { number: value, host: shorthandMatch[1] === "!" ? "gitlab" : "github" };
+  }
+
+  const parsedUrl = parsePullRequestUrl(trimmed);
+  return parsedUrl
+    ? {
+        number: parsedUrl.number,
+        host: parsedUrl.identity.kind,
+        repository: parsedUrl.identity.reference,
+      }
     : null;
-  if (urlMatch && !repositoryNameWithOwner) return null;
-  return {
-    number: value,
-    ...(repositoryNameWithOwner ? { repositoryNameWithOwner } : {}),
-  };
 }
 
 interface CreationCoordinatorDependencies {
@@ -562,9 +563,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     git
                       .fetchPullRequestCommit({
                         cwd: project.workspaceRoot,
+                        host: pullRequest.host,
                         prNumber: pullRequest.number,
-                        ...(pullRequest.repositoryNameWithOwner
-                          ? { expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner }
+                        ...(pullRequest.repository
+                          ? { expectedRepository: pullRequest.repository }
                           : {}),
                       })
                       .pipe(Effect.map((ref) => ({ code: 0, stdout: ref, stderr: "" }))),
@@ -578,7 +580,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               Effect.mapError(
                 (error) =>
                   new ToolInputError(
-                    `Git revision "${requestedRef}" is unavailable. Pass a local ref/commit, #PR, or GitHub pull-request URL. ${errorText(error)}`,
+                    `Git revision "${requestedRef}" is unavailable. Pass a local ref/commit, #PR, !MR, or a GitHub/GitLab pull-request URL. ${errorText(error)}`,
                   ),
               ),
             );

@@ -627,19 +627,23 @@ export default function GitActionsControl({
         return;
       }
       try {
-        const repoResult = await api.git.githubRepository({ cwd: gitCwd });
-        const repoUrl = repoResult.repository?.url ?? null;
-        if (!repoUrl) {
+        const repoResult = await api.git.repository({ cwd: gitCwd });
+        const repository = repoResult.repository ?? null;
+        if (!repository) {
           toastManager.add({
             type: "error",
             title: "Unable to open compare page",
-            description: "No GitHub repository detected for this project.",
+            description: "No repository detected for this project.",
             data: threadToastData,
           });
           return;
         }
+        const base = encodeBranchForCompareUrl(baseBranch);
+        const head = encodeBranchForCompareUrl(headBranch);
         await api.shell.openExternal(
-          `${repoUrl}/compare/${encodeBranchForCompareUrl(baseBranch)}...${encodeBranchForCompareUrl(headBranch)}?expand=1`,
+          repository.host === "gitlab"
+            ? `${repository.url}/-/compare/${base}...${head}`
+            : `${repository.url}/compare/${base}...${head}?expand=1`,
         );
       } catch (error) {
         toastManager.add({
