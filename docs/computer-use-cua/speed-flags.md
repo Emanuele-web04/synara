@@ -130,10 +130,21 @@ Landed and covered by unit tests: all seven flags above, each verified
 off-by-default and on. The conditional-settle tests include the disagreeing
 read-back case the spec calls out (`unconfirmed` keeps the settle).
 
+Landed evidence:
+
+- **Live before numbers.** Warm-path p50/p95 per operation measured on a real
+  host at native rev 17:
+  `evidence/latency-rev17-2026-09-17-notes.md` +
+  `latency-rev17-2026-09-17.json` / `…-supplement.json` (probe scripts kept
+  beside them). Click, scroll, launch, and cold start meet the proposed
+  budget at p50 and p95; get_state meets p50 but not p95 under desktop
+  contention; the type row misses p50 on the AX-insert path. Wire-level
+  finding recorded there: the rev-17 driver attaches its cached frame to
+  every `get_window_state` reply, so `SYNARA_CUA_AX_ONLY_GET_STATE` cannot
+  realize the step-6 saving by request shape alone.
+
 Still open per the spec's acceptance criteria:
 
-- **Live before/after numbers.** The budget table needs measured p50/p95 per
-  operation on a real host; nothing here is a substitute for that evidence.
 - **Scroll probe-leg settle.** The spec's recommendation ("only when measured
   travel already proves arrival") is not implemented; scroll legs keep the
   configured settle.
