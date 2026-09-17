@@ -60,6 +60,7 @@ describe("project context preview", () => {
       "instructions.md",
       "notes.md",
       "decisions.md",
+      "docs/project-bot.md",
     ]);
     expect(isProjectContextPreviewPath("instructions.md")).toBe(true);
     expect(isProjectContextPreviewPath("internal/manifest.json")).toBe(false);

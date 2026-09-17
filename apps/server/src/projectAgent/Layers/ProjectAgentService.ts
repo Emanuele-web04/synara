@@ -71,6 +71,7 @@ import {
   projectAgentSummariesForPrincipal,
   type ProjectAgentPrincipal,
 } from "../principal.ts";
+import { PROJECT_BOT_PLAYBOOK, PROJECT_BOT_PLAYBOOK_PATH } from "../projectBotPlaybook.ts";
 import {
   ProjectAgentService,
   type ProjectAgentServiceShape,
@@ -100,6 +101,7 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   { path: "decisions.md", content: "# Decisions\n\n" },
   { path: "archived.md", content: "# Archived\n\n" },
   { path: "artifacts/index.md", content: "# Artifacts\n\n" },
+  { path: PROJECT_BOT_PLAYBOOK_PATH, content: PROJECT_BOT_PLAYBOOK },
   { path: "internal/manifest.json", content: "{}\n" },
 ];
 
@@ -215,6 +217,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
         content,
       }).pipe(Effect.mapError(toServiceError("Failed to materialize project document.")));
       return saved;
+    });
+
+  const ensureProjectBotPlaybook = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const existingPlaybook = yield* repository
+        .readDocumentRevision({ projectId, logicalPath: PROJECT_BOT_PLAYBOOK_PATH })
+        .pipe(Effect.mapError(toServiceError("Failed to load project bot playbook.")));
+      if (Option.isSome(existingPlaybook)) return;
+      yield* writeSeedDocument(
+        projectId,
+        PROJECT_BOT_PLAYBOOK_PATH,
+        PROJECT_BOT_PLAYBOOK,
+        "system",
+      );
     });
 
   const indexProjectThreads = (projectId: ProjectId) =>
@@ -653,6 +669,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .saveConfig(withAutomation, saved.revision)
             .pipe(Effect.mapError(toServiceError("Failed to link project automation.")));
         }
+        yield* ensureProjectBotPlaybook(input.projectId);
         yield* publish({ type: "config-upserted", config: saved });
         yield* appendActivity({
           projectId: input.projectId,
@@ -1386,8 +1403,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (principal.kind !== "coordinator" && principal.kind !== "worker") {
           return "";
         }
+        if (principal.kind === "coordinator") {
+          yield* ensureProjectBotPlaybook(principal.projectId);
+        }
         const packet = yield* impl.buildContextPacket(principal.projectId, threadId);
+        const playbook = yield* repository
+          .readDocumentRevision({
+            projectId: principal.projectId,
+            logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+          })
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
         const budget = truncateToContextBudget([
+          {
+            label: "Playbook",
+            text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+          },
           { label: "Goal", text: packet.goal?.objective ?? "No active goal." },
           { label: "Instructions", text: packet.instructions },
           { label: "Decisions", text: packet.relevantDecisions },
@@ -1605,6 +1635,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const decisions = yield* repository
           .readDocumentRevision({ projectId, logicalPath: "decisions.md" })
           .pipe(Effect.mapError(toServiceError("Failed to load decisions.")));
+        const playbook = yield* repository
+          .readDocumentRevision({ projectId, logicalPath: PROJECT_BOT_PLAYBOOK_PATH })
+          .pipe(Effect.mapError(toServiceError("Failed to load project bot playbook.")));
         const tasks = yield* repository
           .listTasks({ projectId, includeArchived: false, limit: 40 })
           .pipe(Effect.mapError(toServiceError("Failed to load tasks for context.")));
@@ -1622,6 +1655,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             text: Option.isSome(decisions) ? decisions.value.content : "",
           },
           {
+            label: "Playbook",
+            text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+          },
+          {
             label: "Tasks",
             text: tasks.map((task) => `- ${task.status} ${task.title}`).join("\n"),
           },
@@ -1633,7 +1670,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           instructions: Option.isSome(instructions) ? instructions.value.content : "",
           relevantDecisions: Option.isSome(decisions) ? decisions.value.content : "",
           tasks,
-          documentReferences: ["instructions.md", "decisions.md", "overview.md"],
+          documentReferences: [
+            "instructions.md",
+            "decisions.md",
+            "overview.md",
+            PROJECT_BOT_PLAYBOOK_PATH,
+          ],
           historicalCoverage: Option.isSome(digest) ? digest.value.historicalCoverage : "none",
           characterCount: budget.characterCount,
         };

@@ -59,6 +59,7 @@ export const PROJECT_CONTEXT_PREVIEW_DOCUMENTS = [
   { logicalPath: "instructions.md", label: "Instructions", editable: true },
   { logicalPath: "notes.md", label: "Notes", editable: true },
   { logicalPath: "decisions.md", label: "Decisions", editable: false },
+  { logicalPath: "docs/project-bot.md", label: "Playbook", editable: false },
 ] as const;
 
 export function isProjectContextPreviewPath(logicalPath: string): boolean {
