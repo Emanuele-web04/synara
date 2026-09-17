@@ -1,0 +1,35 @@
+name: Energy Cloud A/B Probe
+
+on:
+  push:
+    branches:
+      - perf/energy-cloud-benchmark
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+          electron: "true"
+
+      - name: Run paired Electron CPU proxy benchmark
+        run: |
+          xvfb-run -a ./node_modules/.bin/electron --no-sandbox \
+            .github/scripts/energy-cloud-probe.cjs 5 20000 | tee energy-cloud-probe.log
+
+      - name: Upload benchmark log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: energy-cloud-probe
+          path: energy-cloud-probe.log
