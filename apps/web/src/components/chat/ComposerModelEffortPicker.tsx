@@ -15,20 +15,13 @@ import {
 } from "@synara/contracts";
 import { useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ProviderModelOption } from "../../providerModelOptions";
-import { Button } from "../ui/button";
-import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Menu, MenuSeparator, MenuSub, MenuSubTrigger } from "../ui/menu";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
-import {
-  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
-  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-} from "./composerPickerStyles";
+import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
+import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
   getComposerTraitSelection,
@@ -142,67 +135,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     props.onSelectionCommitted?.();
   };
 
-  const hiddenTriggerTitle = [
-    props.hideModelLabel ? modelLabel : null,
-    props.hideStatusLabel ? triggerStatusLabel : null,
-  ]
-    .filter((part): part is string => typeof part === "string" && part.length > 0)
-    .join(" · ");
-
-  const triggerButton = (
-    <Button
-      size="sm"
-      variant="chrome"
-      disabled={props.disabled ?? false}
-      className={cn(
-        "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
-        COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-      )}
-      aria-label="Change model and reasoning"
-      {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
-    />
-  );
-
-  const triggerContent = (
-    <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-      <ProviderIcon
-        aria-hidden="true"
-        className={cn(
-          // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-          "size-3.5 shrink-0 opacity-100",
-          getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
-        )}
-      />
-      {props.hideModelLabel ? (
-        <span className="sr-only">{modelLabel}</span>
-      ) : (
-        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
-      )}
-      {showsFastBadge ? (
-        <FastModeIcon
-          aria-hidden="true"
-          className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
-        />
-      ) : null}
-      {triggerStatusLabel ? (
-        props.hideStatusLabel ? (
-          <>
-            <SettingsIcon
-              aria-hidden="true"
-              className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
-            />
-            <span className="sr-only">{triggerStatusLabel}</span>
-          </>
-        ) : (
-          <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
-            {triggerStatusLabel}
-          </span>
-        )
-      ) : null}
-      <ChevronDownIcon aria-hidden="true" className="ms-0.5 size-3 shrink-0 opacity-60" />
-    </span>
-  );
-
   // Shared between the radio and slider layouts so both reach the same model list;
   // each layout decides what a committed model selection closes.
   const renderModelSubmenuPopup = (onAfterSelection: () => void) => (
@@ -254,26 +186,17 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         setMenuOpen(nextOpen);
       }}
     >
-      {props.shortcutLabel ? (
-        <Tooltip>
-          <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
-            {triggerContent}
-          </TooltipTrigger>
-          {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6} variant="picker">
-              <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change model</span>
-                <ShortcutKbd
-                  shortcutLabel={props.shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
-                />
-              </span>
-            </TooltipPopup>
-          ) : null}
-        </Tooltip>
-      ) : (
-        <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
-      )}
+      <ComposerModelMenuTrigger
+        provider={activeProvider}
+        modelLabel={modelLabel}
+        statusLabel={triggerStatusLabel}
+        showsFastBadge={showsFastBadge}
+        hideModelLabel={props.hideModelLabel}
+        hideStatusLabel={props.hideStatusLabel}
+        disabled={props.disabled}
+        isMenuOpen={isMenuOpen}
+        shortcutLabel={props.shortcutLabel}
+      />
       <ComposerPickerMenuPopup
         align="end"
         side="top"

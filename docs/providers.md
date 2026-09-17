@@ -77,8 +77,11 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
-Favorite models can be surfaced above larger catalogs, and supported provider executables can be
-pointed at custom binary locations.
+The composer model picker has one tab per connected provider and a Starred tab. Starring a model
+saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
+picker is open) restores the whole combination. A task that has started stays on its provider: only
+that provider's tab and starred entries are offered. Supported provider executables can be pointed
+at custom binary locations.
 
 ## Provider sessions
 
