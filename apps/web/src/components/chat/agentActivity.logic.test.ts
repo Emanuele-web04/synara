@@ -6,6 +6,7 @@ import {
   formatAgentActivityEntryTitle,
   isAgentActivityWorkEntry,
   isCodexActivityStatusWorkEntry,
+  isPlainRuntimeNoticeWorkEntry,
   isReasoningUpdateWorkEntry,
   isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
@@ -265,5 +266,26 @@ describe("unmapped provider events", () => {
     // normalizeCompactToolLabel strips the trailing "done", which previously
     // fell through to the generic "Activity" label.
     expect(formatAgentActivityEntryTitle(entry)).toBe("Done");
+  });
+});
+
+describe("isPlainRuntimeNoticeWorkEntry", () => {
+  it("matches generic runtime warnings but not notices with their own icon", () => {
+    const warning = workEntry({
+      id: "warning-1",
+      label: "Runtime warning",
+      tone: "info",
+      activityKind: "runtime.warning",
+      detail: "Unhandled Claude system message subtype 'api_retry'.",
+    });
+
+    expect(isPlainRuntimeNoticeWorkEntry(warning)).toBe(true);
+    expect(
+      isPlainRuntimeNoticeWorkEntry({
+        ...warning,
+        nativeEventType: "background_tasks_changed",
+      }),
+    ).toBe(false);
+    expect(isPlainRuntimeNoticeWorkEntry(workEntry({ id: "tool-1" }))).toBe(false);
   });
 });

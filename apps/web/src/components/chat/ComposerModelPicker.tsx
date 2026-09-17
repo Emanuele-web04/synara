@@ -154,6 +154,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
   const activeProvider = lockedProvider ?? props.provider;
+  const effortControl = props.effortControl ?? "menu";
+  const usesEffortSlider = effortControl === "slider";
 
   const { starredModels, toggleStarredModel } = useStarredModels();
   // A locked thread can only ever run its own provider's presets.
@@ -178,11 +180,18 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
   }
 
+  // A model picked while the panel stays open (slider mode) still owes the composer its
+  // focus hand-off; it is paid when the panel finally closes.
+  const selectionCommittedWhileOpenRef = useRef(false);
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
       setUncontrolledOpen(nextOpen);
     }
     onOpenChange?.(nextOpen);
+    if (!nextOpen && selectionCommittedWhileOpenRef.current) {
+      selectionCommittedWhileOpenRef.current = false;
+      props.onSelectionCommitted?.();
+    }
   };
 
   useEffect(() => {
@@ -265,7 +274,13 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const starredKeySet = new Set(starredModels.map(starredModelKey));
 
   // Commit a row: `patch` carries the traits to apply on top of the provider's options.
-  const commitRow = (row: PickerRow, model: ModelSlug, patch: Record<string, unknown>) => {
+  // `keepOpen` leaves the panel up so the footer slider can tune the model just picked.
+  const commitRow = (
+    row: PickerRow,
+    model: ModelSlug,
+    patch: Record<string, unknown>,
+    keepOpen = false,
+  ) => {
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -277,6 +292,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     } else {
       props.onProviderModelChange(row.provider, model);
     }
+    if (keepOpen) {
+      selectionCommittedWhileOpenRef.current = true;
+      return;
+    }
+    selectionCommittedWhileOpenRef.current = false;
     setMenuOpen(false);
     props.onSelectionCommitted?.();
   };
@@ -291,16 +311,19 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     // A starred model may be missing until its provider's catalog is discovered.
     const model = (resolvedModel ?? (row.preset ? row.model : null)) as ModelSlug | null;
     if (!model) return;
+    const selection = traitSelectionFor(row.provider, model);
+    // Slider mode: switching to a model with an effort ladder keeps the panel open so the
+    // footer slider can set its effort. Presets already carry their effort, and picking
+    // the current model again is the "done" gesture, so both close.
+    const keepOpen =
+      usesEffortSlider && row.preset === null && !row.selected && selection.effortLevels.length > 0;
     commitRow(
       row,
       model,
       row.preset
-        ? buildStarredModelOptionsPatch({
-            provider: row.provider,
-            selection: traitSelectionFor(row.provider, model),
-            starred: row.preset,
-          })
+        ? buildStarredModelOptionsPatch({ provider: row.provider, selection, starred: row.preset })
         : {},
+      keepOpen,
     );
   };
 
@@ -382,7 +405,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       <ComposerPickerMenuPopup
         align="start"
         side="top"
-        className="w-[min(21rem,92vw)] [--picker-option-min-h:1.875rem]"
+        // Glassier than the stock picker shell: thinner fill over a deeper, more saturated blur.
+        className="w-[min(18.5rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
         {...{ [MODEL_PICKER_POPUP_ATTRIBUTE]: "" }}
         onKeyDownCapture={(event) => {
           // Tab walks the provider tabs instead of leaving (and closing) the menu.
@@ -438,7 +462,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
           <div
             role="tabpanel"
             className={cn(
-              "max-h-[min(20rem,45vh)] min-h-24 overflow-y-auto overscroll-contain p-1",
+              "max-h-[min(12.5rem,40vh)] min-h-20 overflow-y-auto overscroll-contain p-1",
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
@@ -470,7 +494,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                     prompt={promptFor(row.provider)}
                     starredKeySet={starredKeySet}
                     onSelect={selectRow}
-                    onSelectEffort={selectRowWithEffort}
+                    // The footer slider owns effort in slider mode; rows stay plain.
+                    onSelectEffort={usesEffortSlider ? null : selectRowWithEffort}
                     onToggleStar={toggleStarredModel}
                   />
                 ))}
@@ -501,7 +526,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
             modelLabel={modelLabel}
-            effortControl={props.effortControl ?? "menu"}
+            effortControl={effortControl}
           />
         </div>
       </ComposerPickerMenuPopup>
