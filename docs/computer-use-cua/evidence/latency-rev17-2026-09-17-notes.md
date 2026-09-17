@@ -22,16 +22,16 @@ measured by subtraction: `probe` (host-only, no driver) vs `get_screen_size`
 
 ## Measured vs proposed budget
 
-| Operation                              | p50 target | p95 target | measured p50 | measured p95 | verdict |
-| -------------------------------------- | ---------- | ---------- | ------------ | ------------ | ------- |
-| get_state, AX only, warm               | 400 ms     | 900 ms     | **219 ms** (interleaved) / 811 ms (contended block) | **1 179 ms** / 15 924 ms | p50 meets uncontended; p95 misses — see tails |
-| get_state, with screenshot, warm       | 900 ms     | 1 800 ms   | **349 ms** / 431 ms | **4 915 ms** / 1 252 ms | p50 meets; p95 misses uncontended, met in block run |
-| click, input plus observation          | 800 ms     | 1 600 ms   | **659 ms**   | **742 ms**   | meets both (max 1 383 ms was first-dispatch warmup) |
-| type, focus-neutral AX insert          | 600 ms     | 1 200 ms   | **1 122 ms** write leg alone; **1 343 ms** for the full resolve→set_value→reread compose | **1 178 ms** leg / **1 686 ms** compose | misses p50 either way |
-| scroll, single leg                     | 800 ms     | 1 600 ms   | **743 ms**   | **823 ms**   | meets both |
-| launch, app already installed          | 2 000 ms   | 5 000 ms   | **1 956 ms** | **2 133 ms** | meets both (max 19 833 ms = LaunchServices first-registration, i=0) |
-| turn start, warm host, first tool call | 800 ms     | 2 000 ms   | ≈ get_state warm call: **219–811 ms**; trivial call **0.7 ms** | as get_state | meets when uncontended |
-| host cold start, spawn+handshake+session | 2 000 ms | 5 000 ms   | **55 ms** (n=20 suppl; n=3 main: 53/87/985 ms) | **108 ms** suppl | meets both by ~40× — but see first-exec failure below |
+| Operation                                | p50 target | p95 target | measured p50                                                                             | measured p95                            | verdict                                                             |
+| ---------------------------------------- | ---------- | ---------- | ---------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------- |
+| get_state, AX only, warm                 | 400 ms     | 900 ms     | **219 ms** (interleaved) / 811 ms (contended block)                                      | **1 179 ms** / 15 924 ms                | p50 meets uncontended; p95 misses — see tails                       |
+| get_state, with screenshot, warm         | 900 ms     | 1 800 ms   | **349 ms** / 431 ms                                                                      | **4 915 ms** / 1 252 ms                 | p50 meets; p95 misses uncontended, met in block run                 |
+| click, input plus observation            | 800 ms     | 1 600 ms   | **659 ms**                                                                               | **742 ms**                              | meets both (max 1 383 ms was first-dispatch warmup)                 |
+| type, focus-neutral AX insert            | 600 ms     | 1 200 ms   | **1 122 ms** write leg alone; **1 343 ms** for the full resolve→set_value→reread compose | **1 178 ms** leg / **1 686 ms** compose | misses p50 either way                                               |
+| scroll, single leg                       | 800 ms     | 1 600 ms   | **743 ms**                                                                               | **823 ms**                              | meets both                                                          |
+| launch, app already installed            | 2 000 ms   | 5 000 ms   | **1 956 ms**                                                                             | **2 133 ms**                            | meets both (max 19 833 ms = LaunchServices first-registration, i=0) |
+| turn start, warm host, first tool call   | 800 ms     | 2 000 ms   | ≈ get_state warm call: **219–811 ms**; trivial call **0.7 ms**                           | as get_state                            | meets when uncontended                                              |
+| host cold start, spawn+handshake+session | 2 000 ms   | 5 000 ms   | **55 ms** (n=20 suppl; n=3 main: 53/87/985 ms)                                           | **108 ms** suppl                        | meets both by ~40× — but see first-exec failure below               |
 
 N=30 per warm op per run. Cold start: n=20 in the supplement plus n=3 in the
 main run plus the warm host's own startup (54 ms) = 24 fresh-host samples.
@@ -94,7 +94,7 @@ the attachment. Consequences:
 Steady-state cold start (spawn + validated handshake + `start_session` +
 cursor setup, all inside the first call) is **p50 55 ms / p95 108 ms** — the
 200 ms metadata poll rarely iterates. The observed failure mode is
-*first-ever exec on a cold file cache*: this binary's first spawn took ~5–7 s
+_first-ever exec on a cold file cache_: this binary's first spawn took ~5–7 s
 to create its socket, outlasting the host's ~4.2 s of fast-failed handshake
 polls → "identity/version/native revision handshake failed"; immediate retry
 succeeded (887 ms). Warm-on-first-touch would hide exactly this case. Cold
@@ -122,11 +122,11 @@ ms vs ~660 ms steady; first `set_value` 1 698 ms vs ~1 122 ms; first
 
 ## Consequence for the plan
 
-- click, scroll, launch, and cold start meet the proposed budget at p50 *and*
+- click, scroll, launch, and cold start meet the proposed budget at p50 _and_
   p95 today — those rows are already green and should be marked measured.
 - get_state meets p50 but misses p95 under desktop contention; step-1 numbers
   for that row should carry a contention note rather than a straight fail.
-- The AX-only saving the spec expects is *not* available by request shape
+- The AX-only saving the spec expects is _not_ available by request shape
   alone at rev 17 — the driver attaches the frame anyway. Step 6 needs a
   native change (suppress attach when not requested) to realize the cut.
 - Cold start is ~40× under budget in steady state; the only observed failure

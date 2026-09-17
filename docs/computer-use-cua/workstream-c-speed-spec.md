@@ -30,16 +30,16 @@ Budgets first, then instrument, then cut in budget order. No step may regress re
 
 Step 1 is the budget table. Every number below is a proposed warm target. Warm means the driver generation already exists and the target app is already running. The measured column is from `docs/computer-use-cua/evidence/latency-rev17-2026-09-17-notes.md` (native rev 17, M4 Pro VM, macOS 26.5.2, n=30 per op; that VM ran sibling driver instances, so p95 tails carry contention stalls — see the evidence notes before treating a p95 miss as a code regression).
 
-| Operation                                          | p50 target | p95 target | Notes                                                                                                                              |
-| -------------------------------------------------- | ---------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| get_state, AX only, warm                           | 400 ms     | 900 ms     | No screenshot; tree walk dominates; measured p50 219 ms, p95 1.2 s uncontended (p95 15.9 s contended) — see wire note below        |
-| get_state, with screenshot, warm                   | 900 ms     | 1800 ms    | Tree plus 1536 px capture; measured p50 349–431 ms, p95 1.3 s block / 4.9 s interleaved tail                                       |
-| click, input plus observation                      | 800 ms     | 1600 ms    | Includes 300 ms settle today; measured p50 659 ms, p95 742 ms — meets both                                                         |
-| type, focus neutral AX insert                      | 600 ms     | 1200 ms    | No focus excursion on the AX path; measured write leg p50 1 122 ms, full compose p50 1 343 ms — misses p50                         |
-| scroll, single leg                                 | 800 ms     | 1600 ms    | Probe splits pay settle twice today; measured p50 743 ms, p95 823 ms — meets both                                                  |
-| launch, app already installed                      | 2000 ms    | 5000 ms    | OS cost dominates; measured p50 1 956 ms, p95 2 133 ms (first-ever launch 19.8 s once) — meets both                                |
-| turn start, warm host, first tool call             | 800 ms     | 2000 ms    | No spawn cost; measured ≈ warm get_state 219–811 ms, trivial call 0.7 ms — meets uncontended                                        |
-| host cold start, spawn plus handshake plus session | 2000 ms    | 5000 ms    | Bounded by the 5 s startup calls; measured p50 55 ms, p95 108 ms (n=23) — meets both; first-exec spawn can outlast the handshake   |
+| Operation                                          | p50 target | p95 target | Notes                                                                                                                            |
+| -------------------------------------------------- | ---------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| get_state, AX only, warm                           | 400 ms     | 900 ms     | No screenshot; tree walk dominates; measured p50 219 ms, p95 1.2 s uncontended (p95 15.9 s contended) — see wire note below      |
+| get_state, with screenshot, warm                   | 900 ms     | 1800 ms    | Tree plus 1536 px capture; measured p50 349–431 ms, p95 1.3 s block / 4.9 s interleaved tail                                     |
+| click, input plus observation                      | 800 ms     | 1600 ms    | Includes 300 ms settle today; measured p50 659 ms, p95 742 ms — meets both                                                       |
+| type, focus neutral AX insert                      | 600 ms     | 1200 ms    | No focus excursion on the AX path; measured write leg p50 1 122 ms, full compose p50 1 343 ms — misses p50                       |
+| scroll, single leg                                 | 800 ms     | 1600 ms    | Probe splits pay settle twice today; measured p50 743 ms, p95 823 ms — meets both                                                |
+| launch, app already installed                      | 2000 ms    | 5000 ms    | OS cost dominates; measured p50 1 956 ms, p95 2 133 ms (first-ever launch 19.8 s once) — meets both                              |
+| turn start, warm host, first tool call             | 800 ms     | 2000 ms    | No spawn cost; measured ≈ warm get_state 219–811 ms, trivial call 0.7 ms — meets uncontended                                     |
+| host cold start, spawn plus handshake plus session | 2000 ms    | 5000 ms    | Bounded by the 5 s startup calls; measured p50 55 ms, p95 108 ms (n=23) — meets both; first-exec spawn can outlast the handshake |
 
 Wire note (rev 17, measured): `get_window_state` replies are near-unitary — the driver attaches its cached frame whenever `screenshot_frame_freshness` is `captured_current_space`, so an AX-only read still ships the embedded PNG (~150–190 KB reply) and `include_screenshot` gates capture work rather than attachment. The AX-only saving in step 6 therefore needs a native attach-suppression change, not only the request-shape flag.
 

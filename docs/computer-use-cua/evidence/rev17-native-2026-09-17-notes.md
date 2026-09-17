@@ -36,7 +36,7 @@ gateway sections; this file certifies the native tier).
   second identical-titled window; same-pid keyboard delivery is ambiguous).
 - minimized-target: passed (refused `not-dispatched` after minimize).
 - Identity gate: AppKit child pid 57989, title `Synara Native Fixture
-  57989 A`, WindowServer id verified as `cua:57989:385` before any input;
+57989 A`, WindowServer id verified as `cua:57989:385` before any input;
   observation before input wrote `native-before.png`.
 
 ## Focus invariant
