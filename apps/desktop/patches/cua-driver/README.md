@@ -126,6 +126,14 @@ and exposes it through `computer_wait` with `settle:true`; a driver or host
 that cannot answer it is remembered as unsupported and the fixed post-action
 wait remains the fallback.
 
+Revision 19 extends `key_name_to_code` with the xdotool-style keypad and
+extended-function vocabulary: `kp_0`–`kp_9`, `kp_enter`, `kp_add`,
+`kp_subtract`, `kp_multiply`, `kp_divide`, `kp_decimal`, `kp_equals`,
+`kp_clear`, `f13`–`f20`, `menu`, and `help`, all verified against Apple's
+`HIToolbox/Events.h` codes. Synara still refuses `insert`/`ins` (macOS has
+no Insert key) before dispatch; unmapped spellings keep the honest
+`unknown_key_name` refusal.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event

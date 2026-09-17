@@ -1,17 +1,18 @@
-# native-keymap.diff — driver keymap extension notes
+# native-keymap.diff — driver keymap extension notes (LANDED native rev 19)
 
-Companion to the Synara-side `cuaKey` expansion in this commit. Apply with
-`git apply` at the `cua-src` root. Verified `git apply --check`-clean against
-the rev-17 checkout at `/Users/devin/repos/cua-src` when authored.
+Companion to the Synara-side `cuaKey` expansion. **Applied 2026-09-23**: the
+keyboard.rs and press_key.rs hunks were applied to `/Users/devin/repos/cua-src`
+on top of the staged rev-18 tree and `serve.rs` was bumped to
+`synara_native_revision` 19 by hand (the rev-18 stream had already landed the
+17→18 bump, exactly the concurrency case predicted below). The folded patch
+`0001-synara-native.patch` regenerates at sha
+`6d9a8c9e50a596cde34b01f337d640e172cf2a9e669d2b261c76be810093a91c` and
+`cuaDriverRelease.json` pins `nativeRevision: 19`. This file remains as the
+authored record of the change; the diff itself is retained beside it.
 
-Concurrency note: the `cua-src` working tree is under parallel edits — when
-re-checked later the same day it already carried a `synara_native_revision`
-18 bump in `serve.rs` (plus unrelated modifications across 32 files), so the
-serve.rs hunk below no longer applies verbatim while the keyboard.rs and
-press_key.rs hunks still do. Treat the revision hunk as "bump to current+1 at
-apply time": if the parallel rev-18 stream lands first, this keymap rides
-native rev 19 instead — either way the release pin must match whatever the
-applied driver reports.
+Original apply-time notes: verified `git apply --check`-clean against the
+rev-17 checkout at `/Users/devin/repos/cua-src` when authored. The serve.rs
+hunk required the "bump to current+1" treatment documented here.
 
 ## What it does
 

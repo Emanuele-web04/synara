@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
-index 87bc75e..c9b0db9 100644
+index 87bc75ea7..c9b0db961 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 @@ -207,6 +207,7 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
@@ -30,7 +30,7 @@ index 87bc75e..c9b0db9 100644
          "upload_file" | "download_file" | "copy_file" | "move_file" => CursorAction::Transfer,
  
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-index 2625ee2..1cbd7e1 100644
+index 2625ee2ff..1cbd7e16a 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 @@ -869,6 +869,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
@@ -211,7 +211,7 @@ index 2625ee2..1cbd7e1 100644
      fn history_reads_are_distinct_explicit_history_capabilities() {
          for (tool, capability) in [
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
-index cfd35d2..5e16b83 100644
+index cfd35d264..5e16b8319 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
 @@ -57,8 +57,9 @@ pub enum ElementAncestry {
@@ -306,7 +306,7 @@ index cfd35d2..5e16b83 100644
      /// the routed pointer refuse rather than restoring the window.
      #[test]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d..ad8c114 100644
+index d93bf6d20..ad8c114f5 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 @@ -334,6 +334,10 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
@@ -346,7 +346,7 @@ index d93bf6d..ad8c114 100644
          // `element_token` arg + get_window_state which emits them.
          "accessibility.element_tokens",
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
-index 5d6ac1f..e772dda 100644
+index 5d6ac1f14..e772ddaf6 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 @@ -652,7 +652,13 @@ fn main() {
@@ -365,7 +365,7 @@ index 5d6ac1f..e772dda 100644
                  })
                  .expect("spawn serve thread");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-index a26a6bf..e12b1d3 100644
+index a26a6bfe9..e12b1d304 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 @@ -12,6 +12,33 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
@@ -556,7 +556,7 @@ index a26a6bf..e12b1d3 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..10224a9 100644
+index 67e123bc7..284bc4aa7 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -571,7 +571,7 @@ index 67e123b..10224a9 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(18);
++        metadata["synara_native_revision"] = serde_json::json!(19);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -738,7 +738,7 @@ index 67e123b..10224a9 100644
  
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 new file mode 100644
-index 0000000..8d667ef
+index 000000000..8d667ef80
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 @@ -0,0 +1,123 @@
@@ -866,7 +866,7 @@ index 0000000..8d667ef
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
-index 493656b..1dc0147 100644
+index 493656b5b..1dc0147e7 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
 @@ -9,6 +9,7 @@
@@ -912,7 +912,7 @@ index 493656b..1dc0147 100644
                  "--glide-ms" => {
                      if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
-index cb1e393..c90048d 100644
+index cb1e39396..c90048d73 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
 @@ -109,16 +109,20 @@ impl RenderStateCore {
@@ -1022,7 +1022,7 @@ index cb1e393..c90048d 100644
      // Cyan glow border + faint fill, matching Swift AgentCursor.showFocusRect.
      if let Some(fr) = focus_rect {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
-index 78981e9..33fe517 100644
+index 78981e9cc..33fe51793 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 @@ -80,6 +80,21 @@ fn list_running_apps_native() -> Vec<AppInfo> {
@@ -1116,7 +1116,7 @@ index 78981e9..33fe517 100644
      };
      let running = if urls.is_empty() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
-index 7893a01..b0ec2ca 100644
+index 7893a0132..b0ec2ca7e 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
 @@ -63,6 +63,9 @@ pub struct OpenConfig {
@@ -1138,7 +1138,7 @@ index 7893a01..b0ec2ca 100644
          if !cfg.arguments.is_empty() {
              let strs: Vec<Retained<NSString>> = cfg
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
-index 02ba09c..b99c082 100644
+index 02ba09c01..b99c08277 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 @@ -13,6 +13,7 @@
@@ -1527,7 +1527,7 @@ index 02ba09c..b99c082 100644
  mod tests {
      use super::*;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
-index ee1f5d3..ac68801 100644
+index ee1f5d3a1..ac688015f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
 @@ -14,6 +14,7 @@
@@ -2272,7 +2272,7 @@ index ee1f5d3..ac68801 100644
 +    }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/background_mutation.rs b/libs/cua-driver/rust/crates/platform-macos/src/background_mutation.rs
-index 4ca69d9..12ab3d7 100644
+index 4ca69d9ab..12ab3d7c2 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/background_mutation.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/background_mutation.rs
 @@ -1,25 +1,29 @@
@@ -2411,7 +2411,7 @@ index 4ca69d9..12ab3d7 100644
      async fn nested_lease_proof_is_task_local_and_pid_bound() {
          assert!(!held_by_current_task(-91_004));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
-index 603f2ae..678f7a8 100644
+index 603f2ae4e..678f7a812 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 @@ -280,6 +280,15 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
@@ -2431,7 +2431,7 @@ index 603f2ae..678f7a8 100644
      format!("{name} {bundle_id}")
          .to_ascii_lowercase()
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
-index 5d74ddd..22b7672 100644
+index 5d74dddf5..22b76728f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 @@ -32,7 +32,7 @@
@@ -2875,7 +2875,7 @@ index 5d74ddd..22b7672 100644
      fn sentinel_default_cursor_does_not_require_frame_ticks() {
          // Regression for idle CPU: a freshly-started serve daemon seeds only the
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
-index 3717737..6e976a5 100644
+index 371773760..6e976a5cf 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
 @@ -9,56 +9,194 @@ fn is_selectable_container_role(role: &str) -> bool {
@@ -3385,7 +3385,7 @@ index 3717737..6e976a5 100644
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
 new file mode 100644
-index 0000000..fa26057
+index 000000000..fa2605719
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
 @@ -0,0 +1,415 @@
@@ -3805,7 +3805,7 @@ index 0000000..fa26057
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
-index 2b9baf8..347018e 100644
+index 2b9baf8e5..65eef4224 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 @@ -30,267 +30,227 @@ pub fn is_screen_sharing_pid(pid: i32) -> bool {
@@ -4290,16 +4290,8 @@ index 2b9baf8..347018e 100644
 -    let result = gesture();
 -    release_pid_modifiers(pid, &pressed, active_flags);
 -    result
-+    with_modifier_keys(
-+        modifiers,
-+        KeyboardRoute::Pid {
-+            pid,
-+            authenticated: true,
-+        },
-+        |_| gesture(),
-+    )
- }
- 
+-}
+-
 -fn release_pid_modifiers(
 -    pid: i32,
 -    pressed: &[(u16, CGEventFlags)],
@@ -4310,8 +4302,16 @@ index 2b9baf8..347018e 100644
 -        let _ = post_key(pid, key_code, false, active_flags);
 -        std::thread::sleep(std::time::Duration::from_millis(8));
 -    }
--}
--
++    with_modifier_keys(
++        modifiers,
++        KeyboardRoute::Pid {
++            pid,
++            authenticated: true,
++        },
++        |_| gesture(),
++    )
+ }
+ 
 -/// Type Unicode text into the frontmost application through the global HID
 -/// queue. This is the desktop-scope counterpart to PID-routed `type_text` and
 -/// mirrors computer-server's frontmost pynput typing behavior.
@@ -4475,8 +4475,106 @@ index 2b9baf8..347018e 100644
  fn modifier_flags(modifiers: &[&str]) -> CGEventFlags {
      let mut flags = CGEventFlags::CGEventFlagNull;
      for m in modifiers {
+@@ -654,15 +522,15 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+         "escape" | "esc" => 53,
+         "command" | "cmd" => 55,
+         "shift" => 56,
+-        "capslock" => 57,
++        "capslock" | "caps_lock" => 57,
+         "option" | "alt" => 58,
+         "control" | "ctrl" => 59,
+         "fn" => 63,
+         "home" => 115,
+-        "pageup" => 116,
++        "pageup" | "page_up" | "pgup" | "prior" => 116,
+         "del" | "forward_delete" => 117,
+         "end" => 119,
+-        "pagedown" => 121,
++        "pagedown" | "page_down" | "pgdn" | "next" => 121,
+         "left" | "left_arrow" => 123,
+         "right" | "right_arrow" => 124,
+         "down" | "down_arrow" => 125,
+@@ -679,6 +547,42 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+         "f10" => 109,
+         "f11" => 103,
+         "f12" => 111,
++        // Extended function row: real keycodes Apple reserves even though no
++        // current Apple keyboard ships these keys.
++        "f13" => 105,
++        "f14" => 107,
++        "f15" => 113,
++        "f16" => 106,
++        "f17" => 64,
++        "f18" => 79,
++        "f19" => 80,
++        "f20" => 90,
++        // PC editing-cluster and ANSI keypad keys (Apple kVK_* constants).
++        // "menu" is the Application/Context-Menu key; "help" is what the Insert
++        // key on a PC keyboard maps to — it is NOT Insert semantics, so
++        // "insert" stays unmapped. Keypad navigation names (kp_home,
++        // kp_insert, kp_delete, kp_begin, kp_tab, kp_space, kp_f1-f4,
++        // kp_separator, kp_page_up/down, kp arrows) have no macOS keycode.
++        "help" => 114,
++        "menu" | "context_menu" | "application" => 110,
++        "kp_decimal" | "keypad_decimal" => 65,
++        "kp_multiply" | "keypad_multiply" => 67,
++        "kp_add" | "kp_plus" | "keypad_plus" => 69,
++        "kp_clear" | "keypad_clear" | "numlock" | "num_lock" => 71,
++        "kp_divide" | "keypad_divide" => 75,
++        "kp_enter" | "keypad_enter" => 76,
++        "kp_subtract" | "kp_minus" | "keypad_minus" => 78,
++        "kp_equals" | "kp_equal" | "keypad_equals" => 81,
++        "kp_0" | "keypad_0" => 82,
++        "kp_1" | "keypad_1" => 83,
++        "kp_2" | "keypad_2" => 84,
++        "kp_3" | "keypad_3" => 85,
++        "kp_4" | "keypad_4" => 86,
++        "kp_5" | "keypad_5" => 87,
++        "kp_6" | "keypad_6" => 88,
++        "kp_7" | "keypad_7" => 89,
++        "kp_8" | "keypad_8" => 91,
++        "kp_9" | "keypad_9" => 92,
+         "a" => 0,
+         "s" => 1,
+         "d" => 2,
+@@ -882,4 +786,35 @@ mod tests {
+         assert!(!is_screen_sharing_bundle_id("com.apple.screensharing"));
+         assert!(!is_screen_sharing_bundle_id("com.microsoft.rdc.macos"));
+     }
++
++    #[test]
++    fn extended_keymap_names_resolve_to_macos_virtual_keycodes() {
++        for (name, code) in [
++            ("f13", 105_u16),
++            ("f14", 107),
++            ("f15", 113),
++            ("f16", 106),
++            ("f17", 64),
++            ("f18", 79),
++            ("f19", 80),
++            ("f20", 90),
++            ("help", 114),
++            ("menu", 110),
++            ("kp_decimal", 65),
++            ("kp_multiply", 67),
++            ("kp_add", 69),
++            ("kp_clear", 71),
++            ("kp_divide", 75),
++            ("kp_enter", 76),
++            ("kp_subtract", 78),
++            ("kp_equals", 81),
++            ("kp_0", 82),
++            ("kp_5", 87),
++            ("kp_9", 92),
++            ("page_up", 116),
++            ("caps_lock", 57),
++        ] {
++            assert_eq!(key_name_to_code(name).unwrap(), code, "{name}");
++        }
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
-index 7411233..e6e0ad2 100644
+index 7411233b9..e6e0ad204 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 @@ -9,10 +9,12 @@
@@ -4493,7 +4591,7 @@ index 7411233..e6e0ad2 100644
  pub use ax_actions::perform_ax_action;
  pub use interactive::{
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-index 8ace326..0f24d55 100644
+index 8ace326f7..0f24d558d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 @@ -92,6 +92,23 @@ pub fn click_at_xy_desktop_with_modifiers_preserving_cursor(
@@ -5304,7 +5402,7 @@ index 8ace326..0f24d55 100644
 +    unsafe { CGEventSetLocation(event.as_ptr().cast(), x, y) };
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
-index a657ced..b0f21ed 100644
+index a657ced2b..b0f21edac 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 @@ -612,7 +612,9 @@ pub fn set_front_process_persistently(target_pid: libc::pid_t, target_wid: u32)
@@ -5565,7 +5663,7 @@ index a657ced..b0f21ed 100644
      fn make_key_records_address_only_the_exact_window() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
 new file mode 100644
-index 0000000..b0dda5b
+index 000000000..b0dda5b32
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
 @@ -0,0 +1,549 @@
@@ -6119,7 +6217,7 @@ index 0000000..b0dda5b
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
-index 1a1f261..8a9455e 100644
+index 1a1f2614f..8a9455ebf 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
 @@ -162,11 +162,11 @@ fn wait_for_exact_window(pid: i32, window_id: u32) -> ExactWindowObservation {
@@ -6226,7 +6324,7 @@ index 1a1f261..8a9455e 100644
          let activated = loop {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/check_input_ready.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/check_input_ready.rs
 new file mode 100644
-index 0000000..81e4f0f
+index 000000000..81e4f0ff8
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/check_input_ready.rs
 @@ -0,0 +1,33 @@
@@ -6264,7 +6362,7 @@ index 0000000..81e4f0f
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
-index f0e211e..997c7b0 100644
+index f0e211e35..997c7b0df 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
 @@ -26,11 +26,12 @@ use std::sync::Arc;
@@ -6686,7 +6784,7 @@ index f0e211e..997c7b0 100644
      #[test]
      fn plain_click_requires_selected_readback() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
-index f5eb9d0..94e6179 100644
+index f5eb9d039..94e61799a 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 @@ -56,6 +56,8 @@ fn def() -> &'static ToolDef {
@@ -6802,7 +6900,7 @@ index f5eb9d0..94e6179 100644
          if let Some(wid) = window_id {
              crate::cursor::overlay::send_command(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-index 9078607..13cc3ea 100644
+index 90786072c..13cc3eaca 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 @@ -8,6 +8,16 @@ use std::sync::Arc;
@@ -6888,7 +6986,7 @@ index 9078607..13cc3ea 100644
          idx: Option<usize>,
          role: &str,
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-index 6085da9..22db22e 100644
+index 6085da994..22db22e6d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 @@ -64,6 +64,10 @@ fn def() -> &'static ToolDef {
@@ -6970,7 +7068,7 @@ index 6085da9..22db22e 100644
                  });
                  // Only emit `self_activation_suppressed` when the
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-index 5b2ce9e..bae7242 100644
+index 5b2ce9ed5..bae724262 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 @@ -15,14 +15,18 @@ mod list_windows;
@@ -7135,8 +7233,23 @@ index 5b2ce9e..bae7242 100644
      registry.register(Box::new(get_screen_size::GetScreenSizeTool));
      registry.register(Box::new(get_desktop_state::GetDesktopStateTool));
      registry.register(Box::new(get_cursor_position::GetCursorPositionTool));
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
+index 393f17c3a..00c21f9c2 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
+@@ -194,7 +194,9 @@ fn def() -> &'static ToolDef {
+             changes on the same control. Otherwise a successfully attempted post remains \
+             effect:\"unverifiable\" without implying delivery failure or recommending foreground. \
+             Key names: return, tab, escape, up/down/left/right, space, delete, \
+-            home, end, pageup, pagedown, f1-f12, plus any letter or digit. \
++            home, end, pageup, pagedown, f1-f20, help, menu, and ANSI keypad keys \
++            (kp_0-kp_9, kp_decimal, kp_enter, kp_add, kp_subtract, kp_multiply, \
++            kp_divide, kp_equals, kp_clear), plus any letter or digit. \
+             Modifiers array: cmd, shift, option/alt, ctrl, fn.".into(),
+         input_schema: serde_json::json!({
+             "type": "object",
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
-index 19d54df..37008fb 100644
+index 19d54df23..37008fb2f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
 @@ -215,10 +215,111 @@ pub async fn resolve_or_refuse(window_id: u32) -> Result<WindowPxFrame, ToolResu
@@ -7252,7 +7365,7 @@ index 19d54df..37008fb 100644
          WindowPxFrame {
              bounds: WindowBounds {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
-index 64b98e1..d09baac 100644
+index 64b98e157..d09baac46 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 @@ -79,6 +79,8 @@ fn def() -> &'static ToolDef {
@@ -7449,7 +7562,7 @@ index 64b98e1..d09baac 100644
              ("page", "up") | (_, "up") if by == "page" => "pageup",
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
 new file mode 100644
-index 0000000..e1b38ad
+index 000000000..e1b38ad68
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
 @@ -0,0 +1,184 @@
@@ -7638,7 +7751,7 @@ index 0000000..e1b38ad
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
-index 79bcca1..17e31c0 100644
+index 79bcca10b..17e31c0f7 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 @@ -4,9 +4,8 @@
@@ -8538,7 +8651,7 @@ index 79bcca1..17e31c0 100644
      fn unreadable_value_reports_neither_verified_nor_changed() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs
 new file mode 100644
-index 0000000..7d45b2b
+index 000000000..7d45b2bcf
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_window_minimized.rs
 @@ -0,0 +1,232 @@
@@ -8775,7 +8888,7 @@ index 0000000..7d45b2b
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
-index 94c332a..def1e9f 100644
+index 94c332a80..def1e9f4c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
 @@ -1,10 +1,9 @@
@@ -9095,7 +9208,7 @@ index 94c332a..def1e9f 100644
              Some(TypedProgress::Unchanged) => AxAttempt::Unchanged,
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/wait_for_settle.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/wait_for_settle.rs
 new file mode 100644
-index 0000000..b62e6b9
+index 000000000..b62e6b945
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/wait_for_settle.rs
 @@ -0,0 +1,509 @@
@@ -9609,7 +9722,7 @@ index 0000000..b62e6b9
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
-index 64fdf26..06d0809 100644
+index 64fdf2641..06d08091c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
 @@ -108,6 +108,14 @@ enum LayerFilter {
