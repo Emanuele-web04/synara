@@ -207,6 +207,7 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   synara_computer_press_key: presentComputerTool("pressing a key", "pressed a key"),
   synara_computer_hotkey: presentComputerTool("pressing a shortcut", "pressed a shortcut"),
   synara_computer_set_value: presentComputerTool("setting a field", "set a field"),
+  synara_computer_select_text: presentComputerTool("selecting text", "selected text"),
   synara_computer_perform_action: presentComputerTool(
     "activating a control",
     "activated a control",

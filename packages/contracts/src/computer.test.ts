@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   COMPUTER_ID_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
+  COMPUTER_SELECT_TEXT_RANGE_MAX,
   ComputerActionResult,
   ComputerAvailability,
   ComputerInputPause,
+  ComputerSelectTextInput,
   ComputerSetupRequiredPayload,
   ComputerState,
   ComputerStatusResult,
@@ -209,5 +211,38 @@ describe("ComputerActionResult scroll limits", () => {
         scroll: { ...result.scroll, limitedTo: { deltaX: 0, deltaY: Infinity } },
       }),
     ).toThrow();
+  });
+});
+
+describe("ComputerSelectTextInput", () => {
+  const input = { label: "Display", start: 2, length: 5 } as const;
+
+  it("accepts a semantic target with an in-bounds range, including a caret", () => {
+    expect(Schema.decodeUnknownSync(ComputerSelectTextInput)(input)).toEqual(input);
+    expect(
+      Schema.decodeUnknownSync(ComputerSelectTextInput)({ label: "Display", start: 4, length: 0 }),
+    ).toEqual({ label: "Display", start: 4, length: 0 });
+    expect(
+      Schema.decodeUnknownSync(ComputerSelectTextInput)({
+        label: "Display",
+        start: 0,
+        length: COMPUTER_SELECT_TEXT_RANGE_MAX,
+      }),
+    ).toEqual({ label: "Display", start: 0, length: COMPUTER_SELECT_TEXT_RANGE_MAX });
+  });
+
+  it("requires the range fields and rejects negative, fractional, and over-max values", () => {
+    for (const bad of [
+      { label: "Display" },
+      { label: "Display", start: 0 },
+      { label: "Display", start: -1, length: 1 },
+      { label: "Display", start: 0, length: -1 },
+      { label: "Display", start: 1.5, length: 1 },
+      { label: "Display", start: 0, length: Number.NaN },
+      { label: "Display", start: 0, length: COMPUTER_SELECT_TEXT_RANGE_MAX + 1 },
+      { label: "Display", start: COMPUTER_SELECT_TEXT_RANGE_MAX + 1, length: 0 },
+    ]) {
+      expect(() => Schema.decodeUnknownSync(ComputerSelectTextInput)(bad)).toThrow();
+    }
   });
 });

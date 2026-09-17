@@ -14,6 +14,7 @@ import {
   COMPUTER_HOTKEY_MAX_KEYS,
   COMPUTER_KEY_NAME_MAX_LENGTH,
   COMPUTER_MODIFIERS_MAX_ITEMS,
+  COMPUTER_SELECT_TEXT_RANGE_MAX,
   COMPUTER_SEMANTIC_ACTION_MAX_LENGTH,
   COMPUTER_TEXT_MAX_LENGTH,
   COMPUTER_WAIT_MAX_MS,
@@ -40,6 +41,7 @@ import {
   ComputerBackendError,
   type ComputerAgentDialect,
   type ComputerCaptureRequest,
+  type ComputerTextRange,
 } from "../computer/ComputerBackend.ts";
 import {
   computerSetupSignal,
@@ -136,6 +138,9 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_write_clipboard",
   "computer_set_value",
   "computer_perform_action",
+  // An exact selection writes the target's state too — same mutating class
+  // as set_value, approved the same way.
+  "computer_select_text",
   "computer_paste",
   // A run is the same actions it contains, approved once for the list the
   // model declared rather than once per dispatch.
@@ -599,6 +604,52 @@ function readSetValueValue(args: Record<string, unknown>): string {
   if (value.length > COMPUTER_TEXT_MAX_LENGTH)
     throw new ToolInputError('Argument "value" is too long.');
   return value;
+}
+
+/**
+ * The `computer_select_text` range: two required non-negative integers,
+ * bounded like every other argument because nothing validates MCP calls
+ * against the JSON Schema. Never clamped and never defaulted — an offset the
+ * element cannot take is the native layer's to refuse, while a malformed or
+ * negative range is refused here before any state read is paid for.
+ */
+function readSelectTextRange(args: Record<string, unknown>): ComputerTextRange {
+  const start = readNumberArg(args, "start");
+  const length = readNumberArg(args, "length");
+  if (start === undefined || length === undefined) {
+    throw new ToolInputError('Arguments "start" and "length" are required.');
+  }
+  if (!Number.isSafeInteger(start) || start < 0 || start > COMPUTER_SELECT_TEXT_RANGE_MAX) {
+    throw new ToolInputError(
+      `Argument "start" must be an integer between 0 and ${COMPUTER_SELECT_TEXT_RANGE_MAX}.`,
+    );
+  }
+  if (!Number.isSafeInteger(length) || length < 0 || length > COMPUTER_SELECT_TEXT_RANGE_MAX) {
+    throw new ToolInputError(
+      `Argument "length" must be an integer between 0 and ${COMPUTER_SELECT_TEXT_RANGE_MAX}.`,
+    );
+  }
+  return { start, length };
+}
+
+/**
+ * The `computer_select_text` target is semantic only: a selection writes a
+ * range on one element, and a pixel coordinate cannot name which characters
+ * that range covers — so x/y is refused outright rather than silently
+ * resolving the window's first writable field.
+ */
+function readSelectTextTarget(args: Record<string, unknown>): ComputerTarget {
+  const target = readScreenshotTarget(args);
+  if (target.x !== undefined || target.y !== undefined || target.screenshotId !== undefined) {
+    throw new ToolInputError(
+      "computer_select_text targets a text element by label, role and window_id, not by x/y.",
+    );
+  }
+  return {
+    ...(target.label !== undefined ? { label: target.label } : {}),
+    ...(target.role !== undefined ? { role: target.role } : {}),
+    ...(target.windowId !== undefined ? { windowId: target.windowId } : {}),
+  };
 }
 
 /**
@@ -1726,6 +1777,9 @@ export function makeAgentGatewayComputerTools(
     hotkey: ["keys", "window_id", "windowId"],
     set_value: [...RUN_TARGET_FIELDS, "value"],
     perform_action: [...RUN_TARGET_FIELDS, "action"],
+    // Semantic-only like its standalone tool: a range cannot be aimed at a
+    // pixel, so x/y/screenshot_id are not accepted fields.
+    select_text: ["label", "role", "window_id", "windowId", "start", "length"],
     wait: ["duration_ms", "label", "role", "window_id", "windowId"],
     activate_window: ["window_id", "windowId"],
     launch_app: ["app", "arguments", "wait_for_window", "hidden"],
@@ -1855,6 +1909,11 @@ export function makeAgentGatewayComputerTools(
         const target = readTarget(step, context);
         const action = readActionName(step);
         return () => manager.performAction(threadId, target, action);
+      }
+      case "select_text": {
+        const target = readSelectTextTarget(step);
+        const range = readSelectTextRange(step);
+        return () => manager.selectText(threadId, target, range);
       }
       case "wait": {
         const durationMs = readWaitDurationMs(step);
@@ -2923,7 +2982,7 @@ export function makeAgentGatewayComputerTools(
     clickEntry(
       "computer_triple_click",
       "Triple click",
-      "Triple-click a coordinate or a uniquely labelled visible control, which selects the whole line or paragraph under it — the reliable way to replace a field's contents before typing, where computer_set_value is not available. Three separate clicks are not the same gesture and will not select anything; a desktop that cannot send one refuses rather than approximating it.",
+      "Triple-click a coordinate or a uniquely labelled visible control, which selects the whole line or paragraph under it — the reliable way to replace a field's contents before typing, where computer_set_value is not available and the range you want is a whole line or paragraph. For an exact character range on a text element use computer_select_text, which writes the selection through the accessibility layer. Three separate clicks are not the same gesture and will not select anything; a desktop that cannot send one refuses rather than approximating it.",
       (threadId, target, modifiers) => manager.tripleClick(threadId, target, modifiers),
     ),
     clickEntry(
@@ -3112,7 +3171,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_type_text",
       "Type text",
-      `Type text into the focused desktop control, as if typed on the keyboard. It inserts at the caret or replaces the current selection. To overwrite a field's contents, select them first — computer_triple_click on the field, or the application's own select-all shortcut through computer_hotkey — or use computer_set_value to request a whole-field value change. For browser navigation use the address-bar shortcut, type the URL without a newline, then press Enter with wait_for_label for a known destination control; do not guess address-bar coordinates or repeat Enter on an unchanged page. Type the whole string in one call — a name, an email address, a URL — and do not split it into pieces; splitting only multiplies the chance of a partial result. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Type text into the focused desktop control, as if typed on the keyboard. It inserts at the caret or replaces the current selection. To overwrite part of a field's contents, select it first — computer_select_text for an exact character range, computer_triple_click for its whole line or paragraph, or the application's own select-all shortcut through computer_hotkey — or use computer_set_value to request a whole-field value change. For browser navigation use the address-bar shortcut, type the URL without a newline, then press Enter with wait_for_label for a known destination control; do not guess address-bar coordinates or repeat Enter on an unchanged page. Type the whole string in one call — a name, an email address, a URL — and do not split it into pieces; splitting only multiplies the chance of a partial result. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -3280,10 +3339,43 @@ export function makeAgentGatewayComputerTools(
           readActionName(args),
         ),
     ),
+    observedActionEntry(
+      "computer_select_text",
+      "Select text",
+      `Select an exact character range inside a text element, through the accessibility layer rather than by key chord or pointer drag. ${selectTextNote(dialect)}`,
+      {
+        type: "object",
+        properties: {
+          ...textTargetProperties,
+          start: {
+            type: "integer",
+            minimum: 0,
+            maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
+            description:
+              "Zero-based character offset into the element's value where the selection begins. Counts the same characters a string index does; a start past the end is refused rather than clamped.",
+          },
+          length: {
+            type: "integer",
+            minimum: 0,
+            maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
+            description:
+              "Number of characters to select; 0 collapses the selection to a caret at start. A range running past the element's end is refused rather than clamped.",
+          },
+        },
+        required: ["start", "length"],
+        additionalProperties: false,
+      },
+      async (args, context) =>
+        manager.selectText(
+          context.callerThreadId,
+          readSelectTextTarget(args),
+          readSelectTextRange(args),
+        ),
+    ),
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -3327,6 +3419,8 @@ export function makeAgentGatewayComputerTools(
                   type: "string",
                   enum: [...semanticActionNames(dialect)],
                 },
+                start: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
+                length: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
                 app: { type: "string" },
                 arguments: { type: "array", items: { type: "string" } },
                 wait_for_window: { type: "boolean" },
@@ -3379,6 +3473,20 @@ function performActionArgumentNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
     ? 'One of "press" (AXPress), "open" (AXOpen), "show_menu"/"menu" (AXShowMenu), "pick", "confirm" or "cancel"; use the exact window and its fresh accessibility snapshot, and expect a refusal when the element does not advertise the action.'
     : 'Use "activate" or "click".';
+}
+
+/**
+ * What range selection means on each backend family. macOS writes
+ * `AXSelectedTextRange` natively on a fresh element token and confirms by
+ * reading the attribute back; a target with no settable selection attribute
+ * — web content addressed only through marker ranges included — refuses
+ * before dispatch, and no layer approximates the selection with
+ * triple-click, select-all, or a pointer drag.
+ */
+function selectTextNote(dialect: ComputerAgentDialect): string {
+  return dialect === "macos"
+    ? "Cua writes AXSelectedTextRange on a freshly resolved element token and verifies the selection by native read-back. A target without a settable selection attribute refuses before dispatch — nothing falls back to triple-click or select-all, and an uncertain result is never replayed. Label and role come from computer_get_state; pass window_id alone when the window holds exactly one writable text control."
+    : "This desktop exposes no native range-selection write, so the call refuses rather than approximating the selection with triple-click, select-all, or a pointer drag.";
 }
 
 /**

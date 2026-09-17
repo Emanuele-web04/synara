@@ -1,0 +1,754 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
+index c9b0db9..0af084c 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
+@@ -227,7 +227,9 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
+ 
+         "drag" | "browser_drag" => CursorAction::Drag,
+         "scroll" | "browser_scroll" => CursorAction::Scroll,
+-        "type_text" | "set_value" | "browser_type" | "browser_fill" => CursorAction::Text,
++        "type_text" | "set_value" | "select_text" | "browser_type" | "browser_fill" => {
++            CursorAction::Text
++        }
+         "press_key" | "hotkey" | "browser_press_key" | "browser_hotkey" => CursorAction::Key,
+ 
+         "move_cursor" | "browser_navigate" | "browser_go_back" | "browser_go_forward"
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
+index ef089ba..7f955d1 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
+@@ -90,6 +90,7 @@ pub const ACTION_RESULT_TOOLS: &[&str] = &[
+     "press_key",
+     "hotkey",
+     "set_value",
++    "select_text",
+     "set_window_frame",
+     "invoke_menu",
+     "browser_click",
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
+index 1800450..cd1766b 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
+@@ -629,7 +629,10 @@ fn browser_refusal_escalation(code: &str) -> Option<ActionEscalation> {
+ /// explicit accessibility read-back evidence, as the macOS collection-item
+ /// selection fallback does after observing `AXSelected`.
+ fn legacy_has_publishable_readback(tool_name: &str, structured: &serde_json::Value) -> bool {
+-    let value_readback_tool = matches!(tool_name, "type_text" | "type_text_chars" | "set_value");
++    let value_readback_tool = matches!(
++        tool_name,
++        "type_text" | "type_text_chars" | "set_value" | "select_text"
++    );
+     let click_selection_readback = tool_name == "click"
+         && structured
+             .get("evidence")
+@@ -658,19 +661,28 @@ fn transport_from_legacy(
+     let transport = match path {
+         "ax" | "ax_fg" => {
+             if cfg!(target_os = "macos") {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::MacosAxValue
+                 } else {
+                     ActionTransport::MacosAxAction
+                 }
+             } else if cfg!(target_os = "windows") {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::WindowsUiaValue
+                 } else {
+                     ActionTransport::WindowsUiaInvoke
+                 }
+             } else {
+-                if matches!(tool_name, "type_text" | "type_text_chars" | "set_value") {
++                if matches!(
++                    tool_name,
++                    "type_text" | "type_text_chars" | "set_value" | "select_text"
++                ) {
+                     ActionTransport::LinuxAtSpiValue
+                 } else {
+                     ActionTransport::LinuxAtSpiAction
+@@ -802,7 +814,7 @@ fn transport_from_legacy(
+                 ActionTransport::LinuxXSendEvent
+             }
+         }
+-        "" if tool_name == "set_value" => {
++        "" if matches!(tool_name, "set_value" | "select_text") => {
+             if cfg!(target_os = "macos") {
+                 ActionTransport::MacosAxValue
+             } else if cfg!(target_os = "windows") {
+@@ -1871,6 +1883,7 @@ mod tests {
+             "press_key",
+             "hotkey",
+             "set_value",
++            "select_text",
+             "browser_click",
+             "browser_pointer",
+             "browser_type",
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
+index 1cbd7e1..5d31faf 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
+@@ -282,6 +282,7 @@ const DESKTOP_INPUT_OPERATIONS: &[&str] = &[
+     "press_key",
+     "hotkey",
+     "set_value",
++    "select_text",
+     "bring_to_front",
+     "set_window_frame",
+ ];
+@@ -891,6 +892,7 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+         | "press_key"
+         | "hotkey"
+         | "set_value"
++        | "select_text"
+         | "invoke_menu"
+         | "launch_app"
+         | "bring_to_front"
+@@ -1228,6 +1230,7 @@ fn enforce_hard_invariants(
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+             | "kill_app"
+             | "bring_to_front"
+             | "get_accessibility_tree"
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
+index 3711b19..22df2e9 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
+@@ -175,6 +175,7 @@ fn is_scoped_action(tool_name: &str) -> bool {
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+     )
+ }
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
+index 4fa445f..56c09ad 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
+@@ -985,6 +985,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
+                 "press_key",
+                 "hotkey",
+                 "set_value",
++                "select_text",
+                 "mouse_button_down",
+                 "mouse_button_up",
+                 "mouse_drag",
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+index ad8c114..9fcd77a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+@@ -321,6 +321,13 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+             "input.keyboard.type",
+             "accessibility.element_tokens",
+         ],
++        "select_text" => &[
++            // Exact-range selection on an editable field's
++            // AXSelectedTextRange — a semantic AX write, never key or
++            // pointer events.
++            "accessibility.text.selection",
++            "accessibility.element_tokens",
++        ],
+ 
+         // ── screen / capture ─────────────────────────────────────────
+         // Note: the regular `screenshot` tool was removed from the
+@@ -2573,6 +2580,7 @@ fn is_physical_desktop_action(tool: &str) -> bool {
+             | "press_key"
+             | "hotkey"
+             | "set_value"
++            | "select_text"
+             | "bring_to_front"
+             | "set_window_frame"
+     )
+@@ -4924,6 +4932,11 @@ fn synthesize_action_label(tool_name: &str, args: &Value) -> String {
+         ),
+         "drag" => "drag".into(),
+         "set_value" => arg("value").unwrap_or_default(),
++        "select_text" => format!(
++            "start={} length={}",
++            arg("start").unwrap_or_else(|| "0".into()),
++            arg("length").unwrap_or_else(|| "0".into())
++        ),
+         "launch_app" => arg("bundle_id").or_else(|| arg("name")).unwrap_or_default(),
+         _ => String::new(),
+     };
+@@ -5065,6 +5078,7 @@ mod capability_tests {
+         "press_key",
+         "hotkey",
+         "set_value",
++        "select_text",
+         // screen
+         "zoom",
+         "get_screen_size",
+@@ -5392,6 +5406,7 @@ mod capability_tests {
+             "type_text_chars",
+             "press_key",
+             "set_value",
++            "select_text",
+             // get_window_state emits the tokens — same capability
+             // claim, from the other side of the contract.
+             "get_window_state",
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+index e12b1d3..064d691 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -35,7 +35,13 @@ fn uses_stable_space_membership(name: &str, arguments: &Value) -> bool {
+     // explicitly permits for AxSemantic.
+     matches!(
+         name,
+-        "set_value" | "click" | "double_click" | "right_click" | "type_text" | "scroll"
++        "set_value"
++            | "select_text"
++            | "click"
++            | "double_click"
++            | "right_click"
++            | "type_text"
++            | "scroll"
+     ) && (arguments.get("element_token").is_some() || arguments.get("element_index").is_some())
+ }
+ 
+@@ -233,6 +239,7 @@ impl SdkAdapter {
+                 | "press_key"
+                 | "hotkey"
+                 | "set_value"
++                | "select_text"
+                 | "bring_to_front"
+         ) {
+             let target_args = arguments.clone();
+@@ -280,6 +287,7 @@ impl SdkAdapter {
+                 | "press_key"
+                 | "hotkey"
+                 | "set_value"
++                | "select_text"
+                 | "clipboard_read"
+                 | "clipboard_write"
+                 | "launch_app"
+@@ -601,6 +609,10 @@ mod tests {
+             "type_text",
+             &json!({"semantic_only": true})
+         ));
++        assert!(uses_stable_space_membership(
++            "select_text",
++            &json!({"element_token": "tok"})
++        ));
+         for (name, arguments) in [
+             (
+                 "type_text",
+@@ -608,6 +620,11 @@ mod tests {
+             ),
+             ("type_text", json!({"semantic_only": false})),
+             ("set_value", json!({"semantic_only": true})),
++            ("select_text", json!({})),
++            (
++                "select_text",
++                json!({"element_token": "tok", "delivery_mode": "foreground"}),
++            ),
+             ("press_key", json!({"semantic_only": true})),
+         ] {
+             assert!(
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 10224a9..284bc4a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -680,7 +680,7 @@ fn daemon_metadata_response() -> DaemonResponse {
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(18);
++        metadata["synara_native_revision"] = serde_json::json!(19);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+index b99c082..67ce4b2 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+@@ -719,6 +719,76 @@ pub unsafe fn set_size_attr(
+     result
+ }
+ 
++/// Range payload for AX attributes typed `kAXValueCFRangeType`, such as
++/// `AXSelectedTextRange`. `CFIndex` is a signed pointer-width integer —
++/// `i64` on every supported Apple target.
++#[repr(C)]
++struct CFRangeValue {
++    location: i64,
++    length: i64,
++}
++
++/// Set an AX CFRange attribute such as `AXSelectedTextRange`.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
++pub unsafe fn set_range_attr(
++    element: AXUIElementRef,
++    attr_name: &str,
++    location: i64,
++    length: i64,
++) -> AXError {
++    let attr = CFStr::new(attr_name);
++    let range = CFRangeValue { location, length };
++    let value = AXValueCreate(
++        kAXValueCFRangeType,
++        &range as *const CFRangeValue as *const c_void,
++    );
++    if value.is_null() {
++        return kAXErrorFailure;
++    }
++    let result =
++        AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), value as CFTypeRef);
++    CFRelease(value as CFTypeRef);
++    result
++}
++
++/// Copy an AX CFRange attribute such as `AXSelectedTextRange`. Returns `None`
++/// on any error or when the attribute is not a CFRange-typed AXValue — which
++/// is also how an element whose selection surface is only
++/// `AXSelectedTextMarkerRange` (a different payload type) reads back here.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the call.
++pub unsafe fn copy_range_attr(element: AXUIElementRef, attr_name: &str) -> Option<(i64, i64)> {
++    let attr = CFStr::new(attr_name);
++    let mut value: CFTypeRef = std::ptr::null();
++    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);
++    if err != kAXErrorSuccess || value.is_null() {
++        return None;
++    }
++    let result = if core_foundation::base::CFGetTypeID(value) == AXValueGetTypeID()
++        && AXValueGetType(value as AXValueRef) == kAXValueCFRangeType
++    {
++        let mut range = CFRangeValue {
++            location: 0,
++            length: 0,
++        };
++        AXValueGetValue(
++            value as AXValueRef,
++            kAXValueCFRangeType,
++            &mut range as *mut CFRangeValue as *mut c_void,
++        )
++        .then_some((range.location, range.length))
++    } else {
++        None
++    };
++    CFRelease(value);
++    result
++}
++
+ /// Set an AX attribute to a CFBoolean true value.
+ ///
+ /// # Safety
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+index bae7242..a35497e 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+@@ -15,6 +15,7 @@ mod list_windows;
+ mod press_key;
+ mod right_click;
+ mod scroll;
++mod select_text;
+ mod set_app_visibility;
+ mod set_value;
+ mod set_window_frame;
+@@ -1061,6 +1062,13 @@ pub fn register_all(
+         set_value::SetValueTool::new(state.clone()),
+         &pid_window_candidates,
+     ));
++    // Exact-range AXSelectedTextRange write — semantic element addressing,
++    // same admission path as set_value; never synthesizes pointer or key
++    // events and refuses targets without a settable selection attribute.
++    registry.register(pid_window_guarded(
++        select_text::SelectTextTool::new(state.clone()),
++        &pid_window_candidates,
++    ));
+     registry.register(pid_window_guarded(
+         scroll::ScrollTool::new(state.clone()),
+         &pid_window_candidates,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/select_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/select_text.rs
+new file mode 100644
+index 0000000..a8766a5
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/select_text.rs
+@@ -0,0 +1,372 @@
++//! select_text tool — exact-range text selection through `AXSelectedTextRange`.
++//!
++//! Writes a CFRange on the resolved element's `AXSelectedTextRange` attribute
++//! and verifies the selection by reading the attribute back. There is no
++//! keyboard, pointer, triple-click, or select-all fallback: a target whose
++//! selection attribute is not settable — including most web content, which
++//! Chromium and WebKit expose through `AXSelectedTextMarkerRange` rather than
++//! the plain range attribute — is refused before dispatch.
++//!
++//! `start`/`length` are UTF-16 code-unit offsets, the same indexing
++//! `AXSelectedTextRange`, Swift `String`, and JavaScript string offsets use.
++//! A `length` of `0` places a collapsed caret at `start`. A range that runs
++//! past the element's readable value is refused rather than clamped; when the
++//! value is not readable, the post-write read-back is the sole arbiter.
++
++use async_trait::async_trait;
++use cua_driver_core::{
++    protocol::ToolResult,
++    tool::{Tool, ToolDef},
++};
++use serde_json::Value;
++use std::sync::Arc;
++
++use crate::apps;
++use crate::ax::bindings::{
++    copy_range_attr, copy_string_attr, copy_stringish_attr, is_attribute_settable, kAXErrorSuccess,
++    set_range_attr, AXUIElementRef,
++};
++use crate::focus_guard;
++use crate::input::ax_actions::{action_failure_result, AxActionFailure};
++use crate::window_change_detector::WindowChangeDetector;
++
++use super::ToolState;
++
++pub struct SelectTextTool {
++    state: Arc<ToolState>,
++}
++
++impl SelectTextTool {
++    pub fn new(state: Arc<ToolState>) -> Self {
++        Self { state }
++    }
++}
++
++static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
++
++fn def() -> &'static ToolDef {
++    DEF.get_or_init(|| ToolDef {
++        name: "select_text".into(),
++        description:
++            "Select an exact character range in a text element through \
++             AXSelectedTextRange. Offsets count UTF-16 code units; `length` 0 \
++             places a collapsed caret at `start`. The selection is confirmed \
++             only by an attribute read-back that reports the requested range. \
++             \n\
++             Elements without a settable AXSelectedTextRange — including most \
++             web content, which exposes selection through \
++             AXSelectedTextMarkerRange instead — are refused before dispatch. \
++             No triple-click, select-all, key-event, or pointer fallback is \
++             ever attempted."
++            .into(),
++        input_schema: serde_json::json!({
++            "type": "object",
++            "required": ["pid", "start", "length"],
++            "properties": {
++                "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
++                "pid": { "type": "integer" },
++                "window_id": {
++                    "type": "integer",
++                    "description": "CGWindowID for the window whose get_window_state produced the element_index. Required when element_index is used; optional when element_token is supplied (the token carries it)."
++                },
++                "element_index": cua_driver_core::tool_schema::element_index_schema(),
++                "element_token": cua_driver_core::tool_schema::element_token_schema(),
++                "snapshot_id": cua_driver_core::tool_schema::snapshot_id_schema(),
++                "start": {
++                    "type": "integer",
++                    "minimum": 0,
++                    "description": "Zero-based UTF-16 code-unit offset at which the selection starts."
++                },
++                "length": {
++                    "type": "integer",
++                    "minimum": 0,
++                    "description": "Number of UTF-16 code units to select. 0 collapses to a caret at `start`."
++                }
++            },
++            "additionalProperties": false
++        }),
++        read_only:   false,
++        destructive: true,
++        idempotent:  false,
++        open_world:  true,
++    })
++}
++
++#[async_trait]
++impl Tool for SelectTextTool {
++    fn def(&self) -> &ToolDef {
++        def()
++    }
++
++    async fn invoke(&self, args: Value) -> ToolResult {
++        use cua_driver_core::tool_args::ArgsExt;
++        let pid = match args.require_i32("pid") {
++            Ok(v) => v,
++            Err(e) => return e,
++        };
++        let start = match args.require_u64("start") {
++            Ok(v) => v,
++            Err(e) => return e,
++        };
++        let length = match args.require_u64("length") {
++            Ok(v) => v,
++            Err(e) => return e,
++        };
++        // CFIndex (the range field width) is i64; refuse a range that cannot
++        // be represented instead of truncating it into a different selection.
++        let (start, length) = match start
++            .checked_add(length)
++            .filter(|end| *end <= i64::MAX as u64)
++        {
++            Some(_) => (start as i64, length as i64),
++            None => {
++                return ToolResult::error(
++                    "select_text start + length exceeds the CFIndex width of \
++                     AXSelectedTextRange; the request is refused rather than truncated.",
++                )
++            }
++        };
++
++        // Element addressing follows set_value exactly: element_token or
++        // element_index + window_id, resolved through the live token cache so
++        // a stale snapshot row is refused before any AX traffic.
++        let element_token_arg = args.opt_str("element_token");
++        let window_id_arg = args.opt_u64("window_id");
++        let element_index_arg = args.opt_u64("element_index").map(|v| v as usize);
++        let resolved = match self.state.element_cache.resolve_element_args(
++            pid,
++            element_index_arg,
++            element_token_arg.as_deref(),
++            args.opt_str("snapshot_id").as_deref(),
++            window_id_arg,
++            "select_text",
++        ) {
++            Ok(r) => r,
++            Err(e) => return e,
++        };
++        let (element_index, window_id, element_guard) = match resolved {
++            cua_driver_core::element_token::ResolvedElement::None => {
++                return ToolResult::error(
++                    "select_text requires element_index (+ window_id) or element_token to \
++                     address the target element.",
++                )
++            }
++            cua_driver_core::element_token::ResolvedElement::Element {
++                window_id: Some(wid),
++                element_index: idx,
++                element,
++                ..
++            } => match u32::try_from(wid) {
++                Ok(wid) => (idx, wid, element),
++                Err(_) => return ToolResult::error("window_id is out of range for macOS."),
++            },
++            cua_driver_core::element_token::ResolvedElement::Element {
++                window_id: None, ..
++            } => {
++                return ToolResult::error(
++                    "select_text requires window_id when element_index is used \
++                 (omit only when supplying element_token, which carries it).",
++                )
++            }
++        };
++
++        let element_ptr = element_guard.as_ptr();
++
++        // Always-background semantic AX mutation. Re-prove that the retained
++        // element still belongs to the requested exact window immediately
++        // before any cursor or AX work.
++        let _mutation_lease = match super::gate_background_window_action(
++            pid,
++            window_id,
++            Some(element_ptr),
++            cua_driver_core::background_input::BackgroundAction::AxSemantic,
++        )
++        .await
++        {
++            Ok(lease) => lease,
++            Err(refusal_result) => return refusal_result,
++        };
++
++        let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
++        let center_guard = element_guard.clone();
++        if let Ok(Some((screen_x, screen_y))) = tokio::task::spawn_blocking(move || unsafe {
++            crate::ax::bindings::element_screen_center(center_guard.as_ptr() as AXUIElementRef)
++        })
++        .await
++        {
++            crate::cursor::overlay::send_command(
++                cursor_key.clone(),
++                cursor_overlay::OverlayCommand::PinAbove(window_id as u64),
++            );
++            crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), screen_x, screen_y).await;
++            self.state
++                .cursor_registry
++                .update_position(&cursor_key, screen_x, screen_y);
++        }
++
++        // An AXSelectedTextRange read-back is not ground truth for web
++        // content either: an AXWebArea can echo the write through
++        // accessibility while the renderer never selects. Reuse type_text's
++        // bounded ancestor check so native browser chrome stays trusted but
++        // rendered content is always reported as unverified.
++        let ax_echo_surface = super::type_text::target_in_web_area(
++            pid,
++            Some((element_ptr, Some(element_index))),
++            Some(window_id),
++        );
++
++        // Selection writes can cause reflex activations in some apps; apply
++        // the same focus-suppression wrap set_value uses around AX writes.
++        let prior_front = apps::frontmost_pid();
++        let snapshot = WindowChangeDetector::snapshot(prior_front);
++
++        let result = focus_guard::with_focus_suppressed(
++            Some(pid),
++            prior_front,
++            "select_text.AXSelectedTextRange",
++            || async move {
++                tokio::task::spawn_blocking(move || {
++                    select_text_blocking(element_ptr, element_index, start, length)
++                })
++                .await
++            },
++        )
++        .await;
++
++        let changes = snapshot.detect_async().await;
++
++        match result {
++            Ok(Ok(mut outcome)) => {
++                apply_surface_trust(&mut outcome, ax_echo_surface);
++                apply_verification_label(&mut outcome);
++                let mut msg = outcome.detail;
++                msg.push_str(&changes.result_suffix());
++                let verified = outcome.verified.unwrap_or(false);
++                let mut structured = serde_json::json!({
++                    "path": "ax",
++                    "verified": verified,
++                    "effect": if verified {
++                        "confirmed"
++                    } else if outcome.verified == Some(false) {
++                        "unconfirmed"
++                    } else {
++                        "unverifiable"
++                    },
++                });
++                if verified {
++                    structured["evidence"] = serde_json::json!([{ "kind": "value_readback" }]);
++                }
++                if ax_echo_surface {
++                    structured["observation_required"] = serde_json::json!(true);
++                }
++                ToolResult::text(msg).with_structured(structured)
++            }
++            Ok(Err(e)) => action_failure_result(e, "select_text failed"),
++            Err(e) => action_failure_result(e.into(), "select_text task failed"),
++        }
++    }
++}
++
++// ── Blocking implementation (runs on spawn_blocking thread) ─────────────────
++
++/// Outcome of a `select_text` write.
++///
++/// `verified` is `Some(true)` only when the post-write
++/// `AXSelectedTextRange` read-back reports exactly the requested range —
++/// a successful `AXUIElementSetAttributeValue` return code is not by itself
++/// evidence that the selection landed. `Some(false)` means a read-back ran
++/// and returned a different range; `None` means the attribute could not be
++/// read back at all.
++struct SelectTextOutcome {
++    detail: String,
++    verified: Option<bool>,
++}
++
++fn apply_surface_trust(outcome: &mut SelectTextOutcome, ax_echo_surface: bool) {
++    if ax_echo_surface && outcome.verified == Some(true) {
++        outcome.verified = Some(false);
++        outcome.detail.push_str(
++            " AXSelectedTextRange read-back is not trusted for web content; \
++             verify the renderer via screenshot or use the browser page tools.",
++        );
++    }
++}
++
++fn apply_verification_label(outcome: &mut SelectTextOutcome) {
++    if outcome.verified != Some(true) {
++        if let Some(rest) = outcome.detail.strip_prefix("✅ Selected") {
++            outcome.detail = format!("📨 Sent (unverified){rest}");
++        }
++    }
++}
++
++fn select_text_blocking(
++    element_ptr: usize,
++    element_index: usize,
++    start: i64,
++    length: i64,
++) -> anyhow::Result<SelectTextOutcome> {
++    let element = element_ptr as AXUIElementRef;
++
++    let role = unsafe { copy_string_attr(element, "AXRole") }.unwrap_or_default();
++
++    // Gate on settability up front: a CFRange write to an element without a
++    // settable selection range is refused rather than attempted and reported
++    // uncertain. Elements that expose selection only through
++    // AXSelectedTextMarkerRange fail this check, which is the documented
++    // refusal for most web content.
++    if !unsafe { is_attribute_settable(element, "AXSelectedTextRange") } {
++        return Err(AxActionFailure::refused(
++            "AXSelectedTextRange is not settable on this element. Elements that expose \
++             selection only through AXSelectedTextMarkerRange — most web content — are \
++             not supported, and no keyboard, pointer, or select-all fallback exists.",
++        )
++        .into());
++    }
++
++    // Bounds-check against the element's readable value: a range past the end
++    // is a bad request, refused before dispatch rather than a write the app
++    // may silently clamp. When AXValue is not readable the post-write
++    // read-back is the sole arbiter and a mismatch reports unconfirmed.
++    if let Some(value) =
++        unsafe { copy_stringish_attr(element, "AXValue") }.and_then(|value| value.string_value)
++    {
++        let units = value.encode_utf16().count() as i64;
++        if start > units || start + length > units {
++            return Err(AxActionFailure::refused(format!(
++                "range start={start} length={length} exceeds the element's {units} \
++                 UTF-16 code units; the request is refused rather than clamped."
++            ))
++            .into());
++        }
++    }
++
++    (|| -> anyhow::Result<()> {
++        crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, "AXSelectedTextRange")?;
++        crate::input::cancellation::gate().check_target()
++    })()
++    .map_err(AxActionFailure::before_dispatch)?;
++
++    let error = unsafe { set_range_attr(element, "AXSelectedTextRange", start, length) };
++    if error != kAXErrorSuccess {
++        return Err(AxActionFailure::uncertain(format!(
++            "AXSelectedTextRange write returned {error} after dispatch; no alternate \
++             write was submitted. Observe fresh state; do not replay."
++        ))
++        .into());
++    }
++
++    let after = unsafe { copy_range_attr(element, "AXSelectedTextRange") };
++    let verified = after.map(|(location, len)| location == start && len == length);
++    let suffix = match verified {
++        Some(true) => "",
++        Some(false) => " Read-back reported a different range; observe fresh state; do not replay.",
++        None => " Selection range is not readable through AX; observe fresh state; do not replay.",
++    };
++    Ok(SelectTextOutcome {
++        detail: format!(
++            "✅ Selected {length} characters at {start} on [{element_index}] {role}.{suffix}"
++        ),
++        verified,
++    })
++}

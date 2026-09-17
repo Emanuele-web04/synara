@@ -240,6 +240,7 @@ export const CUA_ACTION_TOOLS = new Set([
   "press_key",
   "hotkey",
   "set_value",
+  "select_text",
   "clipboard_read",
   "clipboard_write",
   "launch_app",

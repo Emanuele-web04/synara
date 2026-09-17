@@ -418,6 +418,13 @@ describe("ComputerManager and FakeComputerBackend", () => {
       action: "computer_perform_action",
       point: { x: 1_180, y: 228 },
     });
+    // The fake's read-back is the substring the range covers: "468"[0..2].
+    await expect(
+      manager.selectText("thread-1", { label: "Display" }, { start: 0, length: 2 }),
+    ).resolves.toMatchObject({
+      action: "computer_select_text",
+      value: "46",
+    });
 
     await expect(manager.click("thread-1", { x: 1_920, y: 1_080 })).rejects.toMatchObject({
       code: "computer_target_offscreen",
@@ -442,6 +449,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await expect(manager.performAction("thread-1", {}, "activate")).rejects.toMatchObject({
       code: "computer_target_invalid",
     });
+    await expect(manager.selectText("thread-1", {}, { start: 0, length: 1 })).rejects.toMatchObject(
+      {
+        code: "computer_target_invalid",
+      },
+    );
 
     await manager.dispose();
   });
@@ -1065,6 +1077,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.readClipboard("thread-1");
     await manager.setValue("thread-1", { label: "Display" }, "12");
     await manager.performAction("thread-1", { label: "Calculate", role: "button" }, "activate");
+    await manager.selectText("thread-1", { label: "Display" }, { start: 0, length: 1 });
 
     expect(actions).toEqual([
       { action: "computer_launch_app", threadId: "thread-1" },
@@ -1081,6 +1094,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       { action: "computer_read_clipboard", threadId: "thread-1" },
       { action: "computer_set_value", threadId: "thread-1" },
       { action: "computer_perform_action", threadId: "thread-1" },
+      { action: "computer_select_text", threadId: "thread-1" },
     ]);
 
     await manager.dispose();

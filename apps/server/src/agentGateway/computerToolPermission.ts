@@ -26,6 +26,7 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_run",
   "computer_screenshot",
   "computer_scroll",
+  "computer_select_text",
   "computer_set_app_visibility",
   "computer_set_value",
   "computer_set_window_frame",

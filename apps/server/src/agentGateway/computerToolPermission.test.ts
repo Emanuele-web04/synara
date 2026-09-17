@@ -11,6 +11,7 @@ describe("Synara Computer provider permission", () => {
   it.each([
     ["computer_click", "computer_click"],
     ["synara_computer_type_text", "computer_type_text"],
+    ["synara_computer_select_text", "computer_select_text"],
     ["mcp__synara__computer_read_clipboard", "computer_read_clipboard"],
   ] as const)("recognizes the exact owned tool %s", (providerName, canonicalName) => {
     expect(canonicalSynaraComputerToolName(providerName)).toBe(canonicalName);

@@ -89,6 +89,7 @@ import {
   ComputerProvisionResult,
   ComputerRightClickInput,
   ComputerScrollInput,
+  ComputerSelectTextInput,
   ComputerSetValueInput,
   ComputerTypeTextInput,
   ComputerState,
@@ -832,6 +833,12 @@ export const WsComputerPerformActionRpc = Rpc.make(COMPUTER_WS_METHODS.performAc
   error: WsRpcError,
 });
 
+export const WsComputerSelectTextRpc = Rpc.make(COMPUTER_WS_METHODS.selectText, {
+  payload: ComputerSelectTextInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
 export const WsComputerSetControlEnabledRpc = Rpc.make(COMPUTER_WS_METHODS.setControlEnabled, {
   payload: ComputerSetControlEnabledInput,
   success: ComputerControlEnabledResult,
@@ -888,6 +895,7 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerHotkeyRpc,
   WsComputerSetValueRpc,
   WsComputerPerformActionRpc,
+  WsComputerSelectTextRpc,
   WsComputerGetThreadStateRpc,
   WsComputerSetControlEnabledRpc,
   WsComputerInputClickRpc,

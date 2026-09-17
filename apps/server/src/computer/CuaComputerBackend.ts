@@ -49,6 +49,7 @@ import {
   type ComputerCaptureRequest,
   type ComputerFrameListener,
   type ComputerResolvedTarget,
+  type ComputerTextRange,
   type ComputerBackendEventListener,
 } from "./ComputerBackend.ts";
 import {
@@ -1095,12 +1096,19 @@ export class CuaComputerBackend implements ComputerBackend {
     preparedBounds?: ComputerRect,
   ): Promise<ComputerBackendActionResult> {
     const { pid, window_id, window, baseline } = await this.target(windowId);
-    const exactSemanticText =
-      name === "type_text" &&
-      args.semantic_only === true &&
-      desktopDeliveryMode() !== "foreground" &&
-      point === undefined;
-    if (exactSemanticText) {
+    // `select_text` shares the lane with semantic text writes on the same
+    // window for a harder reason than convenience: the native semantic lease
+    // is per (pid, window) and refuses a second concurrent lease, so a
+    // lane-unaware selection would race — or refuse against — a type_text
+    // write aimed at the same element. It is also a pure AX attribute write,
+    // so it carries no visibility requirement either.
+    const semanticLaneWrite =
+      name === "select_text" ||
+      (name === "type_text" &&
+        args.semantic_only === true &&
+        desktopDeliveryMode() !== "foreground" &&
+        point === undefined);
+    if (semanticLaneWrite) {
       return this.semanticTextInLane(pid, window_id, () =>
         this.inputDispatch(name, args, windowId, point, preparedBounds, true, {
           pid,
@@ -1239,7 +1247,11 @@ export class CuaComputerBackend implements ComputerBackend {
         {
           pid,
           window_id,
-          ...(name !== "set_value" ? { delivery_mode: desktopDeliveryMode() } : {}),
+          // Always-background semantic AX writes take no delivery_mode —
+          // there is no foreground/background split for an attribute write.
+          ...(name !== "set_value" && name !== "select_text"
+            ? { delivery_mode: desktopDeliveryMode() }
+            : {}),
           ...args,
           ...pixel,
           ...(point || preparedBounds ? { expected_window_bounds: preparedBounds ?? bounds } : {}),
@@ -1659,6 +1671,27 @@ export class CuaComputerBackend implements ComputerBackend {
     return this.input(
       "click",
       { element_token: token, action: spec.driverAction },
+      target.node.windowId,
+    );
+  }
+  /**
+   * Exact-range selection through `AXSelectedTextRange`: the native tool
+   * writes a CFRange on the fresh element token and verifies by reading the
+   * attribute back. Web content is deliberately not special-cased — the
+   * driver refuses a marker-range-only target pre-dispatch rather than
+   * approximating it with gestures, and Synara never composes a workaround.
+   */
+  async selectText(target: ComputerResolvedTarget, range: ComputerTextRange) {
+    const token = this.elementTokens.get(target.node);
+    if (!token || !target.node.windowId)
+      throw new CuaActionError(
+        "The AX text target is not bound to a live Cua token.",
+        "not-dispatched",
+        "stale_target",
+      );
+    return this.input(
+      "select_text",
+      { element_token: token, start: range.start, length: range.length },
       target.node.windowId,
     );
   }

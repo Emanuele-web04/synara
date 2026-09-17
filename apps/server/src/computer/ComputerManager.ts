@@ -61,6 +61,7 @@ import {
   type ComputerCaptureRequest,
   type ComputerStreamFrame,
   type ComputerResolvedTarget,
+  type ComputerTextRange,
 } from "./ComputerBackend.ts";
 import {
   createComputerCallContext,
@@ -3008,6 +3009,41 @@ export class ComputerManager {
       return this.actionResult(
         threadId,
         "computer_perform_action",
+        resolved.point,
+        result,
+        resolved.node.windowId ?? undefined,
+      );
+    });
+  }
+
+  /**
+   * Exact-range text selection through the accessibility layer — the
+   * `computer_select_text` path. The target is resolved from fresh state so
+   * the backend dispatches on a live element token, never on a stale
+   * caller-supplied one; the backend's native read-back alone decides
+   * `verified`. A `window_id`-only target may resolve to the window's sole
+   * writable text control, the same rule `typeTextAt` applies — an ambiguous
+   * or read-only match is refused rather than guessed.
+   */
+  async selectText(
+    threadId: string | undefined,
+    target: ComputerTarget,
+    range: ComputerTextRange,
+  ): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const resolved = await timedComputerLeg("resolve", () =>
+        this.resolveSemanticTarget(target, true),
+      );
+      await timedComputerLeg("resolve", () =>
+        this.prepareResolvedTarget(semanticPointTarget(resolved)),
+      );
+      assertDesktopOperationActive();
+      const result = await timedComputerLeg("dispatch", () =>
+        this.backend.selectText(resolved, range),
+      );
+      return this.actionResult(
+        threadId,
+        "computer_select_text",
         resolved.point,
         result,
         resolved.node.windowId ?? undefined,

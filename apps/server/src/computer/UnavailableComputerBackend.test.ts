@@ -24,6 +24,7 @@ describe("UnavailableComputerBackend", () => {
     });
     await expect(backend.listWindows()).rejects.toThrow(REASON);
     await expect(backend.click()).rejects.toThrow(REASON);
+    await expect(backend.selectText()).rejects.toThrow(REASON);
   });
 
   it("refuses non-retryably: nothing about a backend that does not exist will change", async () => {

@@ -28,6 +28,7 @@ export const COMPUTER_WS_METHODS = {
   hotkey: "computer.hotkey",
   setValue: "computer.setValue",
   performAction: "computer.performAction",
+  selectText: "computer.selectText",
   getThreadState: "computer.getThreadState",
   setControlEnabled: "computer.setControlEnabled",
   subscribeEvents: "computer.subscribeEvents",
@@ -104,6 +105,17 @@ export const COMPUTER_HOTKEY_MAX_KEYS = 16;
 export const COMPUTER_KEY_NAME_MAX_LENGTH = 128;
 /** Longest semantic action name `computer_perform_action` accepts. */
 export const COMPUTER_SEMANTIC_ACTION_MAX_LENGTH = 256;
+/**
+ * Largest `start` or `length` `computer_select_text` accepts, in characters.
+ *
+ * The ceiling is the largest text `ComputerState` can carry: every range inside
+ * any value the accessibility read can report stays addressable, while an
+ * absurd argument is refused at the boundary rather than handed to the native
+ * layer as a CFRange it would only reject. Selection offsets count Unicode
+ * code units the same way `AXSelectedTextRange` (and a JS string index) does —
+ * an element's `value` from computer_get_state is the coordinate space.
+ */
+export const COMPUTER_SELECT_TEXT_RANGE_MAX = 4 * 1024 * 1024;
 
 /**
  * Thread-activity kind appended by the agent gateway when a computer tool call
@@ -989,6 +1001,25 @@ export const ComputerPerformActionInput = Schema.Struct({
   action: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_SEMANTIC_ACTION_MAX_LENGTH)),
 });
 export type ComputerPerformActionInput = typeof ComputerPerformActionInput.Type;
+
+/**
+ * `computer_select_text`: an exact character range on a semantic text target.
+ * `start` is the zero-based offset into the element's value and `length` the
+ * number of characters to select — `0` collapses the selection to a caret at
+ * `start`. Both are bounded by `COMPUTER_SELECT_TEXT_RANGE_MAX`, never
+ * clamped: a range that runs past the element's end is the native layer's to
+ * refuse, not this schema's to rewrite.
+ */
+export const ComputerSelectTextInput = Schema.Struct({
+  ...ComputerTargetFields,
+  start: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX }),
+  ),
+  length: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX }),
+  ),
+});
+export type ComputerSelectTextInput = typeof ComputerSelectTextInput.Type;
 
 // ── User input from the computer dock pane ──────────────────────────
 

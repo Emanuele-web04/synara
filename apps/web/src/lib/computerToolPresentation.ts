@@ -36,6 +36,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_press_key: "Press a key",
   computer_hotkey: "Press a shortcut",
   computer_set_value: "Set a field",
+  computer_select_text: "Select text",
   computer_perform_action: "Activate a control",
   computer_launch_app: "Open an app",
   computer_activate_window: "Activate a window",
@@ -275,6 +276,15 @@ function describeParams(
   const dy = readNumber(args.delta_y);
   if (dx !== null || dy !== null) {
     rows.push({ name: "Scroll", value: `${dx ?? 0}, ${dy ?? 0}` });
+  }
+  // The range is what is being approved — show it as one fact, the way a
+  // coordinate pair is.
+  if (tool === "computer_select_text") {
+    const start = readNumber(args.start);
+    const length = readNumber(args.length);
+    if (start !== null && length !== null) {
+      rows.push({ name: "Range", value: `${start}, ${length}` });
+    }
   }
   const action = readString(args.action);
   if (action) rows.push({ name: "Action", value: action });

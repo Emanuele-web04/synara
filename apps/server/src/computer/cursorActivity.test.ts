@@ -142,6 +142,7 @@ describe("cursor activity", () => {
       computer_press_key: "Pressing key",
       computer_hotkey: "Pressing shortcut",
       computer_set_value: "Setting field",
+      computer_select_text: "Selecting text",
       computer_perform_action: "Activating control",
       computer_launch_app: "Opening app",
       computer_activate_window: "Activating window",

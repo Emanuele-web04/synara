@@ -501,6 +501,97 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "set_value")).toHaveLength(1);
   });
 
+  it("selects an exact text range on a live element and trusts only native read-back", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Display",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+      },
+    ]);
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
+    const node = state.root!.children[0]!;
+    const target = {
+      target: { label: "Display" },
+      node,
+      point: node.activationPoint!,
+    };
+
+    // Only the driver's confirmed effect backed by read-back evidence marks
+    // the selection verified; anything weaker is reported honestly.
+    f.onTool("select_text", () => ({
+      structuredContent: {
+        route: "ax_semantic",
+        delivery: { mode: "background" },
+        effect: "confirmed",
+        evidence: [{ kind: "value_readback" }],
+      },
+    }));
+    await expect(f.backend.selectText(target, { start: 2, length: 4 })).resolves.toMatchObject({
+      verified: "confirmed",
+      effect: "verified",
+    });
+    const call = f.calls.find((c) => c.name === "select_text");
+    expect(call?.args).toMatchObject({
+      pid: 10,
+      window_id: 20,
+      element_token: "fresh-token",
+      start: 2,
+      length: 4,
+    });
+    // An AX attribute write has no foreground/background delivery split.
+    expect(call?.args).not.toHaveProperty("delivery_mode");
+
+    // A structured refusal is the driver's proof nothing was written.
+    f.onTool("select_text", () => ({
+      isError: true,
+      structuredContent: { effect: "refused", code: "attribute_not_settable" },
+      content: [{ type: "text", text: "AXSelectedTextRange is not settable." }],
+    }));
+    await expect(f.backend.selectText(target, { start: 0, length: 1 })).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "attribute_not_settable",
+    });
+
+    // An inconclusive write reports dispatched-unknown exactly once — an
+    // uncertain AX write is never replayed by the backend.
+    f.onTool("select_text", () => ({
+      structuredContent: {
+        route: "ax_semantic",
+        delivery: { mode: "background" },
+        effect: "unconfirmed",
+      },
+    }));
+    await expect(f.backend.selectText(target, { start: 0, length: 1 })).resolves.toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
+    });
+    expect(f.calls.filter((c) => c.name === "select_text")).toHaveLength(3);
+
+    // A node the backend never observed has no token: refuse before dispatch
+    // rather than sending the driver a token it does not own.
+    const unobserved = {
+      target: { label: "Display" },
+      node: { ...node, children: [] },
+      point: node.activationPoint!,
+    };
+    await expect(f.backend.selectText(unobserved, { start: 0, length: 1 })).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_target",
+    });
+
+    f.close();
+    await expect(f.backend.selectText(target, { start: 0, length: 1 })).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    expect(f.calls.filter((c) => c.name === "select_text")).toHaveLength(3);
+  });
+
   it("uses semantic-only text delivery for an exact live control", async () => {
     const f = fixture();
     f.setElements([
@@ -658,6 +749,42 @@ describe("Cua native boundary", () => {
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
+  });
+
+  it("semantic text lane holds select_text behind a same-window write", async () => {
+    const f = fixture({ semanticTextLaneGapMs: 0 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+      .children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    let releaseGate!: () => void;
+    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+
+    const typing = f.backend.typeText("alpha", "cua:10:20", target);
+    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
+    const selecting = f.backend.selectText(target, { start: 0, length: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The native semantic lease is per (pid, window): the selection must not
+    // reach the driver while the same-window write is still held.
+    expect(f.calls.some((c) => c.name === "select_text")).toBe(false);
+    releaseGate!();
+
+    await expect(Promise.all([typing, selecting])).resolves.toHaveLength(2);
+    const order = f.calls
+      .filter((c) => c.name === "type_text" || c.name === "select_text")
+      .map((c) => c.name);
+    expect(order).toEqual(["type_text", "select_text"]);
   });
 
   it("semantic text lane overlaps same-pid writes to different windows", async () => {

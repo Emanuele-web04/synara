@@ -211,6 +211,10 @@ export class UnavailableComputerBackend implements ComputerBackend {
     return this.refuse();
   }
 
+  selectText(): Promise<never> {
+    return this.refuse();
+  }
+
   onEvent(_listener: ComputerBackendEventListener): () => void {
     // Nothing will ever change, so the subscription is a no-op rather than a
     // set that grows for the life of the process.

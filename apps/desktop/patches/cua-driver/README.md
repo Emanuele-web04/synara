@@ -163,6 +163,18 @@ seconds after spawn. Bump the literal in the same edit that bumps the manifest,
 then confirm the staged binary reports it (`metadata` over a live socket, or
 `strings` on the binary) before packaging.
 
+`0002-select-text.patch` is a separate diff that layers on top of the
+revision 18 native tree (the `wait_for_settle` / input-generation base); it is
+not folded into `0001-synara-native.patch` and its hunks intentionally fail on
+a revision 17 base. It adds the `select_text` tool — an exact-range
+`AXSelectedTextRange` write on a resolved element token with attribute
+read-back as the only confirmation path — and bumps the
+`synara_native_revision` literal to 19. Registration spans the platform-macos
+tool registry, `ACTION_RESULT_TOOLS`, the legacy action-record normalization
+lists, authorization/capture-scope/session-manifest tool inventories, the SDK
+adapter's stable-Space-membership and input-lease lists, and the cursor
+classifier. `docs/computer-use-cua/native-select-text.md` records the design.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records

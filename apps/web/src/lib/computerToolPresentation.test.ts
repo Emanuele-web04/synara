@@ -45,6 +45,7 @@ describe("computerToolName", () => {
       "computer_press_key",
       "computer_hotkey",
       "computer_set_value",
+      "computer_select_text",
       "computer_perform_action",
       "computer_launch_app",
       "computer_activate_window",
@@ -162,6 +163,15 @@ describe("describeComputerToolCall", () => {
       args: { x: 812, y: 344 },
     });
     expect(described?.params).toEqual([{ name: "Position", value: "812, 344" }]);
+  });
+
+  it("shows the select_text range as one row, because it is what was approved", () => {
+    const described = describeComputerToolCall({
+      toolName: "computer_select_text",
+      args: { label: "Display", start: 0, length: 12 },
+    });
+    expect(described?.summary).toBe("Select text on “Display”");
+    expect(described?.params).toContainEqual({ name: "Range", value: "0, 12" });
   });
 
   it("describes triple-click, activation, wait, and nested drag targets", () => {

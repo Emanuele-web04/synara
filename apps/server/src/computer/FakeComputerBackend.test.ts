@@ -44,6 +44,31 @@ describe("FakeComputerBackend", () => {
     expect(events).toContain("windows-changed");
   });
 
+  it("selects an exact range by slicing the target element's own value", async () => {
+    const backend = new FakeComputerBackend();
+    const state = await backend.getState({ includeTree: true });
+    // desktop -> window -> [Calculate button, Display text-field (value "0")]
+    const display = state.root!.children[0]!.children[1]!;
+    const displayTarget = {
+      target: { label: "Display" },
+      node: display,
+      point: display.activationPoint!,
+    };
+    await backend.setValue(displayTarget, "4680");
+
+    const refreshed = await backend.getState({ includeTree: true });
+    const updated = refreshed.root!.children[0]!.children[1]!;
+    const result = await backend.selectText(
+      { target: { label: "Display" }, node: updated, point: updated.activationPoint! },
+      { start: 1, length: 2 },
+    );
+
+    // The emulated read-back is exactly the substring the range covers.
+    expect(result).toMatchObject({ value: "68" });
+    expect(backend.callsFor("selectText")).toHaveLength(1);
+    expect(backend.callsFor("selectText")[0]?.args[1]).toEqual({ start: 1, length: 2 });
+  });
+
   it("emits deterministic codec-config and keyframe frames and supports failures", async () => {
     const backend = new FakeComputerBackend();
     const frames: Array<{ keyframe: boolean; codecConfig: boolean }> = [];

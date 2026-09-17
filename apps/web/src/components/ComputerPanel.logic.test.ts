@@ -624,6 +624,7 @@ describe("computerActionLabel", () => {
   it("uses the same curated labels as approvals and transcripts", () => {
     expect(computerActionLabel({ action: "computer_double_click", ok: true })).toBe("Double-click");
     expect(computerActionLabel({ action: "computer_set_value", ok: true })).toBe("Set a field");
+    expect(computerActionLabel({ action: "computer_select_text", ok: true })).toBe("Select text");
     expect(computerActionLabel({ action: "computer_perform_action", ok: true })).toBe(
       "Activate a control",
     );

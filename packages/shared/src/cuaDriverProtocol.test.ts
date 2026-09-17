@@ -40,6 +40,9 @@ const REGISTERED_MACOS_TOOLS = [
   "press_key",
   "hotkey",
   "set_value",
+  // Registered by the pending native select-text patch (native revision 19);
+  // allowlisted here so the name is admitted the moment that patch lands.
+  "select_text",
   "clipboard_read",
   "clipboard_write",
   "launch_app",
@@ -139,6 +142,7 @@ describe("cuaDriverProtocol tool boundary", () => {
         "move_cursor",
         "press_key",
         "scroll",
+        "select_text",
         "set_app_visibility",
         "set_value",
         "set_window_minimized",

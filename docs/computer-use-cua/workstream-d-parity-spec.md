@@ -76,7 +76,7 @@ Cursor identity needs no new provider tool. The session carries an agent label a
 
 Secondary action growth adds names to the existing perform action tool one at a time. Each name reuses the fresh token rule. Each name is approval gated as a mutating action. Each name reports with the shared effect values.
 
-List apps adds computer_list_apps({}). It returns app name, bundle id when known, and window count. It carries the same completeness note as the window list. Select text adds computer_select_text({ window_id, target, range }). It resolves through AX and reports verified only on selection read back.
+List apps adds computer_list_apps({}). It returns app name, bundle id when known, and window count. It carries the same completeness note as the window list. Select text adds computer_select_text({ window_id, target, range }). It resolves through AX and reports verified only on selection read back. Landed as specified: the range is `{start, length}` UTF-16 offsets, the native write is `AXSelectedTextRange` with attribute read-back as the only verification, and targets without a settable range (including `AXSelectedTextMarkerRange`-only web content) refuse with no fallback. Requires the rev-19 native patch in `apps/desktop/patches/cua-driver/0002-select-text.patch`; see `native-select-text.md`.
 
 Every new mutating tool ships with ownership, approval, and effect semantics. Ownership means the exact admitted pid plus window id, revalidated at dispatch. Approval means the shared authorize path with queue caps. Effect means the shared three values with verified only on read back. Any proposal missing one of the three is rejected.
 

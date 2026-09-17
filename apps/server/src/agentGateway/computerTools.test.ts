@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  COMPUTER_SELECT_TEXT_RANGE_MAX,
   COMPUTER_TEXT_MAX_LENGTH,
   COMPUTER_WAIT_MAX_MS,
   type ComputerPermission,
@@ -151,11 +152,12 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — the named AX action enum on perform_action and
-    // the widened press_key/hotkey vocabulary on top of the lifecycle pair
-    // measure 58,081 chars of schema; the bound still trips on accidental
-    // bloat, so raise it only with the new surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(60_000);
+    // The catalog grew again — computer_select_text on top of the named AX
+    // action enum, the widened press_key/hotkey vocabulary, and the
+    // hidden-workspace lifecycle pair measures 61,386 chars of schema; the
+    // bound still trips on accidental bloat, so raise it only with the new
+    // surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(66_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -320,6 +322,7 @@ describe("agent gateway computer tools", () => {
       "computer_activate_window",
       "computer_set_value",
       "computer_perform_action",
+      "computer_select_text",
       "computer_run",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
@@ -341,6 +344,7 @@ describe("agent gateway computer tools", () => {
         "computer_write_clipboard",
         "computer_set_value",
         "computer_perform_action",
+        "computer_select_text",
         "computer_paste",
         "computer_run",
         "computer_activate_window",
@@ -1350,6 +1354,7 @@ describe("agent gateway computer tools", () => {
       "computer_hotkey",
       "computer_set_value",
       "computer_perform_action",
+      "computer_select_text",
     ]) {
       const tool = byName.get(name);
       expect(tool?.definition.description).toContain("Returns a screenshot by default");
@@ -1380,6 +1385,24 @@ describe("agent gateway computer tools", () => {
     });
     expect(setValue.isError).not.toBe(true);
     expect(backend.callsFor("setValue")).toHaveLength(1);
+
+    const selectText = await call("computer_select_text", {
+      label: "Display",
+      start: 0,
+      length: 2,
+    });
+    expect(selectText.isError).not.toBe(true);
+    const selectCalls = backend.callsFor("selectText");
+    expect(selectCalls).toHaveLength(1);
+    expect(selectCalls[0]?.args[0]).toMatchObject({
+      node: expect.objectContaining({ label: "Display" }),
+    });
+    expect(selectCalls[0]?.args[1]).toEqual({ start: 0, length: 2 });
+    // The fake's read-back is the substring the range covers: "468"[0..2].
+    expect(resultJson(selectText)).toMatchObject({
+      action: "computer_select_text",
+      value: "46",
+    });
   });
 
   it("preserves raw text values, including whitespace and an empty value", async () => {
@@ -1647,6 +1670,36 @@ describe("agent gateway computer tools", () => {
       "confirm",
       "cancel",
     ]);
+  });
+
+
+  it("refuses malformed select_text ranges and x/y targets before the backend", async () => {
+    const { backend, call } = await setup();
+
+    for (const args of [
+      { label: "Display" },
+      { label: "Display", start: 0 },
+      { label: "Display", start: -1, length: 1 },
+      { label: "Display", start: 0, length: -1 },
+      { label: "Display", start: 0.5, length: 1 },
+      { label: "Display", start: 0, length: COMPUTER_SELECT_TEXT_RANGE_MAX + 1 },
+      // A coordinate cannot name which characters a range covers — refused
+      // outright rather than resolving the window's first writable field.
+      { x: 100, y: 200, start: 0, length: 1 },
+    ]) {
+      const result = await call("computer_select_text", args);
+      expect(result.isError).toBe(true);
+    }
+    expect(backend.callsFor("selectText")).toHaveLength(0);
+    expect(backend.callsFor("getState")).toHaveLength(0);
+
+    const caret = await call("computer_select_text", {
+      label: "Display",
+      start: 1,
+      length: 0,
+    });
+    expect(caret.isError).not.toBe(true);
+    expect(backend.callsFor("selectText")).toHaveLength(1);
   });
 
   it("reports clipboard tools as unsupported on a backend without them", async () => {
@@ -2980,6 +3033,7 @@ describe("computer_run", () => {
         steps: [
           { type: "click", label: "Display", window_id: "fake-calculator" },
           { type: "type_text", text: "468", window_id: "fake-calculator" },
+          { type: "select_text", label: "Display", start: 0, length: 2 },
           { type: "press_key", key: "enter", window_id: "fake-calculator" },
         ],
       });
@@ -2995,18 +3049,22 @@ describe("computer_run", () => {
         stopped: boolean;
         state: { elements: { label: string }[] };
       };
-      expect(payload.completed).toBe(3);
+      expect(payload.completed).toBe(4);
       expect(payload.stopped).toBe(false);
       expect(payload.steps.map((entry) => [entry.step, entry.type, entry.ok])).toEqual([
         [0, "click", true],
         [1, "type_text", true],
-        [2, "press_key", true],
+        [2, "select_text", true],
+        [3, "press_key", true],
       ]);
       // computerId rides once on the envelope, not on every step.
       for (const entry of payload.steps) expect(entry.result).not.toHaveProperty("computerId");
       expect(payload.state.elements.map((element) => element.label)).toContain("Display");
       expect(backend.callsFor("click")).toHaveLength(1);
       expect(backend.callsFor("typeText").map((entry) => entry.args[0])).toEqual(["468"]);
+      expect(backend.callsFor("selectText").map((entry) => entry.args[1])).toEqual([
+        { start: 0, length: 2 },
+      ]);
       expect(backend.callsFor("pressKey")).toHaveLength(1);
     } finally {
       await manager.dispose();

@@ -26,6 +26,7 @@ import {
   type ComputerProvisionResult,
   type ComputerRightClickInput,
   type ComputerScrollInput,
+  type ComputerSelectTextInput,
   type ComputerSetValueInput,
   type ComputerState,
   type ComputerStatusResult,
@@ -123,6 +124,9 @@ export interface WsComputerHandlers {
   readonly [COMPUTER_WS_METHODS.performAction]: (
     input: ComputerPerformActionInput,
   ) => Effect.Effect<ComputerActionResult, WsRpcError>;
+  readonly [COMPUTER_WS_METHODS.selectText]: (
+    input: ComputerSelectTextInput,
+  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
   readonly [COMPUTER_WS_METHODS.getThreadState]: (
     input: ComputerThreadInput,
   ) => Effect.Effect<ThreadComputerState, WsRpcError>;
@@ -194,6 +198,7 @@ export function makeWsComputerHandlers(
       [COMPUTER_WS_METHODS.hotkey]: () => unsupported(),
       [COMPUTER_WS_METHODS.setValue]: () => unsupported(),
       [COMPUTER_WS_METHODS.performAction]: () => unsupported(),
+      [COMPUTER_WS_METHODS.selectText]: () => unsupported(),
       [COMPUTER_WS_METHODS.getThreadState]: unsupportedState,
       [COMPUTER_WS_METHODS.inputClick]: () => unsupported(),
       [COMPUTER_WS_METHODS.inputScroll]: () => unsupported(),
@@ -271,6 +276,11 @@ export function makeWsComputerHandlers(
       attempt(
         () => manager.performAction(undefined, input, input.action),
         "Failed to perform computer action",
+      ),
+    [COMPUTER_WS_METHODS.selectText]: (input) =>
+      attempt(
+        () => manager.selectText(undefined, input, { start: input.start, length: input.length }),
+        "Failed to select computer text",
       ),
     [COMPUTER_WS_METHODS.getThreadState]: (input) =>
       attempt(() => manager.getThreadState(input.threadId), "Failed to read computer state"),

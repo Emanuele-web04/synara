@@ -114,6 +114,18 @@ export interface ComputerResolvedTarget {
   readonly node: ComputerUiNode;
 }
 
+/**
+ * An exact character range on a text element's value. `start` is the
+ * zero-based character offset and `length` the number of characters —
+ * `0` collapses the selection to a caret at `start`. Characters count the
+ * same units `AXSelectedTextRange` and a JS string index do, so an element's
+ * `value` from get_state is the coordinate space.
+ */
+export interface ComputerTextRange {
+  readonly start: number;
+  readonly length: number;
+}
+
 export interface ComputerBackendActionResult {
   readonly point?: ComputerPoint;
   /**
@@ -656,6 +668,19 @@ export interface ComputerBackend {
   performAction(
     target: ComputerResolvedTarget,
     action: string,
+  ): Promise<ComputerBackendActionResult | void>;
+  /**
+   * Select an exact character range on a semantic text element through the
+   * accessibility layer — never a synthetic keystroke, click, or pointer drag.
+   * Backends write the native selection attribute on the freshly resolved
+   * element and report `verified` only when a read-back of that attribute
+   * matches the requested range. A target with no settable selection
+   * attribute refuses before dispatch; nothing approximates it with
+   * triple-click, select-all, or a coordinate gesture.
+   */
+  selectText(
+    target: ComputerResolvedTarget,
+    range: ComputerTextRange,
   ): Promise<ComputerBackendActionResult | void>;
   onEvent?(listener: ComputerBackendEventListener): () => void;
   attachStream(listener: ComputerFrameListener): Promise<void>;

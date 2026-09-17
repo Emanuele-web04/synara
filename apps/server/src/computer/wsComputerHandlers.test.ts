@@ -140,6 +140,24 @@ describe("computer WebSocket handlers", () => {
     expect(backend.callsFor("getState")).toHaveLength(0);
   });
 
+  it("selects an exact text range on a semantic target", async () => {
+    const { backend, handlers } = setup();
+
+    const result = await Effect.runPromise(
+      handlers[COMPUTER_WS_METHODS.selectText]({ label: "Display", start: 0, length: 1 }),
+    );
+
+    expect(result.action).toBe("computer_select_text");
+    // The fake's read-back is the selected substring of the Display value "0".
+    expect(result.value).toBe("0");
+    const calls = backend.callsFor("selectText");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args[1]).toEqual({ start: 0, length: 1 });
+    expect(calls[0]?.args[0]).toMatchObject({
+      node: expect.objectContaining({ label: "Display" }),
+    });
+  });
+
   it("scopes a perception read to the requested window", async () => {
     const { backend, handlers } = setup();
     await Effect.runPromise(
@@ -227,7 +245,11 @@ describe("computer WebSocket handlers", () => {
     const exit = await Effect.runPromiseExit(
       handlers[COMPUTER_WS_METHODS.inputKey]({ key: "escape" }),
     );
+    const selectExit = await Effect.runPromiseExit(
+      handlers[COMPUTER_WS_METHODS.selectText]({ label: "Display", start: 0, length: 1 }),
+    );
 
     expect(Exit.isFailure(exit)).toBe(true);
+    expect(Exit.isFailure(selectExit)).toBe(true);
   });
 });

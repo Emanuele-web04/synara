@@ -37,6 +37,7 @@ import {
   type ComputerFrameListener,
   type ComputerResolvedTarget,
   type ComputerStreamFrame,
+  type ComputerTextRange,
 } from "./ComputerBackend.ts";
 import { requireWindowBounds } from "./computerGeometry.ts";
 import { ComputerTargetError } from "./uiTreeTargeting.ts";
@@ -802,6 +803,23 @@ export class FakeComputerBackend implements ComputerBackend {
     this.record("performAction", target, action);
     this.throwIfFailed("performAction");
     return { point: target.point, value: action };
+  }
+
+  /**
+   * The fake's selection is the slice of the element's own value: its
+   * "read-back" is exactly the substring the requested range covers, which
+   * is the honest emulation of a driver that confirmed the write.
+   */
+  async selectText(
+    target: ComputerResolvedTarget,
+    range: ComputerTextRange,
+  ): Promise<ComputerBackendActionResult> {
+    this.record("selectText", target, range);
+    this.throwIfFailed("selectText");
+    return {
+      point: target.point,
+      value: (target.node.value ?? "").slice(range.start, range.start + range.length),
+    };
   }
 
   onEvent(listener: ComputerBackendEventListener): () => void {
