@@ -1723,6 +1723,39 @@ describe("Cua native boundary", () => {
     const f = fixture();
     expect(await f.backend.listWindows()).toHaveLength(1);
   });
+  it("reports minimized and hidden workspace windows honestly", async () => {
+    const f = fixture();
+    const rect = { x: 10, y: 10, width: 200, height: 100 };
+    f.setWindows([
+      {
+        pid: 10,
+        window_id: 21,
+        title: "Minimized",
+        bounds: rect,
+        is_on_screen: false,
+        on_current_space: true,
+        space_ids: [3],
+        z_index: 2,
+      },
+      {
+        pid: 11,
+        window_id: 22,
+        title: "Hidden app window",
+        bounds: rect,
+        is_on_screen: false,
+        on_current_space: null,
+        space_ids: null,
+        z_index: 3,
+      },
+    ]);
+    const windows = await f.backend.listWindows();
+    const byId = new Map(windows.map((w) => [w.id, w]));
+    // Minimized: off the screen list but still claimed by its Space.
+    expect(byId.get("cua:10:21")).toMatchObject({ minimized: true, visible: false });
+    // Hidden-app windows are detached from every Space — not minimized, but
+    // still listed so the hidden workspace remains targetable.
+    expect(byId.get("cua:11:22")).toMatchObject({ minimized: false, visible: false });
+  });
   it("distinguishes a native admission refusal from an uncertain delivery", async () => {
     const f = fixture();
     f.refuse();

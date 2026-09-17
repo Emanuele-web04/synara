@@ -607,7 +607,14 @@ export class CuaComputerBackend implements ComputerBackend {
             appName: text(w.app_name),
             bounds,
             focused: this.selectedWindow === `cua:${pid}:${windowId}`,
-            minimized: false,
+            // A minimized window drops out of the screen list but keeps its
+            // Space membership; a hidden app's windows report no membership at
+            // all; an off-Space window reports on_current_space === false.
+            minimized:
+              w.is_on_screen === false &&
+              w.on_current_space !== false &&
+              Array.isArray(w.space_ids) &&
+              w.space_ids.length > 0,
             visible: w.is_on_screen === true && w.on_current_space !== false,
             ...(Number.isInteger(w.z_index) ? { stackingIndex: i } : {}),
           },
