@@ -151,12 +151,11 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — the hidden-workspace lifecycle pair
-    // (set_window_minimized, set_app_visibility) and launch's hidden flag on
-    // top of the eight parity tools measure 56,381 chars of schema; the bound
-    // still trips on accidental bloat, so raise it only with the new surface
-    // measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(58_000);
+    // The catalog grew again — the named AX action enum on perform_action and
+    // the widened press_key/hotkey vocabulary on top of the lifecycle pair
+    // measure 58,081 chars of schema; the bound still trips on accidental
+    // bloat, so raise it only with the new surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(60_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
