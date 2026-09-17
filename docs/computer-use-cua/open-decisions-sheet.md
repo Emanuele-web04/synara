@@ -27,10 +27,10 @@ default. Verification notes record what was checked in the tree on branch
 - Safe default: MIT, since Apache 2.0 adds patent text nobody has reviewed here.
 - Verification: Synara repo is MIT, held by T3 Tools Inc and Emanuele Di Pietro
   (`LICENSE:1`, `:3`–`:4`). The Cua redistribution license is MIT, held by Cua
-  AI, Inc (`docs/computer-use-cua/CUA-LICENSE.txt:1`, `:3`). The root
-  `package.json` has no license field — verified by reading the manifest;
-  `apps/server/package.json:4` declares MIT. The missing root field needs a
-  recorded answer per acceptance criterion 3.
+  AI, Inc (`docs/computer-use-cua/CUA-LICENSE.txt:1`, `:3`). Resolved
+  2026-09-17: the root `package.json` now declares `"license": "MIT"` (`:4`),
+  matching the LICENSE file and `apps/server/package.json:4` — the acceptance-3
+  question is answered in the manifest.
 
 ## 4. Upstream fix flow
 
@@ -57,19 +57,49 @@ default. Verification notes record what was checked in the tree on branch
 - Recommendation: password managers plus system security surfaces, refused or
   per step consent.
 - Safe default: refuse all listed surfaces with no override in v1.
-- Verification: no denylist exists in the computer stack — scan-only negative,
-  unverified beyond the scan. Acceptance 12 requires a refusal run on one
-  listed app.
+- Verification: implemented per the safe default on 2026-09-17 — refuse all
+  listed surfaces with no override in v1. `apps/server/src/computer/computerDenylist.ts`
+  lists password managers (1Password, Bitwarden, Dashlane, LastPass) and macOS
+  security surfaces (Keychain Access, Passwords.app, System Settings/System
+  Preferences, SecurityAgent) matched by app name, bundle id, bundle-id prefix,
+  executable path, and `pid <n>` consent key. Refusals carry the typed code
+  `computer_denylist_refused`. Enforcement: admission (`ComputerManager.ts:539`,
+  `:578`), direct window targeting, point and semantic resolution, keyboard
+  aim, window mutations, app visibility, scoped reads (state, tree, verify,
+  zoom), window/region captures, and post-action observation. `computer_list_windows`
+  remains allowed for presence enumeration; content-bearing reads refuse. The
+  pane's own input (no thread id) is exempt like the lease. Tests:
+  `apps/server/src/computer/computerDenylist.test.ts` — 12 cases including
+  bundle-id-only matching via pid resolution. Acceptance 12's live refusal run
+  on one listed app is still required; the sandbox cannot produce it.
 
 ## 7. Audit log retention
 
 - Recommendation: local only, bounded size, documented in the privacy note.
 - Safe default: shortest retention that still supports abuse review, documented
   the same way.
-- Verification: no audit log exists — scan-only negative, unverified beyond the
-  scan. Acceptance 9 requires target, timestamp, and effect per mutating action.
-  Raw recording and history surfaces stay internal until a privacy policy
-  exists (`v2-parity-matrix.md:31`).
+- Verification: implemented per the recommendation on 2026-09-17 — local only,
+  bounded, documented. `apps/server/src/computer/computerAuditLog.ts` appends
+  one JSON line per mutating call to `computer-audit.jsonl` beside
+  `computer-control.json` in the server state dir (wired at
+  `Layers/ComputerService.ts:60`), capped at 10,000 entries and 2 MB with
+  drop-oldest compaction, mode 0600 inside a 0700 directory, writes serialized
+  on a private chain and flushed on `manager.dispose()`. Each record carries
+  ISO timestamp, tool name, threadId/turnId, resolved target (window id, pid,
+  app), a sanitized argument summary (payload keys become character/item
+  counts — typed text and clipboard contents are never written), and the
+  effect (`verified`/`dispatched-unknown`/`not-dispatched` from the delivery
+  taxonomy, or `refused`/`error` with a code). Records are written at the
+  gateway seam where the final effect is known (`computerTools.ts:1240`–`:1258`),
+  never awaited, and writer failures are swallowed. A thread whose control is
+  off records nothing — enforced at the manager seam (`ComputerManager.ts:601`
+  –`:603`) so the kill switch cannot produce evidence rows. Tests:
+  `apps/server/src/computer/computerAuditLog.test.ts` — 10 cases covering
+  sanitization, caps/compaction, serialized appends, write-failure swallowing,
+  and the disabled-writes-nothing rule. Acceptance 9's three-action
+  completeness run still needs a live desktop. Raw recording and history
+  surfaces stay internal until a privacy policy exists
+  (`v2-parity-matrix.md:31`).
 
 ## 8. Kill switch form
 
@@ -78,11 +108,21 @@ default. Verification notes record what was checked in the tree on branch
 - Verification: the composer turn stop is the always-visible stop affordance
   (`ComputerPreviewPopover.tsx:9`–`:10`; `ChatView.tsx:2771`,`:3297`). A
   dedicated stop-label helper exists (`ComputerPanel.logic.ts:379`–`:387`) but
-  a rendered consumer was not found — surfacing is unverified. A physical
-  emergency release exists only on KWin and Hyprland (`Meta+Shift+Esc`,
+  a rendered consumer was not found — v1 ships the visible stop only, per the
+  safe default; no physical Escape tap was added. A physical emergency release
+  exists only on KWin and Hyprland (`Meta+Shift+Esc`,
   `packages/contracts/src/computer.ts:179`,`:182`–`:185`). macOS has no global
-  release (`ComputerPanel.logic.ts:371`–`:374`). Acceptance 10 requires
-  stopping in-flight input and blocking new input until re-enabled.
+  release (`ComputerPanel.logic.ts:371`–`:374`). The acceptance-10 latch is
+  verified 2026-09-17: `setControlEnabled(false)` disables the thread in
+  memory and bumps the durable generation before cleanup can yield
+  (`ComputerManager.ts:830`–`:839`), cancels pending approval prompts through
+  `computerApprovalGate.cancelThread`, aborts live authorities, calls
+  `backend.stopInput()`, and releases the desktop lease; queued and in-flight
+  calls refuse with `controlRevoked` and a request carrying a pre-stop
+  generation can never re-arm control — regression-tested in
+  `apps/server/src/computer/computerRevoke.test.ts` ("a stale generation
+  cannot revive control after stop, and re-enable mints a fresh one"). The
+  once-per-release live run remains required.
 
 ## 9. Locked use and history
 
