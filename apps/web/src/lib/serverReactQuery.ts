@@ -1,6 +1,7 @@
 import type {
   ProviderKind,
   ServerConfig,
+  ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
   ServerProviderStatus,
   ServerStopLocalServerInput,
@@ -308,6 +309,11 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
 export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
   const api = ensureNativeApi();
   return api.server.listProviderUsage(input);
+}
+
+export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
+  const api = ensureNativeApi();
+  return api.server.consumeCodexResetCredit(input);
 }
 
 /** Provider enablement changes alter the membership of the batch and invalidate any

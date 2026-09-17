@@ -103,6 +103,54 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+### Claude prompt caching and resumed sessions
+
+Synara uses the installed Claude Code runtime through the Agent SDK. Claude owns prompt caching,
+session restoration, and automatic compaction. Resuming a saved conversation restores its history;
+it does not restore an expired server-side cache. An unchanged prefix can still be reused after a
+process restart while its cache remains valid. Leaving a process open does not refresh that cache.
+
+The main-conversation cache policy applies to both CLI and SDK turns. The effective lifetime depends
+on the account and Claude settings; Synara does not force a lifetime or change the selected model,
+effort, or compaction threshold to reduce usage. See Anthropic's
+[prompt caching documentation](https://code.claude.com/docs/en/prompt-caching).
+
+Cache observations distinguish input outside the cache, cache reads, and cache writes. These are
+token counts, not percentages of an Anthropic subscription allowance. A likely-warm observation is
+an estimate, since changes to the model, tools, or conversation can invalidate a previously cached
+prefix. Missing information remains unknown. The adapter preserves the last observation alongside
+the native resume cursor and incorporates native resume metadata when the runtime provides it.
+
+Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
+transcript file size and base64 image size are not model token counts.
+
+When Claude has more than 100,000 context tokens and available evidence indicates an expired cache,
+Synara holds the next message before delivering it to the runtime. The composer lets you continue
+with the full history, compact first when supported, or cancel that send. The held message and attachments survive reconnects and
+server restarts; cancelling keeps the message in the conversation. An unresolved request blocks
+automatic queue promotion for that task, while other tasks can continue.
+Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
+or rollback recorded after the original request prevents a delayed cache check from restoring it.
+
+This check also covers long pauses in an existing process and model changes on the next send.
+A warm observation for the previous model cannot bypass the review for a different requested model;
+checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
+Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
+imported sessions without timing evidence remain unknown, so a warning cannot be guaranteed for
+them. The check makes no model request to keep a cache warm or measure its state.
+
+The context popover offers **Compact now** when the installed runtime supports `/compact` and the
+task is idle. This uses Claude's native summarization with the current model and settings. It can
+reduce the history sent after a long pause; it also processes the existing history once, so running
+it after the cache expires can itself consume substantial usage. Automatic compaction and the
+selected context threshold remain under the existing Claude settings.
+
+**Compact, then send** keeps the held message separate from `/compact`. Synara releases it only
+after a matching native compaction boundary and successful completion. Failure or interruption
+keeps the message on hold. If delivery is uncertain, Synara does not automatically repeat the send.
+See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
+boundaries and remaining live validation.
+
 ## Switching providers
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to

@@ -109,6 +109,12 @@ export const HANDOFF_ICON_NAME = "arrow-left-right";
 export const HandoffIcon: LucideIcon = centralIconWrapper(HANDOFF_ICON_NAME);
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+// Command palette (⌘K) action glyphs: one Central outline set so the rows read as a family.
+export const FolderAddIcon: LucideIcon = centralIconWrapper("folder-add-left");
+export const FolderOpenFrontIcon: LucideIcon = centralIconWrapper("folder-open-front");
+export const ImportThreadIcon: LucideIcon = centralIconWrapper("import");
+export const UsageGaugeIcon: LucideIcon = centralIconWrapper("gauge");
+export const BugReportIcon: LucideIcon = centralIconWrapper("bug");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
 /** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */

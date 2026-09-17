@@ -5,6 +5,7 @@
 import type {
   OrchestrationThread,
   ProviderKind,
+  ServerCodexResetCredits,
   ServerGetProviderUsageSnapshotResult,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
@@ -37,6 +38,7 @@ export interface ProviderUsageSummaryData {
   readonly rateLimits: ReadonlyArray<ProviderRateLimit>;
   readonly usageLines: ReadonlyArray<OpenUsageUsageLine>;
   readonly usageNotice: string | undefined;
+  readonly resetCredits?: ServerCodexResetCredits | undefined;
 }
 
 export function resolveProviderUsageSummary(input: {
@@ -53,6 +55,7 @@ export function resolveProviderUsageSummary(input: {
       rateLimits: [],
       usageLines: [],
       usageNotice: undefined,
+      resetCredits: undefined,
     };
   }
 
@@ -89,6 +92,10 @@ export function resolveProviderUsageSummary(input: {
     rateLimits,
     usageLines,
     usageNotice: detail ? detail : undefined,
+    resetCredits:
+      input.authoritativeLiveSnapshot?.provider === "codex"
+        ? input.authoritativeLiveSnapshot.resetCredits
+        : undefined,
   };
 }
 

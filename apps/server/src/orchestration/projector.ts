@@ -4,6 +4,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  ThreadClaudeCacheSetPayload,
   type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
 import {
@@ -873,6 +874,17 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.claude-cache-set":
+      return decodeForEvent(ThreadClaudeCacheSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            claudeCacheReview: payload.review,
             updatedAt: payload.updatedAt,
           }),
         })),

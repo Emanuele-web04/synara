@@ -30,6 +30,7 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 import messageTextChunkSchema from "./100_MessageTextChunks.ts";
 import messageTurnBoundarySchema from "./102_ProjectionThreadMessagesTurnBoundary.ts";
+import claudeCacheReviewSchema from "./104_ProjectionThreadsClaudeCacheReview.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
@@ -67,6 +68,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         // Install them without changing the migration-99 tracker state under test.
         yield* messageTextChunkSchema;
         yield* messageTurnBoundarySchema;
+        yield* claudeCacheReviewSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");
