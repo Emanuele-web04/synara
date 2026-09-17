@@ -53,6 +53,7 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
     y: 120,
     resizable: false,
     movable: false,
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
   const channel = `live-fixture-${process.pid}`;
@@ -64,27 +65,47 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
   await target.loadURL(
     `data:text/html,${encodeURIComponent(`<!doctype html><title>${title}</title><style>body{font:20px system-ui;padding:24px}button{font:24px system-ui;padding:25px;background:#def;border:2px solid #345;border-radius:12px}</style><h1>Owned live-provider target</h1><button id="counter">Click counter: 0</button><p>One background click is permitted.</p><script>const {ipcRenderer}=require('electron');let clicks=0;const b=document.querySelector('#counter');b.onclick=()=>{b.textContent='Click counter: '+(++clicks);ipcRenderer.send(${JSON.stringify(channel)},clicks)};</script>`)}`,
   );
+  target.showInactive();
   target.webContents.on("will-navigate", (event) => event.preventDefault());
   target.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const capability = randomBytes(32).toString("base64url");
-  const host = new CuaDriverHost({
-    binaryPath,
-    capability,
-    bundleId: "com.synara.cua-fixture",
-    setup: async () => {
-      throw new Error("Fixture never requests new macOS permissions.");
-    },
-  });
-  const nativeEndpoint = await host.listen();
+  // SYNARA_CUA_FIXTURE_ENDPOINT/CAPABILITY: external trusted driver, same
+  // override as electron.ts — the adhoc bundle holds no TCC grants of its own.
+  const externalEndpoint = process.env.SYNARA_CUA_FIXTURE_ENDPOINT ?? "";
+  const capability =
+    externalEndpoint.length > 0
+      ? (process.env.SYNARA_CUA_FIXTURE_CAPABILITY ?? "")
+      : randomBytes(32).toString("base64url");
+  if (externalEndpoint.length > 0 && capability.length === 0)
+    throw new Error("SYNARA_CUA_FIXTURE_ENDPOINT requires SYNARA_CUA_FIXTURE_CAPABILITY.");
+  let host: CuaDriverHost | undefined;
+  let nativeEndpoint: string;
+  if (externalEndpoint.length > 0) {
+    nativeEndpoint = externalEndpoint;
+  } else {
+    host = new CuaDriverHost({
+      binaryPath,
+      capability,
+      bundleId: "com.synara.cua-fixture",
+      setup: async () => {
+        throw new Error("Fixture never requests new macOS permissions.");
+      },
+    });
+    nativeEndpoint = await host.listen();
+  }
   const nativeCall = (name: string, args: Record<string, unknown> = {}) =>
-    cuaRequest<CuaReply>(nativeEndpoint, { method: "call", name, args, capability });
+    cuaRequest<CuaReply>(nativeEndpoint, {
+      method: "call",
+      name,
+      args,
+      capability,
+    });
   const permissions = await nativeCall("check_permissions", { prompt: false });
   report.permissions = permissions.result?.structuredContent;
   if (
     permissions.result?.structuredContent?.accessibility !== true ||
     permissions.result?.structuredContent?.screen_recording !== true
   ) {
-    await host.dispose();
+    await host?.dispose();
     target.destroy();
     ipcMain.removeListener(channel, receive);
     report.error = "Fixture grants are missing; no server/provider/input started.";
@@ -98,13 +119,18 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
     | undefined;
   const matches = rows?.filter((row) => row.pid === process.pid && row.title === title) ?? [];
   if (matches.length !== 1 || !Number.isInteger(matches[0]?.window_id)) {
-    await host.dispose();
+    await host?.dispose();
     target.destroy();
     ipcMain.removeListener(channel, receive);
     throw new Error("Exact owned target identity was not established; no input permitted.");
   }
   const windowId = matches[0]!.window_id;
-  report.target = { pid: process.pid, windowId, id: `cua:${process.pid}:${windowId}`, title };
+  report.target = {
+    pid: process.pid,
+    windowId,
+    id: `cua:${process.pid}:${windowId}`,
+    title,
+  };
   let frame: { x: number; y: number; width: number; height: number; scale: number } | undefined;
   const owned = (args: Record<string, unknown>) =>
     args.pid === process.pid && args.window_id === windowId && !target.isDestroyed();
@@ -204,7 +230,10 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
               row.pid === process.pid && row.window_id === windowId && row.title === title,
           );
           reply.result.content = [
-            { type: "text", text: JSON.stringify(reply.result.structuredContent) },
+            {
+              type: "text",
+              text: JSON.stringify(reply.result.structuredContent),
+            },
           ];
         }
         if (name === "get_window_state" && reply.result?.structuredContent) {
@@ -241,7 +270,11 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
       })()
         .catch(async (error) => {
           const effect = inputSubmitted ? "dispatched-unknown" : "not-dispatched";
-          calls.push({ at: new Date().toISOString(), error: String(error), effect });
+          calls.push({
+            at: new Date().toISOString(),
+            error: String(error),
+            effect,
+          });
           await persist();
           return { ok: false, effect, error: String(error) };
         })
@@ -373,7 +406,9 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
     if (!exited) server.kill("SIGTERM");
     // Stop native admission before retiring the GUI-owned host. Never replace
     // or force-kill an input generation whose cooperative cleanup is unknown.
-    await host.stop();
+    // External mode sends the same `stop` method over the socket.
+    if (host) await host.stop();
+    else await cuaRequest(nativeEndpoint, { method: "stop", capability }).catch(() => undefined);
     for (const client of clients) client.destroy();
     await new Promise<void>((resolve) => proxy.close(() => resolve()));
     await Promise.race([serverExit, pause(5_000)]);
@@ -382,10 +417,12 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
       server.kill("SIGKILL");
       await serverExit;
     }
-    await host.dispose();
+    await host?.dispose();
     if (!target.isDestroyed()) target.destroy();
     ipcMain.removeListener(channel, receive);
-    await writeFile(join(directory, "live-server.log"), output, { mode: 0o600 });
+    await writeFile(join(directory, "live-server.log"), output, {
+      mode: 0o600,
+    });
     await persist();
   }
   return report;

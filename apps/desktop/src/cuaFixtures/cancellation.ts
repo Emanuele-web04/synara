@@ -10,9 +10,14 @@ import { withDesktopDeliveryMode } from "../../../server/src/computer/DesktopOpe
  * cannot prove that the target consumed the matching mouse/key up. */
 export async function runCancellationFixture(
   backend: CuaComputerBackend,
-  host: CuaDriverHost,
+  host: CuaDriverHost | undefined,
   approveCapture: (windowId: string) => void,
 ) {
+  // With an embedded host, stop() tears the driver down at the broker level.
+  // With an external trusted host (SYNARA_CUA_FIXTURE_ENDPOINT) there is no
+  // local broker — backend.stopInput() sends the same `stop` method over the
+  // socket, exercising the identical cancellation wire path.
+  const stop = () => (host ? host.stop() : backend.stopInput());
   const title = `Synara Cua Fixture ${process.pid} C`;
   const channel = `fixture-cancel-${randomUUID()}`;
   const window = new BrowserWindow({
@@ -21,9 +26,18 @@ export async function runCancellationFixture(
     height: 420,
     x: 80,
     y: 80,
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
-  let state = { mouseDown: 0, mouseUp: 0, dragged: 0, keyDown: 0, keyUp: 0, text: "", buttons: 0 };
+  let state = {
+    mouseDown: 0,
+    mouseUp: 0,
+    dragged: 0,
+    keyDown: 0,
+    keyUp: 0,
+    text: "",
+    buttons: 0,
+  };
   const update = (_event: unknown, value: typeof state) => {
     state = value;
   };
@@ -42,6 +56,9 @@ export async function runCancellationFixture(
       field.addEventListener('input',emit); emit();
     </script>`;
     await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    // show:true defers ordering under a never-activated `open -g` launch and
+    // marks the window key in-process; showInactive() does neither.
+    window.showInactive();
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     // WindowServer publishes intermediate bounds during the macOS opening
@@ -79,7 +96,10 @@ export async function runCancellationFixture(
       "(()=>{const r=document.querySelector('#drag').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()",
     );
     const content = window.getContentBounds();
-    const start = { x: content.x + rect.x + 40, y: content.y + rect.y + rect.height / 2 };
+    const start = {
+      x: content.x + rect.x + 40,
+      y: content.y + rect.y + rect.height / 2,
+    };
     const click = backend.click(start, target.id).then(
       (result) => ({ result }),
       (error) => ({ error: String(error) }),
@@ -87,7 +107,7 @@ export async function runCancellationFixture(
     const sawDown = await waitFor(() => state.mouseDown > 0);
     const before = { ...state };
     const stoppedAt = performance.now();
-    await host.stop();
+    await stop();
     const stopMilliseconds = performance.now() - stoppedAt;
     const outcome = await click;
     await pause(200);
@@ -125,7 +145,7 @@ export async function runCancellationFixture(
     const sawKey = await waitFor(() => state.keyDown > keyBaseline.down);
     const keyBefore = { ...state };
     const keyStoppedAt = performance.now();
-    await host.stop();
+    await stop();
     const keyStopMilliseconds = performance.now() - keyStoppedAt;
     const keyOutcome = await typing;
     await pause(200);
@@ -170,7 +190,7 @@ export async function runCancellationFixture(
         );
         const before = { ...state };
         const stopStarted = performance.now();
-        await host.stop();
+        await stop();
         const stopMilliseconds = performance.now() - stopStarted;
         const outcome = await operation;
         await pause(200);

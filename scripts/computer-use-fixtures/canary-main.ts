@@ -216,16 +216,24 @@ async function main(): Promise<void> {
       });
     return reply;
   };
-  backend = new CuaComputerBackend({ endpoint, capability, request: recordedRequest });
+  backend = new CuaComputerBackend({
+    endpoint,
+    capability,
+    request: recordedRequest,
+  });
 
   // Capture the raw permission probe up front: the backend gates enumeration
   // behind it, and an early identity failure must not hide which grant the
   // embedded driver reports missing under this bundle.
   try {
-    const permissionReply = await cuaRequest<{ result?: { structuredContent?: unknown } }>(
-      endpoint,
-      { method: "call", name: "check_permissions", args: { prompt: false }, capability },
-    );
+    const permissionReply = await cuaRequest<{
+      result?: { structuredContent?: unknown };
+    }>(endpoint, {
+      method: "call",
+      name: "check_permissions",
+      args: { prompt: false },
+      capability,
+    });
     report.nativePermissions = permissionReply.result?.structuredContent;
   } catch (error) {
     report.nativePermissions = { error: String(error) };
@@ -238,7 +246,10 @@ async function main(): Promise<void> {
   // of this adhoc bundle, so WindowServer strips kCGWindowTitle for it (no
   // screen-capture grant) — titles arrive as "".
   const boundsMatch = (
-    window: { pid: number; bounds: { x: number; y: number; width: number; height: number } },
+    window: {
+      pid: number;
+      bounds: { x: number; y: number; width: number; height: number };
+    },
     rect: { x: number; y: number; width: number; height: number },
   ) =>
     window.pid === process.pid &&
@@ -270,10 +281,18 @@ async function main(): Promise<void> {
     // check_permissions reports accessibility:false? The answer decides whether
     // the canary can drive itself or whether TCC must grant the bundle first.
     const selfProbe: Record<string, unknown> = {};
-    const rawWindows =
-      (((raw as { result?: { structuredContent?: { windows?: { window_id?: number; pid?: number }[] } } })
-        ?.result?.structuredContent?.windows) ??
-        []) as { window_id?: number; pid?: number }[];
+    const rawWindows = ((
+      raw as {
+        result?: {
+          structuredContent?: {
+            windows?: { window_id?: number; pid?: number }[];
+          };
+        };
+      }
+    )?.result?.structuredContent?.windows ?? []) as {
+      window_id?: number;
+      pid?: number;
+    }[];
     const selfWindow = rawWindows.find(
       (w) => w.pid === process.pid && typeof w.window_id === "number",
     );
@@ -350,7 +369,10 @@ async function main(): Promise<void> {
     let resolved: ResolvedCanaryTarget | undefined;
     let resolveError: string | null = null;
     try {
-      const observation = await backend.getState({ windowId: targetWindow.id, includeTree: true });
+      const observation = await backend.getState({
+        windowId: targetWindow.id,
+        includeTree: true,
+      });
       const node = findNode(observation.root, "Canary text");
       if (node?.activationPoint)
         resolved = {
@@ -414,7 +436,10 @@ async function main(): Promise<void> {
     let axElementCount: number | null = null;
     let axTreeError: string | null = null;
     try {
-      const observation = await backend.getState({ windowId: targetWindow.id, includeTree: true });
+      const observation = await backend.getState({
+        windowId: targetWindow.id,
+        includeTree: true,
+      });
       axReadback = findNode(observation.root, "Canary text")?.value ?? null;
       axElementCount = countNodes(observation.root);
     } catch (error) {
@@ -466,7 +491,9 @@ async function main(): Promise<void> {
     report.nativeBuild = {};
   }
 
-  const permissionReply = await cuaRequest<{ result?: { structuredContent?: unknown } }>(endpoint, {
+  const permissionReply = await cuaRequest<{
+    result?: { structuredContent?: unknown };
+  }>(endpoint, {
     method: "call",
     name: "check_permissions",
     args: { prompt: false },

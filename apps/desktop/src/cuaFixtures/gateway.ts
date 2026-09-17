@@ -20,7 +20,14 @@ export async function runGatewayFixture(
   focusProbePath?: string,
 ) {
   const title = `Synara Cua Fixture ${process.pid}`;
-  const first = new BrowserWindow({ title: `${title} A`, width: 640, height: 420, x: 80, y: 80 });
+  const first = new BrowserWindow({
+    title: `${title} A`,
+    width: 640,
+    height: 420,
+    x: 80,
+    y: 80,
+    show: false,
+  });
   const sibling = new BrowserWindow({
     title: `${title} B`,
     width: 320,
@@ -31,7 +38,11 @@ export async function runGatewayFixture(
   });
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
   const cases: Array<Record<string, unknown>> = [];
-  const approvals: Array<{ name: string; turnId: string | null; allowed: false }> = [];
+  const approvals: Array<{
+    name: string;
+    turnId: string | null;
+    allowed: false;
+  }> = [];
   let active = true;
   const thread = `fixture-gateway-${process.pid}`;
   const turn = `${thread}-turn`;
@@ -98,6 +109,9 @@ export async function runGatewayFixture(
       `data:text/html,${encodeURIComponent(`<title>${title} B</title><h1>Owned sibling</h1>`)}`,
     );
     sibling.showInactive();
+    // show:true defers ordering under `open -g` and marks the window key
+    // in-process; showInactive() does neither.
+    first.showInactive();
     await pause(300);
     const windows = await backend.listWindows();
     const owned = (label: string) =>
@@ -158,7 +172,10 @@ export async function runGatewayFixture(
     });
 
     before = actionCount();
-    const clicked = await call("computer_click", { ...point, window_id: target.id });
+    const clicked = await call("computer_click", {
+      ...point,
+      window_id: target.id,
+    });
     const clicks = await first.webContents.executeJavaScript("window.clicks");
     const clickedPayload = payload(clicked);
     cases.push({
@@ -242,7 +259,11 @@ export async function runGatewayFixture(
       approvals,
       cases,
       focusProbe: probeResult
-        ? { report: probeResult.report, meta: probeResult.meta, done: probeResult.done }
+        ? {
+            report: probeResult.report,
+            meta: probeResult.meta,
+            done: probeResult.done,
+          }
         : { skipped: "focus-probe binary not present" },
     };
   } catch (error) {

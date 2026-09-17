@@ -59,7 +59,10 @@ const measured = async <T>(name: string, run: () => Promise<T>) => {
   try {
     return await run();
   } finally {
-    (report.measurements as unknown[]).push({ name, milliseconds: performance.now() - started });
+    (report.measurements as unknown[]).push({
+      name,
+      milliseconds: performance.now() - started,
+    });
   }
 };
 const findNode = (root: ComputerUiNode | undefined, label: string): ComputerUiNode | undefined => {
@@ -144,7 +147,9 @@ async function main() {
     });
     endpoint = await host.listen();
   }
-  const permissionReply = await cuaRequest<{ result?: { structuredContent?: unknown } }>(endpoint, {
+  const permissionReply = await cuaRequest<{
+    result?: { structuredContent?: unknown };
+  }>(endpoint, {
     method: "call",
     name: "check_permissions",
     args: { prompt: false },
@@ -153,7 +158,12 @@ async function main() {
   report.nativePermissions = permissionReply.result?.structuredContent;
   const windowReply = await cuaRequest<{
     result?: { structuredContent?: { windows?: Array<{ pid?: number }> } };
-  }>(endpoint, { method: "call", name: "list_windows", args: { pid: process.pid }, capability });
+  }>(endpoint, {
+    method: "call",
+    name: "list_windows",
+    args: { pid: process.pid },
+    capability,
+  });
   report.nativeFixtureWindows = windowReply.result?.structuredContent?.windows?.filter(
     (window) => window.pid === process.pid,
   );
@@ -197,7 +207,11 @@ async function main() {
     }
     return reply;
   };
-  backend = new CuaComputerBackend({ endpoint, capability, request: recordedRequest });
+  backend = new CuaComputerBackend({
+    endpoint,
+    capability,
+    request: recordedRequest,
+  });
   report.availability = await backend.availability();
   if ((report.availability as { kind: string }).kind !== "available") {
     cases.push({
@@ -231,7 +245,11 @@ async function main() {
     thirdId: thirdWindow[0]!.id,
   };
   const observation = await measured("window-observation", () =>
-    backend!.getState({ windowId: window.id, includeTree: true, includeScreenshot: true }),
+    backend!.getState({
+      windowId: window.id,
+      includeTree: true,
+      includeScreenshot: true,
+    }),
   );
   if (observation.screenshot)
     await writeFile(
@@ -283,8 +301,18 @@ async function main() {
     });
   }
   const semanticWindows = [
-    { browser: first, window, label: "Fixture text", text: "agent-a-background" },
-    { browser: sibling, window: other[0]!, label: "Fixture text B", text: "agent-b-background" },
+    {
+      browser: first,
+      window,
+      label: "Fixture text",
+      text: "agent-a-background",
+    },
+    {
+      browser: sibling,
+      window: other[0]!,
+      label: "Fixture text B",
+      text: "agent-b-background",
+    },
     {
       browser: third,
       window: thirdWindow[0]!,
@@ -327,12 +355,17 @@ async function main() {
     height: 180,
     x: 100,
     y: 540,
+    show: false,
   });
   await sentinel.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
       `<!doctype html><title>${nonce} Focus Guard</title><style>body{font:22px system-ui;padding:24px}</style><h1>Background focus guard</h1><p>No fixture window may hold focus while A, B and C receive text; the app must never become frontmost.</p>`,
     )}`,
   );
+  // `show:true` calls makeKeyAndOrderFront — even without OS activation it
+  // marks the window key inside the app, so getFocusedWindow() would report
+  // the sentinel and the invariant below could never hold.
+  sentinel.showInactive();
   // Never call focus(): BrowserWindow.focus() activates the app even under an
   // `open -g` launch, which is exactly the focus theft this case guards
   // against. The invariant is now stronger — no fixture window may hold OS
@@ -376,7 +409,11 @@ async function main() {
         try {
           return await backend!.typeText(target.text, target.window.id, target.resolved);
         } finally {
-          spans.push({ label: target.label, started, finished: performance.now() });
+          spans.push({
+            label: target.label,
+            started,
+            finished: performance.now(),
+          });
         }
       }),
     );
@@ -398,13 +435,18 @@ async function main() {
       Math.min(...spans.map((span) => span.finished));
   cases.push({
     name: "three-window-focus-neutral-semantic-text",
+    // OS focus truth comes from the system probe, not getFocusedWindow():
+    // a background AX set_value/typeText legitimately marks the element
+    // focused inside the app — Electron reports that window as "focused"
+    // while the OS key window and frontmost app never change. When the
+    // probe binary is absent the in-process sampler is the fallback meter.
     status:
       !semanticError &&
       semanticValues.every((value, index) => value === semanticTargets[index]!.text) &&
-      focusSamples.length > 1 &&
-      focusSamples.every((id) => id === null) &&
       overlap &&
-      (probeResult === null || probeResult.report.theftFree)
+      (probeResult !== null
+        ? probeResult.report.theftFree
+        : focusSamples.length > 1 && focusSamples.every((id) => id === null))
         ? "passed"
         : "failed",
     results: semanticResults,
@@ -421,7 +463,10 @@ async function main() {
           done: probeResult.done,
           exitCode: probeResult.exitCode,
         }
-      : { skipped: "focus-probe binary not present", binaryPath: focusProbePath },
+      : {
+          skipped: "focus-probe binary not present",
+          binaryPath: focusProbePath,
+        },
     spans,
     overlap,
   });
@@ -478,7 +523,11 @@ async function main() {
         status: actualText === "foreground-ok" ? "passed" : "failed",
       });
     } catch (error) {
-      cases.push({ name: "explicit-foreground-text", status: "refused", error: String(error) });
+      cases.push({
+        name: "explicit-foreground-text",
+        status: "refused",
+        error: String(error),
+      });
     }
   } else
     cases.push({
@@ -488,7 +537,11 @@ async function main() {
     });
 
   const semanticState = await measured("semantic-observation", () =>
-    backend!.getState({ windowId: window.id, includeTree: true, includeScreenshot: true }),
+    backend!.getState({
+      windowId: window.id,
+      includeTree: true,
+      includeScreenshot: true,
+    }),
   );
   const textNode = findNode(semanticState.root, "Fixture text");
   if (textNode?.activationPoint) {
@@ -513,7 +566,11 @@ async function main() {
         status: appText === "fixture-value" ? "passed" : "failed",
       });
     } catch (error) {
-      cases.push({ name: "ax-set-value", status: "refused", error: String(error) });
+      cases.push({
+        name: "ax-set-value",
+        status: "refused",
+        error: String(error),
+      });
     }
   } else
     cases.push({
@@ -527,7 +584,11 @@ async function main() {
   await pause(300);
   try {
     await backend.click({ x: content.x + button.x, y: content.y + button.y }, window.id);
-    cases.push({ name: "moved-target", status: "failed", reason: "A stale point was admitted." });
+    cases.push({
+      name: "moved-target",
+      status: "failed",
+      reason: "A stale point was admitted.",
+    });
   } catch (error) {
     cases.push({
       name: "moved-target",
@@ -541,7 +602,10 @@ async function main() {
       appState: { ...state },
     });
   }
-  const capture = await backend.captureScreenshot({ kind: "window", windowId: window.id });
+  const capture = await backend.captureScreenshot({
+    kind: "window",
+    windowId: window.id,
+  });
   await writeFile(
     join(directory!, "fixture-after.png"),
     Buffer.from(capture.bytesBase64, "base64"),
