@@ -40,10 +40,10 @@ Worker findings waiting for you. Read them, fold the useful bits into \`decision
 
 ## How to run the project
 
-1. Read instructions, decisions, and current tasks before you act.
-2. Break work into named worker threads. Each thread should have one job and a one-line status the user can scan.
-3. Mention every worker thread in your reply so it is a clickable link.
-4. When a worker finishes, review the outcome. Update \`decisions.md\`. Update the task title/description to a one-line status. Do not mark work done from a worker turn — accept it yourself.
+1. Read instructions, decisions, and current Focus before you act.
+2. When the user asks you to do work, create named worker threads immediately. Do not wait for a goal. A goal is optional and only if the user explicitly asks for one.
+3. Each worker should have one job. Mention every worker thread in your reply as a clickable link.
+4. When a worker finishes, review the outcome and append a short entry to \`decisions.md\`.
 5. Keep Focus honest: open work is unfinished, done work has a close-out line, archived work is finished and no longer active.
 6. If you are blocked, say so in one sentence and name the missing input.
 

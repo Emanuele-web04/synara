@@ -1,4 +1,9 @@
-import type { ProjectDigestFocusItem, ProjectTask, ThreadId } from "@synara/contracts";
+import type {
+  ProjectDigestFocusItem,
+  ProjectTask,
+  ProjectThreadIndexEntry,
+  ThreadId,
+} from "@synara/contracts";
 
 export type ProjectFocusRowState = "open" | "done" | "archived";
 
@@ -52,6 +57,50 @@ export function partitionProjectFocusRows(tasks: ReadonlyArray<ProjectTask>): {
     else done.push(row);
   }
   return { open, done, archived };
+}
+
+export function projectThreadIndexFocusRows(input: {
+  readonly threads: ReadonlyArray<ProjectThreadIndexEntry>;
+  readonly coordinatorThreadId: ThreadId | null | undefined;
+  readonly titlesById: ReadonlyMap<string, string>;
+}): {
+  readonly open: ReadonlyArray<ProjectFocusRow>;
+  readonly archived: ReadonlyArray<ProjectFocusRow>;
+} {
+  const open: ProjectFocusRow[] = [];
+  const archived: ProjectFocusRow[] = [];
+  for (const thread of input.threads) {
+    if (thread.excluded) continue;
+    if (input.coordinatorThreadId && thread.threadId === input.coordinatorThreadId) continue;
+    const title = input.titlesById.get(thread.threadId) ?? "Worker thread";
+    const row: ProjectFocusRow = {
+      id: thread.threadId,
+      title,
+      detail: null,
+      threadId: thread.threadId,
+      state: thread.archived ? "archived" : "open",
+    };
+    if (row.state === "archived") archived.push(row);
+    else open.push(row);
+  }
+  return { open, archived };
+}
+
+export function mergeProjectFocusRows(
+  tasks: ReturnType<typeof partitionProjectFocusRows>,
+  threads: ReturnType<typeof projectThreadIndexFocusRows>,
+): ReturnType<typeof partitionProjectFocusRows> {
+  const seen = new Set(tasks.open.map((row) => row.threadId).filter(Boolean));
+  const extraOpen = threads.open.filter((row) => !row.threadId || !seen.has(row.threadId));
+  const archivedIds = new Set(tasks.archived.map((row) => row.threadId).filter(Boolean));
+  const extraArchived = threads.archived.filter(
+    (row) => !row.threadId || !archivedIds.has(row.threadId),
+  );
+  return {
+    open: [...tasks.open, ...extraOpen],
+    done: tasks.done,
+    archived: [...tasks.archived, ...extraArchived],
+  };
 }
 
 export function projectDigestFocusRows(

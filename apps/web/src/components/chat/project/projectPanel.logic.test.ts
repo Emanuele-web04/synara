@@ -1,7 +1,12 @@
 import { ProjectTaskId, ThreadId, type ProjectTask } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { partitionProjectFocusRows, rewriteThreadIdsAsMarkdownLinks } from "./projectPanel.logic";
+import {
+  mergeProjectFocusRows,
+  partitionProjectFocusRows,
+  projectThreadIndexFocusRows,
+  rewriteThreadIdsAsMarkdownLinks,
+} from "./projectPanel.logic";
 
 function task(input: {
   id: string;
@@ -51,6 +56,41 @@ describe("partitionProjectFocusRows", () => {
     expect(partitioned.open[0]?.detail).toBe("Needs GitHub MCP auth");
     expect(partitioned.done.map((row) => row.title)).toEqual(["Test emulator"]);
     expect(partitioned.archived.map((row) => row.title)).toEqual(["Old attempt"]);
+  });
+});
+
+describe("projectThreadIndexFocusRows", () => {
+  it("lists worker threads and hides the coordinator", () => {
+    const coordinatorId = ThreadId.makeUnsafe("thread-coordinator");
+    const workerId = ThreadId.makeUnsafe("thread-worker");
+    const rows = projectThreadIndexFocusRows({
+      coordinatorThreadId: coordinatorId,
+      titlesById: new Map([[workerId, "Sample map Focus"]]),
+      threads: [
+        {
+          projectId: "project-1" as never,
+          threadId: coordinatorId,
+          excluded: false,
+          archived: false,
+          summaryStatus: "covered",
+          lastUpdatedAt: "2026-09-17T00:00:00.000Z",
+          lastSummarizedAt: null,
+        },
+        {
+          projectId: "project-1" as never,
+          threadId: workerId,
+          excluded: false,
+          archived: false,
+          summaryStatus: "pending",
+          lastUpdatedAt: "2026-09-17T00:00:00.000Z",
+          lastSummarizedAt: null,
+        },
+      ],
+    });
+    expect(rows.open.map((row) => row.title)).toEqual(["Sample map Focus"]);
+    expect(
+      mergeProjectFocusRows(partitionProjectFocusRows([]), rows).open.map((row) => row.title),
+    ).toEqual(["Sample map Focus"]);
   });
 });
 

@@ -27,9 +27,9 @@ export const PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT = 20;
 export const PROJECT_AGENT_DIGEST_DEBOUNCE_MS = 60_000;
 
 export const DEFAULT_PROJECT_AGENT_LIMITS = {
-  maxConcurrentWorkers: 2,
-  maxNewWorkersPerTurn: 4,
-  maxWorkerCreationsPerGoal: 12,
+  maxConcurrentWorkers: 8,
+  maxNewWorkersPerTurn: 8,
+  maxWorkerCreationsPerGoal: 40,
   maxAutomaticContinuationsPerGoal: 20,
   maxRepairRoundsPerTask: 2,
 } as const;

@@ -1441,43 +1441,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
         if (principal.kind !== "coordinator") return;
-        const goal = yield* repository
-          .getActiveGoal(principal.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
-        if (Option.isNone(goal) || goal.value.status !== "active") {
-          return yield* Effect.fail(
-            fail(
-              "The coordinator can create workers only while a user-authorized goal is active.",
-              "forbidden",
-            ),
-          );
-        }
+        const config = yield* requireConfig(principal.projectId);
+        const limits = {
+          maxNewWorkersPerTurn: Math.max(
+            config.limits.maxNewWorkersPerTurn,
+            DEFAULT_PROJECT_AGENT_LIMITS.maxNewWorkersPerTurn,
+          ),
+          maxConcurrentWorkers: Math.max(
+            config.limits.maxConcurrentWorkers,
+            DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers,
+          ),
+        };
         const running = yield* repository
           .countRunningWorkers(principal.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to count running workers.")));
-        if (input.requestedCount > goal.value.limits.maxNewWorkersPerTurn) {
+        if (input.requestedCount > limits.maxNewWorkersPerTurn) {
           return yield* Effect.fail(
             fail(
-              `This goal allows at most ${goal.value.limits.maxNewWorkersPerTurn} new workers per turn.`,
+              `This project allows at most ${limits.maxNewWorkersPerTurn} new workers per turn.`,
               "limit",
             ),
           );
         }
-        if (running + input.requestedCount > goal.value.limits.maxConcurrentWorkers) {
+        if (running + input.requestedCount > limits.maxConcurrentWorkers) {
           return yield* Effect.fail(
             fail(
-              `This goal allows at most ${goal.value.limits.maxConcurrentWorkers} concurrent workers.`,
-              "limit",
-            ),
-          );
-        }
-        if (
-          goal.value.workerCreationCount + input.requestedCount >
-          goal.value.limits.maxWorkerCreationsPerGoal
-        ) {
-          return yield* Effect.fail(
-            fail(
-              `This goal allows at most ${goal.value.limits.maxWorkerCreationsPerGoal} worker creations.`,
+              `This project allows at most ${limits.maxConcurrentWorkers} concurrent workers.`,
               "limit",
             ),
           );
@@ -1488,58 +1477,88 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
         if (principal.kind !== "coordinator") return;
+        const now = isoNow();
         const goal = yield* repository
           .getActiveGoal(principal.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
-        if (Option.isNone(goal) || goal.value.status !== "active") return;
+        const activeGoal =
+          Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
         for (const [index, threadId] of input.threadIds.entries()) {
-          const task = yield* impl.createTask(
-            {
-              requestId: `${input.requestId}:task:${threadId}`,
-              projectId: principal.projectId,
-              goalId: goal.value.id,
-              title: input.titles[index] ?? `Worker ${index + 1}`,
-              dependsOnTaskIds: [],
-            },
-            principal,
-          );
-          const assigned = {
-            ...task,
-            status: "running" as const,
-            assignedThreadId: threadId,
-            revision: task.revision + 1,
-            updatedAt: isoNow(),
-          };
+          const title = input.titles[index] ?? `Worker ${index + 1}`;
           yield* repository
-            .saveTask(assigned, task.revision)
-            .pipe(Effect.mapError(toServiceError("Failed to assign worker thread.")));
-          yield* repository
-            .saveAttempt({
-              id: branded.attempt(),
+            .upsertThreadIndex({
               projectId: principal.projectId,
-              taskId: task.id,
-              workerThreadId: threadId,
-              gatewayOperationId: input.requestId,
-              requestId: `${input.requestId}:attempt:${threadId}`,
-              attemptNumber: 1,
-              outcome: "running",
-              error: null,
-              createdAt: isoNow(),
-              finishedAt: null,
+              threadId,
+              excluded: false,
+              archived: false,
+              summaryStatus: "pending",
+              lastUpdatedAt: now,
+              lastSummarizedAt: null,
             })
-            .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+            .pipe(Effect.mapError(toServiceError("Failed to index worker thread.")));
+          if (activeGoal) {
+            const task = yield* impl.createTask(
+              {
+                requestId: `${input.requestId}:task:${threadId}`,
+                projectId: principal.projectId,
+                goalId: activeGoal.id,
+                title,
+                dependsOnTaskIds: [],
+              },
+              principal,
+            );
+            const assigned = {
+              ...task,
+              status: "running" as const,
+              assignedThreadId: threadId,
+              revision: task.revision + 1,
+              updatedAt: now,
+            };
+            yield* repository
+              .saveTask(assigned, task.revision)
+              .pipe(Effect.mapError(toServiceError("Failed to assign worker thread.")));
+            yield* repository
+              .saveAttempt({
+                id: branded.attempt(),
+                projectId: principal.projectId,
+                taskId: task.id,
+                workerThreadId: threadId,
+                gatewayOperationId: input.requestId,
+                requestId: `${input.requestId}:attempt:${threadId}`,
+                attemptNumber: 1,
+                outcome: "running",
+                error: null,
+                createdAt: now,
+                finishedAt: null,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+          }
+          yield* appendActivity({
+            projectId: principal.projectId,
+            kind: "task-created",
+            actorKind: "coordinator",
+            actorThreadId: principal.threadId,
+            goalId: activeGoal?.id ?? null,
+            taskId: null,
+            source: null,
+            summary: `Opened worker: ${title}`,
+            createdAt: now,
+          });
         }
-        yield* repository
-          .saveGoal(
-            {
-              ...goal.value,
-              workerCreationCount: goal.value.workerCreationCount + input.threadIds.length,
-              revision: goal.value.revision + 1,
-              updatedAt: isoNow(),
-            },
-            goal.value.revision,
-          )
-          .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+        if (activeGoal) {
+          yield* repository
+            .saveGoal(
+              {
+                ...activeGoal,
+                workerCreationCount: activeGoal.workerCreationCount + input.threadIds.length,
+                revision: activeGoal.revision + 1,
+                updatedAt: now,
+              },
+              activeGoal.revision,
+            )
+            .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+        }
+        yield* impl.scheduleDigest(principal.projectId);
       }),
 
     reconcilePendingWakes: () =>
@@ -1921,7 +1940,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
     assertCallerMayDriveManagedThread: (input) =>
       Effect.gen(function* () {
         const caller = yield* impl.resolvePrincipalForThread(input.callerThreadId);
-        const target = yield* impl.resolvePrincipalForThread(input.targetThreadId);
         const targetShell = yield* snapshotQuery.getThreadShellById(input.targetThreadId).pipe(
           Effect.mapError(toServiceError("Failed to load target thread.")),
           Effect.flatMap(
@@ -1937,30 +1955,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           );
         }
         if (caller.kind === "coordinator") {
-          const goal = yield* repository
-            .getActiveGoal(caller.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
-          if (Option.isNone(goal) || goal.value.status !== "active") {
-            return yield* Effect.fail(
-              fail(
-                "The coordinator may drive only threads associated with its active authorized goal.",
-                "forbidden",
-              ),
-            );
-          }
           if (targetShell.projectId !== caller.projectId) {
             return yield* Effect.fail(fail("Cross-project control is blocked.", "forbidden"));
-          }
-          const assigned = yield* repository
-            .findTaskByAssignedThread(input.targetThreadId)
-            .pipe(Effect.mapError(toServiceError("Failed to load managed worker association.")));
-          if (Option.isNone(assigned) || assigned.value.goalId !== goal.value.id) {
-            return yield* Effect.fail(
-              fail(
-                "The coordinator may drive only threads associated with its active authorized goal.",
-                "forbidden",
-              ),
-            );
           }
         }
       }),

@@ -12,6 +12,8 @@ import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/e
 import { basenameOfPath } from "~/file-icons";
 import { BotIcon, CheckIcon, PauseIcon, PlayIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useStore } from "~/store";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -23,8 +25,10 @@ import {
 import { ProjectAgentDialog } from "./ProjectAgentDialog";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
 import {
+  mergeProjectFocusRows,
   partitionProjectFocusRows,
   projectDigestFocusRows,
+  projectThreadIndexFocusRows,
   type ProjectFocusRow,
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
@@ -58,7 +62,19 @@ export function ProjectPanel({
 }: ProjectPanelProps) {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
-  const focusRows = useMemo(() => partitionProjectFocusRows(agent.tasks), [agent.tasks]);
+  const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
+  const sidebarThreads = useStore(selectSidebarThreads);
+  const focusRows = useMemo(() => {
+    const titlesById = new Map(sidebarThreads.map((thread) => [thread.id, thread.title] as const));
+    return mergeProjectFocusRows(
+      partitionProjectFocusRows(agent.tasks),
+      projectThreadIndexFocusRows({
+        threads: agent.threads,
+        coordinatorThreadId: agent.overview?.config?.coordinatorThreadId,
+        titlesById,
+      }),
+    );
+  }, [agent.overview?.config?.coordinatorThreadId, agent.tasks, agent.threads, sidebarThreads]);
   const digestFocus = useMemo(
     () => projectDigestFocusRows(agent.overview?.digest?.focusItems ?? []),
     [agent.overview?.digest?.focusItems],

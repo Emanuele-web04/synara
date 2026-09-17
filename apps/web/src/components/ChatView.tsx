@@ -3856,7 +3856,7 @@ export default function ChatView({
     sendPreflightInFlightRef,
   });
 
-  const { onSend: onSendPreparedTurn } = useChatTurnSubmission({
+  const { onSend } = useChatTurnSubmission({
     threadId,
     hasLiveTurn,
     lateComposerSendHandlersRef,
@@ -3990,31 +3990,6 @@ export default function ChatView({
     runProjectScript,
     persistThreadSettingsForNextTurn,
   });
-
-  const onSend = useCallback(
-    async (...args: Parameters<typeof onSendPreparedTurn>) => {
-      if (isCoordinatorConversation && activeProjectId) {
-        const objective = (promptRef.current ?? "").trim();
-        if (objective.length > 0) {
-          try {
-            const api = readNativeApi();
-            const overview = await api?.projectAgent?.getOverview({ projectId: activeProjectId });
-            if (overview?.configured && overview.goal?.status !== "active") {
-              await api?.projectAgent?.startGoal({
-                requestId: randomUUID(),
-                projectId: activeProjectId,
-                objective,
-              });
-            }
-          } catch {
-            // Sending still proceeds if goal authorization cannot start.
-          }
-        }
-      }
-      return onSendPreparedTurn(...args);
-    },
-    [activeProjectId, isCoordinatorConversation, onSendPreparedTurn],
-  );
 
   const {
     onSubmitPlanFollowUp,
