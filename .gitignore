@@ -43,3 +43,6 @@ __screenshots__/
 
 # Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
 .smoke/
+
+# Unlazy pipeline state (machine-local ledgers, dispatch, approvals log)
+.unlazy/
