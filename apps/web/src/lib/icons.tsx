@@ -157,6 +157,11 @@ export const ChangesIcon = centralIconWrapper("changes");
 export const COPY_ICON_NAME = "square-behind-square-6";
 export const CopyIcon = centralIconWrapper(COPY_ICON_NAME);
 export const LinkIcon = centralIconWrapper("chain-link-3");
+// Pull request menu glyphs: a text page for "View PR", the Central GitHub mark for the
+// inline "Open in GitHub" button, and a plus bubble for "Add to chat".
+export const PageTextIcon: LucideIcon = centralIconWrapper("page-text");
+export const GitHubMarkIcon: LucideIcon = centralIconWrapper("github");
+export const ChatBubblePlusIcon: LucideIcon = centralIconWrapper("bubble-plus");
 export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
 // The clock doubles as the automation glyph everywhere it appears (meta chip,
