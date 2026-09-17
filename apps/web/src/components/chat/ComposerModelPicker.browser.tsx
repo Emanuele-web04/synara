@@ -148,7 +148,9 @@ describe("ComposerModelPicker", () => {
       await page.getByRole("tab", { name: "Codex" }).click();
       await page.getByRole("searchbox", { name: "Search models" }).fill("5.4");
       await expect.element(page.getByRole("menuitem", { name: /GPT-5\.4/u })).toBeVisible();
-      expect(page.getByRole("menuitem", { name: /GPT-5\.5/u }).elements()).toHaveLength(0);
+      await expect
+        .element(page.getByRole("menuitem", { name: /GPT-5\.5/u }))
+        .not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }
