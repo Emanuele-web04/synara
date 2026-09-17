@@ -52,6 +52,11 @@ import {
   type ComputerActionObservation,
 } from "../computer/ComputerManager.ts";
 import {
+  summarizeComputerAuditArgs,
+  type ComputerAuditEffect,
+  type ComputerAuditEntry,
+} from "../computer/computerAuditLog.ts";
+import {
   ScreenshotFrameRegistry,
   screenshotDeltaToDesktop,
   screenshotPointToDesktop,
@@ -151,6 +156,94 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
 
 export function computerToolRequiresApproval(name: string): boolean {
   return COMPUTER_APPROVAL_REQUIRED_TOOLS.has(name);
+}
+
+/**
+ * The calls the local audit log records: every approval-gated computer tool —
+ * the mutating set plus `computer_read_clipboard`, the one read that can lift
+ * a private payload the agent could not otherwise see. Perception reads stay
+ * out: they are the ordinary traffic, and the log exists for abuse review,
+ * not telemetry.
+ */
+const COMPUTER_AUDITED_TOOLS = COMPUTER_APPROVAL_REQUIRED_TOOLS;
+
+/**
+ * The audit entry's target: the ids the call declared first, then the window
+ * the result resolved when one rode it. `drivenApps` carries the apps the
+ * call was admitted to drive, so a window-grain tool still names the app its
+ * consent covered.
+ */
+function computerAuditTarget(
+  args: Record<string, unknown>,
+  drivenApps: ReadonlySet<string>,
+  resultWindowId: string | undefined,
+): ComputerAuditEntry["target"] | undefined {
+  const windowId = readWindowIdArg(args) ?? resultWindowId;
+  const pid =
+    typeof args.pid === "number" && Number.isSafeInteger(args.pid) && args.pid > 0
+      ? args.pid
+      : undefined;
+  const app =
+    typeof args.app === "string" && args.app.trim().length > 0 ? args.app : [...drivenApps][0];
+  if (windowId === undefined && pid === undefined && app === undefined) return undefined;
+  return {
+    ...(windowId !== undefined ? { windowId } : {}),
+    ...(pid !== undefined ? { pid } : {}),
+    ...(app !== undefined ? { app } : {}),
+  };
+}
+
+/** The window id a successful call resolved, when the result reports one. */
+function computerAuditResultWindowId(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.windowId === "string") return record.windowId;
+  const window = record.window;
+  return window !== null &&
+    typeof window === "object" &&
+    typeof (window as Record<string, unknown>).id === "string"
+    ? ((window as Record<string, unknown>).id as string)
+    : undefined;
+}
+
+/**
+ * The effect a completed call earned: the delivered verdict when one rode the
+ * result (`verified`, `dispatched-unknown`, `not-dispatched`), and the honest
+ * "the backend accepted it" answer otherwise — which is what
+ * `dispatched-unknown` exists to say.
+ */
+function computerAuditSuccessEffect(name: string, value: unknown): ComputerAuditEffect {
+  const delivery = (value as { delivery?: { effect?: unknown } } | null | undefined)?.delivery;
+  if (
+    delivery?.effect === "verified" ||
+    delivery?.effect === "dispatched-unknown" ||
+    delivery?.effect === "not-dispatched"
+  )
+    return delivery.effect;
+  if (name === "computer_run") {
+    const completed = (value as { completed?: unknown } | null | undefined)?.completed;
+    return typeof completed === "number" && completed > 0 ? "dispatched-unknown" : "not-dispatched";
+  }
+  return "dispatched-unknown";
+}
+
+/** The effect/code pair a failed call reports — a typed refusal or a fault. */
+export function computerAuditErrorOutcome(error: unknown): {
+  readonly effect: ComputerAuditEffect;
+  readonly code: string;
+} {
+  // A CuaActionError already carries the delivery taxonomy's verdict.
+  if (error instanceof CuaActionError)
+    return { effect: error.effect, code: error.code ?? "cua_action_error" };
+  if (error instanceof ComputerTargetError) return { effect: "refused", code: error.code };
+  if (error instanceof ComputerLeaseError) return { effect: "refused", code: error.code };
+  if (error instanceof ComputerBackendError) {
+    return error.inputPause !== undefined
+      ? { effect: "refused", code: "computer_input_paused" }
+      : { effect: "error", code: "computer_backend_error" };
+  }
+  if (error instanceof ToolInputError) return { effect: "refused", code: "invalid_arguments" };
+  return { effect: "error", code: "error" };
 }
 
 /** Computer tools are capability-gated. Provider-side schema loading varies;
@@ -1144,6 +1237,26 @@ export function makeAgentGatewayComputerTools(
       const guidance = guidanceCadence.shouldRefresh(context.callerThreadId)
         ? COMPUTER_TOOL_REFRESH_GUIDANCE
         : undefined;
+      // The audit record's resolved fields, filled as the call learns them:
+      // the admitted apps before dispatch, the delivered window id after.
+      let drivenApps: ReadonlySet<string> = new Set();
+      let resultWindowId: string | undefined;
+      const audit = (outcome: {
+        readonly effect: ComputerAuditEffect;
+        readonly code?: string;
+      }): void => {
+        if (!COMPUTER_AUDITED_TOOLS.has(name)) return;
+        const target = computerAuditTarget(args, drivenApps, resultWindowId);
+        manager.recordComputerAudit({
+          tool: name,
+          threadId: context.callerThreadId,
+          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          args: summarizeComputerAuditArgs(args),
+          ...(target !== undefined ? { target } : {}),
+          effect: outcome.effect,
+          ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+        });
+      };
       return Effect.tryPromise({
         try: async (abortSignal) => {
           if (
@@ -1153,11 +1266,13 @@ export function makeAgentGatewayComputerTools(
               args.delivery_mode === "foreground" ||
               name === "computer_activate_window")
           ) {
-            if (!options.authorizeAction)
+            if (!options.authorizeAction) {
+              audit({ effect: "refused", code: "approval_unavailable" });
               return {
                 result: approvalUnavailableResult(name),
                 signal: undefined,
               };
+            }
             if (
               !(await options.authorizeAction(
                 name,
@@ -1168,6 +1283,7 @@ export function makeAgentGatewayComputerTools(
                 abortSignal,
               ))
             ) {
+              audit({ effect: "refused", code: "approval_denied" });
               return {
                 result: mcpToolResultError(
                   "Computer action was denied or cancelled; no input was sent.",
@@ -1179,7 +1295,8 @@ export function makeAgentGatewayComputerTools(
           // Second-app consent runs here, on the caller's signal, before the
           // desktop queue is taken: a prompt nobody can reach must never park
           // the serialized operation slot.
-          for (const app of await drivenAppsForCall(name, args)) {
+          drivenApps = await drivenAppsForCall(name, args);
+          for (const app of drivenApps) {
             await manager.admitDrivenApp(context.callerThreadId, app, {
               signal: abortSignal,
               turnId: context.callerTurnId ?? undefined,
@@ -1269,6 +1386,13 @@ export function makeAgentGatewayComputerTools(
                     ? readWindowIdArg(args)
                     : undefined,
                 );
+          // The effect is final here: the delivered verdict rode the result
+          // for dispatch-capable backends, and anything else is the honest
+          // "the backend accepted it" answer `dispatched-unknown` exists to
+          // carry. Written before the setup read so a hung permission probe
+          // cannot lose a record of input already sent.
+          resultWindowId = computerAuditResultWindowId(value);
+          audit({ effect: computerAuditSuccessEffect(name, value) });
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
           // availability, and a missing Screen Recording grant blocks nothing at
@@ -1308,6 +1432,11 @@ export function makeAgentGatewayComputerTools(
       }).pipe(
         Effect.flatMap(({ result, signal }) => withSetupCard(name, context, signal, result)),
         Effect.catch((error) => {
+          // The kill switch writes nothing: a disabled thread refusing input
+          // is a state, not an event, and the log must stay empty for it.
+          if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
+            audit(computerAuditErrorOutcome(error));
+          }
           const failure =
             error instanceof ComputerBackendError && error.inputPause
               ? {

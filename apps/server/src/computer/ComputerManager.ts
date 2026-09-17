@@ -86,6 +86,7 @@ import {
   resolveComputerUniqueTextTarget,
   resolveComputerWindowTarget,
 } from "./uiTreeTargeting.ts";
+import { ComputerAuditLog, type ComputerAuditEntry } from "./computerAuditLog.ts";
 import { ComputerDenylistError, computerDenylistMatch } from "./computerDenylist.ts";
 import { describeComputerUiTree } from "./uiTreeText.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
@@ -231,6 +232,12 @@ interface DesktopLease {
 export interface ComputerManagerOptions {
   readonly backend: ComputerBackend;
   readonly controlStatePath?: string;
+  /**
+   * Where the mutating-call audit log appends — beside the control state in
+   * the server state dir. Absent means no audit file: tests and in-memory
+   * embeddings get the same behavior the feature had before it existed.
+   */
+  readonly auditLogPath?: string;
   readonly transport?: FrameTransport<string, ComputerStreamFrame>;
   /** Injected for tests; the lease is the only clock-dependent state here. */
   readonly now?: () => number;
@@ -419,6 +426,7 @@ export class ComputerManager {
   private disposed = false;
   private readonly disabledThreads = new Set<string>();
   private readonly controlState: ComputerControlState;
+  private readonly auditLog: ComputerAuditLog;
   /**
    * The running-app inventory the denylist's pid resolution reuses; see
    * `COMPUTER_DENYLIST_APP_CACHE_MS` for the bound.
@@ -589,6 +597,22 @@ export class ComputerManager {
     throw new ComputerBackendError(
       `Driving ${app} needs its own approval first; a consent prompt cannot open inside an active desktop operation. Run the action as a standalone call so the user can be asked.`,
     );
+  }
+
+  /**
+   * One mutating-call record in the local audit log. Called at the seam where
+   * the call's final effect is already known — the gateway, after a result or
+   * a typed refusal — and never awaited by it: a full or broken log must not
+   * delay or fail the action it records.
+   *
+   * The kill switch writes nothing, and that is enforced here rather than
+   * trusted to every caller: a thread whose control is off records no
+   * entries — not even the refusal that stopped it — so disabled state can
+   * never produce evidence rows the feature was already refusing to act on.
+   */
+  recordComputerAudit(entry: Omit<ComputerAuditEntry, "ts">): void {
+    if (entry.threadId !== undefined && this.controlDisabled(entry.threadId)) return;
+    this.auditLog.record(entry);
   }
 
   /**
@@ -854,6 +878,7 @@ export class ComputerManager {
       ?.abort(
         new ComputerBackendError(
           "Computer control was revoked for this conversation; no new input may be dispatched.",
+          { controlRevoked: true },
         ),
       );
     for (const controller of this.activeAuthorities.get(threadId) ?? []) controller.abort();
@@ -876,6 +901,8 @@ export class ComputerManager {
   constructor(options: ComputerManagerOptions) {
     this.backend = options.backend;
     this.controlState = new ComputerControlState(options.controlStatePath);
+    // Beside the control state file: same directory, same local-only lifetime.
+    this.auditLog = new ComputerAuditLog(options.auditLogPath);
     // Beside the control state: same directory, same atomicity expectations.
     this.scrollGearingFile = new ScrollGearingFile(
       options.controlStatePath === undefined
@@ -2922,6 +2949,7 @@ export class ComputerManager {
       if (this.controlDisabled(threadId) || this.suspendedThreads.has(threadId))
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
+          { controlRevoked: true },
         );
       const controller = new AbortController();
       let live = this.activeAuthorities.get(threadId);
@@ -3076,6 +3104,7 @@ export class ComputerManager {
       if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
+          { controlRevoked: true },
         );
       }
       await this.assertWindowInputAllowed(threadId, windowId);
@@ -3137,6 +3166,7 @@ export class ComputerManager {
       if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
+          { controlRevoked: true },
         );
       }
       // Readiness first: a paused thread is refused before it can take the
@@ -3486,6 +3516,9 @@ export class ComputerManager {
     this.backendUnsubscribe?.();
     await this.backend.dispose();
     this.listeners.clear();
+    // Queued audit appends settle last: nothing after this writes, so a flush
+    // here cannot hide a late record the way one earlier could.
+    await this.auditLog.flush();
   }
 
   private async reconcileStream(): Promise<void> {

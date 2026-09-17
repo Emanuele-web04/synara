@@ -44,7 +44,11 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
-import { COMPUTER_CONTROL_CAPABILITY } from "./computerTools.ts";
+import { COMPUTER_CONTROL_CAPABILITY, computerAuditErrorOutcome } from "./computerTools.ts";
+import {
+  summarizeComputerAuditArgs,
+  type ComputerAuditEffect,
+} from "../computer/computerAuditLog.ts";
 
 export interface AgentGatewayComputerBrowserToolsOptions {
   readonly manager: ComputerManager;
@@ -219,16 +223,56 @@ export function makeAgentGatewayComputerBrowserTools(
   const { manager } = options;
 
   const handle =
-    (name: ComputerBrowserToolName) => (args: Record<string, unknown>, context: ToolContext) =>
-      Effect.tryPromise({
+    (name: ComputerBrowserToolName) => (args: Record<string, unknown>, context: ToolContext) => {
+      // Mutating browser calls audit exactly like the desktop family; the
+      // read-only state snapshot and the dialog inspect stay out.
+      const audited = computerBrowserToolRequiresApproval(name, args);
+      const audit = (outcome: {
+        readonly effect: ComputerAuditEffect;
+        readonly code?: string;
+      }): void => {
+        if (!audited) return;
+        const pid =
+          typeof args.pid === "number" && Number.isSafeInteger(args.pid) && args.pid > 0
+            ? args.pid
+            : undefined;
+        const windowId =
+          typeof args.window_id === "number" && Number.isSafeInteger(args.window_id)
+            ? `cua:${pid ?? 0}:${args.window_id}`
+            : typeof args.window_id === "string"
+              ? args.window_id
+              : undefined;
+        manager.recordComputerAudit({
+          tool: name,
+          threadId: context.callerThreadId,
+          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          args: summarizeComputerAuditArgs(args),
+          ...(pid !== undefined || windowId !== undefined
+            ? {
+                target: {
+                  ...(pid !== undefined ? { pid } : {}),
+                  ...(windowId !== undefined ? { windowId } : {}),
+                },
+              }
+            : {}),
+          effect: outcome.effect,
+          ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+        });
+      };
+      return Effect.tryPromise({
         try: async (abortSignal) => {
           if (computerBrowserToolRequiresApproval(name, args)) {
-            if (!options.authorizeAction) return approvalUnavailableResult(name);
+            if (!options.authorizeAction) {
+              audit({ effect: "refused", code: "approval_unavailable" });
+              return approvalUnavailableResult(name);
+            }
             const approved = await options.authorizeAction(name, args, context, abortSignal);
-            if (!approved)
+            if (!approved) {
+              audit({ effect: "refused", code: "approval_denied" });
               return mcpToolResultError(
                 "Computer browser action was denied or cancelled; no input was sent.",
               );
+            }
           }
           await Effect.runPromise(context.assertCallerTurnActive(), { signal: abortSignal });
           abortSignal.throwIfAborted();
@@ -246,11 +290,35 @@ export function makeAgentGatewayComputerBrowserTools(
             boundedArgs,
             abortSignal,
           );
+          // A deliberate driver refusal is a successful call with a refused
+          // payload; both halves land in the audit record's effect + code.
+          const structured =
+            result.structuredContent !== null && typeof result.structuredContent === "object"
+              ? (result.structuredContent as Record<string, unknown>)
+              : undefined;
+          const status = typeof structured?.status === "string" ? structured.status : undefined;
+          audit(
+            result.isError === true
+              ? {
+                  effect: "error",
+                  code: typeof structured?.error === "string" ? structured.error : "browser_error",
+                }
+              : status === "refused"
+                ? {
+                    effect: "refused",
+                    code:
+                      typeof structured?.code === "string" ? structured.code : "browser_refused",
+                  }
+                : { effect: "dispatched-unknown" },
+          );
           return browserResultToMcp(result);
         },
         catch: (error) => error,
       }).pipe(
         Effect.catch((error) => {
+          if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
+            audit(computerAuditErrorOutcome(error));
+          }
           const failure =
             error instanceof CuaActionError
               ? {
@@ -273,6 +341,7 @@ export function makeAgentGatewayComputerBrowserTools(
           return Effect.succeed(failure);
         }),
       );
+    };
 
   const entry = (
     name: ComputerBrowserToolName,

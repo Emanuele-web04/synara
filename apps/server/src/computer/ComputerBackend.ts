@@ -232,6 +232,13 @@ export class ComputerBackendError extends Error {
   readonly setupRequired: boolean;
   /** A recoverable input refusal; observation remains available. */
   readonly inputPause: ComputerInputPause | undefined;
+  /**
+   * The call was refused because the thread's computer control was disabled —
+   * the kill switch, not a fault. The audit seam reads this to keep disabled
+   * state out of the log: a refusal written while control is off would record
+   * attempts the feature was already refusing to make.
+   */
+  readonly controlRevoked: boolean;
 
   constructor(
     message: string,
@@ -242,6 +249,7 @@ export class ComputerBackendError extends Error {
       readonly rejectedOperation?: string;
       readonly setupRequired?: boolean;
       readonly inputPause?: ComputerInputPause;
+      readonly controlRevoked?: boolean;
     } = {},
   ) {
     super(message, options);
@@ -251,6 +259,7 @@ export class ComputerBackendError extends Error {
     this.rejectedOperation = options.rejectedOperation;
     this.setupRequired = options.setupRequired ?? false;
     this.inputPause = options.inputPause;
+    this.controlRevoked = options.controlRevoked ?? false;
   }
 }
 

@@ -55,7 +55,12 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       const manager = new ComputerManager({
         backend,
         ...(Option.isSome(config)
-          ? { controlStatePath: join(config.value.stateDir, "computer-control.json") }
+          ? {
+              controlStatePath: join(config.value.stateDir, "computer-control.json"),
+              // Beside the control state: the bounded mutating-call audit log,
+              // local-only and dropped-oldest past its caps.
+              auditLogPath: join(config.value.stateDir, "computer-audit.jsonl"),
+            }
           : {}),
       });
       yield* Effect.addFinalizer(() => Effect.promise(() => manager.dispose()));
