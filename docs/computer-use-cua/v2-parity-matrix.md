@@ -2,7 +2,7 @@
 
 ## Scope
 
-This doc maps each Codex computer use capability to the Synara equivalent on branch `agent/computer-use-preview` at native revision 19 and driver 0.28.2. Codex claims come from third party reconstructions and local binary scans in the mega handoff, so each is marked unverified. Ours claims come from the tool surface, the backend, the desktop host, and repo docs. The milestone tool set and scroll v2 are verified live on TextEdit on this VM at rev 16; background drag and the hidden-workspace lifecycle are verified live at rev 17; the rev-18 AX observer settle passed a live embedded-daemon smoke (TextEdit application scope, Safari window scope, foreign-window and dead-pid refusals) plus unit and contract tests — no signed-app GUI run has qualified the full Synara path yet; three concurrent real-app targets with foreground isolation are verified live at rev 17 via the external trusted host (`evidence/rev17-realapp-3target-2026-09-22-*` — three distinct TextEdit pids, concurrent `set_value`, all `confirmed` with `value_readback`, frontmost untouched). Off-Space semantic input (a genuinely different Space, vs. the hidden-workspace rung already proven) and the signed-app fresh-TCC run remain uncertified. The browser/CDP family is wired through the driver as `computer_browser_*`; the Chrome extension path stays deferred.
+This doc maps each Codex computer use capability to the Synara equivalent on branch `agent/computer-use-preview` at native revision 20 and driver 0.28.2. Codex claims come from third party reconstructions and local binary scans in the mega handoff, so each is marked unverified. Ours claims come from the tool surface, the backend, the desktop host, and repo docs. The milestone tool set and scroll v2 are verified live on TextEdit on this VM at rev 16; background drag and the hidden-workspace lifecycle are verified live at rev 17; the rev-18 AX observer settle passed a live embedded-daemon smoke (TextEdit application scope, Safari window scope, foreign-window and dead-pid refusals) plus unit and contract tests — no signed-app GUI run has qualified the full Synara path yet; three concurrent real-app targets with foreground isolation are verified live at rev 17 via the external trusted host (`evidence/rev17-realapp-3target-2026-09-22-*` — three distinct TextEdit pids, concurrent `set_value`, all `confirmed` with `value_readback`, frontmost untouched). Off-Space semantic input (a genuinely different Space, vs. the hidden-workspace rung already proven) and the signed-app fresh-TCC run remain uncertified. The browser/CDP family is wired through the driver as `computer_browser_*`; the Chrome extension path stays deferred. `computer_select_text` is verified live at rev 20 on the packaged driver (hidden TextEdit, `value_readback` confirmed and independently echoed by a System Events `AXSelectedText` read on the exact window; out-of-bounds refused `ax_action_refused` unclamped; operator front untouched).
 
 ## Capability matrix
 
@@ -131,13 +131,13 @@ The gap summary above predates the decisive input matrix. Verified results:
   under its own name rather than aliased. Right-side modifier spellings stay
   driver-refused until the keymap carries the right-key codes.
 
-## Driver tool inventory — definitive audit (0.28.2, native rev 17, embedded serve)
+## Driver tool inventory — definitive audit (0.28.2, native rev 20, embedded serve)
 
 Every tool the managed macOS driver registers, classified once. Registration
 comes from `platform-macos` `tools::register_all` plus the binary's host
 tools (`check_for_update`, and `history_status`/`history_query` only under the
 upstream preview admission — the embedded daemon Synara spawns does not admit
-them, so 57 names exist on the wire here, 59 upstream). Names in the contract
+them, so 58 names exist on the wire here, 59 upstream). Names in the contract
 vocabulary that macOS never registers are listed last.
 
 The allowlist boundary is machine-pinned by
@@ -166,6 +166,7 @@ growing the allowlist means re-auditing the tool here first.
 | `press_key`              | `computer_press_key`                                                                                                                                                                                                                             |
 | `hotkey`                 | `computer_hotkey`                                                                                                                                                                                                                                |
 | `set_value`              | `computer_set_value` (exact element-token write, no synthetic fallback)                                                                                                                                                                          |
+| `select_text`            | `computer_select_text` (rev-20 native tool; exact `AXSelectedTextRange` write on an element token, verified only by attribute read-back; marker-only web content refused pre-dispatch)                                                           |
 | `clipboard_read`         | `computer_read_clipboard` (approval-gated)                                                                                                                                                                                                       |
 | `clipboard_write`        | `computer_write_clipboard` / `computer_paste` (approval-gated)                                                                                                                                                                                   |
 | `launch_app`             | `computer_launch_app` (approval-gated)                                                                                                                                                                                                           |
@@ -276,7 +277,7 @@ extraction overlaps `computer_get_state` `include_text`.
   driver (prepare → navigate → snapshot; `browser_route_unavailable` verbatim
   on non-CDP windows). See browser-surface-spec.md.
 
-Driver surface inventory (57 tools at rev 17): Synara exposes the full
+Driver surface inventory (58 tools at rev 20): Synara exposes the full
 agent-facing `computer_*` desktop set plus the `computer_browser_*` family.
 Remaining host-internal by decision: reads (`health_report`, `get_config`,
 `get_recording_state`, `get_session`, `get_session_state`, `list_sessions`,
