@@ -38,12 +38,12 @@ import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
-function defaultAgentForProvider(provider: ProviderKind): string | null {
+export function defaultAgentForProvider(provider: ProviderKind): string | null {
   if (provider === "opencode") return "build";
   return null;
 }
 
-function getAgentOptions(
+export function getAgentOptions(
   provider: ProviderKind,
   runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
 ): ReadonlyArray<ProviderAgentDescriptor> {
@@ -51,7 +51,7 @@ function getAgentOptions(
   return runtimeAgents ?? [];
 }
 
-function getSelectedAgentValue(
+export function getSelectedAgentValue(
   provider: ProviderKind,
   modelOptions: ProviderOptions | null | undefined,
 ): string | null {

@@ -192,6 +192,7 @@ import {
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { isModelPickerShortcutScopeActive } from "./chat/ComposerModelPicker.logic";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
@@ -5345,6 +5346,8 @@ export default function Sidebar() {
       }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
       if (jumpIndex !== null) {
+        // The open model picker addresses its rows with the same mod+digit chord.
+        if (isModelPickerShortcutScopeActive()) return;
         event.preventDefault();
         event.stopPropagation();
         const threadJumpTargetId = threadJumpThreadIds[jumpIndex];

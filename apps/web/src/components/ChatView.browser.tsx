@@ -5408,15 +5408,45 @@ describe("ChatView transcript geometry (full app)", () => {
         targetMessageId: "msg-user-effort-picker-shortcut" as MessageId,
         targetText: "effort picker shortcut",
       }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = { ...nextFixture.serverConfig, providers };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
     });
 
     try {
       const composerEditor = await waitForComposerEditor();
       await waitForServerConfigToApply();
+      const queryClient = mounted.router.options.context.queryClient;
+      const catalogKey = ["provider-discovery", "models", "claudeAgent"];
+      await vi.waitFor(() => expect(queryClient.isFetching({ queryKey: catalogKey })).toBe(0));
+      // Simulate a cold non-selected catalog after any route-level prewarming.
+      queryClient.removeQueries({ queryKey: catalogKey });
+      wsRequests.length = 0;
       composerEditor.focus();
       dispatchComposerPickerShortcut(composerEditor, "e");
 
       await waitForComposerPickerSurfaceOpen();
+      await vi.waitFor(() => {
+        expect(wsRequests).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              _tag: WS_METHODS.providerListModels,
+              provider: "claudeAgent",
+            }),
+          ]),
+        );
+      });
     } finally {
       await mounted.cleanup();
     }
