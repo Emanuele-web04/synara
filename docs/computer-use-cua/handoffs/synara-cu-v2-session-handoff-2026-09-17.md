@@ -144,8 +144,8 @@
 - Fix: `apps/server/src/computer/CuaComputerBackend.ts` (lane) +
   `CuaComputerBackend.test.ts`
 - Canary components: `scripts/computer-use-fixtures/{belief_probe.m,
-  build-canary.mjs, canary-main.ts, belief-canary.mjs, space_ctl.m,
-  build-space-ctl.sh}`
+build-canary.mjs, canary-main.ts, belief-canary.mjs, space_ctl.m,
+build-space-ctl.sh}`
 - Ledgers: `.unlazy/cu-specs/`, `.unlazy/cu-fix3w/`, `.unlazy/cu-belief/`
 - Approvals: `~/.unlazy/approved/` (do not touch)
 - Apps: `~/Applications/Synara Cua Fixture.app` (rebuilt, ungranted, lane

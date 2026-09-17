@@ -59,14 +59,14 @@ The handoff listed the Operon vs `cua-rs-mcp` conflict as unresolved. It is reso
 `NSEventSubtype.debugDescription` and the lazy-global initializers of
 `AccessibilitySupport.SynthesizedEvent` give the exact values.
 
-| Name | Value |
-| --- | --- |
-| `kCPSNotifyNewFront` | `0x0002` |
-| `kCPSNotifyLostKeyFocus` | `0x1000` |
-| `kCPSNotifyKeyFocusTaken` | `0x4000` |
-| `kCPSNotifyKeyFocusReturned` | `0x8000` |
-| `kCPSNotifyKeyFocusChanged` | `0xF102` |
-| `kCPSNotifyLostTypingFocus` | `0xF105` |
+| Name                           | Value    |
+| ------------------------------ | -------- |
+| `kCPSNotifyNewFront`           | `0x0002` |
+| `kCPSNotifyLostKeyFocus`       | `0x1000` |
+| `kCPSNotifyKeyFocusTaken`      | `0x4000` |
+| `kCPSNotifyKeyFocusReturned`   | `0x8000` |
+| `kCPSNotifyKeyFocusChanged`    | `0xF102` |
+| `kCPSNotifyLostTypingFocus`    | `0xF105` |
 | `kCPSNotifyTypingFocusChanged` | `0xF107` |
 
 The `cua-rs-mcp` table matches Codex exactly; the Operon table is mislabeled. The process-notification
@@ -142,7 +142,7 @@ PSN fallback until a crash is observed. The pinned driver would need a `SLEventP
     delivered counts).
   - #2874 - window-scoped click duplicates mouse events (both SkyLight and `CGEventPostToPid`; Synara's
     patch already posts once instead).
-  Any pin bump must bump the `nativeRevision` literal in `serve.rs` as well as the manifest.
+    Any pin bump must bump the `nativeRevision` literal in `serve.rs` as well as the manifest.
 - **Driver build toolchain.** `provision-cua-driver.mjs` asserts `rustc 1.97.1` exactly. The upstream
   tree pins it itself: `libs/cua-driver/rust/rust-toolchain.toml` sets `channel = "1.97.1"` (verified
   present in the 0.24.0 and 0.28.2 trees), so rustup honors it automatically when the script runs
@@ -158,7 +158,7 @@ PSN fallback until a crash is observed. The pinned driver would need a `SLEventP
   Confirmations Policy" (hand-off required / always confirm / pre-approval / no confirmation
   taxonomies) that is useful raw material for the open-source guardrails workstream.
 - **Codex session config on this machine** (`~/.codex/computer-use/sessions/*.toml`): `[apps] allowed =
-  ["com.apple.Safari"]` - i.e. Codex is running with a per-app allowlist, Safari only.
+["com.apple.Safari"]` - i.e. Codex is running with a per-app allowlist, Safari only.
 - **Our driver still has no focus enforcer.** Neither upstream 0.24.0 nor the 7,888-line patch uses CPS
   notifications or NSEvent-first focus events. The ComputerManager's `frontmost` handling exists only to
   restore the user's window after a foreground excursion; there is no focus-theft tracking or assertion
@@ -201,31 +201,31 @@ has no new commits.
 
 ### 7.1 Release timeline (cua-driver-rs)
 
-| Release | Date | Notes |
-| --- | --- | --- |
-| v0.24.0 | 2026-09-07 | our pin (source commit `4b3396d9`) |
-| v0.25.0 | 2026-09-09 | macOS click delivery fix, browser checkbox AX, envelope/Fleet features |
-| v0.26.0 | 2026-09-10 | typed window SDK flow, opt-in MCP envelopes |
-| v0.26.1 | 2026-09-10 | Hyprland pointer fix |
-| v0.27.0 | 2026-09-11 | Swift bridge symbol dedupe, consent labels, MCP connection sharing |
-| v0.28.0 | 2026-09-11 | modern stdio MCP + skills resources |
+| Release | Date       | Notes                                                                                      |
+| ------- | ---------- | ------------------------------------------------------------------------------------------ |
+| v0.24.0 | 2026-09-07 | our pin (source commit `4b3396d9`)                                                         |
+| v0.25.0 | 2026-09-09 | macOS click delivery fix, browser checkbox AX, envelope/Fleet features                     |
+| v0.26.0 | 2026-09-10 | typed window SDK flow, opt-in MCP envelopes                                                |
+| v0.26.1 | 2026-09-10 | Hyprland pointer fix                                                                       |
+| v0.27.0 | 2026-09-11 | Swift bridge symbol dedupe, consent labels, MCP connection sharing                         |
+| v0.28.0 | 2026-09-11 | modern stdio MCP + skills resources                                                        |
 | v0.28.1 | 2026-09-12 | embedded-host builds, cursor overlay excluded from foreground verification, encoder errors |
-| v0.28.2 | 2026-09-15 | desktop snapshot identity/payload ownership, desktop capture PATH fix |
+| v0.28.2 | 2026-09-15 | desktop snapshot identity/payload ownership, desktop capture PATH fix                      |
 
 ### 7.2 Every commit that touched macOS driver code since the pin (10)
 
-| Commit | Release | What it does | Files we patch |
-| --- | --- | --- | --- |
-| `b11709305` #3404 | 0.25.0 | read macOS browser checkbox state | `ax/bindings.rs` |
-| `467c103be` #2907 | 0.25.0 | click delivery: background = one SkyLight post + public fallback; foreground = one public pid post | `input/mouse.rs`, `tools/click.rs` |
-| `75b04aac0` #3683 | 0.26.0 | typed native-window SDK flow (breaking, cua framework plumbing) | `tools/click.rs` |
-| `2ec5858d1` #3680 | 0.27.0 | eliminate duplicate Swift bridge symbols | none |
-| `4c96f2496` #3706 | 0.27.0 | normalize repeated macOS consent labels | none |
-| `44c9d1f6d` #3704 | 0.28.1 | exclude the agent cursor overlay window from foreground verification | `cursor/overlay.rs`, `tools/bring_to_front.rs` |
-| `2dbc1c2cf` #3687 | 0.28.1 | embedded-host builds: `libdispatch` -> System.framework link, Linux async-io | `cursor/overlay.rs` |
-| `f2472854c` #3752 | 0.28.1 | remove PiP backend factory registry | `cua-driver/src/main.rs` |
-| `a8a7b1e5e` #3616 | 0.28.2 | unify desktop snapshot identity and payload ownership; trusted Chrome input; exact trusted click coords | `tools/{click,get_window_state,mod,scroll,set_value,type_text}.rs` |
-| `f67be123e` #3755 | 0.28.2 | resolve the system desktop capture executable directly (PATH-independent) | none |
+| Commit            | Release | What it does                                                                                            | Files we patch                                                     |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `b11709305` #3404 | 0.25.0  | read macOS browser checkbox state                                                                       | `ax/bindings.rs`                                                   |
+| `467c103be` #2907 | 0.25.0  | click delivery: background = one SkyLight post + public fallback; foreground = one public pid post      | `input/mouse.rs`, `tools/click.rs`                                 |
+| `75b04aac0` #3683 | 0.26.0  | typed native-window SDK flow (breaking, cua framework plumbing)                                         | `tools/click.rs`                                                   |
+| `2ec5858d1` #3680 | 0.27.0  | eliminate duplicate Swift bridge symbols                                                                | none                                                               |
+| `4c96f2496` #3706 | 0.27.0  | normalize repeated macOS consent labels                                                                 | none                                                               |
+| `44c9d1f6d` #3704 | 0.28.1  | exclude the agent cursor overlay window from foreground verification                                    | `cursor/overlay.rs`, `tools/bring_to_front.rs`                     |
+| `2dbc1c2cf` #3687 | 0.28.1  | embedded-host builds: `libdispatch` -> System.framework link, Linux async-io                            | `cursor/overlay.rs`                                                |
+| `f2472854c` #3752 | 0.28.1  | remove PiP backend factory registry                                                                     | `cua-driver/src/main.rs`                                           |
+| `a8a7b1e5e` #3616 | 0.28.2  | unify desktop snapshot identity and payload ownership; trusted Chrome input; exact trusted click coords | `tools/{click,get_window_state,mod,scroll,set_value,type_text}.rs` |
+| `f67be123e` #3755 | 0.28.2  | resolve the system desktop capture executable directly (PATH-independent)                               | none                                                               |
 
 Overlap is limited: at most 6 patched files in one commit (`#3616`), 2 in `#2907`, 1-2 elsewhere. A
 rebase is tractable, not a rewrite.
@@ -251,16 +251,16 @@ are the text-path fixes we actually want.
 
 Landed in the clone as working-tree changes (not committed, not pushed):
 
-| File | Change |
-| --- | --- |
-| `apps/desktop/patches/cua-driver/0001-synara-native.patch` | regenerated against 0.28.2, 7,956 lines, sha256 `94261ed962199becebe450f226d5a80bbae88c8730cd39d1a002bde9353c749a` |
-| `packages/shared/src/cuaDriverRelease.json` | version `0.28.2`, source `fc188250b4ca8549b8e61f937fdb1fb560770e86`, upstream binary archive sha `386db225...`, nativeRevision `15`, new patch sha |
-| `apps/desktop/patches/cua-driver/README.md` | revision 15 note (inherited upstream fixes, judgment calls) |
-| `apps/server/src/computer/CuaComputerBackend.ts` | 3 user-facing version strings 0.24.0 -> 0.28.2 (capability claims re-verified in the rebased driver) |
-| `apps/server/src/agentGateway/computerTools.ts` | drag guidance version string |
-| `apps/web/src/components/settings/ComputerSettingsPanel.tsx` | settings label version string |
-| `docs/computer-use-cua/README.md` | provenance + meaning of the manifest `sha256` field |
-| `docs/computer-use-cua/capability-audit-2026-09-16.md` | header notes the surface is unchanged in the rebase |
+| File                                                         | Change                                                                                                                                             |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/desktop/patches/cua-driver/0001-synara-native.patch`   | regenerated against 0.28.2, 7,956 lines, sha256 `94261ed962199becebe450f226d5a80bbae88c8730cd39d1a002bde9353c749a`                                 |
+| `packages/shared/src/cuaDriverRelease.json`                  | version `0.28.2`, source `fc188250b4ca8549b8e61f937fdb1fb560770e86`, upstream binary archive sha `386db225...`, nativeRevision `15`, new patch sha |
+| `apps/desktop/patches/cua-driver/README.md`                  | revision 15 note (inherited upstream fixes, judgment calls)                                                                                        |
+| `apps/server/src/computer/CuaComputerBackend.ts`             | 3 user-facing version strings 0.24.0 -> 0.28.2 (capability claims re-verified in the rebased driver)                                               |
+| `apps/server/src/agentGateway/computerTools.ts`              | drag guidance version string                                                                                                                       |
+| `apps/web/src/components/settings/ComputerSettingsPanel.tsx` | settings label version string                                                                                                                      |
+| `docs/computer-use-cua/README.md`                            | provenance + meaning of the manifest `sha256` field                                                                                                |
+| `docs/computer-use-cua/capability-audit-2026-09-16.md`       | header notes the surface is unchanged in the rebase                                                                                                |
 
 Conflicts and resolutions (6 files, 12 hunks):
 

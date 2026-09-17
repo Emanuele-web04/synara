@@ -19,14 +19,14 @@ background semantic text insertion where rev 15 fails today with
 
 The helper posts these stages in order (each stage is one invocation):
 
-| Stage | Name | Signal |
-| --- | --- | --- |
-| 1 | appkit-deactivate-prev | AppKit-defined type 13 subtype 2 to the previous front process |
-| 2 | appkit-activate-target | AppKit-defined type 13 subtype 1, modifiers 0xC0000, to the target pid |
-| 3 | cps-taken | Process-notification NSEvent type 21, subtype 0x4000 |
-| 4 | cps-changed | Process-notification NSEvent type 21, subtype 0xF102 |
-| 5 | cps-newfront | Process-notification NSEvent type 21, subtype 0x0002 |
-| 6 | front-process-record | `_SLPSSetFrontProcessWithOptions` + 248-byte focus record via `SLPSPostEventRecordTo` |
+| Stage | Name                   | Signal                                                                                |
+| ----- | ---------------------- | ------------------------------------------------------------------------------------- |
+| 1     | appkit-deactivate-prev | AppKit-defined type 13 subtype 2 to the previous front process                        |
+| 2     | appkit-activate-target | AppKit-defined type 13 subtype 1, modifiers 0xC0000, to the target pid                |
+| 3     | cps-taken              | Process-notification NSEvent type 21, subtype 0x4000                                  |
+| 4     | cps-changed            | Process-notification NSEvent type 21, subtype 0xF102                                  |
+| 5     | cps-newfront           | Process-notification NSEvent type 21, subtype 0x0002                                  |
+| 6     | front-process-record   | `_SLPSSetFrontProcessWithOptions` + 248-byte focus record via `SLPSPostEventRecordTo` |
 
 ## Phase ladder in the app
 

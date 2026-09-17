@@ -86,7 +86,7 @@ Source checks prove the code builds and the contracts hold. They do not prove th
 1. **Goal:** the best open-source computer-use system for AI agents on macOS. Feature parity with OpenAI's Codex Computer Use first, then better (speed, scroll reliability, robustness, full local capability). Agents are the primary consumer; Synara is the first host.
 2. **Current work:** PR #1227 is the top of stack. It runs a heavily patched, pinned `cua-driver 0.28.2` (Synara native revision 15, rebased 2026-09-17) inside an Electron host, wrapped by a server-side `ComputerManager`/`CuaComputerBackend` layer, with a live in-chat preview UI built on top.
 3. **Biggest known weaknesses:** it is not fast; macOS scroll is quantized and unmeasured; some control paths are limited (foreground-only drag, no hover, no menu tool, no window-frame tool); and human-vs-agent input isolation has an admission gate but no certified isolation guarantee.
-4. **The single most important research finding:** there is no single "hidden API". Background, non-stealing input is a *combination*: per-process event delivery (`CGEventPostToPid` / SkyLight `SLEventPostToPid` + full CGEvent field stamping), a synthetic "you are active / you hold key focus" layer (AppKit-defined `NSEvent`s + private CPS process notifications + `_SLPSSetFrontProcessWithOptions`), NSEvent-first event construction (for AppKit identity bits), and optional visual masking when a real activation is unavoidable (Electron-class apps). See section 4.
+4. **The single most important research finding:** there is no single "hidden API". Background, non-stealing input is a _combination_: per-process event delivery (`CGEventPostToPid` / SkyLight `SLEventPostToPid` + full CGEvent field stamping), a synthetic "you are active / you hold key focus" layer (AppKit-defined `NSEvent`s + private CPS process notifications + `_SLPSSetFrontProcessWithOptions`), NSEvent-first event construction (for AppKit identity bits), and optional visual masking when a real activation is unavoidable (Electron-class apps). See section 4.
 5. **Codex parity reference:** Codex's (closed-source) implementation is now well documented by third parties and by our own reverse-engineering. The shape: per-pid delivery + synthetic focus belief + AX-first actioning + settle/verify + virtual cursor + per-app approvals. We already have big parts of this in the patched cua driver; gaps are enumerated in section 5.4.
 6. **Hazards to check first:** macOS 26.4 changed the argument order of `SLEventPostToPid` (community fix: use `SLEventPostToPSN` on 26.4+; unverified against our pinned driver). 2026-09-17 update: not reproducible on this Mac's 26.5.1 with the driver's call pattern; keep the canary probe, no fallback needed yet. Two community reconstructions disagree on the CPS notification constants; 2026-09-17 update: resolved from Codex's binary (see the update block). Rev-15 behavior (three concurrent apps, human-vs-agent focus, off-Space semantic input) is unproven and needs a signed app + fresh permissions to certify.
 7. **Environment:** this Mac runs macOS 26.5.1. The assistant sandbox kills freshly compiled binaries on exec (do not run compiled test binaries from the agent sandbox; it also pops a scary Gatekeeper dialog for the user). Disk is ~97% full (~17 GB free). Use sequential subagents, no git worktrees. The clone is a partial clone with `node_modules` removed; `bun install` restores deps in ~8 s from cache.
@@ -122,16 +122,16 @@ From the conversation with Kartik:
 
 ### 2.1 Repos and checkouts on this Mac
 
-| Path | What it is | State / notes |
-| --- | --- | --- |
-| `/Users/user/synara` | Main Synara repo checkout (Kartik's fork). | On `agent/pi-midstream-followup`, dirty with unrelated changes. Do not use for CU work. |
-| `/Users/user/synara-computer-use` | Fresh clone made for this effort: `kartikkabadi/synara`, branch `agent/computer-use-preview` @ `bb7eb421c`. Partial clone (`blob:none`). `node_modules` removed to save disk. | The working base for CU v2. `bun install` restores deps (~8 s from cache). |
-| `/Users/user/synara-cua` | Older "Synara Cua" checkout, branch `cua-rebuild`, native rev ~5. Has the original `docs/computer-use-cua` corpus. | Historical reference. |
-| `/Users/user/synara-wt/cua-port` | Worktree of `agent/cua-port-1090` (PR #1090 era), ahead 8 / behind 30 vs upstream main. | Stale; not for new work. |
-| `/Users/user/synara-beta` | Older beta checkout. | Not CU related. |
-| `/Users/user/background-computer-use` | Separate Swift project: local macOS background computer-use API (loopback HTTP; no pointer stealing; window motion; session cursors). | Clean. Best-in-class reference for background input + window movement. |
-| `/Users/user/pi-computer-use` | Pi extension `@injaneity/pi-computer-use` v0.5.0 (macOS/Windows/Linux). | Clean. Best reference for agent tool model + permission onboarding. |
-| `computer-use-sdk` | Private TS SDK repo on GitHub (`kartikkabadi/computer-use-sdk`), not cloned locally. | Wraps `cua-driver-rs`; reference only. |
+| Path                                  | What it is                                                                                                                                                                    | State / notes                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `/Users/user/synara`                  | Main Synara repo checkout (Kartik's fork).                                                                                                                                    | On `agent/pi-midstream-followup`, dirty with unrelated changes. Do not use for CU work. |
+| `/Users/user/synara-computer-use`     | Fresh clone made for this effort: `kartikkabadi/synara`, branch `agent/computer-use-preview` @ `bb7eb421c`. Partial clone (`blob:none`). `node_modules` removed to save disk. | The working base for CU v2. `bun install` restores deps (~8 s from cache).              |
+| `/Users/user/synara-cua`              | Older "Synara Cua" checkout, branch `cua-rebuild`, native rev ~5. Has the original `docs/computer-use-cua` corpus.                                                            | Historical reference.                                                                   |
+| `/Users/user/synara-wt/cua-port`      | Worktree of `agent/cua-port-1090` (PR #1090 era), ahead 8 / behind 30 vs upstream main.                                                                                       | Stale; not for new work.                                                                |
+| `/Users/user/synara-beta`             | Older beta checkout.                                                                                                                                                          | Not CU related.                                                                         |
+| `/Users/user/background-computer-use` | Separate Swift project: local macOS background computer-use API (loopback HTTP; no pointer stealing; window motion; session cursors).                                         | Clean. Best-in-class reference for background input + window movement.                  |
+| `/Users/user/pi-computer-use`         | Pi extension `@injaneity/pi-computer-use` v0.5.0 (macOS/Windows/Linux).                                                                                                       | Clean. Best reference for agent tool model + permission onboarding.                     |
+| `computer-use-sdk`                    | Private TS SDK repo on GitHub (`kartikkabadi/computer-use-sdk`), not cloned locally.                                                                                          | Wraps `cua-driver-rs`; reference only.                                                  |
 
 ### 2.2 GitHub surface
 
@@ -162,6 +162,7 @@ From the conversation with Kartik:
 ### 3.1 PR #1227 in one screen
 
 Implemented (per the PR comment and recon):
+
 - Exact `(pid, window_id)` target admission (WindowServer ownership, positive geometry, visibility, Space membership, Accessibility ancestry checks).
 - Focus-neutral semantic text insertion through the exact writable Accessibility element; background semantic input does not use process-wide HID or transient foreground activation.
 - Concurrent native semantic leases + server-side scoped scheduling: different exact targets may overlap; the same target is not admitted concurrently; pointer and generic keyboard operations remain exclusive; cancellation and shutdown drain active controllers.
@@ -176,6 +177,7 @@ Source verification at PR time: `bun run fmt:check` pass; `bun run lint` 0 error
 Packaged artifacts at PR time: `Synara-0.8.4-arm64.dmg` + `.zip` (hashes in the PR comment; bundle `com.emanueledipietro.synara`, Cua Driver 0.24.0, upstream revision `4b3396d9...`, native revision 14, patch sha `3375ac1c...`). Unsigned; not notarized.
 
 **Explicitly unproven** (needs a freshly packaged rev-14 app + new TCC grants; from the PR comment and repo docs):
+
 - Three simultaneous provider-backed threads typing into three real background applications while a fourth foreground app remains usable.
 - Fresh persisted `computer_type_text` lifecycle events plus before/after target readback.
 - Retained exact semantic input into an off-Space application.
@@ -190,6 +192,7 @@ Pin (`packages/shared/src/cuaDriverRelease.json`): cua-driver `0.24.0`; upstream
 Patch: `apps/desktop/patches/cua-driver/0001-synara-native.patch` (~7,888 lines, 30 file hunks). The daemon stamps `synara_native_revision` from a literal in `serve.rs` (patch line ~455), NOT from the manifest. The patch README warns: bumping the manifest without the literal breaks the handshake and daemons get retired seconds after spawn.
 
 Revision recap:
+
 - **rev 1**: irreversible per-process input-admission gate; keyboard/mouse guards pre-prepare matching releases and release on return/error/cancel/unwind; separate action lease for restore+verify; private `cancel_input` (authenticated embedded parent + exact child PID only); cleanup ack requires zero pending input + drained contexts; host stdin-EOF drains the same gate; host refuses to kill/replace a generation without a valid ack.
 - **rev 2**: read-only `check_input_ready` for exact PID/window; admission rechecks window ownership, active Space, visibility, optional observed bounds at dispatch; Space change invalidates the current action while held releases and focus restoration drain (generation survives); semantic AX distinguishes pre-dispatch refusal vs attempted/uncertain mutation; submitted selection/value writes never fall through to another actuator; exact foreground activation no longer requests all sibling windows.
 - **rev 3**: `window_points` coordinate space + `expected_window_bounds`; input frame resolution without extra captures (`tools/px_frame.rs`, `tools/scroll.rs`).
@@ -209,6 +212,7 @@ Gate scope note (README): the gate applies to the SDK tool path admitted by the 
 ### 3.3 Architecture map (files to know)
 
 **Desktop host (Electron)** - `apps/desktop/src/`:
+
 - `cuaDriverHost.ts` (~1065 lines): private 0700 dir + 0600 unix socket; one JSON line/connection, 1 MiB request cap; capability check via `timingSafeEqual` (>=32 bytes; fd handoff, never inherited); methods `stop`, `end_task`, `probe`, `setup`, `call` (allowlisted read/action tools only, desktop-pause refusal, serialized); driver spawn: `cua-driver serve --embedded --socket <ep> --compact-cursor --idle-hide-ms 900` with env `CUA_DRIVER_EMBEDDED=1`, `CUA_DRIVER_HOST_BUNDLE_ID`, `CUA_DRIVER_PERMISSION_MODE=standard`, telemetry/update-check disabled, `SYNARA_CUA_FOREGROUND_OBSERVATION_MS=100`, `SYNARA_CUA_BACKGROUND_OBSERVATION_MS=350`, `CUA_DRIVER_PARENT_LIVENESS_STDIN=1`, `CUA_DRIVER_EMBEDDED_HOST_PID`, `CUA_DRIVER_RS_HOME=<dir>/state`; handshake asserts version + nativeRevision + embedded + child pid; `start_session` + `set_agent_cursor_motion(glide 100ms, dwell 0)` within 5 s.
 - Retirement: `cancel_input{expected_pid}` (5 s); ack requires pid match + `input_admission_closed` + `cleanup_complete` + `pending_input==0`; never kills/replaces without ack when input was ever dispatched (barrier persists across resume); dead-during-input without ack -> `releaseHeldInput()` then fail closed; orphan sweep kills daemons whose embedded host pid is dead and reaps stale `synara-cua-*` tmpdirs.
 - `computerDesktopLifecycle.ts`: pause on lock/sleep/user-session resign, resume after.
@@ -217,6 +221,7 @@ Gate scope note (README): the gate applies to the SDK tool path admitted by the 
 - `scripts/provision-cua-driver.mjs`: build-from-source + patch + provenance; requires `rustc 1.97.1` exactly; verifies patch sha before use; `--archive` rejected ("lacks Synara's native patch").
 
 **Server** - `apps/server/src/computer/`:
+
 - `ComputerManager.ts` (~3570 lines): lease/orchestration; `withDesktopControl`; `admitDrivenApp` (second-app consent); scoped injection; scroll (`scrollCalibrated` with probe/gearing on non-macOS; macOS path skips measurement); `foregroundWithRestore`; clipboard; waits; frame pub/sub; control enable/disable with generations; provision/revoke; thread removed/restored. Key constants: action settle 300 ms, paste restore 250 ms, windows publish debounce 250 ms, lease idle 300 s, control enable timeout 30 s, scroll probe 48 px, frame queue limit 8, frame socket budget 2 MiB.
 - `CuaComputerBackend.ts` (~1278 lines): translates Manager intents to native IPC; target resolution from fresh AX state (window-scoped, role verbatim, onScreen trusted, ambiguity refused); coordinate mapping via screenshot registry (`screenshotFrames.ts`); Space policy (off-Space pixels never live grounding); effect semantics: `verified` only on native read-back; `not-dispatched` vs `dispatched-unknown`; never replay uncertain actions.
 - `DesktopOperationQueue.ts`: serialized lane (limit 64) + admission/cancellation + delivery-mode context (`background`/`foreground`).
@@ -227,6 +232,7 @@ Gate scope note (README): the gate applies to the SDK tool path admitted by the 
 - Gateway: `apps/server/src/agentGateway/computerTools.ts` (~2815 lines) + `computerGuidance.ts` (60 lines).
 
 **Web** - `apps/web/src/`:
+
 - `components/computer/` (status badge, input-pause notice, click dispatch with double-click pairing 500 ms, input queue limit 24, image stream hook, preview tap hook), `components/ComputerPanel.logic.ts`, `components/chat/ComputerPreviewPopover.*` (phase machine, tap-vs-stills source selection), `ComputerControlDeniedCard`, `ComputerSetupRequiredCard`, `ComposerComputerControlEffortHint`.
 - Stores: `computerPreviewStore.ts` (per-thread sessions/agent-active/footprint), `computerStateStore.ts` (version-gated thread state, last action), `computerControlMode.ts` (`off|request|chat`).
 - Hooks: `useComputerDesktopControl`, `useComputerControlModeChange`, `useProvisionComputer` (single-flight), `useThreadComputerAvailability`, `useComputerEventBridge`, `useCachedComputerStatus`, plus component-hosted `useComputerPreviewTap`/`useComputerImageStream`.
@@ -255,7 +261,7 @@ Deliberately unexposed (audited): `invoke_menu`, `set_window_frame`, `verify_sta
 - macOS drag requires foreground (10 s cap); no hover promise; no background drag on macOS; Swift-era comparison showed the Swift engine had broader hover/background-drag/2-axis/modified scroll.
 - `set_window_frame`, `invoke_menu`, `verify_state` deliberately unexposed (capability audit).
 - Mixed-scale / secondary-display capture unproven; Intel slice compiled but not executed; production signing/notarization not established.
-- Simultaneous human input: there is an admission gate and pause semantics, but no isolation *guarantee* claim; three real concurrent targets unproven at rev 14.
+- Simultaneous human input: there is an admission gate and pause semantics, but no isolation _guarantee_ claim; three real concurrent targets unproven at rev 14.
 - Whole-desktop pane and remote/SSH/VM previews unproven.
 
 ### 3.7 Recent branch history worth knowing
@@ -268,7 +274,6 @@ Deliberately unexposed (audited): `invoke_menu`, `set_window_frame`, `verify_sta
 
 ---
 
-
 ## 4. Research corpus (knowledge that otherwise lives only in the chat log)
 
 This section is the deep dive. It is written to be self-sufficient: it includes everything learned from reverse-engineering sessions, third-party reconstructions, and hands-on probing of this Mac, with confidence markers where evidence is conflicting.
@@ -276,6 +281,7 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 ### 4.1 Codex Computer Use internals (how the competitor works)
 
 **Process model (confirmed from disks + third-party disassembly):**
+
 - `ChatGPT.app` is an Electron shell + a Rust `codex app-server` + a bundled Node 24 runtime (`cua_node`) with `@oai/sky` 0.6.32. The model sees ONE JavaScript REPL tool (`cua_repl` MCP server: `js`, `js_reset`, `turn_ended`); it writes JS against a persistent `sky` object.
 - Native Mac control happens in the **Sky daemon**: `~/.codex/computer-use/Codex Computer Use.app` (`com.openai.sky.CUAService`, an `LSUIElement` app that owns the TCC grants: Accessibility + Screen Recording). It is signed by OpenAI (team `2DC432GLL2`).
 - The daemon speaks **JSON-RPC 2.0 over a unix socket** with u32-LE length-prefixed frames: `~/Library/Group Containers/2DC432GLL2.com.openai.sky.CUAService/IPC/computeruse.sock` (plus `.lock`). An XPC transport exists behind `CODEX_COMPUTER_USE_IPC_TRANSPORT_XPC`. A separate lock-screen guardian socket lives at `/tmp/com.openai.sky.CUAService/LockScreenLoginAuthorization.sock`.
@@ -284,16 +290,18 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 - Companion servers in the same client binary: `messages` (reads `chat.db` via SQLite, resolves names via Contacts, sends via ScriptingBridge with two-phase Prepare/Commit), `computer-history` ("Skysight": ScreenCaptureKit + Vision OCR + CoreML, JSONL segments, 10-minute/6-hour summaries), `event-stream` ("Record & Replay": UIRecorder captures clicks/keys/AX diffs to `events.jsonl`).
 
 **Input synthesis model (the "no focus steal, no cursor move" trick):**
+
 - Events are **posted to the target process, not to HID**: `CGEventPostToPid` under the hood (via a once-initialized function-pointer table; also `tapCreateForPid` in the wrapper). None of the CGEvent functions are static imports; they are resolved at runtime, which is why a naive `nm` scan shows almost nothing.
 - **Events are built as `NSEvent` first** (`mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:`) and converted with `-cgEvent`. Reason: a from-scratch `CGEvent` has no AppKit identity (`[NSEvent eventNumber]` is 0, `[NSEvent window]` is nil) and custom NSViews / Electron hit-testing drop it. After conversion they patch CG-space fields.
 - **Field stamping on mouse events** (confidence: high, read from multiple binaries): field 3 = button number; field 7 = subtype, set to **3** (the value real pointing-device events carry; without it the event self-identifies as synthetic); fields 51/91/92 = window number / window-under-mouse-pointer / that-can-handle-this-event (so backgrounds apps accept a click the real pointer is nowhere near); field 41 = source pid (their own); field 40 = `kCGEventTargetUnixProcessID`. Then `WindowServerSPI.setWindowLocation` (i.e. private `CGEventSetWindowLocation`) stores the **window-local** point, flipping Y for AppKit windows.
 - Private field ids are kept in a once-initialized table `(51, 55, 64, 66, 67, 69, 71, 73)` with an "unavailable" flag per entry, so a future macOS can disable them without a crash.
 - Click timing: `humanClickInterval` = **0.1 s** between down/up; multiple clicks increment the click-state field; drag is the same event stream with `andDragTo:` (mouseDown -> mouseDragged -> mouseUp). There is also a press-and-hold path (`leftMouseDownUp(isDown:)`).
-- Keyboard: keycodes come from the *current layout* (`TISCopyCurrentKeyboardLayoutInputSource` + `kTISPropertyUnicodeKeyLayoutData` + `UCKeyTranslate` + `LMGetKbdType`); literal typing uses `keyboardSetUnicodeString` (layout-independent); `press_key` accepts an xdotool-style keysym table (`Return`, `BackSpace`, `KP_0`..`KP_9`, `KP_Enter`, `Page_Up`, `F1`..`F20`, `super`/`cmd`, `alt`/`option`, `ctrl`, `shift`, `fn`, `Caps_Lock`, `Menu`, ...).
+- Keyboard: keycodes come from the _current layout_ (`TISCopyCurrentKeyboardLayoutInputSource` + `kTISPropertyUnicodeKeyLayoutData` + `UCKeyTranslate` + `LMGetKbdType`); literal typing uses `keyboardSetUnicodeString` (layout-independent); `press_key` accepts an xdotool-style keysym table (`Return`, `BackSpace`, `KP_0`..`KP_9`, `KP_Enter`, `Page_Up`, `F1`..`F20`, `super`/`cmd`, `alt`/`option`, `ctrl`, `shift`, `fn`, `Caps_Lock`, `Menu`, ...).
 
 **Focus model (the real "hidden API" answer):**
+
 - `SyntheticAppFocusEnforcer` keeps three flags per pid: `applicationIsActive` (genuinely frontmost), `applicationBelievesItIsActive` (told so synthetically), `applicationBelievesItHasFocus` (told its window has key focus). It posts nothing when the target already believes it is active+focused, and it re-asserts only when needed (this avoids flicker).
-- It synthesizes **AppKit-defined notifications** and posts them *to the target pid*:
+- It synthesizes **AppKit-defined notifications** and posts them _to the target pid_:
   - `notifyAppDeactivated()` = `[NSEvent otherEventWithType:NSEventTypeAppKitDefined(13) ... subtype:NSEventSubtypeApplicationDeactivated(2)]` -> `.cgEvent` -> pid.
   - Activation and key-focus variants use the **private `NSEventType` 21 ("processNotification")** with **private CPS subtypes**: `kCPSNotifyNewFront`, `kCPSNotifyKeyFocusTaken`, `kCPSNotifyKeyFocusChanged`, `kCPSNotifyKeyFocusReturned`, `kCPSNotifyLostKeyFocus`, `kCPSNotifyLostTypingFocus`, `kCPSNotifyTypingFocusChanged`. These are Core Process Services notifications that AppKit normally receives from the window server; here they are forged and delivered to one process.
   - `notifyWindowKeyFocusRemoved()` sends `kCPSNotifyKeyFocusTaken` (counter-intuitive; verified by matching the lazily-initialized global each builder loads); `notifyWindowKeyFocusReturned()` sends `0xF102`.
@@ -304,14 +312,16 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 - The overall effect: the target app believes it is active/key while the user's real foreground app is untouched. This is how Codex types into a background app while you keep working.
 
 **Observation model:**
+
 - "Skyshot" = window screenshot + formatted accessibility tree text with integer `element_index` per interactive element; diff mode ("the following is a diff from the previous accessibility tree, ~ changed, + added"); the tree is refetchable by element id with validation.
 - Tree pipeline: associateTitleUIElements -> flattenIntoSelectableAncestor -> flattenRepetitiveStaticText -> pruneNonDescriptiveSubtrees, then render one line per element. Interactive elements get ids; frames are window-relative for action targeting.
 - Settle: an AXObserver-based `waitForUIToSettle` (layout/value/focus/`elementBusyChanged` notifications, debounced; ~1 s after an action, up to ~5 s while busy indicators show). Actions set `needsUISettleBeforeSkyshot`.
 - Fast window capture uses a private `SLSHWCaptureWindowList`-style path for previews/PIP; model screenshots use ScreenCaptureKit. PIP streams the controlled window into the ChatGPT window either as a remote CoreAnimation layer or VideoToolbox-encoded frames.
 
 **Action model:**
+
 - AX-first: `AXUIElementPerformAction` for menu items and secondary actions; `perform_secondary_action` invokes a named AX action on an indexed element.
-- Clicks: multi-tier (from a reverse-engineered replica, plausible for Codex): AXPress/AXOpen (zero activation) -> AX hit-test then AXPress -> `CGEvent.postToPid` (native apps) -> *real activate + visual masking* for Electron-class apps (~80 ms: raise the user's windows to `kCGPopUpMenuWindowLevel` (25) via private `CGSSetWindowLevel`, activate the target so its window sits behind the user's raised windows, deliver the click, restore). Known cosmetic issue: the menu bar can flash during the activation; the community fix is a transparent fullscreen overlay at level 25.
+- Clicks: multi-tier (from a reverse-engineered replica, plausible for Codex): AXPress/AXOpen (zero activation) -> AX hit-test then AXPress -> `CGEvent.postToPid` (native apps) -> _real activate + visual masking_ for Electron-class apps (~80 ms: raise the user's windows to `kCGPopUpMenuWindowLevel` (25) via private `CGSSetWindowLevel`, activate the target so its window sits behind the user's raised windows, deliver the click, restore). Known cosmetic issue: the menu bar can flash during the activation; the community fix is a transparent fullscreen overlay at level 25.
 - `set_value`: writes `kAXValue` when the element says settable; autosubmits search fields by pressing Return.
 - `select_text`: resolves text ranges via text markers (WebKit) and sets the selection.
 - `paste`: writes `NSPasteboard` (String/HTML/RTF/file URLs) and restores the previous clipboard contents afterwards.
@@ -319,19 +329,23 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 - `drag`: the same synthesized events with `andDragTo:`; middle button = `mouseButton: 2`.
 
 **UX and safety features:**
+
 - Virtual cursor overlay ("ComputerUseCursor", including a fog style): spring animation, press effect, idle wobble; ordered directly above the target window; visual-only and never used for coordinates. Multiple agents = multiple cursors.
 - Per-app approvals (allow / always allow / deny), approvals for launching apps, URL policy checks for browser use, "Computer Use was stopped by the user with the physical Escape key" stop flow.
 - Menu bar UI: "No Active Sessions" / "Stop Computer Use for App"; sessions deactivate at turn end.
 - Locked use (macOS): optional authorization plug-in; auto-unlock only during active CU turns; every display is covered while temporarily unlocked; relock-on-local-input.
 
 **Chrome path (important architecture lesson):**
+
 - Chrome is NOT driven through macOS Accessibility. It is driven through the **Chrome DevTools Protocol** obtained by a ChatGPT extension via `chrome.debugger`, relayed through a native messaging host and `browser-service.mjs`. Tab APIs: `tab.ax.*` (index-addressed), `tab.playwright.*`, `tab.dom_cua.*`, `tab.cua.*` (raw coordinates); a content-script cursor overlay; agent tab groups; favicon badges; takeover of user tabs with fail-closed checks. Without the extension, Chrome falls back to the AX path (with `AXManualAccessibility`).
 
 **IPC and security posture:**
+
 - Sender authentication: the daemon authorizes clients by code signature / team id / bundle identity (audit token, `getsockopt(LOCAL_PEERTOKEN)`; `browser-use-peer-authorization.node` checks teamId + signingIdentifier + parent/grandparent). `SkyComputerUseClient` carries a parent launch constraint (`SkyComputerUseClient_Parent.coderequirement`, team `2DC432GLL2`), so only OpenAI-signed processes can spawn it.
 - Known failure modes (openai/codex issues): `#35234` native pipe rejects a correctly signed in-app sender ("Sender process is not authenticated", macOS 26.5.2); `#32210` service crashes on macOS 15 (missing Swift concurrency symbol); `#18755` client built for macOS 15 crashes on 14; `#26293` `turn-ended` client leaks as PPID=1 orphans; `#28479` CU client needs `CODEX_HOME`/`CODEX_SQLITE_HOME`; `#25321` composer focus loss with the pet/overlay.
 
 **Version hazards (top of the risk list):**
+
 - **macOS 26.4 changed the argument order of `SLEventPostToPid`.** A community implementation (Osaurus, fix #2316) switched to `SLEventPostToPSN` on 26.4+ because pid-first calls crash (crash registers forwarded the pid into `SLEventPostToPSN`'s event slot, #2315). **Check what our pinned driver calls on this macOS 26.5.1 machine, and add a version-gated PSN path if needed.**
 - CPS subtype constants: two reconstructions disagree. Operon: `kCPSNotifyKeyFocusTaken = 0x8000`, `kCPSNotifyKeyFocusReturned = 0xF102` (and warns "LostKeyFocus would be the obvious guess and it is wrong"). cua-rs-mcp: `kCPSNotifyKeyFocusReturned = 0x8000`, `kCPSNotifyKeyFocusTaken = 0x4000`, `kCPSNotifyKeyFocusChanged = 0xf102`, `kCPSNotifyNewFront = 2`, `kCPSNotifyLostKeyFocus = 0x1000`. **Verify empirically on this machine before relying on either table.**
 - Event field offsets (`SLSEventRecord` pointer at CGEvent offset 24; probed 24/32/16) and other private layouts can shift across macOS releases. Keep availability flags + fallbacks (the current architecture already does this).
@@ -339,9 +353,11 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 ### 4.2 Prior art catalogue (what to study, per problem)
 
 **Our engine base:**
+
 - `trycua/cua` (MIT): the upstream of our pinned driver. Its blog post "Inside macOS window internals" documents the SkyLight path: `SLEventPostToPid` for per-process delivery + `SLPSPostEventRecordTo` focus-without-raise + `CGEventSetWindowLocation` + the `SLSEventAuthenticationMessage` envelope for Chromium-class keyboard. The repo has `libs/cua-driver/rust/crates/platform-macos/src/input/{skylight,keyboard,mouse}.rs`, plus `docs/macos-background-input-v1-plan.md` (the ladder + reliability policy we mirror).
 
 **Focus/input recipes:**
+
 - `koekeishiya/yabai` `window_manager_focus_window_without_raise`: the canonical 248-byte `SLPSPostEventRecordTo` record (byte 0x04 = 0xF8, byte 0x08 = 0x0D, window id LE at 0x3C..0x40, byte 0x8A = 0x02 to defocus the outgoing process then 0x01 to focus the incoming one), plus `_SLPSSetFrontProcessWithOptions(psn, wid, kCPSUserGenerated = 0x200)` and `kCPSNoWindows = 0x400` variants.
 - `osaurus-ai/osaurus` `SkyLightBridge.swift`: minimal Swift recipe, the `isWindowServerVisible(pid)` guard (kill(pid,0) + `NSRunningApplication.activationPolicy != .prohibited` before posting; GetProcessForPID segfaults on non-GUI pids), the "status is diagnostic only, never retry through a second transport" rule, and the 26.4 PSN switch.
 - `nickqiaoo/Operon` `SynthesizedFocusEvent.swift` / `SyntheticAppFocusEnforcer.swift` / `SystemFocusStealPreventer.swift`: clean Swift reconstructions of Codex's activation/focus events (including the activation sequence with arming clicks for Electron), plus the pure policy that avoids re-posting when the target already believes it is active/focused.
@@ -349,6 +365,7 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 - `Puggo1145/Notch-Agent`: Swift keyboard/mouse posters with the auth envelope.
 
 **Agent/tool model + engine patterns:**
+
 - `~/pi-computer-use` (public `injaneity/pi-computer-use`, MIT, ~1.9k stars): state-scoped observation model (`find_roots` -> `observe_ui` -> `search_ui`/`expand_ui`/`inspect_ui` -> `act_ui` transactional batches with `expect` verification), strict `headless` (background) vs default modes, per-resource scheduling (`desktop-pid:{pid}`, `cdp:{target}`), permission onboarding that pre-registers the helper app in both panes then restarts the helper on "Recheck", helper app identity `~/Applications/pi-computer-use.app`, macOS bridge in `native/macos/bridge.swift`, visual agent cursor owned by the helper (`agent_cursor*.swift`), sockets at `~/Library/Caches/pi-computer-use/bridge.sock` (protocol v6).
 - `~/background-computer-use` (Swift package, MIT-ish; `actuallyepic/background-computer-use`): loopback HTTP API (`/v1/bootstrap`, `/v1/routes`, `list_apps`, `list_windows`, `get_window_state`, `click`, `scroll`, `drag`, `resize`, `set_window_frame`, `type_text`, `press_key`, `set_value`, `perform_secondary_action`); AX-first then target-only native dispatch (`SLEventPostToPid` family with a 30-50 ms settle); verifier-first response taxonomy (`success | unsupported | effect_not_verified | verifier_ambiguous`); window-motion planner/executor/verifier stack; session cursors (`cursor:{id,name,color}`); self-signing bootstrap keychain (`~/Library/Keychains/background-computer-use-dev.keychain-db`) and a signed `.app` for TCC. This is the best pure-background engine to study for transport + verification semantics.
 - `iFurySt/open-codex-computer-use` (open MCP alternative; `sky_click` method; fail-closed reliability doc in Chinese): useful cross-check on the "SkyLight symbols fail closed" posture.
@@ -360,12 +377,14 @@ This section is the deep dive. It is written to be self-sufficient: it includes 
 ### 4.3 macOS private API knowledge base (all verified present on this Mac except where noted)
 
 Verified via osascript + dlopen/dlsym on macOS 26.5.1 (all resolve at runtime):
+
 - **SkyLight:** `SLEventPostToPid`, `SLEventPostToPSN`, `SLEventSetAuthenticationMessage`, `SLEventSetIntegerValueField`, `SLPSPostEventRecordTo`, `_SLPSSetFrontProcessWithOptions`, `_SLPSGetFrontProcess`, `GetProcessForPID`, `SLSMainConnectionID`, `CGSMainConnectionID`, `SLSGetActiveSpace`, `CGSGetActiveSpace`, `SLSCopySpacesForWindows` (selector 0x7 = all Spaces containing the window), `SLSCopyManagedDisplayForWindow`, `SLSManagedDisplayGetCurrentSpace`, `SLSManagedDisplaySetCurrentSpace`, `SLSMoveWindowsToManagedSpace`, `SLSAddWindowsToSpaces`, `SLSRemoveWindowsFromSpaces`, `SLSGetSpaceManagementMode`, `SLSCopyManagedDisplaySpaces`, `SLSGetWindowOwner`, `SLSGetConnectionPSN`.
 - **HIToolbox/CarbonCore:** `CPSNotifyKeyFocusTaken`, `CPSNotifyKeyFocusReturned`, `CPSNotifyLostKeyFocus`, `CPSNotifyLostTypingFocus`, `CPSNotifyTypingFocusChanged`, `CPSNotifyNewFront`, `CPSNotifyKeyFocusChanged`, `CPSEnableForegroundOperation`, `SetFrontProcessWithOptions`, `GetFrontProcess`, `CGEventTapCreate`, `CGEventTapPostEvent`, `CGEventTapCreateForPSN`, `CGEventTapEnable`.
 - **HIServices/ApplicationServices:** `_AXUIElementGetWindow`, `AXUIElementPostKeyboardEvent` (deprecated but present), `_AXUIElementPostKeyboardEvent`, `_AXObserverAddNotificationAndCheckRemote`.
 - **CoreGraphics:** `CGEventPostToPid`, `CGEventSetWindowLocation` (also public `CGEventGetFlags`, `CGEventTapPostEvent` etc.).
 
 Key mechanics and constants:
+
 - **Focus-without-raise record** (yabai/cua/ours): 248-byte buffer, `[0x04]=0xF8`, `[0x08]=0x0D`, target window id LE at `0x3C..0x40`, `[0x8A]=0x02` defocus record to previous front PSN, then `[0x8A]=0x01` focus record to target PSN. Posted via `SLPSPostEventRecordTo(psn, buf)`; PSNs from `_SLPSGetFrontProcess` / `SLSGetWindowOwner + SLSGetConnectionPSN` / `GetProcessForPID` fallback. `_SLPSSetFrontProcessWithOptions` deliberately skipped in the background path (it raises + can trigger Space-follow); used with `kCPSUserGenerated = 0x200` only for exact make-key window work; `kCPSNoWindows = 0x400` for "front without raising all windows".
 - **Make-key record variant** (for menu key-equivalents): `[0x04]=0xF8`, `[0x08]=0x01/0x02` (focus/defocus), `[0x3A]=0x10`, `[0x3C..0x40]=wid`, `[0x20..0x30]=0xFF`.
 - **Keyboard auth envelope** (Chromium/Electron): build `SLSEventAuthenticationMessage` via the ObjC factory `+[SLSEventAuthenticationMessage messageWithEventRecord:pid:version:]` (selector exists macOS 15+; class exists 14; guard with `class_respondsToSelector`), extract the `SLSEventRecord*` from the CGEvent (probe offsets 24/32/16), attach with `SLEventSetAuthenticationMessage`. Use for keyboard only (mouse must NOT carry it, or it routes via a direct-mach path that bypasses `cgAnnotatedSessionEventTap` which Chromium's window handler needs). Skip the envelope for NSMenu key equivalents (they need the `IOHIDPostEvent` path; use a no-auth post for those).
@@ -382,7 +401,6 @@ Key mechanics and constants:
 - The `cua-driver` telemetry/update-check are disabled by the host env; keep that.
 - Two earlier reverts on this branch (`0e862235`, `7d503eb1`) reverted permission-flow fixes; check current intent before building on the permission flow.
 - `docs/computer-use-cua/evidence/` has no rev-10..14 artifacts; rev-14 claims are source-level only right now.
-
 
 ## 5. The V2 plan (workstreams, parity, sequencing)
 
@@ -407,8 +425,9 @@ Key mechanics and constants:
 **Current state.** Exact `(pid, window_id)` admission; focus-neutral semantic text (no HID, no activation); per-pid delivery in the driver; Space-aware cancellation. Not yet: a certified isolation guarantee, three-target concurrency, or reach into apps that demand "NSApp.isActive" (Electron-class).
 
 **Approach.**
+
 1. Adopt the Codex-style synthetic focus enforcer as an opt-in layer for apps that need "believe active/focused" (CPS notifications + AppKit-defined events posted to pid; keep the three-flag policy so nothing is re-posted when not needed).
-2. Keep masked real activation (raise user windows to level 25 + restore + optional overlay) as the *last* rung, never the default, and never to replay an uncertain action.
+2. Keep masked real activation (raise user windows to level 25 + restore + optional overlay) as the _last_ rung, never the default, and never to replay an uncertain action.
 3. Instrument focus theft: frontmost pid, key window, AX focused element, synthetic-event counters; assert no steals across runs.
 4. Reconcile with the current no-transient-foreground rule: default stays background; `foreground` remains explicit per call.
 
@@ -419,6 +438,7 @@ Key mechanics and constants:
 **Problem.** macOS scroll is quantized (120 px notches, max 50), single-axis, no modifiers, no travel measurement, no correction; "the agent has trouble scrolling".
 
 **Approach options.**
+
 1. Extend the existing measurement pipeline to macOS (the non-macOS path already estimates travel + gearing; macOS branch currently skips it). Guard with the observation budget so it does not blow latency.
 2. Prefer AX scroll actions when the element exposes them (`AXScrollDownByPage`-class), fall back to wheel.
 3. Add 2-axis + modifier support in the driver patch (Swift-era engine had it).
@@ -431,7 +451,7 @@ Key mechanics and constants:
 
 **Problem.** "It's not fast." Candidate contributors: host startup (~5 s bound), action settle (300 ms), observation budgets (100/350 ms), screenshots and tree walks, preview stream work, per-call round trips.
 
-**Approach.** Define budgets first (p50/p95 for get_state, click, type, scroll, launch, turn start), instrument, then: prefer warm host at first touch; cut redundant captures (reuse frame registry); conditional settle (skip when a read-back already proves the effect); AX-only fast path for get_state when requested; check JPEG quality/size; consider prewarmed cursor; keep everything env-tunable (`SYNARA_CUA_*` pattern) for A/B.
+**Approach.** Define budgets first (p50/p95 for get*state, click, type, scroll, launch, turn start), instrument, then: prefer warm host at first touch; cut redundant captures (reuse frame registry); conditional settle (skip when a read-back already proves the effect); AX-only fast path for get_state when requested; check JPEG quality/size; consider prewarmed cursor; keep everything env-tunable (`SYNARA_CUA*\*` pattern) for A/B.
 
 **Acceptance.** Before/after latency table on a fixed scenario set; no reliability regressions; budgets documented in the repo.
 
@@ -530,7 +550,6 @@ Decide with Kartik which of these are in the "parity first" milestone vs "later"
 10. **Chrome**: AX path vs CDP integration for browser control (Codex uses CDP; we currently rely on AX with `AXManualAccessibility` fallback).
 11. **Certification environment**: Lume harness availability (SIP-disabled VM, signing keychain) vs local signed-app runs only.
 12. **Upstream strategy**: keep the Synara patch as a patch file vs fork; contribute upstream fixes (like the input gate) to trycua/cua?
-
 
 ## 7. Risks and gotchas (keep this list visible)
 
@@ -676,4 +695,4 @@ Consolidated from section 6.6, with a recommended default so work can proceed if
 
 ---
 
-*End of handoff. If you are the next agent: read section 0, then 3, then 4, then 6, then 11. Do not run compiled binaries from the assistant sandbox (implementers in normal local terminals can). Confirm the section 11.3 decisions with Kartik, or proceed on the recommended defaults in writing. Keep this document accurate as you go.*
+_End of handoff. If you are the next agent: read section 0, then 3, then 4, then 6, then 11. Do not run compiled binaries from the assistant sandbox (implementers in normal local terminals can). Confirm the section 11.3 decisions with Kartik, or proceed on the recommended defaults in writing. Keep this document accurate as you go._
