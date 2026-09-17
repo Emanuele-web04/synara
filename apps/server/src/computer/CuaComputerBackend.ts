@@ -779,6 +779,45 @@ export class CuaComputerBackend implements ComputerBackend {
       );
     }
   }
+  /**
+   * The driver's AX-observer settle: `wait_for_settle` is a read-only tool —
+   * no input admission, no mutation lease — so this call runs through the
+   * ordinary read path. The native observer scopes to the exact window's AX
+   * subtree, debounces `quietMs` of silence, and reports `settled` plus the
+   * observed event count at `timeoutMs`. An older or refusing driver fails
+   * through `call`'s normal error path and the caller falls back to the fixed
+   * settle rather than retrying an uncertain wait.
+   */
+  async waitForSettle(options: {
+    readonly windowId: string;
+    readonly timeoutMs: number;
+    readonly quietMs: number;
+  }): Promise<{
+    readonly settled: boolean;
+    readonly waitedMs: number;
+    readonly eventsSeen?: number;
+  }> {
+    const { pid, window_id } = await this.target(options.windowId);
+    const result = await this.call("wait_for_settle", {
+      pid,
+      window_id,
+      timeout_ms: Math.max(0, Math.min(30_000, Math.floor(options.timeoutMs))),
+      quiet_ms: Math.max(0, Math.min(5_000, Math.floor(options.quietMs))),
+    });
+    const data = result.structuredContent ?? {};
+    if (typeof data.settled !== "boolean")
+      throw new CuaActionError(
+        "Cua did not return a settle verdict for the exact target window.",
+        "not-dispatched",
+        "invalid_settle_read",
+      );
+    const waited = number(data.waited_ms);
+    return {
+      settled: data.settled,
+      waitedMs: Number.isFinite(waited) ? waited : 0,
+      ...(typeof data.events_seen === "number" ? { eventsSeen: data.events_seen } : {}),
+    };
+  }
   async raiseWindow(windowId: string): Promise<void> {
     if (desktopDeliveryMode() !== "foreground")
       throw new CuaActionError(

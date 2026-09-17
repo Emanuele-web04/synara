@@ -805,6 +805,19 @@ describe("Cua GUI host retirement", () => {
     expect(response.ok).toBe(false);
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("admits wait_for_settle as a read through the allowlist", async () => {
+    const f = await fixture();
+    // The fixture driver answers any listed name {}; the allowlist is what a
+    // refused name would have failed inside the host before ever spawning.
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "wait_for_settle",
+        args: { pid: 42, window_id: 10, timeout_ms: 5_000, quiet_ms: 1_000 },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).some((event) => event.event === "start")).toBe(true);
+  });
 });
 
 describe("task-owned user stop", () => {

@@ -2422,7 +2422,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_wait",
-        description: `Wait for delayed content without sending input or changing focus. Prefer label plus window_id when you know the next control: duration_ms is then a maximum, and the tool returns as soon as that unique control appears, with a screenshot by default. Target it by label afterward so a layout change cannot leave stale coordinates. An unavailable accessibility tree returns immediately; use the screenshot and do not repeat semantic waits until the environment changes. Without label this is a fixed pause with no screenshot. Never repeat the preceding action merely because a page is still loading. Waiting is capped at ${COMPUTER_WAIT_MAX_MS} ms; one accessibility read may finish after the deadline.`,
+        description: `Wait for delayed content without sending input or changing focus. Prefer label plus window_id when you know the next control: duration_ms is then a maximum, and the tool returns as soon as that unique control appears, with a screenshot by default. Target it by label afterward so a layout change cannot leave stale coordinates. An unavailable accessibility tree returns immediately; use the screenshot and do not repeat semantic waits until the environment changes. Alternatively pass settle:true plus window_id: duration_ms is again the maximum, and the tool returns as soon as the window's accessibility surface stops changing — or when it cannot be watched, after a fixed pause reported as mode:"fixed". Without label or settle this is a fixed pause with no screenshot. Never repeat the preceding action merely because a page is still loading. Waiting is capped at ${COMPUTER_WAIT_MAX_MS} ms; one accessibility read may finish after the deadline.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -2444,6 +2444,11 @@ export function makeAgentGatewayComputerTools(
               type: "string",
               description: "Window to observe without raising or activating it.",
             },
+            settle: {
+              type: "boolean",
+              description:
+                "Wait for the window's accessibility surface to go quiet instead of for a named control. Requires window_id; cannot combine with label.",
+            },
             ...INCLUDE_ACTION_SCREENSHOT_PROPERTY,
           },
           required: ["duration_ms"],
@@ -2453,6 +2458,8 @@ export function makeAgentGatewayComputerTools(
       },
       handler: handle("computer_wait", async (args, context) => {
         const durationMs = readWaitDurationMs(args);
+        if (args.label !== undefined && readBooleanArg(args, "settle") === true)
+          throw new Error("A settle wait cannot combine with label; pick one observation mode.");
         if (args.label !== undefined) {
           const target = readTarget(args, context);
           if (!target.windowId || !target.label?.trim()) {
@@ -2499,6 +2506,24 @@ export function makeAgentGatewayComputerTools(
             context.callerTurnId ?? undefined,
           );
           return deliverScreenshot(context.callerThreadId, result, screenshot, windowId);
+        }
+        if (readBooleanArg(args, "settle") === true) {
+          const windowId = readTarget(args, context).windowId;
+          if (!windowId) {
+            throw new Error("A settle wait requires window_id.");
+          }
+          const verdict = await manager.withAgentActivity(
+            context.callerThreadId,
+            async () => {
+              await Effect.runPromise(context.assertCallerTurnActive(), {
+                signal: desktopOperationSignal(),
+              });
+              return manager.waitForSettle(windowId, durationMs);
+            },
+            desktopOperationSignal(),
+            context.callerTurnId ?? undefined,
+          );
+          return { computerId: manager.computerId, ...verdict };
         }
         if (durationMs > 0)
           await waitForComputer(durationMs, undefined, {

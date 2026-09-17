@@ -39,6 +39,7 @@ import {
   type ComputerStreamFrame,
 } from "./ComputerBackend.ts";
 import { requireWindowBounds } from "./computerGeometry.ts";
+import { ComputerTargetError } from "./uiTreeTargeting.ts";
 
 const FAKE_SCREENSHOT_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -112,6 +113,27 @@ export interface FakeComputerBackendOptions {
     | ((
         call: ComputerBrowserCall,
       ) => ComputerBrowserCallResult | void | Promise<ComputerBrowserCallResult | void>);
+  /**
+   * Opts the fake into driver-observed settling. `true` answers every
+   * `waitForSettle` call `{settled:true}` immediately; a function answers
+   * itself, so a test can return a busy surface or throw the
+   * "Unknown tool:" refusal an older driver produces. Absent or `false`
+   * means the backend truthfully has no observer — the method stays
+   * undefined and callers must take the fixed-settle fallback.
+   */
+  readonly waitForSettle?:
+    | boolean
+    | ((options: {
+        readonly windowId: string;
+        readonly timeoutMs: number;
+        readonly quietMs: number;
+      }) =>
+        | { readonly settled: boolean; readonly waitedMs: number; readonly eventsSeen?: number }
+        | Promise<{
+            readonly settled: boolean;
+            readonly waitedMs: number;
+            readonly eventsSeen?: number;
+          }>);
 }
 
 export class FakeComputerBackend implements ComputerBackend {
@@ -146,6 +168,14 @@ export class FakeComputerBackend implements ComputerBackend {
   private cursorPosition: ComputerPoint = { x: 0, y: 0 };
   private disposed = false;
   readonly browser?: ComputerBrowserBackend;
+  /**
+   * Present only when `options.waitForSettle` opted the fake into the
+   * observer capability — exactly like a real backend that either exposes
+   * the driver's `wait_for_settle` read or does not. `NonNullable` because
+   * `exactOptionalPropertyTypes` makes the interface's optional member
+   * present-or-absent, never undefined.
+   */
+  readonly waitForSettle?: NonNullable<ComputerBackend["waitForSettle"]>;
 
   constructor(options: FakeComputerBackendOptions = {}) {
     this.computerId = (options.computerId ?? "desktop") as ComputerId;
@@ -183,6 +213,21 @@ export class FakeComputerBackend implements ComputerBackend {
         endThread: async (threadId) => {
           this.record("browser.endThread", threadId);
         },
+      };
+    }
+    if (options.waitForSettle) {
+      const handler =
+        typeof options.waitForSettle === "function" ? options.waitForSettle : undefined;
+      this.waitForSettle = async (settleOptions) => {
+        this.record("waitForSettle", settleOptions);
+        this.throwIfFailed("waitForSettle");
+        const window = this.currentWindows.find((entry) => entry.id === settleOptions.windowId);
+        if (!window)
+          throw new ComputerTargetError({
+            code: "computer_target_not_found",
+            message: `No desktop window has id ${JSON.stringify(settleOptions.windowId)}.`,
+          });
+        return (await handler?.(settleOptions)) ?? { settled: true, waitedMs: 0 };
       };
     }
   }

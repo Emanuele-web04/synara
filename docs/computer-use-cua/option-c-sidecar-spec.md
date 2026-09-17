@@ -12,7 +12,7 @@ The typing isolation gap is proven, not theoretical. The parity matrix records t
 
 ## Current state
 
-The driver pin is cua-driver 0.28.2 at native revision 16, per `packages/shared/src/cuaDriverRelease.json:2` and `packages/shared/src/cuaDriverRelease.json:5`. The protocol constants derive from that manifest in `packages/shared/src/cuaDriverProtocol.ts:4`.
+The driver pin is cua-driver 0.28.2 at native revision 18, per `packages/shared/src/cuaDriverRelease.json:2` and `packages/shared/src/cuaDriverRelease.json:5`. The protocol constants derive from that manifest in `packages/shared/src/cuaDriverProtocol.ts:4`.
 
 The gate facts from rev 1 still hold, per `apps/desktop/patches/cua-driver/README.md:10` and `apps/desktop/patches/cua-driver/README.md:14`. Input admission closes irreversibly per driver process. Keyboard and mouse guards prepare matching releases before a down event. Release runs on return, failure, cancellation, and unwind. The private cancel_input path accepts only the authenticated embedded parent and the exact child PID. Cleanup acknowledgement requires zero pending input and drained contexts. The host never kills or replaces a generation without that acknowledgement when input was ever dispatched.
 

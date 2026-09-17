@@ -228,6 +228,7 @@ export const CUA_READ_TOOLS = new Set([
   "get_agent_cursor_state",
   "get_cursor_position",
   "verify_state",
+  "wait_for_settle",
   "zoom",
 ]);
 export const CUA_ACTION_TOOLS = new Set([

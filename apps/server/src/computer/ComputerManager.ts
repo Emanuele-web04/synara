@@ -131,6 +131,18 @@ export const COMPUTER_CONTROL_ENABLE_TIMEOUT_MS = 30_000;
 export const COMPUTER_ACTION_SETTLE_MS = 300;
 
 /**
+ * The driver-observed settle that replaces the fixed wait when the backend
+ * exposes `waitForSettle`: the AX observer debounces
+ * `COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS` of notification silence after a
+ * mutation, bounded by `COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS` when the
+ * surface keeps churning (a busy indicator, a repeating animation). A
+ * settled verdict usually lands faster than the fixed budget; a busy surface
+ * waits longer than it — both better than the blind sleep they replace.
+ */
+export const COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS = 5_000;
+export const COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS = 1_000;
+
+/**
  * How long paste waits before restoring the user's previous clipboard. The
  * target application reads the pasteboard off the keystroke asynchronously, so
  * restoring immediately would hand it the old contents. There is no observable
@@ -360,6 +372,14 @@ export class ComputerManager {
   /** Depth rather than a flag: a lease publish can nest inside a window one. */
   private publishAllDepth = 0;
   private windowsPublishPending = false;
+  /**
+   * Whether this backend answers `waitForSettle`. "unsupported" is sticky —
+   * the driver and the host's tool allowlist are fixed for the backend's
+   * life — but a transient failure (stale target, retired generation,
+   * cancelled call) never flips it: the next action probes again rather than
+   * permanently losing the observer over one bad target.
+   */
+  private observerSettle: "unknown" | "supported" | "unsupported" = "unknown";
   private windowsPublishTimer: ReturnType<typeof setTimeout> | undefined;
   private backendHealth: ComputerHealth;
   private lease: DesktopLease | null = null;
@@ -1193,6 +1213,60 @@ export class ComputerManager {
   }
 
   /**
+   * The explicit agent-facing settle wait (`computer_wait` with
+   * `settle:true`): validate the exact window, then let the driver's AX
+   * observer debounce its surface until quiet — or, when this backend cannot
+   * answer `waitForSettle`, fall back to the fixed post-action pause and say
+   * so. The wait never sends input, never raises the window, and a refused or
+   * failed observer reports through `mode` rather than being retried.
+   */
+  async waitForSettle(
+    windowId: string,
+    timeoutMs: number,
+  ): Promise<{
+    readonly settled: boolean;
+    readonly waitedMs: number;
+    readonly eventsSeen?: number;
+    readonly mode: "observer" | "fixed";
+  }> {
+    this.engageBackend();
+    return this.withComputerCall(async () => {
+      markComputerCall("computer_wait_settle");
+      const window = (await this.readWindows()).find((entry) => entry.id === windowId);
+      if (!window) throw windowNotFoundError(windowId);
+      const timeout = Math.max(
+        0,
+        Math.min(COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS * 6, Math.floor(timeoutMs)),
+      );
+      if (this.observerSettle !== "unsupported" && this.backend.waitForSettle !== undefined) {
+        try {
+          const outcome = await this.backend.waitForSettle({
+            windowId,
+            timeoutMs: timeout,
+            quietMs: COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS,
+          });
+          this.observerSettle = "supported";
+          currentComputerCall()?.timing?.count(
+            outcome.settled ? "settle_observer_settled" : "settle_observer_timeout",
+          );
+          return { ...outcome, mode: "observer" as const };
+        } catch (error) {
+          if (settlePermanentlyUnsupported(error)) this.observerSettle = "unsupported";
+          else throw error;
+          // A permanent refusal falls through to the fixed wait; a transient
+          // one propagates — the caller asked for observed settle, and a
+          // guessed quiet window would lie about what was verified.
+        }
+      }
+      const waitedMs = Math.min(timeout, Math.max(0, this.actionSettleMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, waitedMs);
+      });
+      return { settled: true, waitedMs, mode: "fixed" as const };
+    });
+  }
+
+  /**
    * Zoomed capture of the window that holds input focus, falling back to the
    * whole workspace when no visible window with known bounds has it. This is
    * what a perception request with no explicit target means: "show me where
@@ -1277,13 +1351,7 @@ export class ComputerManager {
         if (this.actionEffectAlreadyProven()) {
           currentComputerCall()?.timing?.count("settle_skipped");
         } else {
-          await timedComputerLeg(
-            "settle",
-            () =>
-              new Promise<void>((resolve) => {
-                setTimeout(resolve, this.actionSettleMs);
-              }),
-          );
+          await timedComputerLeg("settle", () => this.settleAfterAction(windowIdHint));
         }
       }
       return timedComputerLeg("observe", () =>
@@ -1305,6 +1373,44 @@ export class ComputerManager {
     if (!cuaConditionalSettleEnabled()) return false;
     const proof = currentComputerCall()?.takeActionProof();
     return proof?.effect === "verified" || proof?.verified === "confirmed";
+  }
+
+  /**
+   * One post-action wait. The driver's AX observer is preferred whenever the
+   * call knows the target window and the backend offers `waitForSettle`: a
+   * quiet surface resolves early and a churning one outlasts the fixed
+   * budget. A driver or host that does not know the tool is remembered as
+   * "unsupported" so later actions skip straight to the fixed wait; every
+   * other failure — stale window, retired generation, cancelled call — only
+   * falls back for this action, and none of it can ever be grounds to replay
+   * the action itself.
+   */
+  private async settleAfterAction(windowId: string | undefined): Promise<void> {
+    if (
+      windowId !== undefined &&
+      this.observerSettle !== "unsupported" &&
+      this.backend.waitForSettle !== undefined
+    ) {
+      try {
+        const outcome = await this.backend.waitForSettle({
+          windowId,
+          timeoutMs: COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
+          quietMs: COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS,
+        });
+        this.observerSettle = "supported";
+        currentComputerCall()?.timing?.count(
+          outcome.settled ? "settle_observer_settled" : "settle_observer_timeout",
+        );
+        return;
+      } catch (error) {
+        if (settlePermanentlyUnsupported(error)) this.observerSettle = "unsupported";
+        currentComputerCall()?.timing?.count("settle_observer_unavailable");
+        // Fall through to the fixed wait — the action still needs its pause.
+      }
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, this.actionSettleMs);
+    });
   }
 
   private async captureActionObservation(
@@ -2562,13 +2668,7 @@ export class ComputerManager {
       }
     }
     if (this.actionSettleMs > 0) {
-      await timedComputerLeg(
-        "settle",
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, this.actionSettleMs);
-          }),
-      );
+      await timedComputerLeg("settle", () => this.settleAfterAction(windowId));
     }
     const capture = await this.captureForMeasurement(windowId);
     if (!capture) return {};
@@ -4292,6 +4392,20 @@ async function measureScrollTravelFromPng(
 /** Scroll telemetry is a reading, not a measurement instrument: two decimals is all it means. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Whether a `waitForSettle` failure means this backend can never answer it.
+ * Only the two name-resolution refusals count: a driver older than the
+ * observer revision reports "Unknown tool: …", and a desktop host whose
+ * allowlist predates it throws "Unsupported computer host request." Neither
+ * can change for the backend's life, so the refusal is cached. Anything else
+ * — a stale window id, a retired generation, a transport failure — is a
+ * transient miss this one action falls back from and the next may retry.
+ */
+function settlePermanentlyUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return message.startsWith("Unknown tool:") || message === "Unsupported computer host request.";
 }
 
 /**

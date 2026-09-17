@@ -119,4 +119,4 @@ Ordered steps.
 - The three-window case this spec blocks on is closed: web-content
   `typeText` routes through verified `set_value` compose, and the G5
   fixture passed 10x (`docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17-notes.md`).
-- Certification now targets native revision 16, not 15.
+- Certification now targets native revision 18, not 15.

@@ -2688,6 +2688,63 @@ it("waits for a live label and returns its window screenshot in the same call", 
   expect(invalid.isError).toBe(true);
 });
 
+it("waits for a window's surface to go quiet when settle is requested", async () => {
+  const { backend, call } = await setup(new FakeComputerBackend({ waitForSettle: true }));
+  const result = await call("computer_wait", {
+    duration_ms: 5_000,
+    window_id: "fake-terminal",
+    settle: true,
+  });
+  expect(result.isError).not.toBe(true);
+  expect(resultJson(result)).toMatchObject({
+    settled: true,
+    mode: "observer",
+  });
+  expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+  expect(backend.callsFor("waitForSettle")[0]?.args[0]).toMatchObject({
+    windowId: "fake-terminal",
+  });
+  // Watching is not touching: no input, no raise, no capture rode along.
+  expect(backend.callsFor("click")).toHaveLength(0);
+  expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+  expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
+});
+
+it("reports the fixed fallback when the backend cannot observe a settle", async () => {
+  const { backend, call } = await setup();
+  const result = await call("computer_wait", {
+    duration_ms: 5_000,
+    window_id: "fake-terminal",
+    settle: true,
+  });
+  expect(result.isError).not.toBe(true);
+  // No observer exists on this backend, so the honest answer is a fixed
+  // pause — mode reports which kind of wait actually happened.
+  expect(resultJson(result)).toMatchObject({ settled: true, mode: "fixed", waitedMs: 0 });
+  expect(backend.callsFor("waitForSettle")).toHaveLength(0);
+});
+
+it("requires a window for a settle wait and refuses an unknown one", async () => {
+  const { call } = await setup(new FakeComputerBackend({ waitForSettle: true }));
+  const missing = await call("computer_wait", { duration_ms: 5_000, settle: true });
+  expect(missing.isError).toBe(true);
+  const unknown = await call("computer_wait", {
+    duration_ms: 5_000,
+    window_id: "no-such-window",
+    settle: true,
+  });
+  expect(unknown.isError).toBe(true);
+  // settle and label are different observation modes; combining them is
+  // refused rather than silently preferring one.
+  const combined = await call("computer_wait", {
+    duration_ms: 5_000,
+    window_id: "fake-terminal",
+    label: "OK",
+    settle: true,
+  });
+  expect(combined.isError).toBe(true);
+});
+
 it("can wait for the next label on an action without replaying input", async () => {
   const { backend, call } = await setup();
   const result = await call("computer_click", {

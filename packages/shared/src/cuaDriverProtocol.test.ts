@@ -9,7 +9,7 @@ import {
 
 /**
  * The macOS cua-driver tool inventory at the pinned release (driver 0.28.2,
- * native revision 17, embedded serve). `platform-macos` `tools::register_all`
+ * native revision 18, embedded serve). `platform-macos` `tools::register_all`
  * registers the platform and core tools; the cua-driver binary adds
  * `check_for_update` and — only under the upstream preview admission the
  * embedded host never grants — `history_status`/`history_query`.
@@ -51,6 +51,9 @@ const REGISTERED_MACOS_TOOLS = [
   // minimized windows. Reachability is decided by the allowlists.
   "set_app_visibility",
   "set_window_minimized",
+  // Rev 18 read-only AX observer settle; allowlisted for backend-internal
+  // post-action observation and the explicit computer_wait settle path.
+  "wait_for_settle",
   // Surfaced through `click` arguments rather than dispatched by name.
   "double_click",
   "right_click",
@@ -118,6 +121,7 @@ describe("cuaDriverProtocol tool boundary", () => {
         "list_apps",
         "list_windows",
         "verify_state",
+        "wait_for_settle",
         "zoom",
       ].sort(),
     );

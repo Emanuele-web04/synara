@@ -468,6 +468,23 @@ export interface ComputerBackend {
   /** Fresh exact-window readiness only; never focus, raise, or send input. */
   checkInputReady?(windowId: string): Promise<void>;
   /**
+   * Driver-observed UI settle for the exact window: resolves once no
+   * accessibility notification arrives for `quietMs`, bounded by `timeoutMs`.
+   * Pure read — no input, no mutation lease — so it is safe to run between an
+   * action's dispatch and its observation. Optional because only the macOS
+   * driver exposes an AX observer; callers must fall back to a fixed wait
+   * when it is absent or refused.
+   */
+  waitForSettle?(options: {
+    readonly windowId: string;
+    readonly timeoutMs: number;
+    readonly quietMs: number;
+  }): Promise<{
+    readonly settled: boolean;
+    readonly waitedMs: number;
+    readonly eventsSeen?: number;
+  }>;
+  /**
    * The process-level app list — name, pid, bundle id, active state — for
    * backends that can enumerate it. Optional because a compositor plugin may
    * only see windows; the agent tool refuses when it is absent.

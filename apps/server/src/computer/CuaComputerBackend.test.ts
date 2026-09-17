@@ -1220,6 +1220,54 @@ describe("Cua native boundary", () => {
       code: "invalid_readiness",
     });
   });
+  it("asks the driver to observe settle for the exact window without touching input", async () => {
+    const f = fixture();
+    f.onTool("wait_for_settle", (args) => ({
+      structuredContent: {
+        settled: true,
+        waited_ms: 120,
+        events_seen: 3,
+        pid: args.pid,
+        window_id: args.window_id,
+        scope: "window",
+      },
+    }));
+    await expect(
+      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 5_000, quietMs: 1_000 }),
+    ).resolves.toEqual({ settled: true, waitedMs: 120, eventsSeen: 3 });
+    expect(f.calls.map((call) => call.name)).toEqual(["list_windows", "wait_for_settle"]);
+    expect(f.calls[1]?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      timeout_ms: 5_000,
+      quiet_ms: 1_000,
+    });
+  });
+  it("clamps the settle bounds the driver caps, and refuses a malformed verdict", async () => {
+    const f = fixture();
+    f.onTool("wait_for_settle", () => ({
+      structuredContent: { settled: false, waited_ms: 30_000, events_seen: 41 },
+    }));
+    await expect(
+      f.backend.waitForSettle({
+        windowId: "cua:10:20",
+        timeoutMs: 999_999,
+        quietMs: 999_999,
+      }),
+    ).resolves.toMatchObject({ settled: false, eventsSeen: 41 });
+    expect(f.calls[1]?.args).toMatchObject({ timeout_ms: 30_000, quiet_ms: 5_000 });
+    f.onTool("wait_for_settle", () => ({ structuredContent: { waited_ms: 5 } }));
+    await expect(
+      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 1_000, quietMs: 100 }),
+    ).rejects.toMatchObject({ code: "invalid_settle_read", effect: "not-dispatched" });
+    f.onTool("wait_for_settle", () => ({
+      isError: true,
+      content: [{ type: "text", text: "Unknown tool: wait_for_settle" }],
+    }));
+    await expect(
+      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 1_000, quietMs: 100 }),
+    ).rejects.toMatchObject({ effect: "not-dispatched" });
+  });
   it("pauses input on another Space while leaving observation available", async () => {
     const f = fixture();
     f.setVisible(false);

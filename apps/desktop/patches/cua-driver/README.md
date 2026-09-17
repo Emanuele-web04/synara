@@ -111,6 +111,21 @@ submission instead of the upstream duplicate SkyLight plus public post, and
 `click_at_xy_native_with_window_local` preserves the non-Chromium synthetic
 recipe on the background path.
 
+Revision 18 adds read-only `wait_for_settle`. An `AXObserver` bound to the
+requested pid's application element — or to the exact AX window when
+`window_id` scopes it — subscribes to the six change notifications that are
+available and resolves once the surface has been silent for `quiet_ms`
+(default 1000, capped at 5000) or reports `settled:false` with the observed
+event count at `timeout_ms` (default 5000, capped at 30000). The tool takes
+no input admission and no mutation lease: teardown removes the run-loop
+source and the registered notifications on every path, a retired input
+generation ends the wait early, and `cancel_input` never waits on the
+observer because it registers no input operation for the gate to drain.
+Synara prefers this observed settle after a mutation whose window is known
+and exposes it through `computer_wait` with `settle:true`; a driver or host
+that cannot answer it is remembered as unsupported and the fixed post-action
+wait remains the fallback.
+
 The gate applies to the SDK tool path admitted by Synara's GUI host. It does not
 instrument the separate interactive-worker API. An acknowledgement means native
 release events were submitted and action contexts drained; fixture-owned event

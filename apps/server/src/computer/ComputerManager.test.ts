@@ -899,6 +899,144 @@ describe("ComputerManager and FakeComputerBackend", () => {
       });
       await manager.dispose();
     });
+
+    /**
+     * The same press-and-observe pair, but with the window the action named —
+     * the only case the driver observer can scope to.
+     */
+    const pressThenObserveWindow = (
+      manager: ComputerManager,
+      spy = vi.spyOn(globalThis, "setTimeout"),
+    ) =>
+      manager
+        .withAgentActivity("thread-1", async () => {
+          await manager.pressKey("thread-1", "enter");
+          return manager.captureActionScreenshot("fake-terminal");
+        })
+        .then((observation) => ({ observation, spy }));
+
+    it("prefers the driver's observed settle when the backend offers it and a window is known", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend({ waitForSettle: true });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserveWindow(manager);
+      const settleCalls = backend.callsFor("waitForSettle");
+      expect(settleCalls).toHaveLength(1);
+      expect(settleCalls[0]?.args[0]).toMatchObject({
+        windowId: "fake-terminal",
+        timeoutMs: 5_000,
+        quietMs: 1_000,
+      });
+      // The observer answered the settle itself; no blind timer ran beside it.
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("a busy verdict from the observer still ends the wait — the timeout already covered the bound", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend({
+        waitForSettle: () => ({ settled: false, waitedMs: 5_000, eventsSeen: 14 }),
+      });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("falls back to the fixed wait without a window hint, even when the observer exists", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend({ waitForSettle: true });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(backend.callsFor("waitForSettle")).toHaveLength(0);
+      expect(settleWaitedFor(spy, 60)).toBe(true);
+      await manager.dispose();
+    });
+
+    it.each([
+      ["Unknown tool: wait_for_settle [effect=not-dispatched; automatic replay is forbidden]"],
+      ["Unsupported computer host request."],
+    ] as const)(
+      "a backend that cannot name the tool falls back once and is never probed again — %s",
+      async (refusalMessage) => {
+        setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+        let probes = 0;
+        const backend = new ProvenBackend({
+          waitForSettle: () => {
+            probes += 1;
+            throw new Error(refusalMessage);
+          },
+        });
+        const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+        const spy = vi.spyOn(globalThis, "setTimeout");
+        await pressThenObserveWindow(manager);
+        expect(probes).toBe(1);
+        expect(settleWaitedFor(spy, 60)).toBe(true);
+        spy.mockClear();
+        await pressThenObserveWindow(manager);
+        // The refusal is cached for the backend's life: the second action
+        // goes straight to the fixed wait instead of paying a dead call.
+        expect(probes).toBe(1);
+        expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+        expect(settleWaitedFor(spy, 60)).toBe(true);
+        await manager.dispose();
+      },
+    );
+
+    it("a transient observer failure falls back for that call but does not poison the probe", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      let fail = true;
+      const backend = new ProvenBackend({
+        waitForSettle: () => {
+          if (fail)
+            throw new Error(
+              "wait_for_settle: window_id 42 is closed, stale, or unknown to WindowServer",
+            );
+          return { settled: true, waitedMs: 30 };
+        },
+      });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const spy = vi.spyOn(globalThis, "setTimeout");
+      await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+      expect(settleWaitedFor(spy, 60)).toBe(true);
+      fail = false;
+      spy.mockClear();
+      await pressThenObserveWindow(manager);
+      // Not remembered as unsupported: the next action retries the observer
+      // and this time it answers, so no fixed wait runs.
+      expect(backend.callsFor("waitForSettle")).toHaveLength(2);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("a proven effect still skips the wait entirely, observer included", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
+      const backend = new ProvenBackend({ waitForSettle: true });
+      backend.proof = { effect: "verified" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")).toHaveLength(0);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("an observer refusal mid-observation never replays the action", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend({
+        waitForSettle: () => {
+          throw new Error("Unknown tool: wait_for_settle");
+        },
+      });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      await pressThenObserveWindow(manager);
+      // The uncertain wait fell back and the observation still landed; the
+      // action it observed ran exactly once.
+      expect(backend.callsFor("pressKey")).toHaveLength(1);
+      expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
+      await manager.dispose();
+    });
   });
 
   it("attributes every action event to the thread that drove it", async () => {
