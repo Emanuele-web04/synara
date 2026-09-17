@@ -340,6 +340,29 @@ describe("code theme seeds", () => {
 });
 
 describe("buildThemeCssVariables", () => {
+  it.each([
+    { electron: true, isMac: false },
+    { electron: true, isMac: true },
+    { electron: false, isMac: false },
+  ])("projects distinct Vercel and Codex light colors on %j", (platform) => {
+    const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
+    const vercel = buildThemeCssVariables(resolveThemePack(state, "light"), "light", platform);
+    const codex = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "light"),
+      "light",
+      platform,
+    );
+    expect(vercel.variables["--codex-base-accent"]).toBe("#006aff");
+    expect(codex.variables["--codex-base-accent"]).toBe("#0169cc");
+    expect(vercel.variables["--color-text-foreground"]).toBe("#171717");
+    expect(codex.variables["--color-text-foreground"]).toBe("#0d0d0d");
+    // These two presets intentionally share a white surface in light mode.
+    expect(vercel.variables["--codex-base-surface"]).toBe(codex.variables["--codex-base-surface"]);
+    // Editing a slot must not change the user's system-mode or other-slot choices.
+    expect(state.mode).toBe("system");
+    expect(state.chromeThemes.dark).toEqual(DEFAULT_THEME_STATE.chromeThemes.dark);
+  });
+
   it("derives the renderer token map from the imported theme pack", () => {
     const importedTheme = parseThemeShareString(PROVIDED_THEME_STRING);
     const cssVariables = buildThemeCssVariables(
