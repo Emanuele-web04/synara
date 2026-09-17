@@ -136,14 +136,20 @@ async function main(): Promise<void> {
   await mkdir(directory, { recursive: true });
   await app.whenReady();
 
+  // show:false + showInactive(): under an `open -g` launch, `show: true` calls
+  // orderFront, which a never-activated app defers — the window reads
+  // isVisible() in-process but never enters WindowServer's on-screen list.
+  // showInactive() uses orderFrontRegardless, which registers the window with
+  // WindowServer immediately without activating the app.
   const sentinel = new BrowserWindow({
     title: `${nonce} Canary Sentinel`,
     width: 400,
     height: 200,
     x: 80,
     y: 80,
-    show: true,
+    show: false,
   });
+  sentinel.once("ready-to-show", () => sentinel.showInactive());
   await sentinel.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
       `<!doctype html><title>${nonce} Canary Sentinel</title><style>body{font:18px system-ui;padding:24px}</style><h1>Canary sentinel</h1><p>No canary window may hold focus; the app must never become frontmost while the target receives text.</p>`,
@@ -159,24 +165,44 @@ async function main(): Promise<void> {
     height: 420,
     x: 80,
     y: 320,
-    show: true,
+    show: false,
   });
+  target.once("ready-to-show", () => target.showInactive());
   await target.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
       `<!doctype html><title>${nonce} Canary Target</title><style>body{font:18px system-ui;padding:24px}input{font:20px system-ui;padding:12px;width:90%}</style><h1>Canary target</h1><input id="text" aria-label="Canary text" value=""><p>Exact semantic target</p>`,
     )}`,
   );
 
-  const capability = randomBytes(32).toString("base64url");
-  host = new CuaDriverHost({
-    binaryPath: join(resourcesPath, "cua-driver", "cua-driver"),
-    capability,
-    bundleId: "com.synara.cua-canary",
-    setup: async () => {
-      throw new Error("The canary probe never requests permissions.");
-    },
-  });
-  const endpoint = await host.listen();
+  // SYNARA_CUA_CANARY_ENDPOINT/CAPABILITY: connect to an externally hosted
+  // driver instead of embedding one. The adhoc canary bundle holds no TCC
+  // grants of its own, so an embedded driver is attributed to it and every AX
+  // surface comes back empty. An external host spawned under a trusted
+  // ancestry (the operator terminal) serves the same protocol with grants —
+  // the semantic path being certified is identical; only the TCC provisioning
+  // differs, and the report records which mode ran.
+  const externalEndpoint = process.env.SYNARA_CUA_CANARY_ENDPOINT ?? "";
+  const capability =
+    externalEndpoint.length > 0
+      ? (process.env.SYNARA_CUA_CANARY_CAPABILITY ?? "")
+      : randomBytes(32).toString("base64url");
+  if (externalEndpoint.length > 0 && capability.length === 0)
+    throw new Error("SYNARA_CUA_CANARY_ENDPOINT requires SYNARA_CUA_CANARY_CAPABILITY.");
+  report.driverMode = externalEndpoint.length > 0 ? "external" : "embedded";
+  let endpoint: string;
+  if (externalEndpoint.length > 0) {
+    endpoint = externalEndpoint;
+  } else {
+    host = new CuaDriverHost({
+      binaryPath: join(resourcesPath, "cua-driver", "cua-driver"),
+      capability,
+      bundleId: "com.synara.cua-canary",
+      setup: async () => {
+        throw new Error("The canary probe never requests permissions.");
+      },
+    });
+    endpoint = await host.listen();
+  }
   const recordedRequest: typeof cuaRequest = async <T>(
     path: string,
     request: unknown,
@@ -192,23 +218,116 @@ async function main(): Promise<void> {
   };
   backend = new CuaComputerBackend({ endpoint, capability, request: recordedRequest });
 
-  const windows = await backend.listWindows();
-  const targetMatches = windows.filter(
-    (window) => window.pid === process.pid && window.title === `${nonce} Canary Target`,
-  );
-  const sentinelMatches = windows.filter(
-    (window) => window.pid === process.pid && window.title === `${nonce} Canary Sentinel`,
-  );
-  if (targetMatches.length !== 1 || sentinelMatches.length !== 1)
+  // Capture the raw permission probe up front: the backend gates enumeration
+  // behind it, and an early identity failure must not hide which grant the
+  // embedded driver reports missing under this bundle.
+  try {
+    const permissionReply = await cuaRequest<{ result?: { structuredContent?: unknown } }>(
+      endpoint,
+      { method: "call", name: "check_permissions", args: { prompt: false }, capability },
+    );
+    report.nativePermissions = permissionReply.result?.structuredContent;
+  } catch (error) {
+    report.nativePermissions = { error: String(error) };
+  }
+
+  // `open -g` launches keep the app invisible to LaunchServices activation but
+  // the windows still take a beat to register with WindowServer — the same lag
+  // `launch_app`'s retry loop absorbs. Poll instead of racing the first read.
+  // Identity is by exact geometry, not title: the embedded driver is a child
+  // of this adhoc bundle, so WindowServer strips kCGWindowTitle for it (no
+  // screen-capture grant) — titles arrive as "".
+  const boundsMatch = (
+    window: { pid: number; bounds: { x: number; y: number; width: number; height: number } },
+    rect: { x: number; y: number; width: number; height: number },
+  ) =>
+    window.pid === process.pid &&
+    window.bounds.x === rect.x &&
+    window.bounds.y === rect.y &&
+    window.bounds.width === rect.width &&
+    window.bounds.height === rect.height;
+  const targetRect = { x: 80, y: 320, width: 640, height: 420 };
+  const sentinelRect = { x: 80, y: 80, width: 400, height: 200 };
+  let windows: Awaited<ReturnType<typeof backend.listWindows>> = [];
+  let targetMatches: typeof windows = [];
+  let sentinelMatches: typeof windows = [];
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    windows = await backend.listWindows();
+    targetMatches = windows.filter((window) => boundsMatch(window, targetRect));
+    sentinelMatches = windows.filter((window) => boundsMatch(window, sentinelRect));
+    if (targetMatches.length === 1 && sentinelMatches.length === 1) break;
+    await pause(250);
+  }
+  if (targetMatches.length !== 1 || sentinelMatches.length !== 1) {
+    const raw: unknown = await cuaRequest<CuaReply>(endpoint, {
+      method: "call",
+      name: "list_windows",
+      args: {},
+      capability,
+    }).catch((error: unknown) => ({ error: String(error) }));
+    // Self-target probe: does the embedded driver hold enough AX trust to
+    // inspect and mutate windows owned by its own responsible host even when
+    // check_permissions reports accessibility:false? The answer decides whether
+    // the canary can drive itself or whether TCC must grant the bundle first.
+    const selfProbe: Record<string, unknown> = {};
+    const rawWindows =
+      (((raw as { result?: { structuredContent?: { windows?: { window_id?: number; pid?: number }[] } } })
+        ?.result?.structuredContent?.windows) ??
+        []) as { window_id?: number; pid?: number }[];
+    const selfWindow = rawWindows.find(
+      (w) => w.pid === process.pid && typeof w.window_id === "number",
+    );
+    if (selfWindow?.window_id) {
+      selfProbe.get_window_state = await cuaRequest<CuaReply>(endpoint, {
+        method: "call",
+        name: "get_window_state",
+        args: { pid: process.pid, window_id: selfWindow.window_id },
+        capability,
+      }).catch((error: unknown) => ({ error: String(error) }));
+    } else {
+      selfProbe.skipped = "no raw window for own pid";
+    }
     throw new Error(
       `Canary window identity check failed: ${targetMatches.length} target window(s), ` +
-        `${sentinelMatches.length} sentinel window(s).`,
+        `${sentinelMatches.length} sentinel window(s). ` +
+        `Backend list: ${JSON.stringify(
+          windows.map((w) => ({
+            id: w.id,
+            pid: w.pid,
+            app: w.appName,
+            title: w.title,
+            bounds: w.bounds,
+            visible: w.visible,
+          })),
+        ).slice(0, 3000)} in-process: ${JSON.stringify(
+          BrowserWindow.getAllWindows().map((w) => ({
+            id: w.id,
+            title: w.getTitle(),
+            visible: w.isVisible(),
+          })),
+        )} self-probe: ${JSON.stringify(selfProbe).slice(0, 1500)} raw driver: ${JSON.stringify(raw).slice(0, 2500)}`,
     );
+  }
   const targetWindow = targetMatches[0]!;
   const sentinelWindow = sentinelMatches[0]!;
   const nativeWindowId = Number(targetWindow.id.split(":")[2]);
   if (!Number.isSafeInteger(nativeWindowId) || nativeWindowId <= 0)
     throw new Error(`Canary target window id is not a native window number: ${targetWindow.id}`);
+
+  // The renderer's AX tree lags window ordering by a beat; baseline must not
+  // fail on warmup. Poll the semantic target once before the ladder starts.
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    try {
+      const observation = await backend.getState({
+        windowId: targetWindow.id,
+        includeTree: true,
+      });
+      if (findNode(observation.root, "Canary text")) break;
+    } catch {
+      // Keep polling: the window is real, only the AX tree is still empty.
+    }
+    await pause(250);
+  }
 
   const phases = ["baseline", "stage-1", "stage-2", "stage-3", "stage-4", "stage-5", "stage-6"];
   for (const phase of phases) {
