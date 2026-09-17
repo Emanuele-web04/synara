@@ -57,9 +57,13 @@ export async function runGatewayFixture(
   };
   const entries = makeAgentGatewayComputerTools({
     manager,
-    authorizeAction: async (name, _args, caller) => {
-      approvals.push({ name, turnId: caller.callerTurnId, allowed: false });
-      return false;
+    authorizeAction: async (name, args, caller) => {
+      // Task consent for routine background actions; foreground is denied.
+      // Only denials are recorded so the foreground case still asserts
+      // exactly one gate consultation for the exact denied call.
+      const allowed = (args as Record<string, unknown>).delivery_mode !== "foreground";
+      if (!allowed) approvals.push({ name, turnId: caller.callerTurnId, allowed });
+      return allowed;
     },
   });
   const call = async (name: string, args: Record<string, unknown>) => {
