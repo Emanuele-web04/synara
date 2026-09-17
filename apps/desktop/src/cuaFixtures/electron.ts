@@ -85,6 +85,7 @@ async function main() {
     height: 420,
     x: 80,
     y: 80,
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
   const sibling = new BrowserWindow({
@@ -111,18 +112,38 @@ async function main() {
   await third.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(targetHtml("C"))}`);
   sibling.showInactive();
   third.showInactive();
+  // `show:true` relies on orderFront, which a never-activated `open -g` launch
+  // defers — the window reads visible in-process but never registers with
+  // WindowServer. showInactive() uses orderFrontRegardless.
+  first.showInactive();
   first.webContents.on("will-navigate", (event) => event.preventDefault());
   first.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const capability = randomBytes(32).toString("base64url");
-  host = new CuaDriverHost({
-    binaryPath: binaryPath!,
-    capability,
-    bundleId: "com.synara.cua-fixture",
-    setup: async () => {
-      throw new Error("Fixture runner never requests permissions.");
-    },
-  });
-  const endpoint = await host.listen();
+  // SYNARA_CUA_FIXTURE_ENDPOINT/CAPABILITY: connect to an externally hosted
+  // driver instead of embedding one — identical to the canary override. The
+  // adhoc fixture bundle holds no TCC grants, so an embedded driver is
+  // attributed to it and every AX surface enumerates empty. An external host
+  // spawned under a trusted ancestry serves the same protocol with grants.
+  const externalEndpoint = process.env.SYNARA_CUA_FIXTURE_ENDPOINT ?? "";
+  const capability =
+    externalEndpoint.length > 0
+      ? (process.env.SYNARA_CUA_FIXTURE_CAPABILITY ?? "")
+      : randomBytes(32).toString("base64url");
+  if (externalEndpoint.length > 0 && capability.length === 0)
+    throw new Error("SYNARA_CUA_FIXTURE_ENDPOINT requires SYNARA_CUA_FIXTURE_CAPABILITY.");
+  let endpoint: string;
+  if (externalEndpoint.length > 0) {
+    endpoint = externalEndpoint;
+  } else {
+    host = new CuaDriverHost({
+      binaryPath: binaryPath!,
+      capability,
+      bundleId: "com.synara.cua-fixture",
+      setup: async () => {
+        throw new Error("Fixture runner never requests permissions.");
+      },
+    });
+    endpoint = await host.listen();
+  }
   const permissionReply = await cuaRequest<{ result?: { structuredContent?: unknown } }>(endpoint, {
     method: "call",
     name: "check_permissions",
