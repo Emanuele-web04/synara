@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   detectProjectTaskDependencyCycle,
+  isProjectContextPreviewPath,
   normalizeProjectDocumentPath,
+  PROJECT_CONTEXT_PREVIEW_DOCUMENTS,
   ProjectAgentPathError,
   truncateToContextBudget,
 } from "./projectAgent";
@@ -49,6 +51,20 @@ describe("detectProjectTaskDependencyCycle", () => {
         ]),
       }),
     ).toBe(true);
+  });
+});
+
+describe("project context preview", () => {
+  it("shows only the shared files a person would open", () => {
+    expect(PROJECT_CONTEXT_PREVIEW_DOCUMENTS.map((document) => document.logicalPath)).toEqual([
+      "instructions.md",
+      "notes.md",
+      "decisions.md",
+    ]);
+    expect(isProjectContextPreviewPath("instructions.md")).toBe(true);
+    expect(isProjectContextPreviewPath("internal/manifest.json")).toBe(false);
+    expect(isProjectContextPreviewPath("archived.md")).toBe(false);
+    expect(isProjectContextPreviewPath("artifacts/index.md")).toBe(false);
   });
 });
 

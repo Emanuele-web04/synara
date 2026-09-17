@@ -55,6 +55,16 @@ export function isGeneratedDocumentPath(logicalPath: string): boolean {
   return logicalPath === "overview.md" || logicalPath === "archived.md";
 }
 
+export const PROJECT_CONTEXT_PREVIEW_DOCUMENTS = [
+  { logicalPath: "instructions.md", label: "Instructions", editable: true },
+  { logicalPath: "notes.md", label: "Notes", editable: true },
+  { logicalPath: "decisions.md", label: "Decisions", editable: false },
+] as const;
+
+export function isProjectContextPreviewPath(logicalPath: string): boolean {
+  return PROJECT_CONTEXT_PREVIEW_DOCUMENTS.some((document) => document.logicalPath === logicalPath);
+}
+
 export function detectProjectTaskDependencyCycle(input: {
   readonly taskId: ProjectTaskId;
   readonly dependsOnTaskIds: ReadonlyArray<ProjectTaskId>;

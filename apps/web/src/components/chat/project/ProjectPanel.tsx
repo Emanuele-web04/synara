@@ -1,12 +1,15 @@
 import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
+import { useEffect, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
+import { Textarea } from "~/components/ui/textarea";
 import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
 import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
+import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { basenameOfPath } from "~/file-icons";
 import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, WorkflowIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -51,7 +54,6 @@ export function ProjectPanel({
   onOpenThread,
 }: ProjectPanelProps) {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  const [goalDraft, setGoalDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
   const coordinatorName =
@@ -132,103 +134,29 @@ export function ProjectPanel({
 
       {configured ? (
         <>
-          {agent.overview?.goal ? (
-            <>
-              <EnvironmentSectionDivider />
-              <EnvironmentSectionLabel>Active goal</EnvironmentSectionLabel>
-              <p className="px-2 text-[12px]">{agent.overview.goal.objective}</p>
-              <p className="px-2 text-[11px] text-muted-foreground">{agent.overview.goal.status}</p>
-              {agent.overview.goal.status === "active" ? (
-                <div className="px-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void agent.stopGoal()}
-                  >
-                    Stop goal
-                  </Button>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <form
-              className="flex flex-col gap-1 px-2 pt-1"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (goalDraft.trim().length === 0) return;
-                void agent.startGoal(goalDraft.trim());
-                setGoalDraft("");
-              }}
-            >
-              <label className="text-[11px] text-muted-foreground" htmlFor="project-goal">
-                Start goal
-              </label>
-              <textarea
-                id="project-goal"
-                value={goalDraft}
-                onChange={(event) => setGoalDraft(event.target.value)}
-                className="min-h-16 rounded-md border border-border bg-transparent px-2 py-1 text-[12px]"
-                placeholder="What should the coordinator accomplish?"
-              />
-              <Button
-                type="submit"
-                size="sm"
-                disabled={agent.busy || goalDraft.trim().length === 0}
-              >
-                <PlayIcon className="size-3.5" />
-                Start goal
-              </Button>
-            </form>
-          )}
+          {agent.overview?.goal &&
+          (agent.overview.goal.status === "active" || agent.overview.goal.status === "paused") ? (
+            <EnvironmentRow
+              icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+              label={
+                <span className="truncate" title={agent.overview.goal.objective}>
+                  {agent.overview.goal.objective}
+                </span>
+              }
+              trailing={
+                <span className="text-[10px] text-muted-foreground">
+                  {agent.overview.goal.status === "paused" ? "Paused" : "Working"}
+                </span>
+              }
+              onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
+            />
+          ) : null}
 
           {agent.overview?.digest ? (
             <>
               <EnvironmentSectionDivider />
               <EnvironmentCollapsibleSection label="Summary">
-                <div className="flex flex-col gap-1 px-2 pb-1">
-                  <p className="text-[12px]">{agent.overview.digest.summary}</p>
-                  {agent.overview.digest.generationState === "failed" ? (
-                    <p className="text-[11px] text-destructive" role="alert">
-                      {agent.overview.digest.lastError ??
-                        "Summary refresh failed. Last good summary is shown."}
-                    </p>
-                  ) : null}
-                  {agent.overview.digest.historicalCoverage === "partial" ? (
-                    <div className="flex flex-col gap-1">
-                      <p className="text-[11px] text-muted-foreground">
-                        Historical coverage is partial. {agent.overview.digest.pendingThreadCount}{" "}
-                        threads remain unsummarized.
-                      </p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void agent.backfillSummaries()}
-                      >
-                        Backfill remaining threads
-                      </Button>
-                    </div>
-                  ) : null}
-                  {agent.overview.digest.focusItems.slice(0, 8).map((item) => (
-                    <EnvironmentRow
-                      key={item.id}
-                      icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                      label={item.title}
-                      onClick={() => {
-                        if (item.sourceThreadId) onOpenThread(item.sourceThreadId);
-                      }}
-                    />
-                  ))}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void agent.refreshDigest()}
-                  >
-                    Refresh summary
-                  </Button>
-                </div>
+                <ProjectSummary digest={agent.overview.digest} onOpenThread={onOpenThread} />
               </EnvironmentCollapsibleSection>
             </>
           ) : null}
@@ -239,10 +167,20 @@ export function ProjectPanel({
             </p>
           ))}
 
-          <EnvironmentSectionDivider />
-          <EnvironmentCollapsibleSection label="Context">
-            <ContextDocuments projectId={projectId} enabled={open} agent={agent} />
-          </EnvironmentCollapsibleSection>
+          {PROJECT_CONTEXT_PREVIEW_DOCUMENTS.map((document, index) => (
+            <div key={document.logicalPath}>
+              <EnvironmentSectionDivider />
+              <EnvironmentCollapsibleSection label={document.label} defaultOpen={index === 0}>
+                <ProjectContextFile
+                  logicalPath={document.logicalPath}
+                  editable={document.editable}
+                  enabled={open}
+                  projectId={projectId}
+                  agent={agent}
+                />
+              </EnvironmentCollapsibleSection>
+            </div>
+          ))}
 
           <EnvironmentSectionDivider />
           <EnvironmentCollapsibleSection label="Work" defaultOpen={false}>
@@ -484,191 +422,170 @@ function WorkList({
   );
 }
 
-function ContextDocuments({
-  projectId,
+const CONTEXT_TEXTAREA_CLASS_NAME =
+  "relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2";
+
+function ProjectSummary({
+  digest,
+  onOpenThread,
+}: {
+  digest: NonNullable<ReturnType<typeof useProjectAgent>["overview"]>["digest"];
+  onOpenThread: (threadId: ThreadId) => void;
+}) {
+  if (!digest) return null;
+  const updating = digest.generationState === "pending" || digest.generationState === "running";
+  return (
+    <div className="flex flex-col gap-1.5 px-2 pb-1.5">
+      {digest.summary ? (
+        <ChatMarkdown
+          text={digest.summary}
+          cwd={undefined}
+          isStreaming={updating}
+          className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+        />
+      ) : updating ? (
+        <div className="flex flex-col gap-1.5" aria-hidden>
+          <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
+          <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
+        </div>
+      ) : (
+        <p className="text-[12px] text-muted-foreground">No summary yet.</p>
+      )}
+      {updating ? <p className="text-[10px] text-muted-foreground">Updating…</p> : null}
+      {digest.generationState === "failed" ? (
+        <p className="text-[11px] text-muted-foreground" role="status">
+          {digest.lastError ?? "Could not update the summary. It will retry on its own."}
+        </p>
+      ) : null}
+      {digest.focusItems.slice(0, 5).map((item) => (
+        <EnvironmentRow
+          key={item.id}
+          icon={<WorkflowIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+          label={item.title}
+          onClick={() => {
+            if (item.sourceThreadId) onOpenThread(item.sourceThreadId);
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProjectContextFile({
+  logicalPath,
+  editable,
   enabled,
+  projectId,
   agent,
 }: {
-  projectId: ProjectId | null;
+  logicalPath: string;
+  editable: boolean;
   enabled: boolean;
+  projectId: ProjectId | null;
   agent: ReturnType<typeof useProjectAgent>;
 }) {
-  const [selected, setSelected] = useState("instructions.md");
-  const [mode, setMode] = useState<"preview" | "source">("preview");
   const [body, setBody] = useState("");
   const [revision, setRevision] = useState(0);
-  const [history, setHistory] = useState<ReadonlyArray<{ revision: number; createdAt: string }>>(
-    [],
-  );
   const [conflict, setConflict] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const generationRef = useRef(0);
+  const debounceRef = useRef<number | null>(null);
+  const revisionRef = useRef(0);
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    revisionRef.current = revision;
+  }, [revision]);
 
   useEffect(() => {
     if (!enabled || !projectId) return;
     const generation = ++generationRef.current;
     void (async () => {
       try {
-        const read = await agent.readDocument(selected);
+        const read = await agent.readDocument(logicalPath);
         if (generationRef.current !== generation || !read) return;
-        setBody(read.document.content);
+        if (!focusedRef.current) {
+          setBody(read.document.content);
+        }
         setRevision(read.document.revision);
-        setHistory(read.history);
         setConflict(
           read.head.conflictPending
-            ? "The Markdown file changed outside Synara. Import it or keep the server copy."
+            ? "This file changed outside Synara. Keep typing to overwrite, or reopen the panel."
             : null,
         );
       } catch (cause) {
         if (generationRef.current !== generation) return;
-        setConflict(cause instanceof Error ? cause.message : "Failed to load document.");
+        setConflict(cause instanceof Error ? cause.message : "Failed to load this file.");
       }
     })();
-  }, [agent, enabled, projectId, selected]);
+  }, [agent, enabled, logicalPath, projectId]);
 
-  const paths = useMemo(
-    () => (agent.documents.length > 0 ? agent.documents.map((doc) => doc.logicalPath) : [selected]),
-    [agent.documents, selected],
-  );
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const save = (content: string) => {
+    void agent
+      .writeDocument({
+        logicalPath,
+        content,
+        expectedRevision: revisionRef.current,
+      })
+      .then((saved) => {
+        setRevision(saved.revision);
+        setConflict(null);
+      })
+      .catch((cause: unknown) => {
+        setConflict(cause instanceof Error ? cause.message : "Could not save this file.");
+      });
+  };
 
   return (
-    <div className="flex flex-col gap-1 px-1 py-1">
-      {paths.map((path) => (
-        <button
-          key={path}
-          type="button"
-          className="rounded px-1 py-0.5 text-left text-[11px] hover:bg-[var(--color-background-elevated-secondary)]"
-          onClick={() => setSelected(path)}
-        >
-          {path}
-        </button>
-      ))}
-      <div className="flex gap-1">
-        <Button
-          type="button"
-          size="sm"
-          variant={mode === "preview" ? "default" : "ghost"}
-          onClick={() => setMode("preview")}
-        >
-          Preview
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={mode === "source" ? "default" : "ghost"}
-          onClick={() => setMode("source")}
-        >
-          Source
-        </Button>
-      </div>
+    <div className="px-2 pb-1">
       {conflict ? (
-        <p className="text-[11px] text-destructive" role="alert">
+        <p className="pb-1 text-[11px] text-destructive" role="alert">
           {conflict}
         </p>
       ) : null}
-      {mode === "preview" ? (
-        <div className="max-h-48 overflow-auto text-[11px]">
-          <ChatMarkdown text={body} cwd={undefined} isStreaming={false} />
-        </div>
-      ) : (
-        <textarea
-          className="min-h-32 rounded-md border border-border bg-transparent px-2 py-1 font-mono text-[11px]"
+      {editable ? (
+        <Textarea
+          unstyled
+          className={CONTEXT_TEXTAREA_CLASS_NAME}
           value={body}
-          onChange={(event) => setBody(event.target.value)}
-          aria-label="Document source"
+          aria-label={logicalPath}
+          placeholder="Type here"
+          onFocus={() => {
+            focusedRef.current = true;
+          }}
+          onBlur={() => {
+            focusedRef.current = false;
+            if (debounceRef.current !== null) {
+              window.clearTimeout(debounceRef.current);
+              debounceRef.current = null;
+            }
+            save(body);
+          }}
+          onChange={(event) => {
+            const next = event.target.value;
+            setBody(next);
+            if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+            debounceRef.current = window.setTimeout(() => {
+              debounceRef.current = null;
+              save(next);
+            }, 500);
+          }}
         />
+      ) : body.trim().length > 0 ? (
+        <ChatMarkdown
+          text={body}
+          cwd={undefined}
+          isStreaming={false}
+          className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+        />
+      ) : (
+        <p className="text-[12px] text-muted-foreground">Nothing here yet.</p>
       )}
-      <p className="text-[10px] text-muted-foreground">Revision {revision}</p>
-      {history.length > 1 ? (
-        <label className="text-[11px] text-muted-foreground">
-          History
-          <select
-            className="ml-1 rounded border border-border bg-transparent"
-            value={revision}
-            onChange={(event) => {
-              const next = Number(event.target.value);
-              void agent.readDocument(selected, next).then((read) => {
-                if (!read) return;
-                setBody(read.document.content);
-                setRevision(read.document.revision);
-              });
-            }}
-          >
-            {history.map((entry) => (
-              <option key={entry.revision} value={entry.revision}>
-                r{entry.revision} {entry.createdAt}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      <div className="flex flex-wrap gap-1">
-        <Button
-          type="button"
-          size="sm"
-          disabled={saving}
-          onClick={() => {
-            setSaving(true);
-            setConflict(null);
-            void agent
-              .writeDocument({
-                logicalPath: selected,
-                content: body,
-                expectedRevision: revision,
-              })
-              .then((saved) => {
-                setRevision(saved.revision);
-                setBody(saved.content);
-              })
-              .catch((cause: unknown) => {
-                setConflict(cause instanceof Error ? cause.message : "Save failed.");
-              })
-              .finally(() => setSaving(false));
-          }}
-        >
-          {saving ? "Saving…" : "Save"}
-        </Button>
-        {conflict ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              void agent
-                .writeDocument({
-                  logicalPath: selected,
-                  content: body,
-                  expectedRevision: revision,
-                  importExternal: true,
-                })
-                .then((saved) => {
-                  setRevision(saved.revision);
-                  setBody(saved.content);
-                  setConflict(null);
-                })
-                .catch((cause: unknown) => {
-                  setConflict(cause instanceof Error ? cause.message : "Import failed.");
-                });
-            }}
-          >
-            Import external copy
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            const destination = window.prompt("Export directory");
-            if (!destination) return;
-            void agent.exportDocuments([selected], destination).catch((cause: unknown) => {
-              setConflict(cause instanceof Error ? cause.message : "Export failed.");
-            });
-          }}
-        >
-          Export
-        </Button>
-      </div>
     </div>
   );
 }
