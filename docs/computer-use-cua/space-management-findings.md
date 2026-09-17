@@ -10,13 +10,31 @@ read-back because SkyLight routinely returns success while doing nothing.
 
 An unentitled process **cannot create an attached (managed) Space, cannot move
 any window between Spaces — including windows it owns — and cannot switch the
-active Space** on this OS build. The only mutations that actually take effect
-are creating and destroying _orphan_ (type-3) Space objects, which are never
-attached to a display, cannot host windows, and are not usable as an agent
-Space. Every path to attached-space management — the legacy `SLS*` calls, the
-`SLSTransaction*` API used by Dock, and the Objective-C `SLSBridged*Operation`
-WindowManager bridge — resolves to the same entitlement/ownership gate inside
-WindowServer.
+active Space** _via SkyLight_ on this OS build. Every direct path — the legacy
+`SLS*` calls, the `SLSTransaction*` API used by Dock, and the Objective-C
+`SLSBridged*Operation` WindowManager bridge — resolves to the same
+entitlement/ownership gate inside WindowServer. Creating/destroying _orphan_
+(type-3) Space objects works but is useless (never attached, cannot host
+windows).
+
+**2026-10-02 update — the Mission Control path works.** Dock owns the entitled
+connection, and its Mission Control UI is fully AX-exposed, so AXPress on Dock
+elements performs real space management on Dock's entitlement:
+
+| Operation | Path | Result |
+|---|---|---|
+| Create a managed desktop Space | `AXPress` on Dock `button "add desktop"` of `group "Spaces Bar"` inside `group "Mission Control"` | **works** — produced `space 62 type=0` (verified via `space-ctl list`) |
+| Switch active Space | `AXPress` on a `button` of `list 1` of `group "Spaces Bar"` (one button per space: "Desktop 1", "TextEdit", …) | **works** — `active space 1 → 53` verified |
+| Switch active Space | activate an app whose windows live on the target space (`set frontmost` / `activate`) | **works** — macOS switches to that space automatically |
+| Create a fullscreen Space | `AXFullScreen` write on a resizable window | works — `space 53 type=4` (Calculator refused silently; TextEdit accepted) |
+| Switch via posted Ctrl+Arrow CGEvent | `cghidEventTap` key events | **no-op** — WindowServer ignores synthetic keys for space switching |
+| Move a window between Spaces | CGEvent drag on MC window thumbnails | unproven — drop not accepted in our run |
+| Direct input into an off-Space window | any | **impossible** — verified at AX level: an app whose windows are all on inactive Spaces exposes `AXWindows: []` and `AXChildren = [AXMenuBar]`; the driver correctly refuses `ax_window_unresolved`/`off_space_or_ax_unresolved`. Raw AX can't reach what isn't vended. |
+
+Consequence: the viable cross-Space workflow is **create → switch → act on the
+now-active space → switch back**, all without entitlements. True background
+input into an inactive Space does not exist — the window has no AX
+representation until its space is active.
 
 ## Verified command matrix (space-ctl)
 
@@ -98,29 +116,32 @@ Dock performs these operations because it holds
 | Fallback                           | Outcome                                                                                                                                                                                                                                                                                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Orphan type-3 Space                | created/destroyed fine, but can never host a window or become active — not usable                                                                                                                                                                                                                                   |
-| Minimized window                   | raw **AX reads and writes still work** (a hidden/minimized TextEdit accepted `AXValue` writes), but the Synara driver **refuses** input: `input_window_info_by_id` (CGWindowList `kCGWindowListOptionIncludingWindow`, layer-0) no longer enumerates it → `stale_target`. Refusal is driver policy, not an OS gate. |
-| `open -j` hidden app               | same — window reports `is_on_screen=False`, `space_ids=None`; driver refuses `stale_target`; raw AX still works                                                                                                                                                                                                     |
+| Minimized window                   | **works at rev 20** — `input_window_info_by_id` falls back to the full layer-0 enumeration when the targeted query misses, so minimized windows resolve; live-verified 2026-10-02: `set_value` on a minimized TextEdit → `confirmed`/`value_readback`, `is_on_screen:false`. |
+| `open -j`/`AXHidden` hidden app    | **works at rev 20** — same fallback path; live-verified: hidden TextEdit pid returned the full 37-element tree and accepted `set_value` → `confirmed`, `is_on_screen:false`. |
 | Off-screen coordinates             | unreachable — macOS clamps AX window positions; CGS moves crash on foreign windows                                                                                                                                                                                                                                  |
 | Zero alpha                         | `SLSSetWindowAlpha` returns 0, alpha stays 1 — silent no-op                                                                                                                                                                                                                                                         |
-| Windows on another real user Space | driver's `semantic_only`/`StableMembership` policy is designed to keep exact-element input working there, but we could not verify end-to-end because a second attached Space cannot be created by an unentitled process                                                                                             |
+| Windows on another real user Space | **verified 2026-10-02: impossible** — off-Space windows are absent from the app's AX hierarchy (`AXWindows: []` for pid 20432 while its wid 745 sat on inactive space 1; active space was 53). Driver refuses `ax_window_unresolved`/`off_space_or_ax_unresolved` and returns an empty tree deliberately. Cross-space requires activating/switching first (MC AX or app activation — both verified) |
 
 ## Recommended agent-Space isolation architecture
 
-1. **Primary:** use an _existing_ managed Space that already belongs to the
-   user/system (enumerate via `space-ctl list` / `all-spaces` where
-   `managed=1`). If the environment provides a second desktop Space, exact
-   windows there remain valid `semantic_only` driver targets under
-   `StableMembership` — this is the only path that matches the "#3 core ask"
-   semantics.
-2. **Reality on a single-Space machine:** attached Spaces cannot be
-   provisioned. Isolation has to come from _background_ input on the active
-   Space (driver `delivery_mode:"background"` already avoids focus steal and
-   was verified inserting text into an unfocused TextEdit), or from
-   relaxing the driver's `stale_target` policy for AX-verified
-   minimized/hidden windows — macOS itself permits that traffic; the refusal
-   is the driver's exact-target invariant, which would need a compensating
-   AX-ancestry identity check before it could be lifted safely.
-3. **Do not** treat `create-orphan` spaces as agent Spaces: they are not in
+1. **Provisioning (verified 2026-10-02):** an agent _can_ provision a dedicated
+   managed desktop Space by driving Mission Control over AX (open MC → AXPress
+   Dock's `add desktop` button → AXPress the new space's Spaces-Bar cell to
+   enter it). No entitlement needed; Dock performs the mutation.
+2. **Primary isolation model:** the agent works _on its own space_ — launch
+   targets there, full input surface while it's active. Cross-space operation
+   is `activate → act → switch back`, with the operator-view caveat that
+   switching moves the display the operator may be watching.
+3. **Off-Space input is impossible:** windows on inactive Spaces are absent
+   from the app's AX hierarchy (`AXWindows: []`), so no semantic or event
+   route exists. The driver's `ax_window_unresolved` refusal is correct —
+   keep it; it prevents misgrounded writes. Background input applies to
+   inactive _windows on the active space_, not inactive _spaces_.
+4. **Hidden/minimized:** covered at rev 20 — the layer-0 fallback in
+   `input_window_info_by_id` resolves hidden/minimized windows and AX writes
+   were live-verified on both (`is_on_screen:false`, `value_readback`
+   confirmed). The earlier `stale_target` refusal no longer applies.
+5. **Do not** treat `create-orphan` spaces as agent Spaces: they are not in
    `SLSCopyManagedDisplaySpaces`, reject window membership, and cannot be
    made active. `space-ctl` reports `managed=0` for them deliberately.
 
