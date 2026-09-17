@@ -219,5 +219,3 @@ bounds check, `gate_background_window_action(WindowPointer)` admission lease
 acquired before cursor animation or dispatch, then the window-local stamped
 CGEvent gesture. Foreground delivery is untouched and remains the explicit
 fallback for surfaces that drop background events.
-
-> > > > > > > 270f5dd6a (feat(computer): background drag tool for exact windows)

@@ -135,7 +135,7 @@ growing the allowlist means re-auditing the tool here first.
 | `zoom`                   | `computer_zoom` (display-only; never a coordinate frame)                                                                                                                            |
 | `click`                  | `computer_click`; `computer_double_click`/`computer_triple_click` via `count`; `computer_right_click` via `button:"right"`; `computer_perform_action` via `element_token` (AXPress) |
 | `move_cursor`            | `computer_move_cursor` (overlay-only move; never aims input)                                                                                                                        |
-| `drag`                   | `computer_drag` (foreground delivery only)                                                                                                                                          |
+| `drag`                   | `computer_drag` (background by default on rev-17 drivers; explicit `delivery_mode:"foreground"` fallback; `background_unavailable` → `not-dispatched`)                              |
 | `scroll`                 | `computer_scroll` (rev-16 two-axis + modifiers + measured travel)                                                                                                                   |
 | `type_text`              | `computer_type_text` (focus-neutral AX insert or synthetic keys)                                                                                                                    |
 | `press_key`              | `computer_press_key`                                                                                                                                                                |
@@ -188,9 +188,19 @@ tool exposes them.
 | `health_report`                                            | Consumer-diagnostics contract ("consumers stay thin"), and every check it runs has a cheaper Synara-native equivalent already wired: `binary_version` = spawn handshake pin, `session_active` = generation liveness/`health().status`, `bundle_identity` = host bundle plumbing, `tcc_*` = `check_permissions` → `missingPermissions`/setup card, `ax_capability` = proven by live AX reads, `screen_capture_capability` = `health().captureAvailable`. A model cannot act on driver internals differently than on the structured errors and setup cards it already gets, so this stays out of the agent surface; revisit only if a user-facing diagnostics card wants the driver's own verdict. |
 | `history_status`, `history_query`                          | Privacy policy prerequisite (gap 14); upstream only registers them under the preview admission the embedded host never grants.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-### Browser surface — owned by the browser workstream
+### Browser surface — WIRED (separate consent model)
 
-`page` (the legacy compatibility tool: `get_text`/`query_dom`/`execute_javascript`/et al.) and `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, `browser_pointer` are a separate feature family with their own consent model. The desktop host refuses them at the allowlist (pinned by `cuaDriverHost.test.ts`); `page`'s generic text extraction overlaps `computer_get_state` `include_text`, so nothing is lost by deferring it.
+`get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`,
+`browser_type`, `browser_dialog`, `browser_set_input_files`,
+`browser_download`, `browser_pointer` ship as the `computer_browser_*` tool
+family: admitted by the host through `CUA_BROWSER_TOOLS` (never the desktop
+allowlists), gated on task attribution, and carried on per-thread
+`synara-browser-<threadId>` lifecycle sessions under one persistent control
+transport. Their targets are session-scoped `target_id`/`tab_id`/ref
+capabilities, input travels over CDP, and deliberate refusals arrive as
+structured `status:"refused"` results rather than protocol errors. `page`
+(the legacy compatibility tool) stays unreachable — its generic text
+extraction overlaps `computer_get_state` `include_text`.
 
 ### Not registered on macOS at this pin
 
@@ -213,9 +223,9 @@ tool exposes them.
   gate.
 - **Electron background scroll and type via CGEvent are dead.** Upstream
   refuses background scroll for Electron outright, and process-scoped
-  CGEvent posts never reach an inactive renderer. The real fix for
-  browser-class apps is the `browser_*` CDP surface, which is being built
-  separately; computer use stays the native-app fallback.
+  CGEvent posts never reach an inactive renderer. The `browser_*` CDP
+  surface now covers browser-class apps; computer use stays the native-app
+  fallback.
 - **Space management is proven blocked for an unentitled process.**
   `SLSSpaceCreate` produces orphaned type-3 spaces that never attach;
   every move/add/remove/set-current variant (including the
@@ -230,24 +240,27 @@ tool exposes them.
   own `launch_app` never steal focus; `hidden:true` additionally skips
   rendering entirely.
 - **Hidden-workspace lifecycle (rev 17).** New driver tools:
-  `set_window_minimized` (exact pid+window*id, AXMinimized readback) and
+  `set_window_minimized` (exact pid+window_id, AXMinimized readback) and
   `set_app_visibility` (pid, AXHidden + isHidden readback); `launch_app`
   accepts `hidden`. Verified end-to-end: hidden TextEdit accepted
   `set_value` with `effect:confirmed`, frontmost stayed ghostty.
-  Driver surface inventory (57 tools at rev 17): Synara exposes 32 agent-facing
-  (`computer*\*`) tools after the milestone set. Remaining: reads
-(`health_report`, `get_config`, `get_recording_state`, `get_session`,
-`get_session_state`, `list_sessions`, `check_for_update`, `debug_window_info`,
-`history_status`/`history_query`), mutations (`set_config`,
-`set_agent_cursor_enabled`/`motion`/`theme`,
+- **Browser surface (CDP family).** The nine `browser_*`/`get_browser_state`
+  tools ship as `computer_browser_*` on per-thread lifecycle sessions under
+  a persistent control transport — live-smoked end to end against the rev-17
+  driver (prepare → navigate → snapshot; `browser_route_unavailable` verbatim
+  on non-CDP windows). See browser-surface-spec.md.
+
+Driver surface inventory (57 tools at rev 17): Synara exposes the full
+agent-facing `computer_*` desktop set plus the `computer_browser_*` family.
+Remaining host-internal by decision: reads (`health_report`, `get_config`,
+`get_recording_state`, `get_session`, `get_session_state`, `list_sessions`,
+`check_for_update`, `history_status`/`history_query`), mutations
+(`set_config`, `set_agent_cursor_enabled`/`motion`/`theme`,
 `start_session`/`end_session`/`escalate_session`,
-`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`,
-`browser_prepare`), and the browser family (`get_browser_state`,
-`browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
-`browser_dialog`, `browser_download`, `browser_set_input_files`, legacy
-`page`). `get_accessibility_tree`and`get_cursor_position` are allowlisted
-  reads used internally by the backend, not separate agent tools. Browser
-  tools are a distinct feature family needing their own consent model.
+`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`),
+and the legacy `page` tool. `get_accessibility_tree` and `get_cursor_position`
+are allowlisted reads used internally by the backend, not separate agent
+tools.
 
 ## Evidence
 
