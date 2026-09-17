@@ -52,6 +52,44 @@ Ranked by user pain and milestone order. Codex side items stay unverified until 
 14. Locked use and history. Both need safety and privacy decisions first. Target Later.
 15. Chrome CDP path. Deferred by decision. Revisit only after native parity lands.
 
+## Status update — 2026-09-17 live experiments (this VM, full TCC)
+
+The gap summary above predates the decisive input matrix. Verified results:
+
+- **Gap 1 (type text isolation) — RESOLVED.** Web-content fields now route
+  through verified `set_value` compose; three-window same-pid typing passes
+  with `verified/confirmed`, serialized per-pid lane, zero focus steal.
+- **Gap 2 (synthetic focus belief) — DEAD by experiment.** Six belief stages
+  including a real `_SLPSSetFrontProcessWithOptions` front flip cannot
+  manufacture a key window; process-scoped `CGEventPostToPid` (keys, moves,
+  wheel) never reaches an inactive renderer. Belief work is cancelled.
+- **Gap 6 (background drag) and 7 (synthetic key activation) —
+  RECHARACTERIZED.** No background CGEvent path exists on inactive Electron.
+  Real input events exist only through `delivery_mode=foreground`
+  (short-lived front excursion + restore, operator-invisible): verified for
+  keys, clicks (DOM focus + mouseenter), and wheel. Background = semantic AX
+  writes only.
+- **Gap 4 (menus/frames) — IN FLIGHT.** `invoke_menu`, `set_window_frame`,
+  `list_apps`, `verify_state`, `zoom`, `kill_app` verified live on TextEdit
+  and being wired through protocol/backend/gateway.
+- **Gap 3 (scroll v2) — CONFIRMED.** Background scroll returns
+  `background_unavailable`; foreground scroll delivers real DOM wheel events.
+  Options: keep scroll foreground-only, or implement rev-16 scroll with
+  AX-first + 2-axis + modifiers per the subagent map.
+
+Driver surface inventory (55 tools): Synara exposes 23. Remaining after the
+milestone set: reads (`get_accessibility_tree`, `get_cursor_position`,
+`health_report`, `get_config`, `get_recording_state`, `get_session`,
+`get_session_state`, `list_sessions`, `check_for_update`), mutations
+(`set_config`, `set_agent_cursor_enabled`/`motion`/`theme`,
+`start_session`/`end_session`/`escalate_session`,
+`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`),
+and the browser family (`browser_prepare`, `get_browser_state`,
+`browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
+`browser_dialog`, `browser_download`, `browser_set_input_files`, legacy
+`page`). Browser tools are a distinct feature family needing their own
+consent model.
+
 ## Evidence
 
 - Tool surface: `apps/server/src/agentGateway/computerTools.ts:117` (tool allowlist start), `apps/server/src/agentGateway/computerTools.ts:1906`, `apps/server/src/agentGateway/computerTools.ts:1940`, `apps/server/src/agentGateway/computerTools.ts:2060`, `apps/server/src/agentGateway/computerTools.ts:2152`

@@ -94,3 +94,33 @@ Ordered steps. Existing files carry cites. New code lives in the listed files on
 5. Add the same-pid lane. In `apps/server/src/computer/CuaComputerBackend.ts:934` scope, derive the lane key from the target pid and order same-lane writes. Keep cross-pid overlap. Add the two pacing params with the stated defaults. Reuse existing refusal codes only.
 
 Implementation amendment, 2026-09-17: the lane lives in `CuaComputerBackend.inputDispatch`, not in `ComputerManager.runScoped` as first written. Two verified reasons. First, the queue rejects a nested scope whose key differs from the ambient activity scope, so a pid key cannot ride the queue. Second, the fixture and any direct client call the backend without passing through the Manager, so a Manager lane would leave the in-tree acceptance test unchanged. The backend `target` step already proves pid (`apps/server/src/computer/CuaComputerBackend.ts:545`), so no extra read and no unknown-pid fallback were needed. Pacing params are `CUA_SEMANTIC_TEXT_LANE_HOLD_MS` and `CUA_SEMANTIC_TEXT_LANE_GAP_MS` in `apps/server/src/computer/CuaComputerBackend.ts:102`. Timeout helper is `withSemanticTextLaneTimeout` in `apps/server/src/computer/CuaComputerBackend.ts:137`. Contract unchanged: same-pid serializes, cross-pid overlaps, driver untouched. 6. Attribute readback per token. After each write completes, read back through its own element token before releasing the lane. Mismatch fails honestly as `dispatched-unknown`. Never replay. 7. Add unit tests. Lane key mapping, same-lane ordering, lane timeout release. Run the affected Vitest suites for `apps/server/src/computer/DesktopOperationQueue.ts:140` and `apps/server/src/computer/ComputerManager.ts:2011`. 8. Run the proof. Run the three-window case 10 times plus the five solo cases in a signed app with fresh permissions. Save all reports and images as evidence. Check focus samples, lane waits, and readbacks in each. 9. Final checks. Run fmt, lint, typecheck, and the affected tests. Confirm the admission gate, cleanup acknowledgement, and never-replay rule are untouched. Report what ran, what passed, and what stays unverified.
+
+## Resolution (2026-09-17, post-spec)
+
+The spec's ranked candidates all assumed the `AXSelectedText` insert path was
+sound and the failure was concurrency. Live disproof:
+`docs/computer-use-cua/input-matrix-2026-09-17.md`. On Electron 43 the
+AXSelectedText write never reaches the DOM at all — serialized or
+concurrent, inactive or frontmost. The race was never the primary defect.
+
+Actual fix: `CuaComputerBackend` tracks `in_web_content` elements and routes
+their text writes through a composed `set_value` (`existing + text`) plus an
+independent re-read verification — `webContentTypeText`/`webSetValue`/
+`resolveWebField` in `apps/server/src/computer/CuaComputerBackend.ts`. The
+same-pid lane still serializes these writes (kept as defence-in-depth);
+`setValue` on web elements verifies identically.
+
+Result (`evidence/fixture-g5-set-value-2026-09-17.report.json`,
+`fixture-g5-set-value-2026-09-17-notes.md`): three-window passes with
+3× `verified`/`confirmed` on the `cua-accessibility-background` route,
+2580/2580 focus samples on the sentinel, `overlap: true`, spans
+~1.4 s/2.6 s/3.9 s. Full suite green three consecutive runs including
+`explicit-foreground-text` under `SYNARA_CUA_FIXTURE_FOREGROUND=approved-once`.
+Gateway stub repaired to model task consent (`gateway.ts` — routine
+background approved, foreground denied, denials recorded), closing the two
+pre-existing gateway failures with their real assertions exercised.
+
+Not done from the spec: 10× consecutive stability runs (3 so far). The
+"decisive experiment" it asked for ran differently than planned — instead of
+1-vs-3 windows of the same mechanism, the mechanism itself was replaced after
+the input matrix proved AXSelectedText dead on Chromium.

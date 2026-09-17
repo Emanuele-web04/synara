@@ -20,7 +20,16 @@ Report: `fixture-g5-set-value-2026-09-17.report.json`.
 | closed-target                            | passed (off-Space refusal)      | passed                                                                                                                |
 | native tier (5 cases)                    | passed                          | passed                                                                                                                |
 | cancellation (2 run)                     | passed                          | passed                                                                                                                |
-| gateway                                  | 2 failures                      | same 2 failures — pre-existing approval-harness issue, identical pre-change                                           |
+| gateway                                  | 2 failures                      | **all pass** — fixture `authorizeAction` now models consent (background allowed, foreground denied); see `ccf5ad10a`    |
+
+## Stability — 10x acceptance met
+
+Ten consecutive clean runs of the full suite after the gateway fix; the
+three-window case passed every time with **zero off-sentinel focus samples**
+(2,180–2,663 samples per run). One additional run recorded a 76-sample blip
+attributed to parallel experiment traffic activating TextEdit on the same
+desktop — all three writes still verified confirmed; not a write-path
+regression.
 
 ## What changed
 
@@ -45,5 +54,6 @@ dispatches report success while the DOM never changes — see
   front). Sidecar reduces to optional theft-sampling; recommend not shipping it.
 - Remaining known-baseline items: `identical-text-replacement` refuses
   window-scoped synthetic keys under same-pid ambiguity (correct — agents must
-  use element-targeted type); gateway approval-harness cases fail identically
-  pre/post change and need a separate fix.
+  use element-targeted type). The gateway approval-harness failures were fixed
+  in `ccf5ad10a` — the stub now denies only `delivery_mode=foreground` so the
+  denial-path assertion stays real.
