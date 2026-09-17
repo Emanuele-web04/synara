@@ -10,7 +10,10 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_get_state",
   "computer_hotkey",
   "computer_input_paused",
+  "computer_invoke_menu",
+  "computer_kill_app",
   "computer_launch_app",
+  "computer_list_apps",
   "computer_list_windows",
   "computer_move_cursor",
   "computer_paste",
@@ -22,10 +25,13 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_screenshot",
   "computer_scroll",
   "computer_set_value",
+  "computer_set_window_frame",
   "computer_triple_click",
   "computer_type_text",
+  "computer_verify_state",
   "computer_wait",
   "computer_write_clipboard",
+  "computer_zoom",
 ] as const;
 
 export type SynaraComputerToolName = (typeof SYNARA_COMPUTER_TOOL_NAMES)[number];

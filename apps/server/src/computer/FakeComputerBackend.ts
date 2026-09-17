@@ -1,4 +1,5 @@
 import type {
+  ComputerApp,
   ComputerAvailability,
   ComputerBuildSignature,
   ComputerCapabilities,
@@ -13,7 +14,9 @@ import type {
   ComputerScreenshot,
   ComputerState,
   ComputerUiNode,
+  ComputerVerifyStateResult,
   ComputerWindow,
+  ComputerZoomResult,
 } from "@synara/contracts";
 
 import {
@@ -33,6 +36,10 @@ import { requireWindowBounds } from "./computerGeometry.ts";
 
 const FAKE_SCREENSHOT_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+/** A real 1×1 JPEG: zoom returns JPEG, not the PNG the ordinary captures carry. */
+const FAKE_ZOOM_BASE64 =
+  "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKwA//9k=";
 
 /**
  * How many calls the fake remembers. A long-running server that leaves the
@@ -79,6 +86,12 @@ export interface FakeComputerBackendOptions {
   readonly capabilities?: ComputerCapabilities;
   readonly screenSize?: ComputerScreenSize;
   readonly windows?: readonly ComputerWindow[];
+  /**
+   * The process list `listApps` answers. Defaults to one running app per
+   * default window, so the fixture mirrors what the real driver reports
+   * without a test having to name any.
+   */
+  readonly apps?: readonly ComputerApp[];
   readonly root?: ComputerUiNode;
   readonly now?: () => string;
 }
@@ -94,14 +107,24 @@ export class FakeComputerBackend implements ComputerBackend {
   private readonly currentCapabilities: ComputerCapabilities;
   private currentScreenSize: ComputerScreenSize;
   private currentWindows: ComputerWindow[];
+  private currentApps: ComputerApp[];
   private currentRoot: ComputerUiNode;
   private readonly now: () => string;
   private readonly eventListeners = new Set<ComputerBackendEventListener>();
   private frameListener: ComputerFrameListener | null = null;
   private nextSequence = 1;
+  private nextPid = 5_000;
   private clipboardText = "";
   private failures = new Map<string, Error>();
   private readonly queuedScreenshots: string[] = [];
+  /**
+   * When false the frame call still succeeds but the window keeps its old
+   * bounds — the readback-mismatch shape a driver that dispatched without the
+   * move landing produces.
+   */
+  private frameApplies = true;
+  private readonly refusedMenuPaths = new Map<string, Error>();
+  private verifySatisfied = true;
   private disposed = false;
 
   constructor(options: FakeComputerBackendOptions = {}) {
@@ -119,6 +142,7 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentCapabilities = options.capabilities ?? DEFAULT_FAKE_CAPABILITIES;
     this.currentScreenSize = options.screenSize ?? { width: 1_920, height: 1_080, scale: 1 };
     this.currentWindows = [...(options.windows ?? defaultWindows())];
+    this.currentApps = [...(options.apps ?? defaultApps(this.currentWindows))];
     this.currentRoot = options.root ?? defaultRoot(this.currentScreenSize, this.currentWindows);
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -229,6 +253,7 @@ export class FakeComputerBackend implements ComputerBackend {
       id,
       title: app,
       appName: app,
+      pid: this.nextPid++,
       bounds: { x: 120, y: 80, width: 900, height: 700 },
       focused: true,
       minimized: false,
@@ -241,6 +266,160 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
     this.emit({ type: "windows-changed", windows: this.currentWindows });
     return { computerId: this.computerId, app, window } as ComputerLaunchAppResult;
+  }
+
+  async listApps(): Promise<readonly ComputerApp[]> {
+    this.record("listApps");
+    this.throwIfFailed("listApps");
+    return this.currentApps.map((app) => ({ ...app }));
+  }
+
+  /**
+   * The fake's readback is its own window list: applying the frame is what a
+   * confirmed verification looks like, and `setFrameApplies(false)` produces
+   * the dispatched-but-unverified result a real backend reports when the move
+   * did not land.
+   */
+  async setWindowFrame(
+    windowId: string,
+    frame: ComputerRect,
+  ): Promise<ComputerBackendActionResult> {
+    this.record("setWindowFrame", windowId, frame);
+    this.throwIfFailed("setWindowFrame");
+    if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0) {
+      throw new ComputerBackendError("Window frame needs finite geometry and positive size.");
+    }
+    const index = this.currentWindows.findIndex((window) => window.id === windowId);
+    if (index === -1) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    if (!this.frameApplies) {
+      return {
+        windowId,
+        deliveryPath: "fake-frame",
+        verified: "unconfirmed",
+        effect: "dispatched-unknown",
+      };
+    }
+    this.currentWindows[index] = { ...this.currentWindows[index]!, bounds: { ...frame } };
+    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+    this.emit({ type: "windows-changed", windows: this.currentWindows });
+    return {
+      windowId,
+      deliveryPath: "fake-frame",
+      verified: "confirmed",
+      effect: "verified",
+    };
+  }
+
+  async invokeMenu(
+    windowId: string,
+    path: readonly string[],
+  ): Promise<ComputerBackendActionResult> {
+    this.record("invokeMenu", windowId, path);
+    this.throwIfFailed("invokeMenu");
+    if (!this.currentWindows.some((window) => window.id === windowId)) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    if (path.length === 0 || path.some((segment) => segment.trim().length === 0)) {
+      throw new ComputerBackendError("A menu path needs at least one non-empty title.");
+    }
+    const refusal = this.refusedMenuPaths.get(path.join(""));
+    if (refusal) throw refusal;
+    return {
+      windowId,
+      deliveryPath: "fake-menu",
+      verified: "confirmed",
+      effect: "verified",
+    };
+  }
+
+  async verifyState(
+    windowId: string,
+    expect: readonly Record<string, unknown>[],
+  ): Promise<ComputerVerifyStateResult> {
+    this.record("verifyState", windowId, expect);
+    this.throwIfFailed("verifyState");
+    if (!this.currentWindows.some((window) => window.id === windowId)) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    return {
+      status: this.verifySatisfied ? "satisfied" : "unsatisfied",
+      stable: true,
+      samples: 1,
+      elapsedMs: 0,
+      predicates: expect.map((_, index) => ({
+        index,
+        status: this.verifySatisfied ? "satisfied" : "unsatisfied",
+        unknown_reason: null,
+        observed_json: "{}",
+      })),
+    };
+  }
+
+  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
+    this.record("zoomWindow", windowId, region);
+    this.throwIfFailed("zoomWindow");
+    const window = this.currentWindows.find((candidate) => candidate.id === windowId);
+    if (!window) {
+      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    }
+    const bounds = requireWindowBounds(window, "a zoom capture");
+    if (
+      !Object.values(region).every(Number.isFinite) ||
+      region.width <= 0 ||
+      region.height <= 0 ||
+      region.x < 0 ||
+      region.y < 0 ||
+      region.x + region.width > bounds.width ||
+      region.y + region.height > bounds.height
+    ) {
+      throw new ComputerBackendError("The zoom region lies outside the target window.");
+    }
+    return {
+      mimeType: "image/jpeg",
+      width: 1,
+      height: 1,
+      sizeBytes: Buffer.from(FAKE_ZOOM_BASE64, "base64").byteLength,
+      bytesBase64: FAKE_ZOOM_BASE64,
+      windowId,
+      capturedAt: this.now(),
+    };
+  }
+
+  async killApp(pid: number): Promise<ComputerBackendActionResult> {
+    this.record("killApp", pid);
+    this.throwIfFailed("killApp");
+    const owned = this.currentWindows.filter((window) => window.pid === pid);
+    if (owned.length === 0) {
+      throw new ComputerBackendError(`No desktop window belongs to pid ${pid}.`);
+    }
+    this.currentWindows = this.currentWindows.filter((window) => window.pid !== pid);
+    this.currentApps = this.currentApps.map((app) =>
+      app.pid === pid ? { ...app, running: false, active: false, pid: 0 } : app,
+    );
+    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+    this.emit({ type: "windows-changed", windows: this.currentWindows });
+    return {
+      windowId: owned[0]!.id,
+      deliveryPath: "fake-kill",
+      verified: "confirmed",
+      effect: "verified",
+    };
+  }
+
+  /** Makes the next setWindowFrame report the dispatched-unverified shape. */
+  setFrameApplies(applies: boolean): void {
+    this.frameApplies = applies;
+  }
+
+  /** Configures a persistent refusal for one menu path, like a disabled item. */
+  refuseMenuPath(path: readonly string[], error: Error): void {
+    this.refusedMenuPaths.set(path.join(""), error);
+  }
+
+  setVerifySatisfied(satisfied: boolean): void {
+    this.verifySatisfied = satisfied;
   }
 
   async raiseWindow(windowId: string): Promise<void> {
@@ -562,6 +741,7 @@ function defaultWindows(): ComputerWindow[] {
       id: "fake-terminal",
       title: "Terminal",
       appName: "org.kde.konsole",
+      pid: 1_001,
       bounds: { x: 40, y: 40, width: 960, height: 720 },
       focused: true,
       minimized: false,
@@ -571,12 +751,29 @@ function defaultWindows(): ComputerWindow[] {
       id: "fake-calculator",
       title: "Calculator",
       appName: "org.kde.kcalc",
+      pid: 1_002,
       bounds: { x: 1_050, y: 120, width: 420, height: 620 },
       focused: false,
       minimized: false,
       visible: true,
     },
   ];
+}
+
+function defaultApps(windows: readonly ComputerWindow[]): ComputerApp[] {
+  return windows.flatMap((window) => {
+    if (window.pid === undefined || !window.appName) return [];
+    return [
+      {
+        pid: window.pid,
+        name: window.title || window.appName,
+        bundleId: window.appName,
+        running: true,
+        active: window.focused,
+        windowCount: 1,
+      },
+    ];
+  });
 }
 
 function defaultRoot(

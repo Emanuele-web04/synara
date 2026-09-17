@@ -3,6 +3,7 @@ import {
   COMPUTER_DELIVERY_PATH_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
   type ComputerActionResult,
+  type ComputerApp,
   type ComputerAvailability,
   type ComputerBuildSignature,
   type ComputerCapabilities,
@@ -20,7 +21,9 @@ import {
   type ComputerState,
   type ComputerTarget,
   type ComputerUiNode,
+  type ComputerVerifyStateResult,
   type ComputerWindow,
+  type ComputerZoomResult,
 } from "@synara/contracts";
 
 /**
@@ -394,6 +397,54 @@ export interface ComputerBackend {
   launchApp(app: string, args: readonly string[]): Promise<ComputerLaunchAppResult>;
   /** Fresh exact-window readiness only; never focus, raise, or send input. */
   checkInputReady?(windowId: string): Promise<void>;
+  /**
+   * The process-level app list — name, pid, bundle id, active state — for
+   * backends that can enumerate it. Optional because a compositor plugin may
+   * only see windows; the agent tool refuses when it is absent.
+   */
+  listApps?(): Promise<readonly ComputerApp[]>;
+  /**
+   * Move and resize the exact window to `frame` in desktop coordinates.
+   * Backends report `verified` only when an independent read-back sees the new
+   * frame; anything less is `unconfirmed`, never silent success.
+   */
+  setWindowFrame?(
+    windowId: string,
+    frame: ComputerRect,
+  ): Promise<ComputerBackendActionResult | void>;
+  /**
+   * Invoke a menu-bar path on the exact window's owning app — `["File",
+   * "Save"]`. The driver walks the AX menu hierarchy itself; disabled or absent
+   * items refuse rather than fall through to another actuator.
+   */
+  invokeMenu?(
+    windowId: string,
+    path: readonly string[],
+  ): Promise<ComputerBackendActionResult | void>;
+  /**
+   * Assert a predicate set against the exact window's live state — element
+   * exists/enabled/selected/value, or window bounds. Pure read: the answer is
+   * a tri-state (`satisfied` / `unsatisfied` / `unknown`) plus the per-predicate
+   * evidence that settled it — `unknown` is never `unsatisfied`, and a caller
+   * that branches on a boolean loses the distinction the driver guarantees.
+   */
+  verifyState?(
+    windowId: string,
+    expect: readonly Record<string, unknown>[],
+  ): Promise<ComputerVerifyStateResult>;
+  /**
+   * A magnified capture of a rect inside the exact window. `region` is in
+   * window-local desktop points — `(0,0)` is the window's top-left — and the
+   * backend converts to the driver's screenshot-pixel space, so the caller
+   * works in the same coordinates window bounds use.
+   */
+  zoomWindow?(windowId: string, region: ComputerRect): Promise<ComputerZoomResult>;
+  /**
+   * Force-terminate a process by pid — the escalation path after the
+   * cooperative close (cmd+q, window close) has already failed. Unsaved state
+   * is lost; approval-gated at the tool surface.
+   */
+  killApp?(pid: number): Promise<ComputerBackendActionResult | void>;
   /**
    * `windowId` is the window the caller resolved this point to, when it named
    * one. A backend that injects at a screen coordinate ignores it — whatever is

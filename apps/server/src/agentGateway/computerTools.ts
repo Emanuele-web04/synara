@@ -137,6 +137,11 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   // The only tool whose whole effect is on what the human sees on their own
   // screen, which is exactly why it is gated.
   "computer_activate_window",
+  // Window motion and menu invocation mutate the app the user is looking at;
+  // kill_app force-terminates it and loses unsaved state.
+  "computer_set_window_frame",
+  "computer_invoke_menu",
+  "computer_kill_app",
 ]);
 
 export function computerToolRequiresApproval(name: string): boolean {
@@ -1003,7 +1008,12 @@ export function makeAgentGatewayComputerTools(
         ? new Set([args.app])
         : new Set();
     }
-    if (name === "computer_activate_window") {
+    if (
+      name === "computer_activate_window" ||
+      name === "computer_set_window_frame" ||
+      name === "computer_invoke_menu" ||
+      name === "computer_kill_app"
+    ) {
       return typeof args.window_id === "string" && args.window_id.length > 0
         ? drivenAppsForWindows(new Set([args.window_id]))
         : new Set();
@@ -1017,7 +1027,12 @@ export function makeAgentGatewayComputerTools(
         if (type === "launch_app") {
           const app = Reflect.get(step, "app");
           if (typeof app === "string" && app.trim().length > 0) apps.add(app);
-        } else if (type === "activate_window") {
+        } else if (
+          type === "activate_window" ||
+          type === "set_window_frame" ||
+          type === "invoke_menu" ||
+          type === "kill_app"
+        ) {
           const windowId = Reflect.get(step, "window_id");
           if (typeof windowId === "string" && windowId.length > 0) windowIds.add(windowId);
         }
@@ -1516,6 +1531,9 @@ export function makeAgentGatewayComputerTools(
     launch_app: ["app", "arguments", "wait_for_window"],
     write_clipboard: ["text"],
     paste: ["text", "window_id", "windowId"],
+    set_window_frame: ["window_id", "windowId", "x", "y", "width", "height"],
+    invoke_menu: ["window_id", "windowId", "path"],
+    kill_app: ["window_id", "windowId"],
   };
 
   interface PreparedRunStep {
@@ -1694,6 +1712,34 @@ export function makeAgentGatewayComputerTools(
         const text = readClipboardText(step);
         const windowId = readWindowIdArg(step);
         return () => manager.paste(threadId, text, windowId);
+      }
+      case "set_window_frame": {
+        const windowId = readWindowIdArg(step);
+        if (!windowId) throw new ToolInputError('Step "set_window_frame" requires "window_id".');
+        const frame = {
+          x: readDelta(step, "x"),
+          y: readDelta(step, "y"),
+          width: readDelta(step, "width"),
+          height: readDelta(step, "height"),
+        };
+        if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
+          throw new ToolInputError(
+            'Step "set_window_frame" needs finite geometry and positive width/height.',
+          );
+        return () => manager.setWindowFrame(threadId, windowId, frame);
+      }
+      case "invoke_menu": {
+        const windowId = readWindowIdArg(step);
+        if (!windowId) throw new ToolInputError('Step "invoke_menu" requires "window_id".');
+        const path = readStringArrayArg(step, "path");
+        if (!path?.length || path.length > 6 || path.some((title) => title.trim().length === 0))
+          throw new ToolInputError('Step "invoke_menu" needs a path of one to six titles.');
+        return () => manager.invokeMenu(threadId, windowId, path);
+      }
+      case "kill_app": {
+        const windowId = readWindowIdArg(step);
+        if (!windowId) throw new ToolInputError('Step "kill_app" requires "window_id".');
+        return () => manager.killApp(threadId, windowId);
       }
       default:
         throw new ToolInputError(`Unknown run step type ${JSON.stringify(type)}.`);
@@ -2292,6 +2338,189 @@ export function makeAgentGatewayComputerTools(
           readBooleanArg(args, "wait_for_window") === false ? 0 : 2_000,
         ),
     ),
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_list_apps",
+        description:
+          "List running applications with pid, name, bundle id and active state. Use it to find the app that owns a window, or to confirm an app is running before launching it again.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        annotations: { title: "List computer apps", ...READ_ONLY_TOOL_ANNOTATIONS },
+      },
+      handler: handle("computer_list_apps", async () => manager.listApps()),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_verify_state",
+        description:
+          "Assert what the exact window looks like right now without changing anything: element exists / enabled / selected / value_equals matched by role or label_contains, or window bounds within a pixel tolerance. Pass one to eight predicates, combined with AND. Returns a tri-state status — satisfied, unsatisfied, or unknown — plus the per-predicate evidence; unknown means the check could not be proven either way, not that it failed. Use it to prove an action's effect before continuing, or to check a control's state without touching it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            window_id: { type: "string", description: "The exact window to inspect." },
+            expect: {
+              type: "array",
+              minItems: 1,
+              maxItems: 8,
+              items: { type: "object" },
+              description:
+                'Predicates such as {"element":{"selector":{"role":"AXButton","label_contains":"Save"},"enabled":true,"exists":true,"value_equals":null,"selected":null}} or {"window":{"bounds":{"x":0,"y":0,"width":800,"height":600,"tolerance_px":4}}}.',
+            },
+          },
+          required: ["window_id", "expect"],
+          additionalProperties: false,
+        },
+        annotations: { title: "Verify computer state", ...READ_ONLY_TOOL_ANNOTATIONS },
+      },
+      handler: handle("computer_verify_state", async (args) => {
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        const raw = args.expect;
+        if (!Array.isArray(raw) || raw.length === 0 || raw.length > 8)
+          throw new ToolInputError("expect must be an array of one to eight predicates.");
+        for (const predicate of raw)
+          if (!predicate || typeof predicate !== "object" || Array.isArray(predicate))
+            throw new ToolInputError("Each expect predicate must be an object.");
+        return manager.verifyState(windowId, raw as Record<string, unknown>[]);
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_zoom",
+        description:
+          "Capture a magnified JPEG of a rect inside the exact window — for reading small text or dense UI that the window screenshot downscales away. x/y/width/height are window-local points: (0,0) is the window's top-left and the window's width/height come from computer_list_windows or get_state.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            window_id: { type: "string", description: "The exact window to magnify." },
+            x: { type: "number" },
+            y: { type: "number" },
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+          required: ["window_id", "x", "y", "width", "height"],
+          additionalProperties: false,
+        },
+        annotations: { title: "Zoom into a window region", ...READ_ONLY_TOOL_ANNOTATIONS },
+      },
+      handler: handle("computer_zoom", async (args) => {
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        const region = {
+          x: readDelta(args, "x"),
+          y: readDelta(args, "y"),
+          width: readDelta(args, "width"),
+          height: readDelta(args, "height"),
+        };
+        if (
+          !Object.values(region).every(Number.isFinite) ||
+          region.width <= 0 ||
+          region.height <= 0
+        )
+          throw new ToolInputError("x/y/width/height must be finite, with positive size.");
+        const zoom = await manager.zoomWindow(windowId, region);
+        // The magnified frame is NOT registered as a coordinate frame: its
+        // pixels are enlarged and window-local, so letting clicks resolve
+        // against it would aim them off-target. It is display-only.
+        const { bytesBase64, ...metadata } = zoom;
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ computerId: manager.computerId, zoom: metadata }),
+            },
+            { type: "image", data: bytesBase64, mimeType: zoom.mimeType },
+          ],
+        };
+      }),
+    },
+    actionEntry(
+      "computer_set_window_frame",
+      "Set window frame",
+      `Move and resize the exact window to x/y/width/height in desktop coordinates — the same space computer_list_windows reports bounds in. The new frame is read back and reported verified only when it matches; an unconfirmed result means the window may not have moved, so observe before relying on it. ${DELIVERY_HINT}`,
+      {
+        type: "object",
+        properties: {
+          window_id: { type: "string", description: "The exact window to move or resize." },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+        },
+        required: ["window_id", "x", "y", "width", "height"],
+        additionalProperties: false,
+      },
+      async (args, context) => {
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        const frame = {
+          x: readDelta(args, "x"),
+          y: readDelta(args, "y"),
+          width: readDelta(args, "width"),
+          height: readDelta(args, "height"),
+        };
+        if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
+          throw new ToolInputError("x/y/width/height must be finite, with positive size.");
+        return manager.setWindowFrame(context.callerThreadId, windowId, frame);
+      },
+    ),
+    actionEntry(
+      "computer_invoke_menu",
+      "Invoke menu item",
+      `Invoke a menu-bar item on the exact window's app by path — ["File", "Save"] or ["Edit", "Copy"]. One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
+      {
+        type: "object",
+        properties: {
+          window_id: {
+            type: "string",
+            description: "A window owned by the app whose menu to invoke.",
+          },
+          path: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 6,
+            description: 'Menu titles from the menu bar down, e.g. ["File", "Export As…"].',
+          },
+        },
+        required: ["window_id", "path"],
+        additionalProperties: false,
+      },
+      async (args, context) => {
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        const path = readStringArrayArg(args, "path");
+        if (!path?.length || path.length > 6 || path.some((title) => title.trim().length === 0))
+          throw new ToolInputError("path must name one to six non-empty menu titles.");
+        return manager.invokeMenu(context.callerThreadId, windowId, path);
+      },
+    ),
+    actionEntry(
+      "computer_kill_app",
+      "Force-quit app",
+      `Force-terminate the app that owns the exact window — the escalation after a cooperative close (computer_invoke_menu ["File","Quit"], or cmd+q via computer_hotkey) has already failed. Unsaved state is lost and every window of that app closes; the kill is refused when the window no longer exists. ${DELIVERY_HINT}`,
+      {
+        type: "object",
+        properties: {
+          window_id: {
+            type: "string",
+            description: "A window owned by the app to force-terminate.",
+          },
+        },
+        required: ["window_id"],
+        additionalProperties: false,
+      },
+      async (args, context) => {
+        const windowId = readWindowIdArg(args);
+        if (!windowId) throw new ToolInputError("window_id is required.");
+        return manager.killApp(context.callerThreadId, windowId);
+      },
+    ),
     clickEntry(
       "computer_click",
       "Click",
@@ -2667,7 +2896,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), launch_app (app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, launch_app (app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {

@@ -37,6 +37,18 @@ export function cursorToolActivity(tool: string): string {
       return "Measuring screen";
     case "computer_list_windows":
       return "Finding window";
+    case "computer_list_apps":
+      return "Listing apps";
+    case "computer_set_window_frame":
+      return "Moving window";
+    case "computer_invoke_menu":
+      return "Opening menu item";
+    case "computer_verify_state":
+      return "Checking state";
+    case "computer_zoom":
+      return "Zooming in";
+    case "computer_kill_app":
+      return "Force-quitting app";
     case "computer_perform_action":
       return "Activating control";
     case "computer_launch_app":

@@ -173,6 +173,12 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "measured the screen",
   ),
   synara_computer_list_windows: presentComputerTool("listing windows", "listed the windows"),
+  synara_computer_list_apps: presentComputerTool("listing apps", "listed the apps"),
+  synara_computer_verify_state: presentComputerTool(
+    "checking desktop state",
+    "checked desktop state",
+  ),
+  synara_computer_zoom: presentComputerTool("zooming into a window", "zoomed into a window"),
   synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
   synara_computer_double_click: presentComputerTool(
     "double-clicking the desktop",
@@ -199,6 +205,12 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   ),
   synara_computer_launch_app: presentComputerTool("opening an app", "opened an app"),
   synara_computer_activate_window: presentComputerTool("activating a window", "activated a window"),
+  synara_computer_set_window_frame: presentComputerTool(
+    "moving or resizing a window",
+    "moved or resized a window",
+  ),
+  synara_computer_invoke_menu: presentComputerTool("invoking a menu item", "invoked a menu item"),
+  synara_computer_kill_app: presentComputerTool("force-quitting an app", "force-quit an app"),
   synara_computer_wait: presentComputerTool("waiting for the desktop", "waited for the desktop"),
   synara_computer_read_clipboard: presentComputerTool(
     "reading the clipboard",

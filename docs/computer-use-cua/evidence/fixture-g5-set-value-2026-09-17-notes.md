@@ -20,7 +20,7 @@ Report: `fixture-g5-set-value-2026-09-17.report.json`.
 | closed-target                            | passed (off-Space refusal)      | passed                                                                                                                |
 | native tier (5 cases)                    | passed                          | passed                                                                                                                |
 | cancellation (2 run)                     | passed                          | passed                                                                                                                |
-| gateway                                  | 2 failures                      | **all pass** — fixture `authorizeAction` now models consent (background allowed, foreground denied); see `ccf5ad10a`    |
+| gateway                                  | 2 failures                      | **all pass** — fixture `authorizeAction` now models consent (background allowed, foreground denied); see `ccf5ad10a`  |
 
 ## Stability — 10x acceptance met
 

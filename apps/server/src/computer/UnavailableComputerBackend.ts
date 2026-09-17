@@ -15,6 +15,7 @@
  * two descriptions of the same fault.
  */
 import type {
+  ComputerApp,
   ComputerAvailability,
   ComputerCapabilities,
   ComputerHealth,
@@ -23,7 +24,9 @@ import type {
   ComputerScreenSize,
   ComputerScreenshot,
   ComputerState,
+  ComputerVerifyStateResult,
   ComputerWindow,
+  ComputerZoomResult,
 } from "@synara/contracts";
 
 import {
@@ -105,6 +108,35 @@ export class UnavailableComputerBackend implements ComputerBackend {
   }
 
   launchApp(): Promise<ComputerLaunchAppResult> {
+    return this.refuse();
+  }
+
+  /**
+   * Declared even though the interface marks these optional: an absent method
+   * makes the manager produce a generic "cannot" error, while refusing here
+   * keeps the one message this backend exists to carry.
+   */
+  listApps(): Promise<readonly ComputerApp[]> {
+    return this.refuse();
+  }
+
+  setWindowFrame(): Promise<never> {
+    return this.refuse();
+  }
+
+  invokeMenu(): Promise<never> {
+    return this.refuse();
+  }
+
+  verifyState(): Promise<ComputerVerifyStateResult> {
+    return this.refuse();
+  }
+
+  zoomWindow(): Promise<ComputerZoomResult> {
+    return this.refuse();
+  }
+
+  killApp(): Promise<never> {
     return this.refuse();
   }
 

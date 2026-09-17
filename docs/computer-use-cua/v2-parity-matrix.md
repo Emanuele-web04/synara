@@ -69,26 +69,33 @@ The gap summary above predates the decisive input matrix. Verified results:
   (short-lived front excursion + restore, operator-invisible): verified for
   keys, clicks (DOM focus + mouseenter), and wheel. Background = semantic AX
   writes only.
-- **Gap 4 (menus/frames) — IN FLIGHT.** `invoke_menu`, `set_window_frame`,
+- **Gap 4 (menus/frames) — WIRED.** `invoke_menu`, `set_window_frame`,
   `list_apps`, `verify_state`, `zoom`, `kill_app` verified live on TextEdit
-  and being wired through protocol/backend/gateway.
+  and shipped through protocol/backend/manager/gateway as
+  `computer_invoke_menu`, `computer_set_window_frame`, `computer_list_apps`,
+  `computer_verify_state`, `computer_zoom`, `computer_kill_app`. Mutations
+  are approval-gated with second-app consent and Synara-side read-back;
+  `verify_state` returns a tri-state that cannot contradict the scoped
+  observation contract.
 - **Gap 3 (scroll v2) — CONFIRMED.** Background scroll returns
   `background_unavailable`; foreground scroll delivers real DOM wheel events.
   Options: keep scroll foreground-only, or implement rev-16 scroll with
   AX-first + 2-axis + modifiers per the subagent map.
 
-Driver surface inventory (55 tools): Synara exposes 23. Remaining after the
-milestone set: reads (`get_accessibility_tree`, `get_cursor_position`,
-`health_report`, `get_config`, `get_recording_state`, `get_session`,
-`get_session_state`, `list_sessions`, `check_for_update`), mutations
-(`set_config`, `set_agent_cursor_enabled`/`motion`/`theme`,
+Driver surface inventory (55 tools): Synara exposes 30 agent-facing
+(`computer_*`) tools after the milestone set. Remaining: reads
+(`health_report`, `get_config`, `get_recording_state`, `get_session`,
+`get_session_state`, `list_sessions`, `check_for_update`, `debug_window_info`,
+`history_status`/`history_query`), mutations (`set_config`,
+`set_agent_cursor_enabled`/`motion`/`theme`,
 `start_session`/`end_session`/`escalate_session`,
-`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`),
-and the browser family (`browser_prepare`, `get_browser_state`,
+`start_recording`/`stop_recording`, `replay_trajectory`, `install_ffmpeg`,
+`browser_prepare`), and the browser family (`get_browser_state`,
 `browser_navigate`, `browser_click`, `browser_type`, `browser_pointer`,
 `browser_dialog`, `browser_download`, `browser_set_input_files`, legacy
-`page`). Browser tools are a distinct feature family needing their own
-consent model.
+`page`). `get_accessibility_tree` and `get_cursor_position` are allowlisted
+reads used internally by the backend, not separate agent tools. Browser
+tools are a distinct feature family needing their own consent model.
 
 ## Evidence
 

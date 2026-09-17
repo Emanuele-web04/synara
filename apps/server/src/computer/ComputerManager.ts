@@ -21,6 +21,7 @@ import {
   type ComputerRect,
   type ComputerScreenshot,
   type ComputerGetScreenSizeResult,
+  type ComputerListAppsResult,
   type ComputerListWindowsResult,
   type ComputerProvisionResult,
   type ComputerLaunchAppResult,
@@ -28,7 +29,9 @@ import {
   type ComputerState,
   type ComputerStatusResult,
   type ComputerTarget,
+  type ComputerVerifyStateResult,
   type ComputerWindow,
+  type ComputerZoomResult,
   type ThreadComputerState,
 } from "@synara/contracts";
 import { encodeComputerFrame } from "@synara/shared/computerFrame";
@@ -1216,6 +1219,84 @@ export class ComputerManager {
         return { ...result, window };
       }
       return result;
+    });
+  }
+
+  async listApps(): Promise<ComputerListAppsResult> {
+    this.engageBackend();
+    const listApps = this.backend.listApps?.bind(this.backend);
+    if (!listApps) throw new ComputerBackendError("This backend cannot enumerate applications.");
+    const [availability, apps] = await Promise.all([this.backend.availability(), listApps()]);
+    return { computerId: this.computerId, apps, availability };
+  }
+
+  async setWindowFrame(
+    threadId: string | undefined,
+    windowId: string,
+    frame: ComputerRect,
+  ): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const setter = this.backend.setWindowFrame?.bind(this.backend);
+      if (!setter) throw new ComputerBackendError("This backend cannot move or resize windows.");
+      const windows = await this.readWindows();
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target) throw windowNotFoundError(windowId);
+      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
+      const result = await setter(windowId, frame);
+      return this.actionResult(threadId, "computer_set_window_frame", undefined, result, windowId);
+    });
+  }
+
+  async invokeMenu(
+    threadId: string | undefined,
+    windowId: string,
+    path: readonly string[],
+  ): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const invoke = this.backend.invokeMenu?.bind(this.backend);
+      if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
+      const windows = await this.readWindows();
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target) throw windowNotFoundError(windowId);
+      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
+      const result = await invoke(windowId, path);
+      return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
+    });
+  }
+
+  async verifyState(
+    windowId: string,
+    expect: readonly Record<string, unknown>[],
+  ): Promise<ComputerVerifyStateResult> {
+    this.engageBackend();
+    const verify = this.backend.verifyState?.bind(this.backend);
+    if (!verify) throw new ComputerBackendError("This backend cannot verify window state.");
+    const windows = await this.readWindows();
+    if (!windows.some((candidate) => candidate.id === windowId))
+      throw windowNotFoundError(windowId);
+    return verify(windowId, expect);
+  }
+
+  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
+    this.engageBackend();
+    const zoom = this.backend.zoomWindow?.bind(this.backend);
+    if (!zoom) throw new ComputerBackendError("This backend cannot capture zoomed regions.");
+    const windows = await this.readWindows();
+    if (!windows.some((candidate) => candidate.id === windowId))
+      throw windowNotFoundError(windowId);
+    return zoom(windowId, region);
+  }
+
+  async killApp(threadId: string | undefined, windowId: string): Promise<ComputerActionResult> {
+    return this.withDesktopControl(threadId, async () => {
+      const kill = this.backend.killApp?.bind(this.backend);
+      if (!kill) throw new ComputerBackendError("This backend cannot terminate applications.");
+      const windows = await this.readWindows();
+      const target = windows.find((candidate) => candidate.id === windowId);
+      if (!target?.pid) throw windowNotFoundError(windowId);
+      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
+      const result = await kill(target.pid);
+      return this.actionResult(threadId, "computer_kill_app", undefined, result, windowId);
     });
   }
 

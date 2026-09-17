@@ -151,10 +151,11 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew by two tools (computer_paste, computer_run) whose value
-    // is replacing per-action round trips; the bound still trips on accidental
-    // schema bloat, so raise it only with the new surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(48_000);
+    // The catalog grew again — six native-driver parity tools (list_apps,
+    // verify_state, zoom, set_window_frame, invoke_menu, kill_app) measure
+    // 52,272 chars of schema; the bound still trips on accidental bloat, so
+    // raise it only with the new surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(56_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -294,6 +295,12 @@ describe("agent gateway computer tools", () => {
       "computer_wait",
       "computer_read_clipboard",
       "computer_launch_app",
+      "computer_list_apps",
+      "computer_verify_state",
+      "computer_zoom",
+      "computer_set_window_frame",
+      "computer_invoke_menu",
+      "computer_kill_app",
       "computer_click",
       "computer_double_click",
       "computer_triple_click",
@@ -333,6 +340,9 @@ describe("agent gateway computer tools", () => {
         "computer_paste",
         "computer_run",
         "computer_activate_window",
+        "computer_set_window_frame",
+        "computer_invoke_menu",
+        "computer_kill_app",
       ]),
     );
     // A hover posts no event, presses nothing, and no longer aims the keyboard,
@@ -1927,6 +1937,9 @@ describe("agent gateway computer tools", () => {
           id: "fake-dialog",
           title: "Save changes?",
           appName: "org.kde.konsole",
+          // A dialog shares its owning app's pid — the same-process test the
+          // observer applies once windows carry one.
+          pid: before.find((window) => window.id === "fake-terminal")?.pid,
           bounds: { x: 200, y: 200, width: 300, height: 200 },
           focused: false,
           minimized: false,
@@ -3382,5 +3395,249 @@ describe("second-app consent", () => {
     } finally {
       await manager.dispose();
     }
+  });
+
+  describe("native driver parity tools", () => {
+    it("lists apps, verifies state, and zooms without approval or dispatch", async () => {
+      const { backend, manager, call } = await setup();
+      try {
+        const apps = await call("computer_list_apps", {});
+        expect(apps.isError).not.toBe(true);
+        const appList = resultJson(apps) as { apps: { pid: number; name: string }[] };
+        expect(appList.apps.map((app) => app.pid)).toContain(1002);
+
+        const verified = await call("computer_verify_state", {
+          window_id: "fake-calculator",
+          expect: [{ window: { bounds: { x: 1050, y: 120, tolerance_px: 4 } } }],
+        });
+        expect(verified.isError).not.toBe(true);
+        expect(resultJson(verified)).toMatchObject({ status: "satisfied" });
+        expect(backend.callsFor("verifyState").map((entry) => entry.args[0])).toEqual([
+          "fake-calculator",
+        ]);
+
+        backend.setVerifySatisfied(false);
+        const unsatisfied = await call("computer_verify_state", {
+          window_id: "fake-calculator",
+          expect: [{ element: { selector: { role: "AXButton" }, exists: true } }],
+        });
+        expect(resultJson(unsatisfied)).toMatchObject({ status: "unsatisfied" });
+
+        const zoomed = await call("computer_zoom", {
+          window_id: "fake-calculator",
+          x: 10,
+          y: 10,
+          width: 100,
+          height: 80,
+        });
+        expect(zoomed.isError).not.toBe(true);
+        expect(zoomed.content.map((entry) => entry.type)).toEqual(["text", "image"]);
+        expect(zoomed.content[1]).toMatchObject({ mimeType: "image/jpeg" });
+        // The magnified frame must not become a coordinate frame: a click aimed
+        // from it would land off-target.
+        expect(resultJson(zoomed)).not.toHaveProperty("screenshot.screenshotId");
+
+        const outOfBounds = await call("computer_zoom", {
+          window_id: "fake-calculator",
+          x: 400,
+          y: 0,
+          width: 100,
+          height: 80,
+        });
+        expect(outOfBounds.isError).toBe(true);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("moves a window through approval and reports the read-back", async () => {
+      const backend = new FakeComputerBackend();
+      const approval = vi.fn(async () => true);
+      const { call, manager } = await setup(backend, approval);
+      try {
+        const moved = await call("computer_set_window_frame", {
+          window_id: "fake-calculator",
+          x: 300,
+          y: 200,
+          width: 500,
+          height: 400,
+        });
+        expect(moved.isError).not.toBe(true);
+        expect(approval).toHaveBeenCalledWith(
+          "computer_set_window_frame",
+          expect.objectContaining({ window_id: "fake-calculator" }),
+          expect.anything(),
+          expect.anything(),
+        );
+        expect(backend.callsFor("setWindowFrame").map((entry) => entry.args)).toEqual([
+          ["fake-calculator", { x: 300, y: 200, width: 500, height: 400 }],
+        ]);
+        const windows = await backend.listWindows();
+        expect(windows.find((window) => window.id === "fake-calculator")?.bounds).toEqual({
+          x: 300,
+          y: 200,
+          width: 500,
+          height: 400,
+        });
+
+        const invalid = await call("computer_set_window_frame", {
+          window_id: "fake-calculator",
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 400,
+        });
+        expect(invalid.isError).toBe(true);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("asks approval before invoking menus and force-quitting, dispatching nothing when refused", async () => {
+      const backend = new FakeComputerBackend();
+      const approval = vi.fn(async () => false);
+      const { call, manager } = await setup(backend, approval);
+      try {
+        for (const [name, args] of [
+          ["computer_invoke_menu", { window_id: "fake-calculator", path: ["File", "Save"] }],
+          ["computer_kill_app", { window_id: "fake-calculator" }],
+        ] as const) {
+          const refused = await call(name, args);
+          expect(refused.isError).toBe(true);
+        }
+        expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+        expect(backend.callsFor("killApp")).toHaveLength(0);
+        expect(approval.mock.calls.map((entry) => (entry as unknown[])[0])).toEqual([
+          "computer_invoke_menu",
+          "computer_kill_app",
+        ]);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("resolves kill_app's window to its owning pid before dispatch", async () => {
+      const backend = new FakeComputerBackend();
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      try {
+        const killed = await call("computer_kill_app", { window_id: "fake-calculator" });
+        expect(killed.isError).not.toBe(true);
+        expect(backend.callsFor("killApp").map((entry) => entry.args[0])).toEqual([1002]);
+        // The closed window leaves the list: the next call names the miss.
+        const gone = await call("computer_kill_app", { window_id: "fake-calculator" });
+        expect(gone.isError).toBe(true);
+        expect(backend.callsFor("killApp")).toHaveLength(1);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("consents the app a window-targeted mutation names before it runs", async () => {
+      const backend = new FakeComputerBackend();
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      const asked: string[] = [];
+      manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
+        asked.push(`${toolName}:${app}`);
+        return true;
+      });
+      try {
+        await call("computer_launch_app", { app: "TextEdit" });
+        const moved = await call("computer_set_window_frame", {
+          window_id: "fake-calculator",
+          x: 0,
+          y: 0,
+          width: 500,
+          height: 400,
+        });
+        expect(moved.isError).not.toBe(true);
+        expect(asked).toEqual(["computer_set_window_frame:org.kde.kcalc"]);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("runs the window-management steps through computer_run in order", async () => {
+      const backend = new FakeComputerBackend();
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      try {
+        const result = await call("computer_run", {
+          steps: [
+            {
+              type: "set_window_frame",
+              window_id: "fake-calculator",
+              x: 50,
+              y: 60,
+              width: 500,
+              height: 400,
+            },
+            { type: "invoke_menu", window_id: "fake-calculator", path: ["File", "Save"] },
+            { type: "kill_app", window_id: "fake-calculator" },
+          ],
+        });
+        expect(result.isError).not.toBe(true);
+        const payload = resultJson(result) as {
+          steps: { step: number; type: string; ok: boolean }[];
+          completed: number;
+        };
+        expect(payload.steps.map((entry) => [entry.step, entry.type, entry.ok])).toEqual([
+          [0, "set_window_frame", true],
+          [1, "invoke_menu", true],
+          [2, "kill_app", true],
+        ]);
+        expect(payload.completed).toBe(3);
+        expect(backend.callsFor("setWindowFrame").map((entry) => entry.args[0])).toEqual([
+          "fake-calculator",
+        ]);
+        expect(backend.callsFor("invokeMenu").map((entry) => entry.args[1])).toEqual([
+          ["File", "Save"],
+        ]);
+        expect(backend.callsFor("killApp").map((entry) => entry.args[0])).toEqual([1002]);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("refuses run steps with missing or oversized arguments whole", async () => {
+      const backend = new FakeComputerBackend();
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      try {
+        for (const steps of [
+          [
+            {
+              type: "set_window_frame",
+              window_id: "fake-calculator",
+              x: 0,
+              y: 0,
+              width: 0,
+              height: 5,
+            },
+          ],
+          [{ type: "set_window_frame", x: 0, y: 0, width: 5, height: 5 }],
+          [{ type: "invoke_menu", window_id: "fake-calculator", path: [] }],
+          [{ type: "invoke_menu", window_id: "fake-calculator" }],
+          [{ type: "kill_app" }],
+        ]) {
+          const result = await call("computer_run", { steps });
+          expect(result.isError).toBe(true);
+        }
+        expect(backend.callsFor("setWindowFrame")).toHaveLength(0);
+        expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+        expect(backend.callsFor("killApp")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    });
   });
 });

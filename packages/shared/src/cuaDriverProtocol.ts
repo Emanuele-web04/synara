@@ -152,10 +152,15 @@ export const CUA_READ_TOOLS = new Set([
   "check_permissions",
   "check_input_ready",
   "list_windows",
+  "list_apps",
   "get_window_state",
   "get_screen_size",
   "get_desktop_state",
+  "get_accessibility_tree",
   "get_agent_cursor_state",
+  "get_cursor_position",
+  "verify_state",
+  "zoom",
 ]);
 export const CUA_ACTION_TOOLS = new Set([
   "click",
@@ -170,4 +175,7 @@ export const CUA_ACTION_TOOLS = new Set([
   "clipboard_write",
   "launch_app",
   "bring_to_front",
+  "invoke_menu",
+  "set_window_frame",
+  "kill_app",
 ]);

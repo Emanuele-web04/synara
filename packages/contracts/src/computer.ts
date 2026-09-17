@@ -662,6 +662,74 @@ export const ComputerListWindowsResult = Schema.Struct({
 });
 export type ComputerListWindowsResult = typeof ComputerListWindowsResult.Type;
 
+/**
+ * A desktop application as the driver reports it: live processes and
+ * installed-but-not-running `.app` bundles in the same list, which is what
+ * makes it answer both "is X running?" and "is X installed?".
+ */
+export const ComputerApp = Schema.Struct({
+  /** Owning process id. 0 when the app is installed but not running. */
+  pid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  name: Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
+  bundleId: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+  /** A live process owns this app; false rows are installed-only launch targets. */
+  running: Schema.Boolean,
+  /** The system-frontmost app — implies running. */
+  active: Schema.Boolean,
+  /** Filesystem path to the `.app` bundle — the value `computer_launch_app` takes. */
+  launchPath: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+  /** Windows the driver attributes to this app right now, when it reports them. */
+  windowCount: Schema.optional(NonNegativeInt),
+  /** Bundle mtime the driver last observed, when readable. */
+  lastUsed: Schema.optional(IsoDateTime),
+});
+export type ComputerApp = typeof ComputerApp.Type;
+
+export const ComputerListAppsResult = Schema.Struct({
+  computerId: ComputerId,
+  apps: Schema.Array(ComputerApp).check(Schema.isMaxLength(1_024)),
+  availability: ComputerAvailability,
+});
+export type ComputerListAppsResult = typeof ComputerListAppsResult.Type;
+
+/**
+ * The driver's tri-state answer to a verify_state predicate set. `unknown`
+ * is its own verdict — a predicate the driver could not prove (an element
+ * the AX walk cannot reach, an observation the window would not allow) is
+ * not `unsatisfied`, so callers must branch on `status`, never infer a
+ * boolean from it.
+ */
+export const ComputerVerifyStateResult = Schema.Struct({
+  status: Schema.Literals(["satisfied", "unsatisfied", "unknown"]),
+  /** Every predicate held across the driver's full stable-sample window. */
+  stable: Schema.Boolean,
+  /** Samples the driver observed before answering. */
+  samples: NonNegativeInt,
+  elapsedMs: NonNegativeInt,
+  /**
+   * Per-predicate outcome rows (`index`, `status`, `unknown_reason`,
+   * `observed_json`), passed through from the driver — the evidence that
+   * settled, or failed to settle, each expectation.
+   */
+  predicates: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(8)),
+});
+export type ComputerVerifyStateResult = typeof ComputerVerifyStateResult.Type;
+
+/**
+ * A magnified window-region capture. The driver returns JPEG (not the PNG a
+ * `ComputerScreenshot` carries), which is why this is its own shape.
+ */
+export const ComputerZoomResult = Schema.Struct({
+  mimeType: Schema.Literal("image/jpeg"),
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
+  sizeBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
+  bytesBase64: TrimmedNonEmptyString.check(Schema.isMaxLength(88 * 1024 * 1024)),
+  windowId: Schema.optional(ComputerWindowId),
+  capturedAt: IsoDateTime,
+});
+export type ComputerZoomResult = typeof ComputerZoomResult.Type;
+
 export const ComputerGetStateInput = Schema.Struct({
   includeScreenshot: Schema.optional(Schema.Boolean),
   includeText: Schema.optional(Schema.Boolean),

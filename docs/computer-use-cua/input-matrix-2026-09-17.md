@@ -19,29 +19,29 @@ the real front process; probe never frontmost unless stated.
 
 ## Extended matrix — pointer/wheel (same probe, TextEdit frontmost throughout)
 
-| Need | Driver call | Landed? | Front preserved |
-|---|---|---|---|
-| Click + DOM focus + mouseenter | `click` `delivery_mode=foreground` (window_points + expected_window_bounds) | **YES** — `hover:1`, `active:true` | YES (59966 TextEdit) |
-| Wheel events | `scroll` `delivery_mode=foreground` | **YES** — `wheel:3, dy:40` real DOM wheel | YES |
-| Scroll (background) | `scroll` background | refused `background_unavailable` | — |
-| Synthetic click (background) | `click` background | refused without `expected_window_bounds` | — |
-| `CGEventPostToPid` mouseMoved/scroll | raw C probe | **NO** — `move:0`, wheel unchanged | — |
-| `invoke_menu` (TextEdit) | `path:["File"]` | opens menu; `["Edit","Undo"]` → refused `menu_path_unavailable` (disabled) | n/a |
-| `set_window_frame` (TextEdit) | x/y/w/h | `effect:confirmed` + `value_readback`; independent `list_windows` agrees | n/a |
-| `list_apps` | no args | 71 apps with running/active/pid/launch_path | n/a |
-| `verify_state` | `expect:[element exists AXTextArea]` | `satisfied` with observed evidence + stable samples | n/a |
-| `zoom` | region | 240×120 JPEG crop returned | n/a |
+| Need                                 | Driver call                                                                 | Landed?                                                                    | Front preserved      |
+| ------------------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------- |
+| Click + DOM focus + mouseenter       | `click` `delivery_mode=foreground` (window_points + expected_window_bounds) | **YES** — `hover:1`, `active:true`                                         | YES (59966 TextEdit) |
+| Wheel events                         | `scroll` `delivery_mode=foreground`                                         | **YES** — `wheel:3, dy:40` real DOM wheel                                  | YES                  |
+| Scroll (background)                  | `scroll` background                                                         | refused `background_unavailable`                                           | —                    |
+| Synthetic click (background)         | `click` background                                                          | refused without `expected_window_bounds`                                   | —                    |
+| `CGEventPostToPid` mouseMoved/scroll | raw C probe                                                                 | **NO** — `move:0`, wheel unchanged                                         | —                    |
+| `invoke_menu` (TextEdit)             | `path:["File"]`                                                             | opens menu; `["Edit","Undo"]` → refused `menu_path_unavailable` (disabled) | n/a                  |
+| `set_window_frame` (TextEdit)        | x/y/w/h                                                                     | `effect:confirmed` + `value_readback`; independent `list_windows` agrees   | n/a                  |
+| `list_apps`                          | no args                                                                     | 71 apps with running/active/pid/launch_path                                | n/a                  |
+| `verify_state`                       | `expect:[element exists AXTextArea]`                                        | `satisfied` with observed evidence + stable samples                        | n/a                  |
+| `zoom`                               | region                                                                      | 240×120 JPEG crop returned                                                 | n/a                  |
 
 ## Scroll reality — verified against the embedded daemon (rev 15)
 
-| Target | Mode | Result |
-|---|---|---|
-| TextEdit doc (non-Electron) | background | **LANDS** — window-local wheel post; scrollbar thumb moved y:269→y:473; `delivery.mode:"background"`, `effect:unverifiable` (honest — confirm via screenshot/AX) |
-| TextEdit doc | bad window-local point | refused — `point lies outside window frame` (window-local coords enforced) |
-| Electron probe | background | refused `background_unavailable` — upstream gate: `is_electron(pid)` refuses ALL background scroll paths (Chromium has no AX scrollbars; CGEvent dead) |
-| Electron probe | foreground | **LANDS** — real DOM wheel events (`wheel:3, dy:40`), front restored |
+| Target                      | Mode                   | Result                                                                                                                                                           |
+| --------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TextEdit doc (non-Electron) | background             | **LANDS** — window-local wheel post; scrollbar thumb moved y:269→y:473; `delivery.mode:"background"`, `effect:unverifiable` (honest — confirm via screenshot/AX) |
+| TextEdit doc                | bad window-local point | refused — `point lies outside window frame` (window-local coords enforced)                                                                                       |
+| Electron probe              | background             | refused `background_unavailable` — upstream gate: `is_electron(pid)` refuses ALL background scroll paths (Chromium has no AX scrollbars; CGEvent dead)           |
+| Electron probe              | foreground             | **LANDS** — real DOM wheel events (`wheel:3, dy:40`), front restored                                                                                             |
 
-Upstream `scroll_wheel_at_xy(pid, screen_x, screen_y, window_local, wid, dy_per_tick, dx_per_tick, ticks)` already carries both axes plus the f51/f91/f92 window-routing stamps — the Electron refusal is policy, not mechanism. **Synara-side gap found:** `CuaComputerBackend.scroll` maps `dx`/`dy` to ONE direction — nonzero `dx` wins and `dy` is silently dropped. Two sequential calls (or a rev-16 two-axis arg) fixes it without native work.
+Upstream `scroll_wheel_at_xy(pid, screen_x, screen_y, window_local, wid, dy_per_tick, dx_per_tick, ticks)` already carries both axes plus the f51/f91/f92 window-routing stamps — the Electron refusal is policy, not mechanism. Synara-side behaviour: `CuaComputerBackend.scroll` honestly refuses `dx && dy` together (`unsupported_operation`, not-dispatched); diagonal scroll needs two sequential calls or a rev-16 two-axis arg.
 
 ## Conclusions
 

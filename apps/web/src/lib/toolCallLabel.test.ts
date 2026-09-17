@@ -300,6 +300,12 @@ describe("deriveReadableToolTitle", () => {
     ["computer_click", "Click"],
     ["computer_type_text", "Type"],
     ["mcp__synara__computer_activate_window", "Activate a window"],
+    ["computer_list_apps", "List apps"],
+    ["computer_set_window_frame", "Move or resize a window"],
+    ["computer_invoke_menu", "Invoke a menu item"],
+    ["computer_verify_state", "Verify state"],
+    ["computer_zoom", "Zoom into a window"],
+    ["mcp__synara__computer_kill_app", "Force-quit an app"],
   ])("uses the curated Computer label for %s", (toolName, expected) => {
     expect(
       deriveReadableToolTitle({

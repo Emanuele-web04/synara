@@ -45,6 +45,7 @@ function fixture(options?: {
   let overviewWait: Promise<void> | undefined;
   let typeGate: Promise<void> | undefined;
   let extraWindows: Array<Record<string, unknown>> = [];
+  let toolHandlers: Record<string, (args: Record<string, unknown>) => Record<string, unknown>> = {};
   let setValueSwallowed = false;
   let actionResult: Record<string, unknown> = {
     route: "synthetic_events",
@@ -164,12 +165,17 @@ function fixture(options?: {
     if (request.name === "set_value" && !setValueSwallowed) {
       const token = (request.args as Record<string, unknown> | undefined)?.element_token;
       const written = (request.args as Record<string, unknown> | undefined)?.value;
-      const target = elements.find(
-        (element) => element.element_token === token,
-      );
+      const target = elements.find((element) => element.element_token === token);
       if (target && typeof written === "string") target.value = written;
     }
     if (isTyping(request.name)) data = actionResult;
+    const toolHandler = request.name ? toolHandlers[request.name] : undefined;
+    if (toolHandler)
+      return {
+        ok: true,
+        result: toolHandler(request.args ?? {}),
+        desktopEpoch: responseEpoch,
+      };
     return {
       ok: true,
       result: { structuredContent: data },
@@ -196,6 +202,12 @@ function fixture(options?: {
     },
     setWindows: (value: Array<Record<string, unknown>>) => {
       extraWindows = value;
+    },
+    setBounds: (value: typeof bounds) => {
+      bounds = value;
+    },
+    onTool: (name: string, handler: (args: Record<string, unknown>) => Record<string, unknown>) => {
+      toolHandlers[name] = handler;
     },
     gateTypeText: (wait: Promise<void> | undefined) => {
       typeGate = wait;
@@ -1179,6 +1191,240 @@ describe("Cua native boundary", () => {
     await expect(f.backend.launchApp("/Applications/Calculator.app")).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
+    });
+  });
+  it("lists apps with pid, name, bundle id, running and active state", async () => {
+    const f = fixture();
+    f.onTool("list_apps", () => ({
+      structuredContent: {
+        apps: [
+          {
+            pid: 42,
+            name: "TextEdit",
+            bundle_id: "com.apple.TextEdit",
+            active: true,
+            running: true,
+            launch_path: "/System/Applications/TextEdit.app",
+            windows: [{}, {}],
+            last_used: "2026-09-17T00:00:00Z",
+          },
+          { pid: 43, name: "NoBundle", active: false, running: true },
+          // Installed but not running: pid 0 is the "is X installed?" row the
+          // tool exists for, so it must survive rather than be filtered out.
+          {
+            pid: 0,
+            name: "Chess",
+            bundle_id: "com.apple.Chess",
+            running: false,
+            active: false,
+            launch_path: "/System/Applications/Chess.app",
+          },
+          { pid: -1, name: "bogus" },
+          { pid: 44 },
+        ],
+      },
+    }));
+    await expect(f.backend.listApps!()).resolves.toEqual([
+      {
+        pid: 42,
+        name: "TextEdit",
+        bundleId: "com.apple.TextEdit",
+        active: true,
+        running: true,
+        launchPath: "/System/Applications/TextEdit.app",
+        windowCount: 2,
+        lastUsed: "2026-09-17T00:00:00Z",
+      },
+      { pid: 43, name: "NoBundle", active: false, running: true },
+      {
+        pid: 0,
+        name: "Chess",
+        bundleId: "com.apple.Chess",
+        running: false,
+        active: false,
+        launchPath: "/System/Applications/Chess.app",
+      },
+    ]);
+  });
+  it("verifies a moved window through an independent list_windows readback", async () => {
+    const f = fixture();
+    // The driver claims the move landed — but Synara only reports verified
+    // once its own list_windows re-read shows the requested frame.
+    f.onTool("set_window_frame", (args) => {
+      f.setBounds({
+        x: Number(args.x),
+        y: Number(args.y),
+        width: Number(args.width),
+        height: Number(args.height),
+      });
+      return {
+        structuredContent: {
+          effect: "confirmed",
+          route: "ax_window_frame",
+          delivery: { mode: "background" },
+          evidence: [{ kind: "value_readback" }],
+        },
+      };
+    });
+    await expect(
+      f.backend.setWindowFrame!("cua:10:20", { x: 0, y: 0, width: 640, height: 480 }),
+    ).resolves.toMatchObject({
+      windowId: "cua:10:20",
+      verified: "confirmed",
+      effect: "verified",
+    });
+    expect(f.calls.find((call) => call.name === "set_window_frame")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      x: 0,
+      y: 0,
+      width: 640,
+      height: 480,
+    });
+    // The driver reports its own readback confirmed, but the independent
+    // window list disagrees — the mutation is reported unknown, never
+    // silently promoted to verified on the driver's word alone.
+    f.setBounds({ x: -300, y: 20, width: 200, height: 100 });
+    f.onTool("set_window_frame", () => ({
+      structuredContent: {
+        effect: "confirmed",
+        route: "ax_window_frame",
+        evidence: [{ kind: "value_readback" }],
+      },
+    }));
+    await expect(
+      f.backend.setWindowFrame!("cua:10:20", { x: 0, y: 0, width: 640, height: 480 }),
+    ).resolves.toMatchObject({ verified: "unconfirmed", effect: "dispatched-unknown" });
+  });
+  it("invokes a menu path and preserves the status-coded refusal dialect", async () => {
+    const f = fixture();
+    f.onTool("invoke_menu", () => ({
+      structuredContent: {
+        effect: "unverifiable",
+        route: "ax_action",
+        delivery: { mode: "foreground" },
+      },
+    }));
+    await expect(f.backend.invokeMenu!("cua:10:20", ["File", "Save"])).resolves.toMatchObject({
+      windowId: "cua:10:20",
+      verified: "unverifiable",
+      effect: "dispatched-unknown",
+    });
+    expect(f.calls.find((call) => call.name === "invoke_menu")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      path: ["File", "Save"],
+    });
+    f.onTool("invoke_menu", () => ({
+      isError: true,
+      structuredContent: {
+        status: "refused",
+        refusal: { code: "menu_path_unavailable", message: "The menu item is disabled." },
+      },
+      content: [{ type: "text", text: "The menu item is disabled." }],
+    }));
+    await expect(f.backend.invokeMenu!("cua:10:20", ["Edit", "Undo"])).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "menu_path_unavailable",
+    });
+  });
+  it("verifies window state from the driver's per-predicate outcome", async () => {
+    const f = fixture();
+    const predicates = [
+      { index: 0, status: "satisfied", unknown_reason: null, observed_json: "{}" },
+    ];
+    f.onTool("verify_state", () => ({
+      structuredContent: { status: "satisfied", stable: true, samples: 2, predicates },
+    }));
+    await expect(
+      f.backend.verifyState!("cua:10:20", [
+        { element: { selector: { role: "AXButton" }, exists: true } },
+      ]),
+    ).resolves.toEqual({
+      status: "satisfied",
+      stable: true,
+      samples: 2,
+      elapsedMs: 0,
+      predicates,
+    });
+    expect(f.calls.find((call) => call.name === "verify_state")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      expect: [{ element: { selector: { role: "AXButton" }, exists: true } }],
+    });
+    f.onTool("verify_state", () => ({
+      structuredContent: {
+        status: "unsatisfied",
+        stable: true,
+        samples: 1,
+        predicates: [
+          { index: 0, status: "unsatisfied", unknown_reason: null, observed_json: "{}" },
+        ],
+      },
+    }));
+    await expect(
+      f.backend.verifyState!("cua:10:20", [{ window: { bounds: { x: 0 } } }]),
+    ).resolves.toMatchObject({ status: "unsatisfied", stable: true });
+    // An unparseable status is "unknown", never collapsed to unsatisfied.
+    f.onTool("verify_state", () => ({ structuredContent: { status: "weird" } }));
+    await expect(
+      f.backend.verifyState!("cua:10:20", [{ window: { bounds: { x: 0 } } }]),
+    ).resolves.toMatchObject({ status: "unknown" });
+  });
+  it("captures a zoom region in window-local points scaled to pixels", async () => {
+    const f = fixture();
+    f.onTool("zoom", () => ({
+      structuredContent: { width: 168, height: 140, mime_type: "image/jpeg" },
+      content: [{ type: "image", mimeType: "image/jpeg", data: "/9j/4AAQ" }],
+    }));
+    const zoom = await f.backend.zoomWindow!("cua:10:20", {
+      x: 10,
+      y: 20,
+      width: 50,
+      height: 50,
+    });
+    expect(zoom).toMatchObject({
+      mimeType: "image/jpeg",
+      width: 168,
+      height: 140,
+      windowId: "cua:10:20",
+      bytesBase64: "/9j/4AAQ",
+    });
+    // scale_factor 2 in the fixture: window-local points become screenshot px.
+    expect(f.calls.find((call) => call.name === "zoom")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      x1: 20,
+      y1: 40,
+      x2: 120,
+      y2: 140,
+    });
+    await expect(
+      f.backend.zoomWindow!("cua:10:20", { x: 150, y: 0, width: 100, height: 50 }),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "invalid_geometry" });
+  });
+  it("reports a killed app verified only once it leaves the app list", async () => {
+    const f = fixture();
+    let apps: Array<Record<string, unknown>> = [
+      { pid: 10, name: "TextEdit", bundle_id: "com.apple.TextEdit", active: true },
+    ];
+    f.onTool("list_apps", () => ({ structuredContent: { apps } }));
+    f.onTool("kill_app", () => {
+      apps = [];
+      return { content: [{ type: "text", text: "Sent SIGKILL to pid 10." }] };
+    });
+    await expect(f.backend.killApp!(10)).resolves.toMatchObject({
+      verified: "confirmed",
+      effect: "verified",
+    });
+    expect(f.calls.find((call) => call.name === "kill_app")?.args).toEqual({ pid: 10 });
+    f.onTool("kill_app", () => ({
+      content: [{ type: "text", text: "Sent SIGKILL to pid 10." }],
+    }));
+    apps = [{ pid: 10, name: "TextEdit", active: true }];
+    await expect(f.backend.killApp!(10)).resolves.toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
     });
   });
   it("reads the published action route and requires public verification evidence", async () => {

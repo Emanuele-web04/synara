@@ -20,6 +20,9 @@ export const COMPUTER_TOOL_TITLES = {
   computer_get_state: "Read the screen",
   computer_get_screen_size: "Measure the screen",
   computer_list_windows: "List windows",
+  computer_list_apps: "List apps",
+  computer_verify_state: "Verify state",
+  computer_zoom: "Zoom into a window",
   computer_click: "Click",
   computer_double_click: "Double-click",
   computer_triple_click: "Triple-click",
@@ -34,6 +37,9 @@ export const COMPUTER_TOOL_TITLES = {
   computer_perform_action: "Activate a control",
   computer_launch_app: "Open an app",
   computer_activate_window: "Activate a window",
+  computer_set_window_frame: "Move or resize a window",
+  computer_invoke_menu: "Invoke a menu item",
+  computer_kill_app: "Force-quit an app",
   computer_wait: "Wait",
   computer_read_clipboard: "Read the clipboard",
   computer_write_clipboard: "Write to the clipboard",
@@ -172,6 +178,10 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
     const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
     return app ?? "";
   }
+  if (tool === "computer_invoke_menu") {
+    const path = readStringArray(args.path);
+    return path.length > 0 ? truncate(path.join(" → "), 80) : "";
+  }
   if (tool === "computer_wait" && !readString(args.label)) {
     const durationMs = readNumber(args.duration_ms);
     if (durationMs === null) return "";
@@ -194,7 +204,25 @@ function describeParams(
   const rows: Array<{ name: string; value: string }> = [];
   const x = readNumber(args.x);
   const y = readNumber(args.y);
-  if (x !== null && y !== null) rows.push({ name: "Position", value: `${x}, ${y}` });
+  if (x !== null && y !== null) {
+    rows.push({
+      name: tool === "computer_set_window_frame" ? "New position" : "Position",
+      value: `${x}, ${y}`,
+    });
+  }
+  const width = readNumber(args.width);
+  const height = readNumber(args.height);
+  if (
+    (tool === "computer_set_window_frame" || tool === "computer_zoom") &&
+    width !== null &&
+    height !== null
+  ) {
+    rows.push({ name: "Size", value: `${width}×${height}` });
+  }
+  if (tool === "computer_invoke_menu") {
+    const path = readStringArray(args.path);
+    if (path.length > 0) rows.push({ name: "Menu", value: truncate(path.join(" → "), 200) });
+  }
   const label = readString(args.label);
   if (label) rows.push({ name: "Target", value: label });
   const role = readString(args.role);

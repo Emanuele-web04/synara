@@ -29,6 +29,9 @@ describe("computerToolName", () => {
       "computer_get_state",
       "computer_get_screen_size",
       "computer_list_windows",
+      "computer_list_apps",
+      "computer_verify_state",
+      "computer_zoom",
       "computer_click",
       "computer_double_click",
       "computer_triple_click",
@@ -43,6 +46,9 @@ describe("computerToolName", () => {
       "computer_perform_action",
       "computer_launch_app",
       "computer_activate_window",
+      "computer_set_window_frame",
+      "computer_invoke_menu",
+      "computer_kill_app",
       "computer_wait",
       "computer_read_clipboard",
       "computer_write_clipboard",
@@ -170,6 +176,65 @@ describe("describeComputerToolCall", () => {
         args: { from: { label: "Draft" }, to: { label: "Archive" } },
       })?.summary,
     ).toBe("Drag from “Draft” to “Archive”");
+  });
+
+  it("describes the app, menu, frame and process tools the gateway now serves", () => {
+    expect(describeComputerToolCall({ toolName: "computer_list_apps", args: {} })?.summary).toBe(
+      "List apps",
+    );
+    // The menu path is the payload: the approving human reads which command
+    // fires, not which pixel was aimed at.
+    const menu = describeComputerToolCall({
+      toolName: "computer_invoke_menu",
+      args: { window_id: "win-7", path: ["File", "Export As…"] },
+      windows: [SAFARI],
+    });
+    expect(menu?.summary).toBe("Invoke a menu item File → Export As… in Safari — Google");
+    expect(menu?.params).toContainEqual({ name: "Menu", value: "File → Export As…" });
+    expect(menu?.params).toContainEqual({ name: "Window", value: "Safari — Google" });
+    // A frame call names its destination: new position and size land as rows
+    // the approval card can check.
+    const frame = describeComputerToolCall({
+      toolName: "computer_set_window_frame",
+      args: { window_id: "win-7", x: 40, y: 60, width: 900, height: 700 },
+      windows: [SAFARI],
+    });
+    expect(frame?.summary).toBe("Move or resize a window at (40, 60) in Safari — Google");
+    expect(frame?.params).toEqual([
+      { name: "New position", value: "40, 60" },
+      { name: "Size", value: "900×700" },
+      { name: "Window", value: "Safari — Google" },
+    ]);
+    // Kill and verify resolve their window to the owning app the same way —
+    // and keep the opaque id out when it cannot be resolved.
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_kill_app",
+        args: { window_id: "win-7" },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Force-quit an app in Safari — Google");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_kill_app",
+        args: { window_id: "win-gone" },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Force-quit an app");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_verify_state",
+        args: { window_id: "win-7", expect: [{ window: {} }] },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Verify state in Safari — Google");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_zoom",
+        args: { window_id: "win-7", x: 10, y: 20, width: 300, height: 200 },
+        windows: [SAFARI],
+      })?.summary,
+    ).toBe("Zoom into a window at (10, 20) in Safari — Google");
   });
 
   it("returns null for anything that is not a desktop tool", () => {

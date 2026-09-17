@@ -1,4 +1,5 @@
 import type {
+  ComputerApp,
   ComputerAvailability,
   ComputerBuildSignature,
   ComputerCapabilities,
@@ -9,7 +10,9 @@ import type {
   ComputerScreenSize,
   ComputerState,
   ComputerUiNode,
+  ComputerVerifyStateResult,
   ComputerWindow,
+  ComputerZoomResult,
   ComputerInputModifier,
   ComputerInputPause,
   ComputerPermission,
@@ -49,6 +52,7 @@ import {
 import { StillFramePublisher } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
+import { jpegDimensions } from "../jpegHeader.ts";
 import { pngDimensions } from "../pngHeader.ts";
 
 export class CuaActionError extends ComputerBackendError {
@@ -374,17 +378,22 @@ export class CuaComputerBackend implements ComputerBackend {
     if (result.isError || result.structuredContent?.effect === "refused") {
       const structured = result.structuredContent ?? {};
       // Only a structured native admission refusal proves no dispatch. An
-      // arbitrary native exception may follow partially delivered input.
-      const refused = structured.effect === "refused";
+      // arbitrary native exception may follow partially delivered input. The
+      // driver publishes two refusal dialects: action tools carry
+      // `effect:"refused"`, while tools like invoke_menu/kill_app carry
+      // `status:"refused"` plus a `refusal.code` object.
+      const refused = structured.effect === "refused" || structured.status === "refused";
+      const refusal = record(structured.refusal);
       const message =
         (result.content ?? [])
           .map((c) => c.text ?? "")
           .join("\n")
           .slice(0, 2048) ||
         text(structured.message) ||
+        text(refusal.message) ||
         text(structured.reason) ||
         "The native operation could not complete.";
-      const code = text(structured.code) || "cua_refusal";
+      const code = text(structured.code) || text(refusal.code) || "cua_refusal";
       if (refused && code === "desktop_input_paused") {
         this.clearCachedImage();
         this.observedGeometry.clear();
@@ -1453,6 +1462,291 @@ export class CuaComputerBackend implements ComputerBackend {
       true,
     );
     return { computerId: this.computerId, app, window: null };
+  }
+  async listApps(): Promise<readonly ComputerApp[]> {
+    const result = await this.call("list_apps");
+    const rows = result.structuredContent?.apps;
+    if (!Array.isArray(rows))
+      throw new CuaActionError(
+        "Cua returned an invalid app list.",
+        "not-dispatched",
+        "invalid_response",
+      );
+    const apps: ComputerApp[] = [];
+    for (const value of rows) {
+      const row = record(value);
+      // pid is 0 for installed-but-not-running apps — those rows are the
+      // "is X installed?" half of the tool and must not be dropped.
+      const pid = number(row.pid);
+      const name = text(row.name, 512) || text(row.app_name, 512);
+      if (!Number.isSafeInteger(pid) || pid < 0 || !name) continue;
+      const bundleId = text(row.bundle_id, 512);
+      const launchPath = text(row.launch_path, 4_096);
+      const lastUsed = text(row.last_used, 64);
+      apps.push({
+        pid,
+        name: name.slice(0, 256),
+        running: row.running === true || pid > 0,
+        active: row.active === true || row.is_active === true,
+        ...(bundleId ? { bundleId } : {}),
+        ...(launchPath ? { launchPath } : {}),
+        ...(Array.isArray(row.windows) ? { windowCount: row.windows.length } : {}),
+        ...(lastUsed ? { lastUsed } : {}),
+      });
+    }
+    return apps.slice(0, 1_024);
+  }
+  async setWindowFrame(
+    windowId: string,
+    frame: ComputerRect,
+  ): Promise<ComputerBackendActionResult> {
+    if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
+      throw new CuaActionError(
+        "A window frame needs finite coordinates and a positive size.",
+        "not-dispatched",
+        "invalid_geometry",
+      );
+    const { pid, window_id, window } = await this.target(windowId);
+    const result = await this.call(
+      "set_window_frame",
+      {
+        pid,
+        window_id,
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+      },
+      true,
+    );
+    const data = result.structuredContent ?? {};
+    // The driver's own `effect: confirmed` + value_readback is not the
+    // verification. A mutation was already dispatched, so the only honest
+    // confirmation is a fresh list_windows read showing the exact frame on
+    // the exact window; a readback that cannot be taken or disagrees leaves
+    // the outcome unknown — never a silent success.
+    let observed: ComputerRect | undefined;
+    try {
+      observed = (await this.readWindows()).find((candidate) => candidate.id === window.id)?.bounds;
+    } catch {
+      observed = undefined;
+    }
+    const confirmed = observed !== undefined && sameRect(observed, frame);
+    // Ground the next input on what the read-back actually saw, not on the
+    // requested frame: when the move did not land, `observed` is still the
+    // true geometry; when the read-back itself failed, nothing may stay.
+    if (observed !== undefined) this.observedGeometry.set(window.id, observed);
+    else this.observedGeometry.delete(window.id);
+    this.clearCachedImage();
+    this.snapshotAt = 0;
+    return {
+      windowId: window.id,
+      deliveryPath: `cua-${text(data.route, 64) || "window_frame"}-${text(record(data.delivery).mode, 32) || "background"}`,
+      verified: confirmed ? "confirmed" : "unconfirmed",
+      effect: confirmed ? "verified" : "dispatched-unknown",
+    };
+  }
+  async invokeMenu(
+    windowId: string,
+    path: readonly string[],
+  ): Promise<ComputerBackendActionResult> {
+    // Fail closed rather than truncate: a sliced path can resolve to a
+    // different menu item than the caller named, which is worse than a refusal.
+    if (path.length === 0 || path.length > 6 || path.some((segment) => segment.trim().length === 0))
+      throw new CuaActionError(
+        "A menu path needs one to six non-empty titles.",
+        "not-dispatched",
+        "invalid_arguments",
+      );
+    const { pid, window_id, window } = await this.target(windowId);
+    const result = await this.call("invoke_menu", { pid, window_id, path: [...path] }, true);
+    const data = result.structuredContent ?? {};
+    const confirmed = data.effect === "confirmed";
+    // A menu command can open or close windows (a Save dialog, a Quit): the
+    // cached snapshot no longer describes the desktop.
+    this.clearCachedImage();
+    this.snapshotAt = 0;
+    return {
+      windowId: window.id,
+      deliveryPath: `cua-${text(data.route, 64) || "menu"}-${text(record(data.delivery).mode, 32) || "background"}`,
+      verified: confirmed
+        ? "confirmed"
+        : data.effect === "unconfirmed"
+          ? "unconfirmed"
+          : "unverifiable",
+      effect: confirmed ? "verified" : "dispatched-unknown",
+    };
+  }
+  async verifyState(
+    windowId: string,
+    expect: readonly Record<string, unknown>[],
+  ): Promise<ComputerVerifyStateResult> {
+    // Fail closed rather than truncate: a sliced predicate set can answer a
+    // different question than the caller asked, which is worse than a refusal.
+    if (
+      expect.length === 0 ||
+      expect.length > 8 ||
+      expect.some((item) => !item || typeof item !== "object" || Array.isArray(item))
+    )
+      throw new CuaActionError(
+        "verify_state needs one to eight object predicates.",
+        "not-dispatched",
+        "invalid_arguments",
+      );
+    const { pid, window_id } = await this.target(windowId);
+    const result = await this.call("verify_state", {
+      pid,
+      window_id,
+      expect: [...expect],
+    });
+    const data = result.structuredContent ?? {};
+    // `unknown` is a verdict, not a failure shape: the driver could not prove
+    // the predicate either way, which must never collapse into `unsatisfied`.
+    const status =
+      data.status === "satisfied" || data.status === "unsatisfied" || data.status === "unknown"
+        ? data.status
+        : "unknown";
+    return {
+      status,
+      stable: data.stable === true,
+      samples: Math.max(0, Math.trunc(number(data.samples) || 0)),
+      elapsedMs: Math.max(0, Math.trunc(number(data.elapsed_ms) || 0)),
+      predicates: Array.isArray(data.predicates) ? data.predicates.slice(0, 8) : [],
+    };
+  }
+  async killApp(pid: number): Promise<ComputerBackendActionResult> {
+    if (!Number.isSafeInteger(pid) || pid <= 0)
+      throw new CuaActionError(
+        "kill_app needs a positive integer pid.",
+        "not-dispatched",
+        "invalid_arguments",
+      );
+    // kill_app is not an action-result tool: success is a bare "sent SIGKILL"
+    // text reply, so the only honest confirmation is an independent check that
+    // the process is actually gone afterwards.
+    await this.call("kill_app", { pid }, true);
+    // The window set is stale the moment the signal lands: drop the cached
+    // snapshot and every retained geometry for the dead pid before the
+    // read-back, so nothing grounds a later call on a window that no longer
+    // exists.
+    this.clearCachedImage();
+    this.snapshotAt = 0;
+    // Map iterators tolerate deletion mid-walk: a key already visited is gone,
+    // one still pending is simply skipped — exactly what this loop wants.
+    for (const key of this.observedGeometry.keys())
+      if (key.startsWith(`cua:${pid}:`)) this.observedGeometry.delete(key);
+    // A killed process can linger in the app list for a beat while the OS
+    // reaps it — poll briefly before admitting the kill is unconfirmed.
+    let gone = false;
+    for (let attempt = 0; attempt < 4 && !gone; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+      gone = !(await this.listApps()).some((app) => app.pid === pid && app.running);
+    }
+    return {
+      deliveryPath: "cua-process_signal-background",
+      verified: gone ? "confirmed" : "unconfirmed",
+      effect: gone ? "verified" : "dispatched-unknown",
+    };
+  }
+  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
+    if (!Object.values(region).every(Number.isFinite) || region.width <= 0 || region.height <= 0)
+      throw new CuaActionError(
+        "The zoom region needs finite geometry and positive size.",
+        "not-dispatched",
+        "invalid_geometry",
+      );
+    const { pid, window_id, window } = await this.target(windowId);
+    const bounds = window.bounds!;
+    if (
+      region.x < 0 ||
+      region.y < 0 ||
+      region.x + region.width > bounds.width ||
+      region.y + region.height > bounds.height
+    )
+      throw new CuaActionError(
+        "The zoom region lies outside the target window.",
+        "not-dispatched",
+        "invalid_geometry",
+      );
+    // The driver crops in "screenshot pixels" — the pixel space of its own
+    // get_window_state capture for this exact window, which is the window's
+    // display backing factor, not necessarily the main display's. Read that
+    // scale from a fresh capture-only state call (no max_dimension, so the
+    // returned image is the driver's native-resolution space) rather than
+    // assuming the desktop scale applies.
+    let state: CuaToolResult;
+    try {
+      state = await this.call("get_window_state", {
+        pid,
+        window_id,
+        include_accessibility_tree: false,
+        include_screenshot: true,
+      });
+      this.assertObservedWindow(state, pid, window_id);
+    } catch (error) {
+      if (!(error instanceof CuaActionError) || error.code !== "off_space_capture_unverified")
+        this.markCaptureFailed(error);
+      throw error;
+    }
+    const stateData = state.structuredContent ?? {};
+    const freshBounds = stateData.window_bounds ? optionalRect(stateData.window_bounds) : undefined;
+    if (!freshBounds || !sameRect(freshBounds, bounds))
+      throw new CuaActionError(
+        "The target window moved before the zoom capture.",
+        "not-dispatched",
+        "stale_target",
+      );
+    const reportedScale = number(stateData.screenshot_scale);
+    const fallback = this.screenshot(state, freshBounds);
+    const scale =
+      Number.isFinite(reportedScale) && reportedScale > 0 ? reportedScale : (fallback.scale ?? 0);
+    if (!(scale > 0))
+      throw new CuaActionError(
+        "Cua could not establish the window's screenshot scale.",
+        "not-dispatched",
+        "capture_unavailable",
+      );
+    const result = await this.call("zoom", {
+      pid,
+      window_id,
+      x1: region.x * scale,
+      y1: region.y * scale,
+      x2: (region.x + region.width) * scale,
+      y2: (region.y + region.height) * scale,
+    });
+    const image = result.content?.find(
+      (c) => c.type === "image" && c.mimeType === "image/jpeg" && c.data,
+    );
+    const data = result.structuredContent ?? {};
+    if (!image?.data)
+      throw new CuaActionError(
+        "Cua returned no zoom image.",
+        "not-dispatched",
+        "capture_unavailable",
+      );
+    const bytes = Buffer.from(image.data, "base64");
+    // Dimensions come from the JPEG's own headers; the structured fields are
+    // only a fallback for a driver that omits them, and both must be sane
+    // before the result is trusted enough to hand a model.
+    const dimensions = jpegDimensions(bytes) ?? {
+      width: Math.trunc(number(data.width) || 0),
+      height: Math.trunc(number(data.height) || 0),
+    };
+    if (dimensions.width <= 0 || dimensions.height <= 0)
+      throw new CuaActionError(
+        "Cua returned a zoom image without readable dimensions.",
+        "not-dispatched",
+        "invalid_response",
+      );
+    return {
+      mimeType: "image/jpeg" as const,
+      width: dimensions.width,
+      height: dimensions.height,
+      sizeBytes: bytes.byteLength,
+      bytesBase64: image.data,
+      windowId: window.id,
+      capturedAt: new Date().toISOString(),
+    };
   }
   async attachStream(listener: ComputerFrameListener) {
     await this.stills.attach(listener);
