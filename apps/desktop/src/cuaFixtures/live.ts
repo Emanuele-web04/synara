@@ -385,7 +385,15 @@ export async function runLiveFixture(directory: string, binaryPath: string) {
   target.on("closed", closing);
   process.on("SIGTERM", closing);
   try {
-    for (let attempt = 0; attempt < 300 && !exited && !output.includes("Synara running"); attempt++)
+    // A cold production boot exceeds 30 s here: fixPath probes each candidate
+    // login shell with a 5 s execFileSync timeout before the HTTP listener and
+    // the readiness marker land. 120 s bounds that without hiding a wedged
+    // server — the wait still exits as soon as the marker appears.
+    for (
+      let attempt = 0;
+      attempt < 1200 && !exited && !output.includes("Synara running");
+      attempt++
+    )
       await pause(100);
     if (!output.includes("Synara running"))
       throw new Error("Live fixture server failed to become ready.");
