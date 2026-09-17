@@ -13,6 +13,7 @@ import { useProjectImportDialogStore } from "./projectImportDialogStore";
 export function ProjectImportDialog() {
   const open = useProjectImportDialogStore((store) => store.isOpen);
   const close = useProjectImportDialogStore((store) => store.closeDialog);
+  const initialProviders = useProjectImportDialogStore((store) => store.initialProviders);
   const [busy, setBusy] = useState(false);
   return (
     <Dialog
@@ -29,7 +30,12 @@ export function ProjectImportDialog() {
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-6 pb-2 pt-4">
-          {open ? <ProjectImportPanel onBusyChange={setBusy} /> : null}
+          {open ? (
+            <ProjectImportPanel
+              onBusyChange={setBusy}
+              {...(initialProviders ? { initialProviders } : {})}
+            />
+          ) : null}
         </div>
       </DialogPopup>
     </Dialog>

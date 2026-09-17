@@ -7,7 +7,9 @@
 import {
   BugReportIcon,
   CheckIcon,
+  ChevronRightIcon,
   DeviceLaptopIcon,
+  DownloadIcon,
   FolderAddIcon,
   FolderOpenFrontIcon,
   ImportThreadIcon,
@@ -18,7 +20,11 @@ import {
   SunIcon,
   UsageGaugeIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import {
+  type FilesystemBrowseResult,
+  type ProjectImportProvider,
+  type ProviderKind,
+} from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
@@ -91,7 +97,7 @@ const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
   "feedback",
 ]);
 
-export type SidebarSearchPaletteMode = "search" | "import";
+export type SidebarSearchPaletteMode = "search" | "import" | "import-projects";
 
 interface SidebarSearchPaletteProps {
   open: boolean;
@@ -112,7 +118,19 @@ interface SidebarSearchPaletteProps {
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  onImportProjects: (providers: readonly ProjectImportProvider[]) => void;
 }
+
+// Second page of the "Import projects" command: pick which local tool to import from.
+const IMPORT_PROJECTS_SOURCES: readonly {
+  id: string;
+  label: string;
+  providers: readonly ProjectImportProvider[];
+}[] = [
+  { id: "claude-code", label: "From Claude Code", providers: ["claudeAgent"] },
+  { id: "codex", label: "From Codex", providers: ["codex"] },
+  { id: "all", label: "From Claude Code and Codex", providers: ["claudeAgent", "codex"] },
+];
 
 export type ImportProviderKind = Extract<
   ProviderKind,
@@ -149,6 +167,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "new-thread": NewThreadIcon,
   "add-project": FolderAddIcon,
   "import-thread": ImportThreadIcon,
+  "import-projects": DownloadIcon,
   feedback: BugReportIcon,
   settings: SettingsIcon,
   "usage-settings": UsageGaugeIcon,
@@ -621,6 +640,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             props.onModeChange("import");
             return;
           }
+          if (action.id === "import-projects") {
+            setQuery("");
+            props.onModeChange("import-projects");
+            return;
+          }
           if (!onSelect) return;
           props.onOpenChange(false);
           onSelect();
@@ -635,9 +659,17 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         {action.shortcutLabel ? (
           <Kbd className={PALETTE_KBD_CLASS}>{action.shortcutLabel}</Kbd>
         ) : null}
+        {action.id === "import-projects" ? (
+          <ChevronRightIcon className={PALETTE_ICON_CLASS} />
+        ) : null}
       </CommandItem>
     );
   };
+
+  const normalizedSourceQuery = query.trim().toLowerCase();
+  const importProjectsSources = IMPORT_PROJECTS_SOURCES.filter((source) =>
+    source.label.toLowerCase().includes(normalizedSourceQuery),
+  );
 
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -751,6 +783,75 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               </div>
             </div>
           </div>
+        ) : props.mode === "import-projects" ? (
+          <Command autoHighlight="always" mode="none">
+            <div className="flex items-center ps-2">
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Back to commands"
+                className="size-7 shrink-0"
+                onClick={() => {
+                  setQuery("");
+                  props.onModeChange("search");
+                }}
+              >
+                <LuArrowLeft className="size-3.5" />
+              </Button>
+              <AutocompletePrimitive.Input
+                autoFocus
+                className={cn(PALETTE_INPUT_CLASS, "ps-2")}
+                placeholder="Import projects from…"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Backspace" && query.length === 0) {
+                    event.preventDefault();
+                    props.onModeChange("search");
+                  }
+                }}
+              />
+            </div>
+            <CommandList className="max-h-[min(30rem,60vh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-2">
+              {importProjectsSources.length > 0 ? (
+                <CommandGroup>
+                  <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
+                    <span>Import projects</span>
+                  </CommandGroupLabel>
+                  {importProjectsSources.map((source) => (
+                    <CommandItem
+                      key={source.id}
+                      value={`import-projects:${source.id}`}
+                      className={PALETTE_ITEM_CLASS}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={() => {
+                        props.onOpenChange(false);
+                        props.onImportProjects(source.providers);
+                      }}
+                    >
+                      <span className="flex shrink-0 items-center gap-1">
+                        {source.providers.map((provider) => (
+                          <SharedProviderIcon
+                            key={provider}
+                            provider={provider}
+                            className={PALETTE_ICON_CLASS}
+                          />
+                        ))}
+                      </span>
+                      <span className={PALETTE_TEXT_CLASS}>{source.label}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ) : null}
+            </CommandList>
+            <CommandStatus className="p-0">
+              {importProjectsSources.length === 0 ? (
+                <div className={PALETTE_STATUS_CLASS}>No matching import source.</div>
+              ) : null}
+            </CommandStatus>
+          </Command>
         ) : (
           <>
             <Command

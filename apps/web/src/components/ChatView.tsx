@@ -232,6 +232,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
+import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
@@ -5606,7 +5607,12 @@ export default function ChatView({
                     anchored to the bottom of the pane (with its workspace-tools rail
                     stacked on top of the input) so starting a chat keeps the composer
                     where it lives for the rest of the conversation. */}
-                <div className="flex min-h-0 flex-1 items-center justify-center">
+                <div className="relative flex min-h-0 flex-1 items-center justify-center">
+                  {/* Pinned to the top so the heading stays optically centered; hidden on
+                      short panes where it would crowd the heading. */}
+                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                  </div>
                   <div
                     className={cn(
                       "flex flex-col items-center gap-4 px-6 text-center select-none",

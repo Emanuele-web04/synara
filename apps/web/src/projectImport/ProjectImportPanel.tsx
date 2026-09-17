@@ -28,13 +28,16 @@ interface ImportOutcome {
 
 export function ProjectImportPanel(props: {
   readonly onBusyChange: (busy: boolean) => void;
+  readonly initialProviders?: readonly ProjectImportProvider[];
   readonly onResult?: (
     result: ImportProjectResult,
     workspaceRoot: string,
     created: boolean,
   ) => void;
 }) {
-  const [providers, setProviders] = useState<readonly ProjectImportProvider[]>(IMPORT_PROVIDERS);
+  const [providers, setProviders] = useState<readonly ProjectImportProvider[]>(
+    props.initialProviders ?? IMPORT_PROVIDERS,
+  );
   const [catalog, setCatalog] = useState<ListProjectImportsResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [running, setRunning] = useState(false);

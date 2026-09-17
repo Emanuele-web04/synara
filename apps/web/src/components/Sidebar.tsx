@@ -5605,10 +5605,9 @@ export default function Sidebar() {
       },
       {
         id: "import-projects",
-        label: "Import projects…",
+        label: "Import projects from…",
         description: "Bring Codex and Claude Code projects and conversations into Synara.",
         keywords: ["import", "projects", "codex", "claude", "conversations", "folders"],
-        run: () => useProjectImportDialogStore.getState().openDialog(),
       },
       {
         id: "import-thread",
@@ -7043,6 +7042,7 @@ function SidebarSearchPaletteController(props: {
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}
       onImportThread={props.onImportThread}
+      onImportProjects={(providers) => useProjectImportDialogStore.getState().openDialog(providers)}
       onOpenThread={props.onOpenThread}
     />
   );

@@ -1,7 +1,10 @@
 # Import projects from Codex and Claude Code
 
-Choose **Import projects…** in the sidebar menu, or **Import projects** while adding your first
-project in the welcome tour. Existing installations also get a dismissible introduction card.
+Open the command palette and choose **Import projects from…**, then pick Claude Code, Codex, or
+both; the dialog opens with that source preselected. You can also choose **Import projects** while
+adding your first project in the welcome tour, or click the import banner at the top of an empty
+chat. Hover the banner and press its **×** to remove it for good. Existing installations also get a
+dismissible introduction card in the sidebar.
 
 1. Select Codex, Claude Code, or both, then choose **Find projects**.
 2. Select projects or expand a project to choose individual conversations. Enable **Include
