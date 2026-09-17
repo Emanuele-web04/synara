@@ -375,13 +375,13 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
           }),
       });
 
-      const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url">) =>
+      const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url" | "serverPassword">) =>
         Effect.tryPromise({
           try: async () => {
             const client = openCodeRuntime.createOpenCodeSdkClient({
               baseUrl: server.url,
               directory: input.cwd,
-              ...(serverPassword.length > 0 ? { serverPassword } : {}),
+              ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
               cliSpec: config.cliSpec,
             });
             const sessionCreateInput = {
@@ -450,7 +450,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
 
       const rawOutput =
         serverUrl.length > 0
-          ? yield* runAgainstServer({ url: serverUrl })
+          ? yield* runAgainstServer({ url: serverUrl, serverPassword })
           : yield* Effect.acquireUseRelease(
               acquireSharedServer({
                 binaryPath,

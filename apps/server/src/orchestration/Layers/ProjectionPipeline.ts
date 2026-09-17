@@ -183,6 +183,11 @@ const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.deleted",
+  "thread.claude-cache-set",
+  "thread.archived",
+  "thread.session-stop-requested",
+  "thread.claude-cache-response-requested",
   "thread.turn-start-requested",
   "thread.session-set",
   "thread.turn-diff-completed",
@@ -745,6 +750,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
           }));
 
+        case "thread.claude-cache-set":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            claudeCacheReview: event.payload.review,
+            updatedAt: event.payload.updatedAt,
+          }));
+
         case "thread.runtime-mode-set":
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
@@ -1295,6 +1307,36 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.deleted":
+        case "thread.archived":
+        case "thread.session-stop-requested":
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        case "thread.claude-cache-set":
+          if (event.payload.review?.status === "compacting") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
+          return;
+        case "thread.claude-cache-response-requested":
+          if (event.payload.decision === "cancel") {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          } else if (event.payload.decision === "continue") {
+            yield* projectionTurnRepository.replacePendingTurnStart({
+              threadId: event.payload.threadId,
+              messageId: event.payload.review.messageId,
+              sourceProposedPlanThreadId: event.payload.review.sourceProposedPlan?.threadId ?? null,
+              sourceProposedPlanId: event.payload.review.sourceProposedPlan?.planId ?? null,
+              requestedAt: event.payload.review.requestedAt ?? event.payload.review.createdAt,
+            });
+          }
+          return;
+
         case "thread.turn-start-requested": {
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,

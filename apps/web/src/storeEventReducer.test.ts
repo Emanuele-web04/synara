@@ -12,11 +12,13 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
+  applyShellEvent,
   syncServerShellSnapshot,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
@@ -36,6 +38,103 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store event reducer", () => {
+  it("projects durable cache review transitions and clears them without touching the draft message", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("held-message");
+    const review: PendingClaudeCacheReview = {
+      reviewId: "cache-review-1",
+      messageId,
+      sourceEventSequence: 8,
+      assessment: {
+        observedAt: "2026-09-16T10:00:00.000Z",
+        contextTokens: 800_000,
+        state: "likely-expired",
+        source: "session-start",
+      },
+      status: "pending",
+      createdAt: "2026-09-16T10:00:00.000Z",
+    };
+    const initial = makeState(
+      makeThread({
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            text: "Continue the task",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-09-16T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const pendingEvent = makeDomainEvent("thread.claude-cache-set", {
+      threadId,
+      review,
+      updatedAt: "2026-09-16T10:00:00.000Z",
+    });
+    let state = applyOrchestrationEvents(initial, [pendingEvent]);
+    expect(state.threadShellById?.[threadId]?.claudeCacheReview).toEqual(review);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toEqual(review);
+    expect(applyOrchestrationEvents(state, [pendingEvent])).toBe(state);
+
+    let sequence = pendingEvent.sequence;
+    for (const status of ["responding", "compacting", "failed", "uncertain"] as const) {
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.claude-cache-set",
+          {
+            threadId,
+            review: { ...review, status },
+            updatedAt: "2026-09-16T10:01:00.000Z",
+          },
+          { sequence: ++sequence },
+        ),
+      ]);
+      expect(threadsOf(state)[0]?.claudeCacheReview?.status).toBe(status);
+    }
+
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.claude-cache-set",
+        {
+          threadId,
+          review: null,
+          updatedAt: "2026-09-16T10:02:00.000Z",
+        },
+        { sequence: ++sequence },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    expect(state.messageByThreadId).toBe(initial.messageByThreadId);
+    expect(threadsOf(state)[0]?.messages[0]?.text).toBe("Continue the task");
+
+    const shell = makeReadModelThread({ claudeCacheReview: null, updatedAt: review.createdAt });
+    state = applyShellEvent(state, { kind: "thread-upserted", thread: shell, sequence: 20 });
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.claude-cache-set",
+        {
+          threadId,
+          review,
+          updatedAt: review.createdAt,
+        },
+        { sequence: 19 },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = applyShellEvent(state, {
+      kind: "thread-upserted",
+      thread: { ...shell, claudeCacheReview: review },
+      sequence: 18,
+    });
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = syncServerThreadDetailHotPath(state, { ...shell, claudeCacheReview: review }, 19);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toBeNull();
+    state = syncServerThreadDetailHotPath(state, { ...shell, claudeCacheReview: review }, 21);
+    expect(threadsOf(state)[0]?.claudeCacheReview).toEqual(review);
+  });
+
   it("hydrates and removes Spaces while clearing matching project assignments", () => {
     const spaceId = SpaceId.makeUnsafe("space-work");
     let state = applyOrchestrationEvents(makeState(makeThread()), [

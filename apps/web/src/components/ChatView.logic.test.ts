@@ -7,6 +7,7 @@ import {
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type PendingClaudeCacheReview,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -2136,6 +2137,49 @@ describe("runWorktreeCreationFlow", () => {
     expect(harness.unsubscribeCount()).toBe(1);
     expect(harness.removedPaths).toEqual([]);
   });
+});
+
+describe("Claude cache review dispatch acknowledgement", () => {
+  it.each([
+    { expectedId: "held-message", reviewedId: "held-message", acknowledged: true },
+    { expectedId: "new-message", reviewedId: "old-message", acknowledged: false },
+    { expectedId: null, reviewedId: "held-message", acknowledged: false },
+  ])(
+    "only acknowledges the exact held message ($expectedId / $reviewedId)",
+    ({ expectedId, reviewedId, acknowledged }) => {
+      const localDispatch = createLocalDispatchSnapshot(
+        undefined,
+        expectedId === null
+          ? undefined
+          : { expectedUserMessageId: MessageId.makeUnsafe(expectedId) },
+      );
+      const claudeCacheReview: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe(reviewedId),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      };
+      const input = {
+        localDispatch,
+        claudeCacheReview,
+        phase: "ready" as const,
+        latestTurn: null,
+        session: null,
+        messages: [],
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      };
+      expect(hasServerAcknowledgedLocalDispatch(input)).toBe(acknowledged);
+      expect(hasLiveTurnTakenOver(input)).toBe(acknowledged);
+    },
+  );
 });
 
 describe("hasServerAcknowledgedLocalDispatch", () => {

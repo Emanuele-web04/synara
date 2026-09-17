@@ -504,6 +504,8 @@ export default function BranchToolbar({
                       usageLines={usageSummary.usageLines}
                       notice={usageSummary.usageNotice}
                       isLoading={usageSummary.isLoading}
+                      resetCredits={usageSummary.resetCredits}
+                      resetCreditsSurface="popover"
                       learnMoreHref={usageSummary.learnMoreHref}
                       showTitle={false}
                       showLearnMore={true}

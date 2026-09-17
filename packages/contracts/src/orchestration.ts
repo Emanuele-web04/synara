@@ -13,6 +13,7 @@ import {
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from "./asyncUserInput";
 import { ProjectKind } from "./project";
+import { ClaudeCacheObservation } from "./claudeCache";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -767,7 +768,23 @@ export const OrchestrationPendingInteraction = Schema.Struct({
 });
 export type OrchestrationPendingInteraction = typeof OrchestrationPendingInteraction.Type;
 
+export const PendingClaudeCacheReview = Schema.Struct({
+  reviewId: TrimmedNonEmptyString,
+  messageId: MessageId,
+  sourceEventSequence: PositiveInt,
+  assessment: ClaudeCacheObservation,
+  status: Schema.Literals(["pending", "responding", "compacting", "failed", "uncertain"]),
+  compactionTurnId: Schema.optional(TurnId),
+  compactionResponseEventSequence: Schema.optional(PositiveInt),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  requestedAt: Schema.optional(IsoDateTime),
+  error: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type PendingClaudeCacheReview = typeof PendingClaudeCacheReview.Type;
+
 export const OrchestrationThread = Schema.Struct({
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -859,6 +876,7 @@ export const OrchestrationThread = Schema.Struct({
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1372,6 +1390,37 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadClaudeCacheRespondCommand = Schema.Struct({
+  type: Schema.Literal("thread.claude-cache.respond"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  reviewId: TrimmedNonEmptyString,
+  decision: Schema.Literals(["continue", "compact", "cancel"]),
+  createdAt: IsoDateTime,
+});
+
+const ThreadClaudeCacheSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.claude-cache.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  review: Schema.NullOr(PendingClaudeCacheReview),
+  expectedReviewId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  hold: Schema.optional(
+    Schema.Struct({ sourceEventSequence: PositiveInt, session: OrchestrationSession }),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ThreadClaudeCacheCompactedCommand = Schema.Struct({
+  type: Schema.Literal("thread.claude-cache.compacted"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  reviewId: TrimmedNonEmptyString,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -1507,6 +1556,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
   ThreadTaskBackgroundCommand,
@@ -1543,6 +1593,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
   ThreadTaskBackgroundCommand,
@@ -1685,6 +1736,8 @@ const ThreadSidechatExpireCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadClaudeCacheCompactedCommand,
+  ThreadClaudeCacheSetCommand,
   ThreadSessionSetCommand,
   ThreadGoalContinueCommand,
   ThreadMessagesImportCommand,
@@ -1734,6 +1787,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.async-user-input-answered",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.claude-cache-set",
+  "thread.claude-cache-response-requested",
   "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
@@ -2007,6 +2062,18 @@ export const ThreadAsyncUserInputAnsweredPayload = Schema.Struct({
   response: AsyncUserInputResponse,
 });
 
+export const ThreadClaudeCacheSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  review: Schema.NullOr(PendingClaudeCacheReview),
+  updatedAt: IsoDateTime,
+});
+export const ThreadClaudeCacheResponseRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  review: PendingClaudeCacheReview,
+  decision: Schema.Literals(["continue", "compact", "cancel"]),
+  createdAt: IsoDateTime,
+});
+
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -2264,6 +2331,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.async-user-input-answered"),
     payload: ThreadAsyncUserInputAnsweredPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.claude-cache-set"),
+    payload: ThreadClaudeCacheSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.claude-cache-response-requested"),
+    payload: ThreadClaudeCacheResponseRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -178,6 +178,8 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
+    deepEqualJson(left.claudeCacheReview ?? null, right.claudeCacheReview ?? null) &&
+    left.claudeCacheReviewSequence === right.claudeCacheReviewSequence &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
     (left.goal ?? "") === (right.goal ?? "") &&
@@ -1009,6 +1011,7 @@ function clearSettledTurnStreamingFlags(
 export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
+  snapshotSequence?: number,
 ): ReadModelThread {
   if (!previousThread) {
     return incoming;
@@ -1045,10 +1048,18 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   const latestTurn = mergeReadModelLatestTurnWithLiveHotPath(incoming.latestTurn, previousThread, {
     preserveRunningTurn,
   });
+  const claudeCacheReview =
+    previousThread.claudeCacheReview !== undefined &&
+    (snapshotSequence === undefined
+      ? incoming.updatedAt < (previousThread.updatedAt ?? previousThread.createdAt)
+      : snapshotSequence < (previousThread.claudeCacheReviewSequence ?? 0))
+      ? previousThread.claudeCacheReview
+      : incoming.claudeCacheReview;
   if (
     messages === incoming.messages &&
     session === incoming.session &&
-    latestTurn === incoming.latestTurn
+    latestTurn === incoming.latestTurn &&
+    claudeCacheReview === incoming.claudeCacheReview
   ) {
     return incoming;
   }
@@ -1057,6 +1068,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     messages,
     session,
     latestTurn,
+    ...(claudeCacheReview !== undefined ? { claudeCacheReview } : {}),
   };
 }
 
@@ -1572,6 +1584,7 @@ function normalizeLatestTurn(
 export function normalizeThreadFromReadModel(
   incoming: ReadModelThread,
   previous: Thread | undefined,
+  snapshotSequence?: number,
 ): Thread {
   const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
   const session = normalizeThreadSession(incoming.session, previous?.session);
@@ -1582,6 +1595,19 @@ export function normalizeThreadFromReadModel(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const incomingClaudeCacheReview =
+    snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
+      ? previous?.claudeCacheReview
+      : incoming.claudeCacheReview;
+  const claudeCacheReviewSequence =
+    snapshotSequence === undefined
+      ? previous?.claudeCacheReviewSequence
+      : Math.max(snapshotSequence, previous?.claudeCacheReviewSequence ?? 0);
+  const claudeCacheReview =
+    previous?.claudeCacheReview &&
+    deepEqualJson(previous.claudeCacheReview, incomingClaudeCacheReview ?? null)
+      ? previous.claudeCacheReview
+      : (incomingClaudeCacheReview ?? null);
   const lastKnownPr =
     previous?.lastKnownPr &&
     incoming.lastKnownPr &&
@@ -1701,6 +1727,8 @@ export function normalizeThreadFromReadModel(
     (previous.sidechatExpiredAt ?? null) === (incoming.sidechatExpiredAt ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
+    (previous.claudeCacheReview ?? null) === claudeCacheReview &&
+    previous.claudeCacheReviewSequence === claudeCacheReviewSequence &&
     previous.pinnedMessages === pinnedMessages &&
     previous.notes === notes &&
     previous.goal === goal &&
@@ -1754,6 +1782,8 @@ export function normalizeThreadFromReadModel(
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
+    claudeCacheReview,
+    ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
     ...(notes !== undefined ? { notes } : {}),
     ...(goal !== undefined ? { goal } : {}),
@@ -1781,6 +1811,7 @@ export function normalizeThreadFromReadModel(
 export function normalizeThreadShellSnapshot(
   incoming: ShellSnapshotThread,
   previous: Thread | undefined,
+  snapshotSequence?: number,
 ): {
   shell: ThreadShell;
   session: ThreadSession | null;
@@ -1793,6 +1824,19 @@ export function normalizeThreadShellSnapshot(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const incomingClaudeCacheReview =
+    snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
+      ? previous?.claudeCacheReview
+      : incoming.claudeCacheReview;
+  const claudeCacheReviewSequence =
+    snapshotSequence === undefined
+      ? previous?.claudeCacheReviewSequence
+      : Math.max(snapshotSequence, previous?.claudeCacheReviewSequence ?? 0);
+  const claudeCacheReview =
+    previous?.claudeCacheReview &&
+    deepEqualJson(previous.claudeCacheReview, incomingClaudeCacheReview ?? null)
+      ? previous.claudeCacheReview
+      : (incomingClaudeCacheReview ?? null);
   const lastKnownPr =
     previous?.lastKnownPr &&
     incoming.lastKnownPr &&
@@ -1863,6 +1907,8 @@ export function normalizeThreadShellSnapshot(
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
     handoff,
+    claudeCacheReview,
+    ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those
     // values instead of clobbering them with `undefined`. Goals are shell state and update here.
     ...(previous?.pinnedMessages !== undefined ? { pinnedMessages: previous.pinnedMessages } : {}),

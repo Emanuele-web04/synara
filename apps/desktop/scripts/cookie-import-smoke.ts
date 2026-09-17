@@ -5,8 +5,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BetterWright, NetworkPolicy } from "betterwright";
-import { openBetterwrightConnection } from "../src/browserAutomation/betterwrightConnection";
+import { configureElectronNetwork } from "betterwright/electron";
+import { synaraHostTarget } from "../src/browserAutomation/betterwrightHostTarget";
 
+configureElectronNetwork();
 void (async () => {
   const home = await mkdtemp(join(tmpdir(), "synara-import-native-"));
   app.setPath("userData", join(home, "electron"));
@@ -22,11 +24,10 @@ void (async () => {
     webPreferences: { partition: "persist:import-smoke", sandbox: true, contextIsolation: true },
   });
   await view.webContents.loadURL("about:blank");
-  const connection = await openBetterwrightConnection(view.webContents, undefined, [], true);
+  const hostTarget = synaraHostTarget(view.webContents, { cookieImport: true });
   const browser = new BetterWright({
     home: join(home, "worker"),
-    provider: connection.provider,
-    hostOwnedTarget: true,
+    hostTarget,
     vault: false,
     credentialCapture: false,
     downloadPolicy: "deny",
@@ -39,7 +40,6 @@ void (async () => {
       source: { browser: "safari", profile: "default" },
       windowsAppBound: "disabled",
       timeoutMs: 30_000,
-      cloudConsent: `cdp:${new URL(connection.provider.cdpUrl).host}`,
     });
     assert.ok(result.ok, "Synthetic native import failed");
     if (!result.ok) return;
@@ -50,7 +50,7 @@ void (async () => {
     assert.equal(stored[0]?.value, "synthetic-only");
     console.log("Native fixture import and stored-domain metadata passed");
   } finally {
-    await connection.close(false);
+    await hostTarget.revokeAll(false);
     await browser.close();
     view.webContents.close();
   }
