@@ -11495,9 +11495,7 @@ describe("ProviderCommandReactor", () => {
     });
     harness.startSession.mockClear();
 
-    // Context-window changes switch in-session via setModel on the next turn.
-    // Restarting would resume via --resume and replay the whole conversation
-    // as uncached input tokens.
+    // A context override is spawn-fixed and resumes the same conversation.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -11512,6 +11510,17 @@ describe("ProviderCommandReactor", () => {
         },
       }),
     );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { contextWindow: "1m" },
+      },
+    });
+    harness.startSession.mockClear();
 
     // Effort is fixed at subprocess spawn, so an effort change still restarts.
     await Effect.runPromise(
@@ -11656,12 +11665,44 @@ describe("ProviderCommandReactor", () => {
         modelSelection: {
           provider: "claudeAgent",
           model: "claude-opus-4-7",
-          options: { effort: "max" },
+          options: { autoCompactWindow: "200k" },
         },
       }),
     );
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-reject-context-steer"),
+        threadId,
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        message: {
+          messageId: asMessageId("reject-context-steer"),
+          role: "user",
+          text: "steer",
+          attachments: [],
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+
+    expect(
+      (await Effect.runPromise(harness.engine.getReadModel())).threads[0]?.session,
+    ).toMatchObject({
+      status: "running",
+      activeTurnId: turnId,
+    });
 
     harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
     await Effect.runPromise(
@@ -11682,18 +11723,21 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // The context-only edit is compared with the profile that is actually live,
-    // so the pending effort change still forces exactly one replacement.
+    // No explicit selection: the persisted desired override must still apply.
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-context"),
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-idle-context-send"),
         threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max", contextWindow: "1m" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        message: {
+          messageId: asMessageId("idle-context-send"),
+          role: "user",
+          text: "continue",
+          attachments: [],
         },
+        createdAt: now,
       }),
     );
 
@@ -11702,10 +11746,79 @@ describe("ProviderCommandReactor", () => {
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-7",
-        options: { effort: "max", contextWindow: "1m" },
+        options: { autoCompactWindow: "200k" },
       },
     });
   });
+
+  for (const interveningEvent of [false, true]) {
+    it(`restores only its own optimistic state after a busy Claude rejection (concurrent event: ${interveningEvent})`, async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      const send = (id: string, options?: { autoCompactWindow: string }) =>
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(id),
+          threadId,
+          message: { messageId: asMessageId(id), role: "user", text: "continue", attachments: [] },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+          ...(options
+            ? {
+                modelSelection: {
+                  provider: "claudeAgent" as const,
+                  model: "claude-fable-5-1",
+                  options,
+                },
+              }
+            : {}),
+        });
+      await Effect.runPromise(send("bootstrap-busy"));
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      const prior = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+      harness.sendTurn.mockClear();
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.gen(function* () {
+          if (interveningEvent) {
+            yield* harness.engine
+              .dispatch({
+                type: "thread.session.set",
+                commandId: CommandId.makeUnsafe("late-runtime-event"),
+                threadId,
+                session: {
+                  ...prior,
+                  status: "running",
+                  activeTurnId: asTurnId("late-turn"),
+                  updatedAt: "2099-01-01T00:00:00.000Z",
+                },
+                createdAt: "2099-01-01T00:00:00.000Z",
+              })
+              .pipe(Effect.orDie);
+          }
+          return yield* new ProviderAdapterValidationError({
+            provider: "claudeAgent",
+            operation: "session/reconfigure",
+            issue: "Background work is active",
+          });
+        }),
+      );
+      await Effect.runPromise(send("rejected-busy", { autoCompactWindow: "200k" }));
+      await harness.drain();
+      const after = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+      expect(after).toMatchObject(
+        interveningEvent
+          ? { status: "running", activeTurnId: "late-turn" }
+          : { status: "ready", activeTurnId: null, runtimeMode: prior.runtimeMode },
+      );
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.stopSession).not.toHaveBeenCalled();
+    });
+  }
 
   it("seeds imported Droid selection before handling idle metadata updates", async () => {
     const harness = await createHarness({

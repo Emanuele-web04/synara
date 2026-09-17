@@ -25,6 +25,7 @@ export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
   modelLabel: string;
   statusLabel: string | null;
+  contextWindowLabel?: string | null | undefined;
   showsFastBadge: boolean;
   hideModelLabel?: boolean | undefined;
   hideStatusLabel?: boolean | undefined;
@@ -36,6 +37,7 @@ export function ComposerModelMenuTrigger(props: {
   const hiddenTriggerTitle = [
     props.hideModelLabel ? props.modelLabel : null,
     props.hideStatusLabel ? props.statusLabel : null,
+    props.hideStatusLabel ? props.contextWindowLabel : null,
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" · ");
@@ -91,6 +93,17 @@ export function ComposerModelMenuTrigger(props: {
             {props.statusLabel}
           </span>
         )
+      ) : null}
+      {props.contextWindowLabel ? (
+        <span
+          className={
+            props.hideStatusLabel
+              ? "sr-only"
+              : cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)
+          }
+        >
+          {props.contextWindowLabel}
+        </span>
       ) : null}
       <ChevronDownIcon aria-hidden="true" className="ms-0.5 size-3 shrink-0 opacity-60" />
     </span>

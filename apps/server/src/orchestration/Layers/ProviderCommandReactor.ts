@@ -1812,24 +1812,22 @@ const make = Effect.gen(function* () {
         requestedModelSelection.model !== activeSessionBeforeEnsure?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadSessionModelSelections.get(threadId);
-      // Claude restarts resume via `--resume`, which replays the whole conversation
-      // as uncached input tokens. Only spawn-fixed options (currently `max` effort)
-      // may force that; model and context-window changes switch in-session via
-      // setModel, and effort/fastMode/ultracode/thinking apply via flag settings.
+      // Spawn-fixed max effort and auto-compaction overrides resume the same
+      // conversation. Claude owns prefix caching; a resume does not guarantee a hit.
       // When the dispatch cache has no entry (the session was started by a turn
       // without a selection), compare against the projected thread selection the
       // session was actually spawned from so spawn-fixed changes still restart.
       const shouldRestartForModelSelectionChange =
-        requestedModelSelection !== undefined &&
-        (currentProvider === "claudeAgent"
+        currentProvider === "claudeAgent"
           ? claudeSelectionRequiresRestart(
               previousModelSelection ?? thread.modelSelection,
-              requestedModelSelection,
+              desiredModelSelection,
             )
           : (currentProvider === "droid" ||
               currentProvider === "grok" ||
               currentProvider === "devin") &&
-            !Equal.equals(previousModelSelection, requestedModelSelection));
+            requestedModelSelection !== undefined &&
+            !Equal.equals(previousModelSelection, requestedModelSelection);
 
       if (
         !runtimeModeChanged &&
@@ -1844,6 +1842,14 @@ const make = Effect.gen(function* () {
           nativeResumeFailed: false,
           nativeSessionRestarted: false,
         };
+      }
+
+      if (currentProvider === "claudeAgent" && reusableSession.activeTurnId != null) {
+        return yield* new ProviderAdapterValidationError({
+          provider: currentProvider,
+          operation: "session/reconfigure",
+          issue: "Wait for Claude's active turn to finish before changing session settings.",
+        });
       }
 
       const resumeCursor =
@@ -3403,6 +3409,48 @@ const make = Effect.gen(function* () {
                   turnId: null,
                   createdAt: event.payload.createdAt,
                 });
+                const failure = Option.getOrUndefined(Cause.findErrorOption(cause));
+                // A refused configuration change leaves the existing runtime and
+                // its live turn intact. Do not project a false terminal state.
+                if (
+                  failure instanceof ProviderAdapterValidationError &&
+                  failure.operation === "session/reconfigure"
+                ) {
+                  const optimisticSession = turnStartSession ?? thread.session;
+                  const runtime = (yield* providerService.listSessions()).find(
+                    (session) => session.threadId === event.payload.threadId,
+                  );
+                  if (
+                    optimisticSession?.status === "starting" &&
+                    runtime &&
+                    runtime.activeTurnId == null
+                  ) {
+                    yield* setThreadSession({
+                      threadId: event.payload.threadId,
+                      session: {
+                        threadId: event.payload.threadId,
+                        providerName: runtime.provider,
+                        runtimeMode: runtime.runtimeMode,
+                        status:
+                          runtime.status === "closed"
+                            ? "stopped"
+                            : runtime.status === "connecting"
+                              ? "starting"
+                              : runtime.status,
+                        activeTurnId: null,
+                        lastError: runtime.lastError ?? null,
+                        updatedAt: runtime.updatedAt,
+                      },
+                      expectedSession: {
+                        status: optimisticSession.status,
+                        updatedAt: optimisticSession.updatedAt,
+                      },
+                      createdAt: event.payload.createdAt,
+                    });
+                  }
+                  if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  return yield* Effect.failCause(cause);
+                }
                 yield* setThreadSessionError({
                   threadId: event.payload.threadId,
                   runtimeMode: event.payload.runtimeMode,

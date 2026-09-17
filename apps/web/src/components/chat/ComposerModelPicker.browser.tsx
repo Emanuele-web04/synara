@@ -19,6 +19,11 @@ import {
 } from "../../composerDraftStore";
 import { STARRED_MODELS_STORAGE_KEY, type StarredModel } from "../../lib/starredModels";
 import { type ProviderModelOption } from "../../providerModelOptions";
+import {
+  deriveComposerContextWindowLabel,
+  deriveContextWindowSelectionStatus,
+  deriveSelectedContextWindowSnapshot,
+} from "../../lib/contextWindow";
 import { ComposerModelPicker } from "./ComposerModelPicker";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-composer-model-picker");
@@ -312,4 +317,74 @@ describe("ComposerModelPicker", () => {
       await screen.unmount();
     }
   });
+});
+
+describe("Claude composer budget suffix", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+  it.each([
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", false, "Fable 5.1High(1M)"],
+    ["claude-opus-4-7", "Opus", undefined, "(1M)", false, "OpusHigh(1M)"],
+    [
+      "claude-fable-5-1",
+      "Fable 5.1",
+      "high",
+      "(200k · 1M next)",
+      false,
+      "Fable 5.1High(200k · 1M next)",
+    ],
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M next)", false, "Fable 5.1High(1M next)"],
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", true, "Fable 5.1High(1M)"],
+  ] as const)(
+    "renders %s %s %s %s compact=%s",
+    async (slug, name, effort, label, compact, expected) => {
+      const snapshot = {
+        ...deriveSelectedContextWindowSnapshot("1m")!,
+        maxTokens: 967000,
+        claudeCache: {
+          model: `${slug}[1m]`,
+          observedAt: "2026-09-17T00:00:00.000Z",
+          state: "unknown" as const,
+          source: "request-usage" as const,
+        },
+      };
+      const runtimeLabel = deriveComposerContextWindowLabel({
+        provider: "claudeAgent",
+        model: slug,
+        snapshot,
+        status: deriveContextWindowSelectionStatus({
+          activeSnapshot: snapshot,
+          appliedValue: "1m",
+          selectedValue: "1m",
+        }),
+      });
+      const screen = await render(
+        <ComposerModelPicker
+          provider="claudeAgent"
+          model={slug as ModelSlug}
+          lockedProvider={null}
+          modelOptionsByProvider={{
+            ...EMPTY_BY_PROVIDER,
+            claudeAgent: [{ slug: slug as ModelSlug, name }],
+          }}
+          onProviderModelChange={vi.fn()}
+          threadId={THREAD_ID}
+          modelOptions={{ ...(effort ? { effort } : {}), fastMode: true }}
+          prompt=""
+          onPromptChange={vi.fn()}
+          contextWindowLabel={label === "(1M)" ? runtimeLabel : label}
+          hideModelLabel={compact}
+          hideStatusLabel={compact}
+        />,
+      );
+      const button = page.getByRole("button", { name: "Change model and reasoning" });
+      expect(button.element().textContent).toBe(expected);
+      if (compact) {
+        await expect.element(button).toHaveAttribute("title", `Fable 5.1 · High · ${label}`);
+        expect(button.element().getBoundingClientRect().width).toBeLessThan(150);
+      }
+      await screen.unmount();
+    },
+  );
 });

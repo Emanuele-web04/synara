@@ -46,6 +46,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   ProviderAdapterProcessError,
+  ProviderAdapterValidationError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
@@ -300,6 +301,9 @@ function makeFakeCodexAdapter(
       }),
   );
 
+  const prepareSessionReplacement = vi.fn<
+    NonNullable<ProviderAdapterShape<ProviderAdapterError>["prepareSessionReplacement"]>
+  >(() => Effect.succeed(undefined));
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
@@ -310,6 +314,7 @@ function makeFakeCodexAdapter(
         : {}),
     },
     startSession,
+    ...(provider === "claudeAgent" ? { prepareSessionReplacement } : {}),
     ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
     sendTurn,
     steerTurn,
@@ -353,6 +358,7 @@ function makeFakeCodexAdapter(
 
   return {
     adapter,
+    prepareSessionReplacement,
     emit,
     waitForRuntimeSubscribers,
     updateSession,
@@ -482,6 +488,131 @@ function makeProviderServiceLayer(
 }
 
 const routing = makeProviderServiceLayer();
+const replacementEvents = new Map<string, ProviderRuntimeEvent>();
+const replacementRouting = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => {
+      replacementEvents.set(String(event.eventId), event);
+      return { sequence: replacementEvents.size, event };
+    }),
+});
+replacementRouting.layer("Claude replacement preparation", (it) => {
+  for (const failure of ["background", "unsupported-auto", "missing-binary"] as const) {
+    it.effect(
+      `preserves events and generation when preparation rejects (${failure}), then resumes idle`,
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`claude-replacement-${failure}`);
+          const startInput = {
+            threadId,
+            provider: "claudeAgent" as const,
+            runtimeMode: "full-access" as const,
+            providerOptions: { claudeAgent: { binaryPath: "/persisted/bin/claude" } },
+          };
+          yield* replacementRouting.claude.waitForRuntimeSubscribers();
+          yield* provider.startSession(threadId, startInput);
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const starts = replacementRouting.claude.startSession.mock.calls.length;
+          const stops = replacementRouting.claude.stopSession.mock.calls.length;
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(
+            (preparedInput) =>
+              Effect.gen(function* () {
+                assert.equal(
+                  preparedInput.providerOptions?.claudeAgent?.binaryPath,
+                  "/persisted/bin/claude",
+                );
+                assert.equal(
+                  preparedInput.runtimeMode,
+                  failure === "background" ? "full-access" : "auto",
+                );
+                // Background output arrives during asynchronous preparation with no activeTurnId.
+                replacementRouting.claude.emit({
+                  type: "content.delta",
+                  eventId: asEventId(`${failure}-background-output`),
+                  provider: "claudeAgent",
+                  threadId,
+                  lifecycleGeneration: before.lifecycleGeneration,
+                  createdAt: "2026-09-17T20:00:00.000Z",
+                  payload: { streamKind: "assistant_text", delta: "still working" },
+                });
+                yield* waitUntil(() => replacementEvents.has(`${failure}-background-output`));
+                return yield* new ProviderAdapterValidationError({
+                  provider: "claudeAgent",
+                  operation: "session/reconfigure",
+                  issue:
+                    failure === "background"
+                      ? "Background work is active"
+                      : failure === "unsupported-auto"
+                        ? "Claude CLI 2.1.110 does not support Auto mode"
+                        : "Could not verify Auto mode support: ENOENT",
+                });
+              }),
+          );
+          const rejected = yield* provider
+            .startSession(threadId, {
+              threadId,
+              provider: "claudeAgent",
+              runtimeMode: failure === "background" ? "full-access" : "auto",
+            })
+            .pipe(Effect.result);
+          assert.equal(rejected._tag, "Failure");
+          assert.equal(replacementRouting.claude.startSession.mock.calls.length, starts);
+          assert.equal(replacementRouting.claude.stopSession.mock.calls.length, stops);
+          assert.isTrue(yield* replacementRouting.claude.hasSession(threadId));
+          assert.equal(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+            before.lifecycleGeneration,
+          );
+          const latestCursor = {
+            resume: "same-native-session",
+            trackedTasks: [{ id: "todo", status: "pending" }],
+          };
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+            Effect.gen(function* () {
+              const session = (yield* replacementRouting.claude.listSessions()).find(
+                (item) => item.threadId === threadId,
+              )!;
+              yield* replacementRouting.claude.stopSession(threadId);
+              return {
+                previousSession: { ...session, resumeCursor: latestCursor },
+                startSession: replacementRouting.claude.startSession,
+              };
+            }),
+          );
+          yield* provider.startSession(threadId, startInput);
+          assert.deepEqual(
+            replacementRouting.claude.startSession.mock.calls.at(-1)?.[0].resumeCursor,
+            latestCursor,
+          );
+          assert.notEqual(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+            before.lifecycleGeneration,
+          );
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+            Effect.gen(function* () {
+              const session = (yield* replacementRouting.claude.listSessions()).find(
+                (item) => item.threadId === threadId,
+              )!;
+              yield* replacementRouting.claude.stopSession(threadId);
+              return {
+                previousSession: { ...session, resumeCursor: latestCursor },
+                startSession: replacementRouting.claude.startSession,
+              };
+            }),
+          );
+          const explicitCursor = { resume: "intentional-other-boundary" };
+          yield* provider.startSession(threadId, { ...startInput, resumeCursor: explicitCursor });
+          assert.deepEqual(
+            replacementRouting.claude.startSession.mock.calls.at(-1)?.[0].resumeCursor,
+            explicitCursor,
+          );
+        }),
+    );
+  }
+});
+
 const rotationRetryPersistAttempts = new Map<string, number>();
 const ROTATION_RETRY_FAILURE_EVENT_ID = "terminal-rotation-settlement-retry";
 const rotationRetry = makeProviderServiceLayer({
