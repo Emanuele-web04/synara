@@ -594,6 +594,18 @@ describe("agent gateway computer tools", () => {
     );
   });
 
+  it("tells the model the cursor is overlay-only and no background hover exists", async () => {
+    const { byName } = await setup();
+    // Probing showed pid-routed synthetic mouseMoved posts only reach an AppKit
+    // window while the user's real cursor is inside it, so move_cursor cannot
+    // become a hover delivery path (docs/computer-use-cua/hover-verdict-2026-09-17.md).
+    // The description must keep denying that effect plainly.
+    const description = byName.get("computer_move_cursor")?.definition.description ?? "";
+    expect(description).toContain("does not deliver hover events");
+    expect(description).toContain("a real background hover is not available on this backend");
+    expect(description).toContain("real system pointer never moves");
+  });
+
   it("tells the model how to click a window another window covers", async () => {
     const { byName } = await setup();
     const list = byName.get("computer_list_windows")?.definition.description ?? "";

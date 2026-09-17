@@ -76,6 +76,16 @@ foreground` performs a short-lived front-process switch and restores the
    `verified` is reported truthfully; until then Synara must not treat
    `unverifiable` as failure for AXValue writes — it must re-read independently.
 
+6. **Same-day addendum — pid-routed `mouseMoved` is gated on the real cursor on
+   AppKit too.** Follow-up probing of a scratch AppKit app showed stamped
+   `SLEventPostToPid`/`CGEventPostToPid` moves DO dispatch into
+   `NSTrackingArea` handlers — but only while the user's real cursor is inside
+   the target window. With the real cursor outside, they are dropped entirely,
+   even with the target window key and its app active. So background hover is
+   not deliverable on native apps either; `computer_move_cursor` stays
+   overlay-only. Full record:
+   `docs/computer-use-cua/hover-verdict-2026-09-17.md`.
+
 ## Revised architecture
 
 - **Text:** route insert/type into web-content text fields through `set_value`

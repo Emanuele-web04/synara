@@ -82,6 +82,17 @@ describe("describeComputerToolCall", () => {
     expect(described?.summary).toBe("Click at (812, 344) in Safari — Google");
   });
 
+  it("names the agent cursor, not the user's cursor, for move_cursor", () => {
+    // The tool moves the agent's overlay cursor only — the hardware pointer
+    // never moves and no application hover is delivered, so the approval and
+    // transcript card must not read as though the user's own pointer moved.
+    const described = describeComputerToolCall({
+      toolName: "computer_move_cursor",
+      args: { x: 10, y: 20 },
+    });
+    expect(described?.summary).toBe("Move the agent cursor at (10, 20)");
+  });
+
   it("drops a window id it cannot resolve rather than printing it", () => {
     // An opaque id tells the user nothing they can check against their screen.
     const described = describeComputerToolCall({

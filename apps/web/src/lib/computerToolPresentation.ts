@@ -29,7 +29,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_double_click: "Double-click",
   computer_triple_click: "Triple-click",
   computer_right_click: "Right-click",
-  computer_move_cursor: "Move the cursor",
+  computer_move_cursor: "Move the agent cursor",
   computer_drag: "Drag",
   computer_scroll: "Scroll",
   computer_type_text: "Type",

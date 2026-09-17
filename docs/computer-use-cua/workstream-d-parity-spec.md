@@ -12,7 +12,7 @@ Three native capabilities were deliberately unexposed when this spec was written
 
 Drag is foreground only on macOS. The backend refuses background drag in `apps/server/src/computer/CuaComputerBackend.ts:1146`. Duration is capped at 10 seconds in `apps/server/src/computer/CuaComputerBackend.ts:1152`. The gateway describes the drag shape in `apps/server/src/agentGateway/computerTools.ts:2340`.
 
-There is no hover promise. The move cursor tool only draws an overlay on macOS. It delivers no hover events and opens no hover menus, stated in `apps/server/src/agentGateway/computerTools.ts:2322`. The backend reports the overlay only delivery path in `apps/server/src/computer/CuaComputerBackend.ts:1138`. The limits table states the cursor does not promise a real hover in `docs/computer-use-cua/README.md:67`.
+There is no hover promise. The move cursor tool only draws an overlay on macOS. It delivers no hover events and opens no hover menus, stated in `apps/server/src/agentGateway/computerTools.ts:2605`. The backend reports the overlay only delivery path in `apps/server/src/computer/CuaComputerBackend.ts:1138`. The limits table states the cursor does not promise a real hover in `docs/computer-use-cua/README.md:67`. **Status 2026-09-17: the underlying question is now settled — a real background hover is not deliverable on macOS through pid-routed synthetic moves, which the OS drops unless the user's own cursor is already inside the target window.** The probe record is `docs/computer-use-cua/hover-verdict-2026-09-17.md`.
 
 Secondary actions are AXPress only. The dialect list allows one name on macOS in `apps/server/src/agentGateway/computerTools.ts:2747`. The backend refuses every other action name in `apps/server/src/computer/CuaComputerBackend.ts:1303`. The supported action check is exact in `apps/server/src/computer/CuaComputerBackend.ts:1301`. The limits table confirms no synthetic semantic fallback in `docs/computer-use-cua/README.md:64`.
 
@@ -32,7 +32,7 @@ Window frame control mutates layout. It needs a bounds policy before any tool sh
 
 ### Hover semantics
 
-Hover becomes a real delivered event, not an overlay draw. The current overlay behavior stays as the safe default for pointing without effect. The new hover action posts a real pointer move without button state to the exact window. It never aims the keyboard. A hover followed by typing without a window id stays refused, matching the rule in the current move cursor text. Hover menus that open need the same settle and read back as menus. If the target app class needs synthetic focus belief for hover, hover waits for the focus workstream. It ships degraded as overlay only until then, with the refusal text saying so.
+**Decided against, 2026-09-17.** The plan below assumed a real background hover could be delivered once the focus workstream landed. Live probing refuted that: a stamped pid-routed `mouseMoved` reaches AppKit tracking only while the user's real cursor is already inside the target window; with the real cursor outside, the events are dropped entirely — even when the target window is key and its app is active. See `docs/computer-use-cua/hover-verdict-2026-09-17.md`. The cursor therefore stays overlay-only permanently on this backend: `computer_move_cursor` keeps its no-event, no-keyboard-aiming contract, and `computer_hover` is withdrawn rather than shipped degraded. The surviving rule is the typing one — a move followed by typing without a window id stays refused. Revisit only if a new delivery mechanism (for example a WindowServer pointer-window override) passes the same real-cursor-outside test.
 
 ### Background drag (after focus work lands, Gap 6 in the matrix)
 
@@ -68,7 +68,7 @@ computer_invoke_menu({ window_id, path, mode }). window_id is required. path is 
 
 computer_set_window_frame({ window_id, x, y, width, height, display }). window_id is required. x, y, width, and height are integers in desktop pixels. display is optional and names a known display. Requires explicit visible approval showing app, title, and old and new frames. Applies the bounds policy from the Approach section, then reads back geometry. Returns the requested frame, the observed frame, and the effect. Refuses off Space moves in milestone one.
 
-computer_hover({ window_id, target }). window_id is required. target is a label plus optional role, or x and y in a registered frame. Delivers a real button free pointer move to the exact window. Reports overlay only with a clear flag when the focus layer is absent. Never aims keys. Never opens a click path.
+computer_hover — withdrawn, 2026-09-17. The delivery mechanism this signature assumed does not exist: posted pointer moves only land while the user's own cursor is inside the window (`docs/computer-use-cua/hover-verdict-2026-09-17.md`), so the tool could never deliver the promised effect. Overlay-only `computer_move_cursor` remains the pointing surface.
 
 computer_drag keeps its shape and gains background only after the focus certification. No signature change. The delivery mode field selects the path. The backend refusal stays until then.
 
@@ -90,7 +90,7 @@ Window frames on AppKit apps. Move and resize a TextEdit and a Finder window to 
 
 Window frames on Electron apps. Repeat on VS Code and Slack. Same tolerance. Same refusal rules. Same approval copy.
 
-Hover on AppKit and Electron. Hover a control with a hover reveal in one AppKit app and one Electron app. The reveal appears in read back state. Keys stay unaimed. The real system pointer never moves.
+Hover on AppKit and Electron — withdrawn with `computer_hover`, 2026-09-17. The real-cursor-outside test showed posted moves never reach a window the pointer is not inside, so no implementation can meet this criterion on the current delivery path.
 
 Background drag after focus work. Drag a text selection and a slider in one AppKit app and one Electron app without activation. Both endpoints stay in window. Stop during drag releases cleanly with no later movement. This criterion is gated on the focus certification. It is not milestone one done proof.
 
@@ -104,7 +104,7 @@ Every criterion runs against real apps. Source checks alone do not pass any item
 
 Unit and contract tier. Targeting validation for each new tool. Refusal codes for ambiguous labels, stale tokens, out of policy frames, and off Space moves. Approval queue behavior under the existing caps. Effect mapping for verified, dispatched unknown, and not dispatched. Run the affected Vitest suites for the server package. Save the run output.
 
-Fixture tier. Extend the existing fixture set with a menu fixture, a frame fixture, and a hover fixture. The menu fixture drives a scratch AppKit app menu by label and checks read back. The frame fixture moves a scratch window through five frames and checks read back within tolerance. The hover fixture checks a hover reveal through state read back. Each fixture records before and after images plus a result JSON under the evidence folder. The drag stop fixture pattern stays the model for proving clean release.
+Fixture tier. Extend the existing fixture set with a menu fixture and a frame fixture. The menu fixture drives a scratch AppKit app menu by label and checks read back. The frame fixture moves a scratch window through five frames and checks read back within tolerance. A hover fixture is dropped: the capability it would certify does not exist (`docs/computer-use-cua/hover-verdict-2026-09-17.md`). Each fixture records before and after images plus a result JSON under the evidence folder. The drag stop fixture pattern stays the model for proving clean release.
 
 Live tier. Run the AppKit and Electron matrix by hand in a signed app with fresh permissions. Record the human foreground app throughout. Assert zero focus theft and zero pointer moves from the real pointer. Save evidence JSON plus before and after images per run.
 
@@ -138,7 +138,7 @@ Menu depth limit. Recommendation is three levels max in milestone one. Deeper pa
 
 Frame scope. Recommendation is same Space moves only in milestone one. Safe default is to refuse cross Space and cross display moves until Spaces certification lands.
 
-Hover default. Recommendation is real hover where certified, overlay only elsewhere, with the result flag saying which ran. Safe default is overlay only until the focus layer certifies the app class.
+Hover default — decided 2026-09-17. Overlay only is not a degraded safe default; it is the only honest mode, because macOS delivers posted moves to a window only while the user's own cursor is inside it (`docs/computer-use-cua/hover-verdict-2026-09-17.md`). No "real hover where certified" tier exists to flag.
 
 ## Implementer brief
 

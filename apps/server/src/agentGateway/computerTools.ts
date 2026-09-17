@@ -2635,7 +2635,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_move_cursor",
       "Move cursor",
-      `Move the dedicated computer-use cursor to a coordinate or uniquely labelled visible control. It posts no click and presses nothing: it moves the agent's own visible cursor so the user can see where you are working. On macOS with Cua this only draws an overlay: it does not deliver hover events or open hover menus. It does not aim the keyboard, so a hover followed by computer_type_text without a window_id is refused rather than typed into whatever the cursor happens to be over. The real system pointer never moves. ${POINTER_COORDINATE_HINT}`,
+      `Move the dedicated computer-use cursor to a coordinate or uniquely labelled visible control. It posts no click and presses nothing: it moves the agent's own visible cursor so the user can see where you are working. On macOS with Cua this only draws an overlay: it does not deliver hover events or open hover menus, and no synthetic move can — macOS discards posted pointer moves unless the user's own cursor is already inside the target window, so a real background hover is not available on this backend. It does not aim the keyboard, so a move followed by computer_type_text without a window_id is refused rather than typed into whatever the cursor happens to be over. The real system pointer never moves. ${POINTER_COORDINATE_HINT}`,
       targetSchema,
       async (args, context) =>
         manager.moveCursor(context.callerThreadId, readTarget(args, context)),
