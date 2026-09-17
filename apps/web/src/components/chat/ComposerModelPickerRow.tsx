@@ -1,6 +1,6 @@
 // FILE: ComposerModelPickerRow.tsx
 // Purpose: One model row of the composer model picker — name, mod+digit hint, star toggle,
-//   and (for models with an effort ladder) a hover side block that picks model + effort at once.
+//   and (for models with an effort ladder, in menu mode) a hover side block that picks model + effort at once.
 // Layer: Chat composer presentation
 // Depends on: composer trait resolution, starred model keys, and shared menu primitives.
 
@@ -44,7 +44,8 @@ export function ComposerModelPickerRow(props: {
   prompt: string;
   starredKeySet: ReadonlySet<string>;
   onSelect: (row: PickerRow) => void;
-  onSelectEffort: (row: PickerRow, effort: string) => void;
+  /** Null hides the hover effort side block (the picker's footer slider owns effort). */
+  onSelectEffort: ((row: PickerRow, effort: string) => void) | null;
   onToggleStar: (entry: StarredModel) => void;
 }) {
   const { row } = props;
@@ -66,10 +67,25 @@ export function ComposerModelPickerRow(props: {
   };
   const starred = row.preset !== null || props.starredKeySet.has(starredModelKey(starEntry));
   // Starred rows already pin their effort; Ultrathink locks the ladder to the prompt.
+  const onSelectEffort = props.onSelectEffort;
   const effortLevels =
-    row.preset === null && !selection.ultrathinkPromptControlled ? selection.effortLevels : [];
+    onSelectEffort !== null && row.preset === null && !selection.ultrathinkPromptControlled
+      ? selection.effortLevels
+      : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];
   const rowClassName = cn("pe-1", row.selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME);
+  const starButton = (
+    <ModelStarButton
+      starred={starred}
+      iconClassName="size-3.5"
+      label={
+        starred
+          ? `Remove ${row.name} from starred`
+          : `Star ${row.name} with its current effort and speed`
+      }
+      onToggle={() => props.onToggleStar(starEntry)}
+    />
+  );
 
   const rowContent = (
     <>
@@ -90,24 +106,28 @@ export function ComposerModelPickerRow(props: {
           {props.shortcutHint}
         </Kbd>
       ) : null}
-      <ModelStarButton
-        starred={starred}
-        iconClassName="size-3.5"
-        label={
-          starred
-            ? `Remove ${row.name} from starred`
-            : `Star ${row.name} with its current effort and speed`
-        }
-        onToggle={() => props.onToggleStar(starEntry)}
-      />
+      {row.selectableModel !== null ? starButton : null}
     </>
   );
 
-  if (effortLevels.length === 0) {
+  if (row.selectableModel === null) {
+    return (
+      <div className="relative">
+        <MenuItem disabled className="pe-8" closeOnClick={false}>
+          {rowContent}
+        </MenuItem>
+        <div className="absolute inset-y-0 end-1 flex items-center">{starButton}</div>
+      </div>
+    );
+  }
+
+  if (onSelectEffort === null || effortLevels.length === 0) {
     return (
       <MenuItem
         aria-current={row.selected ? "true" : undefined}
         className={rowClassName}
+        // The picker decides whether a pick closes it (slider mode keeps it open).
+        closeOnClick={false}
         onClick={() => props.onSelect(row)}
       >
         {rowContent}
@@ -138,7 +158,7 @@ export function ComposerModelPickerRow(props: {
               <MenuRadioItem
                 key={level.value}
                 value={level.value}
-                onClick={() => props.onSelectEffort(row, level.value)}
+                onClick={() => onSelectEffort(row, level.value)}
               >
                 {level.label}
                 {level.value === selection.defaultEffort ? " (default)" : ""}

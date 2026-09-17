@@ -2834,7 +2834,7 @@ describe("CodexAppServerManager discovery", () => {
     }
   });
 
-  it("wires model discovery through model/list", async () => {
+  it("refreshes model/list when the shared discovery cache requests a catalog", async () => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -2866,13 +2866,20 @@ describe("CodexAppServerManager discovery", () => {
         },
         "sendRequest",
       )
-      .mockResolvedValue({ result: { items: [] } });
+      .mockResolvedValueOnce({ data: [{ id: "gpt-5.4", displayName: "GPT-5.4" }] })
+      .mockResolvedValueOnce({ data: [{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }] });
 
     await expect(manager.listModels("thread_1")).resolves.toMatchObject({
-      models: [],
+      models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
       source: "codex-app-server",
       cached: false,
     });
+    await expect(manager.listModels("thread_1")).resolves.toMatchObject({
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      source: "codex-app-server",
+      cached: false,
+    });
+    expect(sendRequest).toHaveBeenCalledTimes(2);
     expect(sendRequest).toHaveBeenCalledWith(context, "model/list", {
       cursor: null,
       limit: 50,

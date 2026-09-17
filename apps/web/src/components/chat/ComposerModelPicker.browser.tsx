@@ -59,6 +59,9 @@ function readyProvider(provider: ProviderKind): ServerProviderStatus {
 
 type HarnessProps = {
   lockedProvider?: ProviderKind | null;
+  modelOptionsByProvider?: React.ComponentProps<
+    typeof ComposerModelPicker
+  >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
 };
@@ -80,7 +83,7 @@ function Harness(props: HarnessProps) {
       lockedProvider={props.lockedProvider ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={[readyProvider("codex"), readyProvider("claudeAgent")]}
-      modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
+      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       threadId={THREAD_ID}
       modelOptions={modelOptions?.codex}
@@ -220,6 +223,73 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("keeps retired presets removable while blocking clicks and shortcuts", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker(
+      {
+        onProviderModelChange,
+        modelOptionsByProvider: {
+          ...MODEL_OPTIONS_BY_PROVIDER,
+          codex: [{ slug: GPT_5_5, name: "GPT-5.5" }],
+        },
+      },
+      undefined,
+      [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: null, thinking: null }],
+    );
+    try {
+      const retired = page.getByRole("menuitem", { name: /GPT-5\.4.*Unavailable/u });
+      await expect.element(retired).toHaveAttribute("aria-disabled", "true");
+      retired.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await userEvent.keyboard("{Control>}1{/Control}");
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+
+      await page.getByRole("button", { name: "Remove GPT-5.4 from starred" }).click();
+      expect(readStoredStars()).toEqual([]);
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("enables a saved custom preset when its catalog becomes available", async () => {
+    const onProviderModelChange = vi.fn();
+    const model = "private-model" as ModelSlug;
+    const preset: StarredModel = {
+      provider: "codex",
+      model,
+      effort: null,
+      fastMode: null,
+      thinking: null,
+    };
+    const screen = await mountPicker(
+      { onProviderModelChange, modelOptionsByProvider: EMPTY_BY_PROVIDER },
+      undefined,
+      [preset],
+    );
+    try {
+      await expect
+        .element(page.getByRole("menuitem", { name: /Private Model.*Unavailable/u }))
+        .toHaveAttribute("aria-disabled", "true");
+      expect(readStoredStars()).toEqual([preset]);
+
+      await screen.rerender(
+        <Harness
+          onProviderModelChange={onProviderModelChange}
+          modelOptionsByProvider={{
+            ...EMPTY_BY_PROVIDER,
+            codex: [{ slug: model, name: "Private Model" }],
+          }}
+        />,
+      );
+      const available = page.getByRole("menuitem", { name: /Private Model/u });
+      await expect.element(available).not.toHaveAttribute("aria-disabled", "true");
+      await available.click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", model);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("renders the effort ladder as a footer slider and commits keyboard steps", async () => {
     const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "medium" });
     try {
@@ -237,6 +307,43 @@ describe("ComposerModelPicker", () => {
         provider: "codex",
         options: { reasoningEffort: "high" },
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the panel open after switching model in slider mode so the slider stays usable", async () => {
+    // Mirror the app: a picked model lands in the draft store and flows back as props.
+    const onProviderModelChange = vi.fn((_provider: ProviderKind, model: ModelSlug) => {
+      useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+        provider: "codex",
+        model,
+        options: { reasoningEffort: "medium" },
+      });
+    });
+    const screen = await mountPicker(
+      { effortControl: "slider", onProviderModelChange },
+      { reasoningEffort: "medium" },
+    );
+    try {
+      const otherModel = page.getByRole("menuitem", { name: /GPT-5\.4/u });
+      // Slider mode drops the per-row effort side block: the footer slider owns effort.
+      await otherModel.hover();
+      expect(page.getByRole("menuitemradio").elements()).toHaveLength(0);
+
+      await otherModel.click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toBeVisible();
+      await expect.element(otherModel).toHaveAttribute("aria-current", "true");
+
+      // Stop labels are a second way to set the level.
+      await page.getByRole("button", { name: "Set effort to High" }).click();
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+
+      // Picking the model that is already current is the "done" gesture.
+      await otherModel.click();
+      await expect.element(slider).not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }

@@ -36,6 +36,8 @@ type ComposerEffortSliderCardProps = {
 const CARD_ICON_BUTTON_CLASS_NAME =
   "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 disabled:pointer-events-none disabled:opacity-35";
 
+const MAX_FULLY_LABELLED_STOPS = 5;
+
 // Effort ladder as a stepped slider. Every level the model exposes is one stop
 // (including prompt-injected ones such as Ultrathink), so the ladder matches the
 // radio menu exactly; changes commit immediately and keep the menu open so the label
@@ -59,6 +61,10 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const statusLabel = resolveComposerTraitStatusLabel(selection) ?? activeLevel?.label ?? "Effort";
   const effortIsDefault = ultrathinkPromptControlled || effort === defaultEffort;
   const canReset = fastModeEnabled || !effortIsDefault;
+
+  const lastIndex = Math.max(effortLevels.length - 1, 0);
+  // Long ladders would collide; they keep only the ends and the active stop labelled.
+  const showsEveryStopLabel = effortLevels.length <= MAX_FULLY_LABELLED_STOPS;
 
   const handleSliderChange = (nextIndex: number) => {
     if (nextIndex === ladderIndex) return;
@@ -85,7 +91,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   };
 
   return (
-    <div className="px-1 pt-0.5 pb-1.5" data-slot="effort-slider-card">
+    <div className="px-1 pt-0.5 pb-1" data-slot="effort-slider-card">
       <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_1.5rem] items-center gap-1">
         {supportsFastMode ? (
           <FastModeToggle
@@ -130,7 +136,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         <Slider
           value={ladderIndex}
           min={0}
-          max={Math.max(effortLevels.length - 1, 0)}
+          max={lastIndex}
           step={1}
           size="large"
           showStepMarks
@@ -140,6 +146,42 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           getAriaValueText={(index) => effortLevels[index]?.label ?? String(index)}
           onValueChange={handleSliderChange}
         />
+        {/* Stop labels sit in the same inset rail as the slider's step marks, so each one
+            lands under its dot. The end labels hug the edges instead of overhanging. */}
+        {lastIndex > 0 ? (
+          <div className="relative mx-2.5 mt-1 h-3.5">
+            {effortLevels.map((level, index) => {
+              const active = index === ladderIndex;
+              if (!showsEveryStopLabel && !active && index !== 0 && index !== lastIndex) {
+                return null;
+              }
+              return (
+                <button
+                  key={level.value}
+                  type="button"
+                  tabIndex={-1}
+                  disabled={ultrathinkPromptControlled}
+                  aria-label={`Set effort to ${level.label}`}
+                  className={cn(
+                    "absolute top-0 cursor-pointer whitespace-nowrap text-[length:var(--app-font-size-ui-xs,10px)] leading-3.5 transition-colors disabled:pointer-events-none",
+                    index === 0 ? "-left-2" : index === lastIndex ? "-right-2" : "-translate-x-1/2",
+                    active
+                      ? "font-medium text-[var(--color-text-accent)]"
+                      : "text-muted-foreground/70 hover:text-[var(--color-text-foreground)]",
+                  )}
+                  style={
+                    index === 0 || index === lastIndex
+                      ? undefined
+                      : { left: `${(index / lastIndex) * 100}%` }
+                  }
+                  onClick={() => handleSliderChange(index)}
+                >
+                  {level.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
       {ultrathinkPromptControlled ? (
         <div className="px-1 pt-1 text-muted-foreground/80 text-xs">

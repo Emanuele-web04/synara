@@ -137,7 +137,8 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/opencode/cursor/grok), and user-defined custom models always survive.
+ * (codex/antigravity/opencode/cursor/droid/grok/devin). Codex also owns a successful
+ * empty catalog. User-defined custom models survive except for Droid.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
  */
@@ -214,16 +215,18 @@ export function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  const missingStaticBuiltIns =
-    (input.provider === "antigravity" ||
-      input.provider === "opencode" ||
-      input.provider === "cursor" ||
-      input.provider === "droid" ||
-      input.provider === "grok" ||
-      input.provider === "devin") &&
-    normalizedDynamicOptions.length > 0
-      ? []
-      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
+  const hasAuthoritativeCatalog =
+    input.provider === "codex" ||
+    (normalizedDynamicOptions.length > 0 &&
+      (input.provider === "antigravity" ||
+        input.provider === "opencode" ||
+        input.provider === "cursor" ||
+        input.provider === "droid" ||
+        input.provider === "grok" ||
+        input.provider === "devin"));
+  const missingStaticBuiltIns = hasAuthoritativeCatalog
+    ? []
+    : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   if (input.provider === "claudeAgent") {
     return [
