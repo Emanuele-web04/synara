@@ -4,7 +4,7 @@ import { CUA_ACTION_TOOLS, CUA_READ_TOOLS } from "./cuaDriverProtocol";
 
 /**
  * The macOS cua-driver tool inventory at the pinned release (driver 0.28.2,
- * native revision 16, embedded serve). `platform-macos` `tools::register_all`
+ * native revision 17, embedded serve). `platform-macos` `tools::register_all`
  * registers the platform and core tools; the cua-driver binary adds
  * `check_for_update` and — only under the upstream preview admission the
  * embedded host never grants — `history_status`/`history_query`.
@@ -42,6 +42,10 @@ const REGISTERED_MACOS_TOOLS = [
   "invoke_menu",
   "set_window_frame",
   "kill_app",
+  // Rev 17 hidden-workspace lifecycle; verified live against hidden and
+  // minimized windows. Reachability is decided by the allowlists.
+  "set_app_visibility",
+  "set_window_minimized",
   // Surfaced through `click` arguments rather than dispatched by name.
   "double_click",
   "right_click",
@@ -150,6 +154,10 @@ describe("cuaDriverProtocol tool boundary", () => {
         "set_agent_cursor_enabled",
         "set_agent_cursor_motion",
         "set_agent_cursor_theme",
+        // Rev 17 hidden-workspace tools stay unreachable until the audited
+        // allowlist + agent-tool surface lands.
+        "set_app_visibility",
+        "set_window_minimized",
         "get_config",
         "set_config",
         "start_recording",
