@@ -1576,6 +1576,40 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("performAction")).toHaveLength(0);
   });
 
+  it("passes the macOS secondary action names through to the backend verbatim", async () => {
+    const { backend, call } = await setup(
+      Object.assign(new FakeComputerBackend(), {
+        agentDialect: "macos" as const,
+      }),
+    );
+    for (const action of [
+      "AXPress",
+      "press",
+      "open",
+      "show_menu",
+      "menu",
+      "pick",
+      "confirm",
+      "cancel",
+    ]) {
+      const result = await call("computer_perform_action", {
+        label: "Calculate",
+        action,
+      });
+      expect(result.isError).not.toBe(true);
+    }
+    expect(backend.callsFor("performAction").map((call) => call.args[1])).toEqual([
+      "AXPress",
+      "press",
+      "open",
+      "show_menu",
+      "menu",
+      "pick",
+      "confirm",
+      "cancel",
+    ]);
+  });
+
   it("reports clipboard tools as unsupported on a backend without them", async () => {
     const { call } = await setup(withoutClipboard(new FakeComputerBackend()));
 
@@ -2107,7 +2141,19 @@ describe("agent gateway computer tools", () => {
     expect(macHotkey).toContain("exactly one other key");
     expect(macHotkey).toContain("More than one non-modifier key is refused");
     const macActions = schemaEnum(mac.byName, "computer_perform_action", "action");
-    expect(macActions).toEqual(["AXPress"]);
+    expect(macActions).toEqual([
+      "AXPress",
+      "press",
+      "open",
+      "show_menu",
+      "menu",
+      "pick",
+      "confirm",
+      "cancel",
+    ]);
+    expect(schemaPropertyDescription(mac.byName, "computer_perform_action", "action")).toContain(
+      "does not advertise",
+    );
     const macLaunchAppDescription =
       mac.byName.get("computer_launch_app")?.definition.description ?? "";
     expect(macLaunchAppDescription).toContain("the way macOS does");

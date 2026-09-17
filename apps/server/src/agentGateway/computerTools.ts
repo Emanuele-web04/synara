@@ -3206,21 +3206,24 @@ export function makeAgentGatewayComputerTools(
  * them came back as a refusal the caller could do nothing with. Both lists are
  * what the backends really implement: `KWinComputerBackend.performAction` maps
  * exactly two names onto a synthetic click and refuses everything else, while
- * the macOS helper forwards the name to `AXUIElementPerformAction`.
+ * the macOS backend forwards each listed name to the driver recipe that
+ * performs the matching `AXUIElementPerformAction` on the resolved element.
  */
 function semanticActionNames(dialect: ComputerAgentDialect): readonly string[] {
-  return dialect === "macos" ? ["AXPress"] : ["activate", "click"];
+  return dialect === "macos"
+    ? ["AXPress", "press", "open", "show_menu", "menu", "pick", "confirm", "cancel"]
+    : ["activate", "click"];
 }
 
 function performActionNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Cua exposes AXPress through a freshly resolved element token. Other AX actions are unavailable in this pinned integration."
+    ? "Cua performs named AX actions through a freshly resolved element token: press (or the legacy AXPress spelling) activates the control, open performs AXOpen, show_menu/menu perform AXShowMenu, and pick, confirm and cancel perform their namesakes. Every name past press dispatches only when the element advertises that AX action in a fresh snapshot; otherwise the call refuses and nothing is submitted."
     : 'This desktop supports "activate" and "click".';
 }
 
 function performActionArgumentNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Only AXPress is supported; use the exact window and its fresh accessibility snapshot."
+    ? 'One of "press" (AXPress), "open" (AXOpen), "show_menu"/"menu" (AXShowMenu), "pick", "confirm" or "cancel"; use the exact window and its fresh accessibility snapshot, and expect a refusal when the element does not advertise the action.'
     : 'Use "activate" or "click".';
 }
 

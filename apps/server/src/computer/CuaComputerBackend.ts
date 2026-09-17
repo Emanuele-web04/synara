@@ -148,6 +148,35 @@ const RECENT_TREE_TTL_MS = 5_000;
  * it in tests.
  */
 const CUA_STILL_FRAME_INTERVAL_MS = 2_000;
+/**
+ * The semantic element actions this integration admits, what the pinned
+ * driver's `click` element path performs for each (`action` argument, mapped
+ * in `ax_actions::map_action`), and the AX action the element must advertise
+ * for Synara to dispatch it.
+ *
+ * The driver's `map_action` silently defaults any unknown spelling to
+ * AXPress, so names are mapped here explicitly: an unlisted request refuses
+ * before dispatch rather than becoming a press the caller never asked for.
+ */
+const CUA_ELEMENT_ACTIONS: Readonly<
+  Record<string, { readonly driverAction: string; readonly axAction: string }>
+> = {
+  axpress: { driverAction: "press", axAction: "AXPress" },
+  press: { driverAction: "press", axAction: "AXPress" },
+  open: { driverAction: "open", axAction: "AXOpen" },
+  show_menu: { driverAction: "show_menu", axAction: "AXShowMenu" },
+  menu: { driverAction: "show_menu", axAction: "AXShowMenu" },
+  pick: { driverAction: "pick", axAction: "AXPick" },
+  confirm: { driverAction: "confirm", axAction: "AXConfirm" },
+  cancel: { driverAction: "cancel", axAction: "AXCancel" },
+};
+
+function cuaElementAction(
+  name: string,
+): { readonly driverAction: string; readonly axAction: string } | undefined {
+  return CUA_ELEMENT_ACTIONS[name.toLowerCase()];
+}
+
 function cuaKey(value: string): string {
   const key = value.toLowerCase();
   if (key === "insert")
@@ -222,7 +251,12 @@ export class CuaComputerBackend implements ComputerBackend {
   private snapshot: Promise<void> | undefined;
   private selectedWindow: string | undefined;
   private readonly elementTokens = new WeakMap<ComputerUiNode, string>();
-  private readonly pressableElements = new WeakSet<ComputerUiNode>();
+  /**
+   * The AX action names the element advertised in the snapshot that produced
+   * it — the same `actions` list the driver's own dispatch checks. Nodes are
+   * recreated on every observation, so this is always the freshest claim.
+   */
+  private readonly elementActions = new WeakMap<ComputerUiNode, ReadonlySet<string>>();
   /**
    * Elements living inside Chromium-family web content. AXSelectedText
    * inserts never reach their DOM (verified against Electron 43), so text
@@ -924,8 +958,13 @@ export class CuaComputerBackend implements ComputerBackend {
         if (typeof element.element_token === "string") {
           this.elementTokens.set(node, element.element_token);
           if (element.in_web_content === true) this.webContentElements.add(node);
-          if (Array.isArray(element.actions) && element.actions.includes("AXPress"))
-            this.pressableElements.add(node);
+          if (Array.isArray(element.actions))
+            this.elementActions.set(
+              node,
+              new Set(
+                element.actions.filter((action): action is string => typeof action === "string"),
+              ),
+            );
         }
         children.push(node);
       }
@@ -1524,10 +1563,12 @@ export class CuaComputerBackend implements ComputerBackend {
     return this.input("set_value", { element_token: token, value }, target.node.windowId);
   }
   supportsAction(target: ComputerResolvedTarget, action: string): boolean {
-    return action === "AXPress" && this.pressableElements.has(target.node);
+    const spec = cuaElementAction(action);
+    return spec !== undefined && this.elementActions.get(target.node)?.has(spec.axAction) === true;
   }
   async performAction(target: ComputerResolvedTarget, action: string) {
-    if (action !== "AXPress")
+    const spec = cuaElementAction(action);
+    if (spec === undefined)
       throw new CuaActionError(
         `Cua does not expose ${action} through this integration.`,
         "not-dispatched",
@@ -1540,7 +1581,25 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
-    return this.input("click", { element_token: token }, target.node.windowId);
+    // Past AXPress the driver would submit an action the element never
+    // advertised and report the outcome as merely suspected_noop; refuse
+    // instead so an unsupported action is a clean non-dispatch. AXPress
+    // itself keeps its long-standing dispatch — the driver degrades it to a
+    // verified AXSelected write on collection items that never advertised it.
+    if (
+      spec.axAction !== "AXPress" &&
+      this.elementActions.get(target.node)?.has(spec.axAction) !== true
+    )
+      throw new CuaActionError(
+        `The resolved element does not advertise ${spec.axAction}; ${action} was not dispatched.`,
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    return this.input(
+      "click",
+      { element_token: token, action: spec.driverAction },
+      target.node.windowId,
+    );
   }
   async readClipboard(): Promise<string> {
     const data =

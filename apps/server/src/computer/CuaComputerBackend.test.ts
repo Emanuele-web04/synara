@@ -347,6 +347,128 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "click")).toHaveLength(1);
   });
 
+  it("dispatches named secondary actions through the click element recipe", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXRow",
+        label: "Document.txt",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "open-token",
+        actions: ["AXPress", "AXOpen"],
+      },
+      {
+        role: "AXButton",
+        label: "Menu",
+        frame: { x: -270, y: 30, width: 20, height: 20 },
+        element_token: "menu-token",
+        actions: ["AXPress", "AXShowMenu", "AXPick", "AXConfirm", "AXCancel"],
+      },
+    ]);
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
+    const openNode = state.root!.children[0]!;
+    const menuNode = state.root!.children[1]!;
+    const openTarget = {
+      target: { label: "Document.txt" },
+      node: openNode,
+      point: openNode.activationPoint!,
+    };
+    const menuTarget = {
+      target: { label: "Menu" },
+      node: menuNode,
+      point: menuNode.activationPoint!,
+    };
+
+    expect(f.backend.supportsAction(openTarget, "open")).toBe(true);
+    expect(f.backend.supportsAction(openTarget, "show_menu")).toBe(false);
+    expect(f.backend.supportsAction(menuTarget, "menu")).toBe(true);
+    expect(f.backend.supportsAction(menuTarget, "activate")).toBe(false);
+
+    await f.backend.performAction(openTarget, "open");
+    for (const action of ["press", "show_menu", "menu", "pick", "confirm", "cancel"]) {
+      await f.backend.performAction(menuTarget, action);
+    }
+    // Each admitted name lands on the token as the driver's `click` action
+    // recipe; `menu` is the Synara-side alias for the same AXShowMenu call.
+    const dispatched = f.calls
+      .filter((c) => c.name === "click")
+      .map((c) => [c.args?.element_token, c.args?.action]);
+    expect(dispatched).toEqual([
+      ["open-token", "open"],
+      ["menu-token", "press"],
+      ["menu-token", "show_menu"],
+      ["menu-token", "show_menu"],
+      ["menu-token", "pick"],
+      ["menu-token", "confirm"],
+      ["menu-token", "cancel"],
+    ]);
+    // The legacy AXPress spelling rides the same recipe.
+    await f.backend.performAction(openTarget, "AXPress");
+    expect(f.calls.findLast((c) => c.name === "click")?.args).toMatchObject({
+      element_token: "open-token",
+      action: "press",
+    });
+  });
+
+  it("refuses a secondary action the element does not advertise, without dispatching", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Plain",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "plain-token",
+        actions: ["AXPress"],
+      },
+      {
+        role: "AXStaticText",
+        label: "Passive",
+        frame: { x: -270, y: 30, width: 20, height: 20 },
+        element_token: "passive-token",
+      },
+    ]);
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
+    const target = {
+      target: { label: "Plain" },
+      node: state.root!.children[0]!,
+      point: state.root!.children[0]!.activationPoint!,
+    };
+    const passive = {
+      target: { label: "Passive" },
+      node: state.root!.children[1]!,
+      point: state.root!.children[1]!.activationPoint!,
+    };
+
+    for (const action of ["open", "show_menu", "menu", "pick", "confirm", "cancel"]) {
+      await expect(f.backend.performAction(target, action)).rejects.toMatchObject({
+        effect: "not-dispatched",
+        code: "unsupported_operation",
+      });
+    }
+    // An element that reported no action list at all refuses the same way.
+    await expect(f.backend.performAction(passive, "open")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "unsupported_operation",
+    });
+    // And a name the integration never mapped never reaches the driver.
+    await expect(f.backend.performAction(target, "toggle")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "unsupported_operation",
+    });
+    expect(f.calls.filter((c) => c.name === "click")).toHaveLength(0);
+
+    // AXPress keeps its historical dispatch on unadvertised elements — the
+    // driver degrades it to a verified AXSelected write, so it is not gated.
+    await f.backend.performAction(target, "press");
+    expect(f.calls.filter((c) => c.name === "click")).toHaveLength(1);
+  });
+
   it("writes through a live token and refuses a stale one without a second dispatch", async () => {
     const f = fixture();
     f.setElements([

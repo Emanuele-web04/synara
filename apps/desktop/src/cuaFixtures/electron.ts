@@ -73,6 +73,14 @@ const findNode = (root: ComputerUiNode | undefined, label: string): ComputerUiNo
   }
   return undefined;
 };
+const findRole = (root: ComputerUiNode | undefined, role: string): ComputerUiNode | undefined => {
+  if (root?.role === role) return root;
+  for (const child of root?.children ?? []) {
+    const found = findRole(child, role);
+    if (found) return found;
+  }
+  return undefined;
+};
 async function main() {
   await mkdir(directory!, { recursive: true });
   report.nativeBuild = JSON.parse(
@@ -578,6 +586,106 @@ async function main() {
       status: "not-run",
       reason: "The native tree did not expose the exact fixture field.",
     });
+
+  // Named secondary actions on the resolved element: press lands the driver's
+  // AXPress recipe on the owned counter button, and a name outside the
+  // admitted vocabulary refuses before anything is dispatched.
+  const actionButton = findRole(semanticState.root, "AXButton");
+  if (actionButton?.activationPoint) {
+    const actionTarget = {
+      target: { windowId: window.id, label: "Click counter" },
+      node: actionButton,
+      point: actionButton.activationPoint,
+    };
+    const clicksBeforeAction = state.clicks;
+    try {
+      const result = await measured("perform-action-press", () =>
+        backend!.performAction(actionTarget, "press"),
+      );
+      await pause(300);
+      cases.push({
+        name: "ax-perform-action-press",
+        result,
+        appState: { ...state },
+        status: state.clicks === clicksBeforeAction + 1 ? "passed" : "failed",
+      });
+    } catch (error) {
+      cases.push({
+        name: "ax-perform-action-press",
+        status: "refused",
+        error: String(error),
+        appState: { ...state },
+      });
+    }
+    const clicksBeforeRefusal = state.clicks;
+    try {
+      await backend!.performAction(actionTarget, "toggle");
+      cases.push({
+        name: "ax-perform-action-refusal",
+        status: "failed",
+        reason: "An unmapped action name was admitted.",
+      });
+    } catch (error) {
+      cases.push({
+        name: "ax-perform-action-refusal",
+        status:
+          error instanceof CuaActionError &&
+          error.effect === "not-dispatched" &&
+          state.clicks === clicksBeforeRefusal
+            ? "passed"
+            : "failed",
+        error: String(error),
+        appState: { ...state },
+      });
+    }
+    // A mapped secondary name exercises the live advertised-action gate: an
+    // AXButton ordinarily publishes AXPress only, so `open` should refuse
+    // `not-dispatched` before the driver call. If this Chromium build does
+    // advertise AXOpen on the button, a clean dispatch is equally correct —
+    // either outcome proves the name reached the gate; only a wrong error or
+    // effect mapping fails the case.
+    try {
+      const result = await measured("perform-action-open", () =>
+        backend!.performAction(actionTarget, "open"),
+      );
+      cases.push({
+        name: "ax-perform-action-open",
+        result,
+        dispatched: true,
+        note: "The driver dispatched — this element advertises AXOpen.",
+        status: "passed",
+        appState: { ...state },
+      });
+    } catch (error) {
+      cases.push({
+        name: "ax-perform-action-open",
+        dispatched: false,
+        status:
+          error instanceof CuaActionError && error.effect === "not-dispatched"
+            ? "passed"
+            : "failed",
+        error: String(error),
+        appState: { ...state },
+      });
+    }
+  } else
+    cases.push(
+      {
+        name: "ax-perform-action-press",
+        status: "not-run",
+        reason: "The native tree did not expose the fixture button.",
+      },
+      {
+        name: "ax-perform-action-refusal",
+        status: "not-run",
+        reason: "The native tree did not expose the fixture button.",
+      },
+      {
+        name: "ax-perform-action-open",
+        status: "not-run",
+        reason: "The native tree did not expose the fixture button.",
+      },
+    );
 
   const clicksBeforeMove = state.clicks;
   first.setPosition(180, 80);
