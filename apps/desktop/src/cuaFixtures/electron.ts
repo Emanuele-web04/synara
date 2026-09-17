@@ -14,6 +14,7 @@ import {
 } from "../../../server/src/computer/CuaComputerBackend";
 import { runNativeFixture } from "./native";
 import { runGatewayFixture } from "./gateway";
+import { startFocusProbe, type FocusProbeExpect, type FocusProbeRunResult } from "./focusProbe";
 import { runCancellationFixture } from "./cancellation";
 import { withDesktopDeliveryMode } from "../../../server/src/computer/DesktopOperationQueue";
 import { runLiveFixture } from "./live";
@@ -23,6 +24,10 @@ const directory =
   `/private/tmp/synara-cua-implementation/fixture-${Date.now()}`;
 const binaryPath =
   process.env.SYNARA_CUA_FIXTURE_DRIVER || join(process.resourcesPath, "cua-driver", "cua-driver");
+// The focus-theft sampler ships inside the fixture bundle (see
+// build-electron.mjs); SYNARA_CUA_FOCUS_PROBE overrides it for dev runs.
+const focusProbePath =
+  process.env.SYNARA_CUA_FOCUS_PROBE || join(process.resourcesPath, "focus-probe");
 if (
   !directory?.startsWith("/private/tmp/synara-cua-implementation/") ||
   !binaryPath?.endsWith("/cua-driver")
@@ -316,6 +321,30 @@ async function main() {
   const sampleFocus = () => focusSamples.push(BrowserWindow.getFocusedWindow()?.id ?? null);
   sampleFocus();
   const focusSampler = setInterval(sampleFocus, 1);
+  // System-wide meter on top of the in-process sentinel sampling: the probe
+  // watches the real frontmost pid, AX key window, top window and active
+  // Space, so a steal invisible to BrowserWindow.getFocusedWindow (another
+  // app, another Space) still shows up.
+  const sentinelNative = await backend!
+    .listWindows()
+    .then((listed) =>
+      listed.find((entry) => entry.pid === process.pid && entry.title === `${nonce} Focus Guard`),
+    );
+  const probeExpect: FocusProbeExpect = {};
+  if (BrowserWindow.getFocusedWindow()?.id === sentinel.id) probeExpect.pid = process.pid;
+  if (sentinelNative) {
+    const nativeId = Number(sentinelNative.id.split(":")[2]);
+    if (Number.isSafeInteger(nativeId)) probeExpect.keyWin = nativeId;
+  }
+  const focusProbe = await startFocusProbe({
+    binaryPath: focusProbePath,
+    hz: 50,
+    settleMs: 200,
+    expect: probeExpect,
+    label: "three-window-semantic",
+    maxDurationSeconds: 120,
+  });
+  let probeResult: FocusProbeRunResult | null = null;
   let semanticResults: unknown[] = [];
   let semanticError: unknown;
   const spans: Array<{ label: string; started: number; finished: number }> = [];
@@ -335,6 +364,7 @@ async function main() {
   } finally {
     clearInterval(focusSampler);
     sampleFocus();
+    if (focusProbe) probeResult = await focusProbe.finish();
   }
   const semanticValues = await Promise.all(
     semanticTargets.map((target) =>
@@ -352,7 +382,8 @@ async function main() {
       semanticValues.every((value, index) => value === semanticTargets[index]!.text) &&
       focusSamples.length > 1 &&
       focusSamples.every((id) => id === null) &&
-      overlap
+      overlap &&
+      (probeResult === null || probeResult.report.theftFree)
         ? "passed"
         : "failed",
     results: semanticResults,
@@ -362,6 +393,14 @@ async function main() {
     sentinelWindowId: sentinel.id,
     focusInvariant: "no fixture window ever held OS focus",
     focusSamples,
+    focusProbe: probeResult
+      ? {
+          ...probeResult.report,
+          meta: probeResult.meta,
+          done: probeResult.done,
+          exitCode: probeResult.exitCode,
+        }
+      : { skipped: "focus-probe binary not present", binaryPath: focusProbePath },
     spans,
     overlap,
   });
@@ -514,6 +553,7 @@ async function main() {
     directory,
     () => (report.nativeActions as unknown[]).length,
     approveCapture,
+    focusProbePath,
   );
   report.processMemory = process.memoryUsage();
 }

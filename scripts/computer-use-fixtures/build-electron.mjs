@@ -66,6 +66,25 @@ execFileSync(
   ],
   { stdio: "inherit" },
 );
+// The focus-theft sampler ships inside the bundle so it shares the fixture's
+// TCC grants (Accessibility for keyWin/focused, screen recording for titles).
+execFileSync(
+  "/usr/bin/clang",
+  [
+    "-fobjc-arc",
+    "-O2",
+    "-o",
+    join(resources, "focus-probe"),
+    join(root, "scripts/computer-use-fixtures/focus_probe.m"),
+    "-framework",
+    "AppKit",
+    "-framework",
+    "ApplicationServices",
+    "-framework",
+    "CoreGraphics",
+  ],
+  { stdio: "inherit" },
+);
 const plist = join(destination, "Contents/Info.plist");
 for (const [key, value] of Object.entries({
   CFBundleIdentifier: "com.synara.cua-fixture",

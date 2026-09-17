@@ -8,6 +8,7 @@ import type { CuaComputerBackend } from "../../../server/src/computer/CuaCompute
 import { makeAgentGatewayComputerTools } from "../../../server/src/agentGateway/computerTools";
 import { GatewayToolError, type ToolContext } from "../../../server/src/agentGateway/toolRuntime";
 import type { McpToolCallResult } from "../../../server/src/agentGateway/protocol";
+import { startFocusProbe } from "./focusProbe";
 
 /** Real handlers, frame ownership, manager and native host. The caller is a
  * controlled provider context, not a paid model turn. Foreground is denied. */
@@ -16,6 +17,7 @@ export async function runGatewayFixture(
   directory: string,
   actionCount: () => number,
   approveCapture: (windowId: string) => void,
+  focusProbePath?: string,
 ) {
   const title = `Synara Cua Fixture ${process.pid}`;
   const first = new BrowserWindow({ title: `${title} A`, width: 640, height: 420, x: 80, y: 80 });
@@ -85,6 +87,9 @@ export async function runGatewayFixture(
     if (block?.type === "image")
       await writeFile(join(directory, name), Buffer.from(block.data, "base64"));
   };
+  // Declared outside the try so a mid-section failure still finishes the
+  // sampler instead of orphaning it and losing the focus evidence.
+  let focusProbe: Awaited<ReturnType<typeof startFocusProbe>> = null;
   try {
     await first.loadURL(
       `data:text/html,${encodeURIComponent(`<title>${title} A</title><style>body{font:20px system-ui;padding:32px}button{font:24px system-ui;padding:18px}</style><h1>Synara gateway fixture</h1><button id="counter">Counter: 0</button><script>window.clicks=0;counter.onclick=()=>{counter.textContent='Counter: '+(++window.clicks)}</script>`)}`,
@@ -104,6 +109,19 @@ export async function runGatewayFixture(
     const target = owned("A")[0]!;
     const other = owned("B")[0]!;
     approveCapture(target.id);
+    // Meter the whole tool-call section: no background click or type may move
+    // the user's frontmost app, key window, or active Space. Baseline is the
+    // settled state here — the sentinel is gone by this point, so whatever is
+    // stably frontmost is the human's context.
+    focusProbe = focusProbePath
+      ? await startFocusProbe({
+          binaryPath: focusProbePath,
+          hz: 50,
+          settleMs: 150,
+          label: "gateway",
+          maxDurationSeconds: 120,
+        })
+      : null;
     await manager.setControlEnabled(thread, true);
     const observation = await call("computer_get_state", {
       window_id: target.id,
@@ -209,14 +227,44 @@ export async function runGatewayFixture(
       nativeSubmissions: actionCount() - before,
       error: payload(ended).error,
     });
+    const probeSession = focusProbe;
+    focusProbe = null;
+    const probeResult = probeSession ? await probeSession.finish() : null;
+    if (probeResult)
+      cases.push({
+        name: "gateway-focus-neutral",
+        status: probeResult.report.theftFree && probeResult.report.ok ? "passed" : "failed",
+        report: probeResult.report,
+      });
     return {
       caller: "controlled-provider-context",
       target: { pid: target.pid, id: target.id, title: target.title },
       approvals,
       cases,
+      focusProbe: probeResult
+        ? { report: probeResult.report, meta: probeResult.meta, done: probeResult.done }
+        : { skipped: "focus-probe binary not present" },
     };
   } catch (error) {
-    return { error: String(error), approvals, cases };
+    // A failed section still drains the sampler so the report keeps whatever
+    // focus evidence exists up to the failure.
+    const probeSession = focusProbe;
+    focusProbe = null;
+    const probeResult = probeSession ? await probeSession.finish().catch(() => null) : null;
+    return {
+      error: String(error),
+      approvals,
+      cases,
+      ...(probeResult
+        ? {
+            focusProbe: {
+              report: probeResult.report,
+              meta: probeResult.meta,
+              done: probeResult.done,
+            },
+          }
+        : {}),
+    };
   } finally {
     await manager.dispose();
     first.destroy();
