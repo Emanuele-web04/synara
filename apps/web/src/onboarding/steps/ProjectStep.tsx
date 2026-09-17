@@ -8,6 +8,7 @@
 import type { ProjectId } from "@synara/contracts";
 import { useEffect, useState, type FormEvent } from "react";
 
+import { ProjectImportPanel } from "~/projectImport/ProjectImportPanel";
 import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
@@ -40,12 +41,14 @@ export function ProjectStep(props: {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const [path, setPath] = useState("");
+  const [showImport, setShowImport] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { onBusyChange } = props;
-  const busy = picking || submitting;
+  const busy = picking || submitting || importBusy;
   useEffect(() => {
     onBusyChange(busy);
   }, [busy, onBusyChange]);
@@ -99,7 +102,7 @@ export function ProjectStep(props: {
   };
 
   const isDropTarget = useWindowFolderDrop({
-    enabled: isElectron && !submitting,
+    enabled: isElectron && !busy && !showImport,
     onFolder: (dropped) => void addProject(dropped),
     onError: setError,
   });
@@ -111,69 +114,98 @@ export function ProjectStep(props: {
 
   return (
     <div className="flex flex-col gap-4">
-      {isElectron ? (
-        <button
-          type="button"
-          disabled={picking || submitting}
-          className={cn(
-            "flex h-[168px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-foreground/18 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground transition-colors outline-none hover:bg-foreground/3 focus-visible:border-foreground/40 disabled:opacity-50 motion-reduce:transition-none",
-            isDropTarget && "border-solid border-[color:var(--color-border-focus)] bg-foreground/5",
-          )}
-          onClick={() => void browse()}
-        >
-          <CentralIcon
-            name="folder-add-left"
-            className="size-[22px] text-foreground/70"
-            aria-hidden="true"
-          />
-          {picking ? (
-            <span>Opening the folder picker…</span>
-          ) : (
-            <span>
-              Drop a folder here, or{" "}
-              <span className="underline decoration-dotted decoration-[1.5px] underline-offset-[5px]">
-                browse
-              </span>
-            </span>
-          )}
-        </button>
-      ) : null}
-
-      <form onSubmit={onSubmit} className="flex items-center gap-2">
-        <InputGroup className={cn(FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
-          <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-            <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden />
-          </InputGroupAddon>
-          <InputGroupInput
-            value={path}
-            onChange={(event) => {
-              setPath(event.target.value);
-              setError(null);
-            }}
-            placeholder={homeDir ? `${homeDir}/code/my-repo` : "/path/to/repository"}
-            aria-label="Project folder path"
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            disabled={submitting}
-          />
-        </InputGroup>
+      <div className="flex gap-2" role="group" aria-label="Add projects from">
         <Button
-          type="submit"
-          variant="outline"
-          className={cn(FIELD_CONTROL_CLASS_NAME, "shrink-0 px-4")}
-          disabled={submitting || path.trim().length === 0}
+          size="sm"
+          variant={showImport ? "ghost" : "secondary"}
+          disabled={busy}
+          onClick={() => setShowImport(false)}
         >
-          Add
+          Existing folder
         </Button>
-      </form>
+        <Button
+          size="sm"
+          variant={showImport ? "secondary" : "ghost"}
+          disabled={busy}
+          onClick={() => setShowImport(true)}
+        >
+          Import from Codex or Claude
+        </Button>
+      </div>
+      {showImport ? (
+        <ProjectImportPanel
+          onBusyChange={setImportBusy}
+          onResult={(result, workspaceRoot, created) =>
+            props.onResult({ projectId: result.projectId, workspaceRoot, created })
+          }
+        />
+      ) : (
+        <>
+          {isElectron ? (
+            <button
+              type="button"
+              disabled={picking || submitting}
+              className={cn(
+                "flex h-[168px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-foreground/18 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground transition-colors outline-none hover:bg-foreground/3 focus-visible:border-foreground/40 disabled:opacity-50 motion-reduce:transition-none",
+                isDropTarget &&
+                  "border-solid border-[color:var(--color-border-focus)] bg-foreground/5",
+              )}
+              onClick={() => void browse()}
+            >
+              <CentralIcon
+                name="folder-add-left"
+                className="size-[22px] text-foreground/70"
+                aria-hidden="true"
+              />
+              {picking ? (
+                <span>Opening the folder picker…</span>
+              ) : (
+                <span>
+                  Drop a folder here, or{" "}
+                  <span className="underline decoration-dotted decoration-[1.5px] underline-offset-[5px]">
+                    browse
+                  </span>
+                </span>
+              )}
+            </button>
+          ) : null}
 
-      {error ? (
-        <p role="alert" className="text-[length:var(--app-font-size-ui,12px)] text-destructive">
-          {error}
-        </p>
-      ) : null}
+          <form onSubmit={onSubmit} className="flex items-center gap-2">
+            <InputGroup className={cn(FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
+              <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
+                <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden />
+              </InputGroupAddon>
+              <InputGroupInput
+                value={path}
+                onChange={(event) => {
+                  setPath(event.target.value);
+                  setError(null);
+                }}
+                placeholder={homeDir ? `${homeDir}/code/my-repo` : "/path/to/repository"}
+                aria-label="Project folder path"
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                disabled={submitting}
+              />
+            </InputGroup>
+            <Button
+              type="submit"
+              variant="outline"
+              className={cn(FIELD_CONTROL_CLASS_NAME, "shrink-0 px-4")}
+              disabled={submitting || path.trim().length === 0}
+            >
+              Add
+            </Button>
+          </form>
 
+          {error ? (
+            <p role="alert" className="text-[length:var(--app-font-size-ui,12px)] text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </>
+      )}
       {props.results.length > 0 ? (
         <ul className="flex flex-col gap-1.5" aria-label="Added projects">
           {props.results.map((result) => (
