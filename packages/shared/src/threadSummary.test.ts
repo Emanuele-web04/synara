@@ -30,6 +30,42 @@ describe("approvalRequestKindFromRequestType", () => {
 });
 
 describe("deriveThreadSummaryMetadata", () => {
+  it("separates human sends from agent and automation messages, including legacy origins", () => {
+    const messages = [
+      { role: "user" as const, createdAt: "2026-09-17T10:00:00.000Z" },
+      {
+        role: "user" as const,
+        dispatchOrigin: "user" as const,
+        createdAt: "2026-09-17T10:01:00.000Z",
+      },
+      {
+        role: "user" as const,
+        dispatchOrigin: "agent" as const,
+        createdAt: "2026-09-17T10:02:00.000Z",
+      },
+      {
+        role: "user" as const,
+        dispatchOrigin: "automation" as const,
+        createdAt: "2026-09-17T10:03:00.000Z",
+      },
+    ];
+    const summarize = (items: typeof messages) =>
+      deriveThreadSummaryMetadata({
+        messages: items,
+        activities: [],
+        proposedPlans: [],
+        latestTurn: null,
+      });
+    expect(summarize(messages)).toMatchObject({
+      latestUserMessageAt: "2026-09-17T10:03:00.000Z",
+      latestHumanMessageAt: "2026-09-17T10:01:00.000Z",
+    });
+    expect(summarize(messages.slice(0, 1))).toMatchObject({
+      latestHumanMessageAt: "2026-09-17T10:00:00.000Z",
+    });
+    expect(summarize(messages.slice(2))).toMatchObject({ latestHumanMessageAt: null });
+  });
+
   it("derives sidebar summary metadata from thread state", () => {
     const messages: OrchestrationMessage[] = [
       {
@@ -117,6 +153,7 @@ describe("deriveThreadSummaryMetadata", () => {
       }),
     ).toEqual({
       latestUserMessageAt: "2026-02-27T00:03:00.000Z",
+      latestHumanMessageAt: "2026-02-27T00:03:00.000Z",
       hasPendingApprovals: true,
       hasPendingUserInput: true,
       hasActionableProposedPlan: true,
@@ -195,6 +232,7 @@ describe("deriveThreadSummaryMetadata", () => {
       }),
     ).toEqual({
       latestUserMessageAt: null,
+      latestHumanMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
@@ -378,6 +416,7 @@ describe("deriveThreadSummaryMetadata", () => {
       }),
     ).toEqual({
       latestUserMessageAt: null,
+      latestHumanMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,

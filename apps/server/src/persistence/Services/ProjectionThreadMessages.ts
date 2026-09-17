@@ -115,6 +115,11 @@ export interface ProjectionThreadMessageRepositoryShape {
     input: ListProjectionThreadMessagesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
+  /** Last human send, excluding agent and automation dispatches. */
+  readonly getLatestHumanMessageAt: (
+    input: ListProjectionThreadMessagesInput,
+  ) => Effect.Effect<string | null, ProjectionRepositoryError>;
+
   /** Read the newest user-message timestamp used by sidebar summary state. */
   readonly getLatestUserMessageAt: (
     input: ListProjectionThreadMessagesInput,

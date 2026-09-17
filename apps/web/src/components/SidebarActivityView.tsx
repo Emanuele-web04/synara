@@ -58,7 +58,6 @@ import {
   isThreadSettledForActivity,
   resolveActivityScope,
   splitActivityThreadsByDateBucket,
-  splitPriorityActivityThreads,
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
@@ -617,17 +616,14 @@ export function SidebarActivityView({
   });
   const scopedPinnedThreads = model.pinned;
   const nowMs = Date.now();
-  const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
-    model.active,
-  );
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    seenThreads,
+    model.active,
     { nowMs },
   );
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
     groupMode === "project"
-      ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
+      ? groupActivityThreadsByProject(model.active, isRealProject)
       : EMPTY_PROJECT_GROUPS;
 
   const earlierPaging = resolveSidebarThreadListPaging({
@@ -662,7 +658,6 @@ export function SidebarActivityView({
         groupMode,
         pinnedOpen,
         pinned: scopedPinnedThreads,
-        priority: priorityThreads,
         recent: recentThreads,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
@@ -682,7 +677,6 @@ export function SidebarActivityView({
       model.settled,
       pagedProjectGroups,
       pinnedOpen,
-      priorityThreads,
       recentThreads,
       scopedPinnedThreads,
       settledOpen,
@@ -853,13 +847,10 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
-          {priorityThreads.length > 0 || recentThreads.length > 0 ? (
+          {recentThreads.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Recent" />
-              <div className="flex flex-col gap-0.5">
-                {priorityThreads.map(renderActiveRow)}
-                {recentThreads.map(renderActiveRow)}
-              </div>
+              <div className="flex flex-col gap-0.5">{recentThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (

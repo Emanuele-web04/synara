@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applyThreadUpdate,
   clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
@@ -33,6 +34,7 @@ import type { AppState } from "./storeState";
 import { getThreadFromState } from "./threadDerivation";
 import {
   makeThread,
+  makeDomainEvent,
   makeActivity,
   makeState,
   makeProject,
@@ -43,8 +45,126 @@ import {
   threadsOf,
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains an active resend timestamp through binding updates and rollback", () => {
+    const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
+    const messageId = MessageId.makeUnsafe("resent");
+    const thread = makeThread({
+      latestHumanMessageAt: at(1),
+      messages: [
+        {
+          id: messageId,
+          role: "user",
+          text: "Original",
+          dispatchOrigin: "user",
+          turnId: null,
+          streaming: false,
+          createdAt: at(1),
+        },
+      ],
+    });
+    let state = makeState(thread);
+    const upsertUserMessage = (input: {
+      messageId: MessageId;
+      createdAt: string;
+      updatedAt: string;
+      sequence: number;
+    }) => {
+      const { sequence, ...message } = input;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            role: "user",
+            text: "Edited",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            source: "native",
+            ...message,
+          },
+          { sequence, occurredAt: at(sequence) },
+        ),
+      ]);
+    };
+    upsertUserMessage({ messageId, createdAt: at(2), updatedAt: at(2), sequence: 2 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(threadsOf(state)[0]?.messages[0]?.createdAt).toBe(at(1));
+    upsertUserMessage({ messageId, createdAt: at(1), updatedAt: at(2), sequence: 3 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    const nextMessageId = MessageId.makeUnsafe("next");
+    upsertUserMessage({
+      messageId: nextMessageId,
+      createdAt: at(4),
+      updatedAt: at(4),
+      sequence: 4,
+    });
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.conversation-rolled-back",
+        {
+          threadId: thread.id,
+          messageId: nextMessageId,
+          numTurns: 1,
+        },
+        { sequence: 5, occurredAt: at(5) },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(at(2));
+  });
+
+  it("retains human recency through partial hydration, reads, agent sends, eviction, and reconnect", () => {
+    const humanAt = "2026-09-17T10:00:00.000Z";
+    const incoming = makeReadModelThread({ latestHumanMessageAt: humanAt, messages: [] });
+    const threadId = incoming.id;
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    state = syncServerThreadDetailHotPath(state, incoming);
+    state = applyThreadUpdate(state, threadId, (thread) => ({
+      ...thread,
+      lastVisitedAt: "2026-09-17T10:10:00.000Z",
+    }));
+    for (const [index, dispatchOrigin] of (["agent", "automation", "user"] as const).entries()) {
+      const createdAt = `2026-09-17T10:2${index}:00.000Z`;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId,
+            messageId: MessageId.makeUnsafe(`recency-${index}`),
+            role: "user",
+            dispatchOrigin,
+            text: "Follow-up",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt,
+            updatedAt: createdAt,
+          },
+          { sequence: 10 + index, occurredAt: createdAt },
+        ),
+      ]);
+      expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+      expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+    }
+    state = evictThreadDetailFromClientState(state, threadId);
+    expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+      "2026-09-17T10:22:00.000Z",
+    );
+    state = syncServerShellSnapshot(state, {
+      ...makeShellSnapshot({ ...incoming, latestHumanMessageAt: humanAt }),
+      snapshotSequence: 20,
+    });
+    expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(humanAt);
+  });
+
   it("restores cache reviews from shell snapshots and retains them during detail eviction", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const incoming = makeReadModelThread({
