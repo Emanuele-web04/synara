@@ -136,6 +136,17 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       normalizedOptions = normalizeOpenCodeModelOptions(providerOptions);
       break;
     }
+    case "commandcode": {
+      const providerOptions = modelOptions?.commandcode;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? providerOptions?.reasoningEffort
+          : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
+      break;
+    }
     case "pi": {
       const providerOptions = modelOptions?.pi;
       rawEffort = trimOrNull(providerOptions?.thinkingLevel);

@@ -331,6 +331,7 @@ describe("wsNativeApi", () => {
             experimentalWebSockets: false,
             customModels: [],
           },
+          commandcode: { enabled: true, binaryPath: "cmd", customModels: [] },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },

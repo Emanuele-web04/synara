@@ -2011,6 +2011,7 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "grok" ||
     providerName === "droid" ||
     providerName === "opencode" ||
+    providerName === "commandcode" ||
     providerName === "pi" ||
     providerName === "devin"
   ) {

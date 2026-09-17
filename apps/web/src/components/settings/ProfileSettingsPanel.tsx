@@ -352,6 +352,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Droid";
     case "opencode":
       return "OpenCode";
+    case "commandcode":
+      return "Command Code";
     case "pi":
       return "Pi";
   }

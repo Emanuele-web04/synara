@@ -7,6 +7,8 @@ import {
   type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
+  type CodexModelOptions,
+  type CommandCodeModelOptions,
   type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
@@ -29,6 +31,8 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   antigravity: new Set<ModelSlug>(),
+  // Command Code's built-in list is intentionally empty; its CLI supplies the live catalog.
+  commandcode: new Set<ModelSlug>(),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
@@ -914,6 +918,21 @@ export function normalizeAntigravityModelOptions(
   modelOptions: AntigravityModelOptions | null | undefined,
   capabilities: ModelCapabilities = getModelCapabilities("antigravity", model),
 ): AntigravityModelOptions | undefined {
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(capabilities, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(capabilities)) {
+    return undefined;
+  }
+  return { reasoningEffort };
+}
+
+export function normalizeCommandCodeModelOptions(
+  model: string | null | undefined,
+  modelOptions: CommandCodeModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("commandcode", model),
+): CommandCodeModelOptions | undefined {
   const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
   if (!reasoningEffort || !hasEffortLevel(capabilities, reasoningEffort)) {
     return undefined;

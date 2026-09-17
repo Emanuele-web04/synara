@@ -33,6 +33,7 @@ const EMPTY_MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<Provid
   grok: [],
   droid: [],
   opencode: [],
+  commandcode: [],
   pi: [],
 };
 
@@ -45,6 +46,7 @@ const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
   grok: [],
   droid: [],
   opencode: [],
+  commandcode: [],
   pi: [],
 };
 

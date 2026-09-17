@@ -38,6 +38,7 @@ function makeSettings(
     grokBinaryPath: "",
     droidBinaryPath: "",
     openCodeBinaryPath: "",
+    commandCodeBinaryPath: "",
     piBinaryPath: "",
     piAgentDir: "",
     ...overrides,

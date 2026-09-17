@@ -217,6 +217,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
   }),
+  commandcode: defineProviderOptionConfig<"commandcode">({
+    primaryOptionKey: "reasoningEffort",
+    options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
+  }),
   opencode: defineProviderOptionConfig<"opencode">({
     primaryOptionKey: "variant",
     options: {

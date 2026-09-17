@@ -111,6 +111,17 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     },
   },
   {
+    kind: "commandcode",
+    displayName: PROVIDER_DISPLAY_NAMES.commandcode,
+    available: true,
+    setupDocsHref: "https://trysynara.com/docs/providers/command-code",
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "cmd login",
+      learnMoreHref: "https://commandcode.ai/docs",
+    },
+  },
+  {
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,
