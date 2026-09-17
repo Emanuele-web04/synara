@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+// Trigger cloud probe after workflow registration.\nconst { app, BrowserWindow } = require("electron");
 const repeats = Number(process.argv[2] ?? 5);
 const durationMs = Number(process.argv[3] ?? 30000);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
