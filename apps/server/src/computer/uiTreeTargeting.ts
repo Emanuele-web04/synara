@@ -46,7 +46,13 @@ export type ComputerTargetErrorCode =
   /** The named window is covered at the point and the desktop could not raise it. */
   | "computer_target_occluded"
   /** The desktop declined to deliver input to the named window, and sent none. */
-  | "computer_target_refused";
+  | "computer_target_refused"
+  /**
+   * The target belongs to a denylisted surface — a password manager or OS
+   * security UI — and the access was refused before it could dispatch or
+   * disclose anything. There is no override in this build.
+   */
+  | "computer_denylist_refused";
 
 /** How many near-misses to name; a whole desktop of labels is noise, not help. */
 const MAX_REPORTED_CANDIDATES = 16;
