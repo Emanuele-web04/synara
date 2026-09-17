@@ -160,8 +160,7 @@ export function RuntimeUsageControls({
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
   const localAuto = useQuery(localAutoQueryOptions());
-  const localAutoAvailable =
-    (provider === "codex" || provider === "claudeAgent") && localAuto.data?.phase === "ready";
+  const localAutoAvailable = provider !== undefined && localAuto.data?.phase === "ready";
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);

@@ -1120,20 +1120,23 @@ describe("applyDevinSessionConfiguration", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
-  it("fails closed for approval-required when mode discovery is unavailable", async () => {
-    const { runtime, calls } = makeFakeAcpRuntime();
+  it.each(["approval-required", "auto-local"] as const)(
+    "fails closed for %s when mode discovery is unavailable",
+    async (runtimeMode) => {
+      const { runtime, calls } = makeFakeAcpRuntime();
 
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-    expect(calls).toEqual([]);
-  });
+      await expect(
+        Effect.runPromise(
+          applyDevinSessionConfiguration({
+            runtime,
+            runtimeMode,
+            interactionMode: undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+      expect(calls).toEqual([]);
+    },
+  );
 });
 
 describe("resolveRequestedModeId", () => {
@@ -1190,38 +1193,44 @@ describe("resolveRequestedModeId", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
-  it("rejects approval-required when mode state is unavailable", async () => {
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: undefined,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
+  it.each(["approval-required", "auto-local"] as const)(
+    "rejects %s when mode state is unavailable",
+    async (runtimeMode) => {
+      await expect(
+        Effect.runPromise(
+          resolveRequestedModeId({
+            modeState: undefined,
+            runtimeMode,
+            interactionMode: undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    },
+  );
 
-  it("maps approval-required to Code in the real Devin 3000.6.7 catalog", async () => {
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).resolves.toBe("accept-edits");
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).resolves.toBeUndefined();
-  });
+  it.each(["approval-required", "auto-local"] as const)(
+    "maps %s to Code in the real Devin 3000.6.7 catalog",
+    async (runtimeMode) => {
+      await expect(
+        Effect.runPromise(
+          resolveRequestedModeId({
+            modeState: { currentModeId: "smart", availableModes: devin300067Modes },
+            runtimeMode,
+            interactionMode: undefined,
+          }),
+        ),
+      ).resolves.toBe("accept-edits");
+      await expect(
+        Effect.runPromise(
+          resolveRequestedModeId({
+            modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+            runtimeMode,
+            interactionMode: undefined,
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
     await expect(

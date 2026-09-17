@@ -4,14 +4,38 @@ Open **Settings → Auto mode → Install Auto**. Synara downloads a private Pyt
 environment, pinned inference dependencies, and
 [ProCreations/auto-0.4b-2](https://huggingface.co/ProCreations/auto-0.4b-2/tree/5937dd0162a9dd564a07c812b65012681daae3fd).
 Installation does not change any task's permissions. After installation, select **Auto (local)**
-in a Codex or Claude Code task's permissions menu. Provider-native **Approve for me** remains
-available separately.
+in any supported provider's task permissions menu. Provider-native **Approve for me** remains
+available separately for providers that support it.
 
 The model occupies approximately 1.6 GB; allow several GB for Python, PyTorch, and caches.
 Everything is stored under the server's state directory in `local-auto/`. On a remote Synara
 connection, installation and inference happen on the **server**, not in the browser.
 Installation progress survives closing settings. Failed/cancelled installations can be retried;
 only a successful model load and inference self-test mark the installation ready.
+
+## Providers
+
+Auto (local) supports all nine providers: Codex, Claude Code, OpenCode, Cursor, Devin,
+Antigravity, Grok, Pi, and Droid. Each integration keeps the provider's permission boundary:
+
+| Provider                   | Approval integration                                                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex, Claude Code         | Native approval callbacks, with native automatic review disabled.                                                                           |
+| Cursor, Grok, Devin, Droid | ACP permission requests; only `allow_once` can be selected automatically. Native supervised/Code modes and Plan restrictions remain active. |
+| OpenCode                   | Native permission requests matched by message/call ID to full tool input. Directory-policy expansion and loop guards remain manual.         |
+| Pi                         | SDK pre-tool hook pauses built-in, extension, and gateway tools. Existing extension vetoes run first.                                       |
+| Antigravity                | CLI `PreToolUse` hook pauses for Synara's one-call response, without `--dangerously-skip-permissions`.                                      |
+
+Pi and Antigravity expose normal Synara approval prompts while the classifier reviews the call.
+Interrupting or stopping the session cancels their pending hooks; late approvals cannot resume them.
+Antigravity's hook wait is bounded to ten minutes, then denies the call. Its hook configuration
+allows that wait within the [documented hook timeout](https://antigravity.google/docs/hooks).
+Subagent calls without their own complete user/history context remain manual.
+
+Providers may omit raw arguments or tool results in some protocol versions. Those requests stay
+manual, including Antigravity histories whose post-tool hooks lack results. Summaries, permission
+patterns, empty error fields, and display titles never substitute for missing tool input/output.
+Local Auto reviews calls exposed by these provider hooks; existing native allowances still apply.
 
 ## Hardware
 

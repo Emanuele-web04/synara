@@ -1449,7 +1449,7 @@ export function makeDroidAdapter(
         const model = turnModelSelection?.model ?? ctx.session.model;
         const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
         const runtimeMode = ctx.session.runtimeMode;
-        if (runtimeMode === "auto" || runtimeMode === "auto-local") {
+        if (runtimeMode === "auto") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",

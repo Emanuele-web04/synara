@@ -29,11 +29,6 @@ export function autoRuntimeModeSelectionIssue(input: {
     readonly supportsAutoMode?: boolean | undefined;
   };
 }): string | null {
-  if (input.runtimeMode === "auto-local") {
-    return providerSupportsAutoRuntimeMode(input.modelSelection.provider)
-      ? null
-      : "Local Auto is currently available for Codex and Claude Code.";
-  }
   if (input.runtimeMode !== "auto") {
     return null;
   }
@@ -65,8 +60,7 @@ export function normalizeRuntimeModeForProvider(
   runtimeMode: RuntimeMode,
   provider: ProviderKind,
 ): RuntimeMode {
-  return (runtimeMode === "auto" || runtimeMode === "auto-local") &&
-    !providerSupportsAutoRuntimeMode(provider)
+  return runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)
     ? "approval-required"
     : runtimeMode;
 }

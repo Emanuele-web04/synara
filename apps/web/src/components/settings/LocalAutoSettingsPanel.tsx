@@ -112,7 +112,7 @@ export function LocalAutoSettingsPanel({ active }: { readonly active: boolean })
       <SettingsSection title="Using Auto mode">
         <SettingsRow
           title="Choose Auto (local) in a task"
-          description="After installation, open the task’s permissions menu and select Auto (local). Available with Codex and Claude Code."
+          description="After installation, open the task’s permissions menu and select Auto (local). Available with every supported provider."
           status="Your existing task permissions stay the same until you select this mode."
         />
         <SettingsRow

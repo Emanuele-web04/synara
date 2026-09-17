@@ -167,3 +167,127 @@ describe("Auto decision validation", () => {
     });
   });
 });
+
+const providerCases = [
+  ...(["cursor", "grok", "devin", "droid"] as const).map((provider) => ({
+    provider,
+    args: {
+      options: [{ optionId: "once", kind: "allow_once" }],
+      toolCall: {
+        kind: "execute",
+        title: "short summary",
+        rawInput: { _toolName: "shell", command: "printf full" },
+      },
+    },
+    history: {
+      kind: "execute",
+      rawInput: { _toolName: "shell", command: "printf full" },
+      rawOutput: "full",
+    },
+    tool: "shell",
+    input: { _toolName: "shell", command: "printf full" },
+  })),
+  {
+    provider: "opencode" as const,
+    args: {
+      localAutoTool: { permission: "bash", toolName: "bash", input: { command: "printf full" } },
+    },
+    history: { toolName: "bash", input: { command: "printf full" }, state: { output: "full" } },
+    tool: "bash",
+    input: { command: "printf full" },
+  },
+  {
+    provider: "pi" as const,
+    args: { toolName: "bash", input: { command: "printf full" } },
+    history: { toolName: "bash", input: { command: "printf full" }, result: "full" },
+    tool: "bash",
+    input: { command: "printf full" },
+  },
+  {
+    provider: "antigravity" as const,
+    args: { toolName: "run_command", input: { CommandLine: "printf full" } },
+    history: {
+      toolName: "run_command",
+      rawInput: { CommandLine: "printf full" },
+      rawOutput: "full",
+    },
+    tool: "run_command",
+    input: { CommandLine: "printf full" },
+  },
+];
+it.each(providerCases)(
+  "serializes full $provider tool arguments and history in the model's exact format",
+  ({ provider, args, history, tool, input }) => {
+    const current = { ...request, provider, payload: { requestType: "unknown" as const, args } };
+    const completed = {
+      ...started,
+      provider,
+      type: "item.completed",
+      itemId: "tool-1",
+      payload: { itemType: "command_execution", data: history },
+    } as ProviderRuntimeEvent;
+    expect(
+      classifierContext({
+        ...context,
+        request: current,
+        events: [{ ...started, provider }, completed],
+      }),
+    ).toBe(
+      buildAutoInput(userMessage.text, [{ tool, args: JSON.stringify(input), result: "full" }], {
+        tool,
+        args: JSON.stringify(input),
+      }),
+    );
+  },
+);
+it.each(["cursor", "grok", "devin", "droid"] as const)(
+  "keeps %s summary-only and persistent permission grants manual",
+  (provider) => {
+    for (const args of [
+      {
+        options: [{ kind: "allow_always" }],
+        toolCall: { kind: "execute", rawInput: { command: "ls" } },
+      },
+      { options: [{ kind: "allow_once" }], toolCall: { kind: "execute", title: "ls" } },
+    ])
+      expect(
+        proposedCall({ ...request, provider, payload: { requestType: "unknown", args } }),
+      ).toBeUndefined();
+  },
+);
+it("keeps OpenCode policy expansion and Antigravity questions interactive", () => {
+  expect(
+    proposedCall({
+      ...request,
+      provider: "opencode",
+      payload: {
+        requestType: "unknown",
+        args: {
+          localAutoTool: {
+            permission: "external_directory",
+            toolName: "bash",
+            input: { command: "ls" },
+          },
+        },
+      },
+    }),
+  ).toBeUndefined();
+  for (const toolName of ["ask_question", "ask_permission"])
+    expect(
+      proposedCall({
+        ...request,
+        provider: "antigravity",
+        payload: { requestType: "unknown", args: { toolName, input: {} } },
+      }),
+    ).toBeUndefined();
+  expect(
+    proposedCall({
+      ...request,
+      provider: "antigravity",
+      payload: {
+        requestType: "unknown",
+        args: { toolName: "run_command", input: {}, incompleteContext: true },
+      },
+    }),
+  ).toBeUndefined();
+});

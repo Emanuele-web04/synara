@@ -39,6 +39,7 @@ async function runReview(
     }) => void;
     runtimeMode?: OrchestrationThread["runtimeMode"];
     stale?: boolean;
+    request?: typeof request;
   } = {},
 ) {
   const thread = partial<OrchestrationThread>({
@@ -48,7 +49,7 @@ async function runReview(
     session: {
       threadId,
       status: "running",
-      providerName: "claudeAgent",
+      providerName: options.request?.provider ?? "claudeAgent",
       runtimeMode: "auto-local",
       activeTurnId: turnId,
       lastError: null,
@@ -92,7 +93,13 @@ async function runReview(
     Layer.succeed(
       ProviderRuntimeEventRepository,
       partial<ProviderRuntimeEventRepositoryShape>({
-        readThreadEvents: () => Effect.succeed([{ sequence: 1, event: started }]),
+        readThreadEvents: () =>
+          Effect.succeed([
+            {
+              sequence: 1,
+              event: { ...started, provider: options.request?.provider ?? started.provider },
+            },
+          ]),
       }),
     ),
     Layer.succeed(
@@ -111,7 +118,7 @@ async function runReview(
       Effect.gen(function* () {
         const enqueue = yield* makeLocalAutoReviewer;
         const event = {
-          ...request,
+          ...(options.request ?? request),
           createdAt: options.stale ? request.createdAt : new Date(Date.now() + 1000).toISOString(),
         };
         yield* enqueue(event, 2);
@@ -182,5 +189,36 @@ describe("Local Auto approval lifecycle", () => {
       });
       expect(commands).toEqual([]);
     },
+  );
+});
+
+it.each([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "grok",
+  "devin",
+  "droid",
+  "opencode",
+  "pi",
+  "antigravity",
+] as const)("dispatches a one-call local Auto approval for %s", async (provider) => {
+  const args =
+    provider === "codex"
+      ? { command: "ls" }
+      : ["cursor", "grok", "devin", "droid"].includes(provider)
+        ? {
+            options: [{ kind: "allow_once" }],
+            toolCall: { kind: "execute", rawInput: { command: "ls" } },
+          }
+        : provider === "opencode"
+          ? { localAutoTool: { permission: "bash", toolName: "bash", input: { command: "ls" } } }
+          : { toolName: "bash", input: { command: "ls" } };
+  const { classify, commands } = await runReview({
+    request: { ...request, provider, payload: { requestType: "command_execution_approval", args } },
+  });
+  expect(classify).toHaveBeenCalledOnce();
+  expect(commands).toContainEqual(
+    expect.objectContaining({ type: "thread.approval.respond", decision: "accept" }),
   );
 });

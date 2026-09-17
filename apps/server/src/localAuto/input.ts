@@ -47,28 +47,63 @@ function serialize(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+const ACP_PROVIDERS = new Set(["cursor", "grok", "droid", "devin"]);
+
+function acpCall(data: Record<string, unknown>): AutoToolCall | undefined {
+  if (data.rawInput === undefined) return;
+  const rawInput = record(data.rawInput);
+  const tool = typeof rawInput?._toolName === "string" ? rawInput._toolName : data.kind;
+  if (typeof tool !== "string" || !tool.trim()) return;
+  return { tool, args: serialize(data.rawInput) };
+}
+
 export function proposedCall(event: ProviderRuntimeRequestOpenedEvent): AutoToolCall | undefined {
   const args = record(event.payload.args);
-  if (!args) return;
+  if (!args || args.incompleteContext === true) return;
   // Permission-profile expansion, authentication, and structured user input
   // always remain interactive, even if they carry tool-like metadata.
+  const ordinaryApproval = [
+    "command_execution_approval",
+    "exec_command_approval",
+    "file_read_approval",
+    "file_change_approval",
+    "apply_patch_approval",
+  ].includes(event.payload.requestType);
+  if (!ordinaryApproval && event.payload.requestType !== "unknown") return;
+  if (!ordinaryApproval && (event.provider === "codex" || event.provider === "claudeAgent")) return;
   if (
-    ![
-      "command_execution_approval",
-      "exec_command_approval",
-      "file_read_approval",
-      "file_change_approval",
-      "apply_patch_approval",
-    ].includes(event.payload.requestType)
-  )
-    return;
-  if (
-    event.provider === "claudeAgent" &&
+    ["claudeAgent", "pi", "antigravity"].includes(event.provider) &&
     typeof args.toolName === "string" &&
     args.input !== undefined
   ) {
-    if (["AskUserQuestion", "ExitPlanMode"].includes(args.toolName)) return;
+    if (
+      ["AskUserQuestion", "ExitPlanMode", "ask_question", "ask_permission"].includes(args.toolName)
+    )
+      return;
     return { tool: args.toolName, args: serialize(args.input) };
+  }
+  if (ACP_PROVIDERS.has(event.provider)) {
+    // An ACP accept may fall back to allow_always. A local classifier may only
+    // grant this call, so require an actual request-scoped option.
+    if (
+      !Array.isArray(args.options) ||
+      !args.options.some((option) => record(option)?.kind === "allow_once")
+    )
+      return;
+    const tool = record(args.toolCall);
+    return tool ? acpCall(tool) : undefined;
+  }
+  if (event.provider === "opencode") {
+    const tool = record(args.localAutoTool);
+    if (
+      !tool ||
+      typeof tool.permission !== "string" ||
+      ["external_directory", "doom_loop", "question"].includes(tool.permission) ||
+      typeof tool.toolName !== "string" ||
+      tool.input === undefined
+    )
+      return;
+    return { tool: tool.toolName, args: serialize(tool.input) };
   }
   if (
     event.provider === "codex" &&
@@ -89,12 +124,35 @@ function historyCall(
   const data = record(event.payload.data);
   if (!data) return;
   if (
-    event.provider === "claudeAgent" &&
+    (event.provider === "claudeAgent" || event.provider === "pi") &&
     typeof data.toolName === "string" &&
     data.input !== undefined &&
     data.result !== undefined
   ) {
     return { tool: data.toolName, args: serialize(data.input), result: serialize(data.result) };
+  }
+  if (ACP_PROVIDERS.has(event.provider)) {
+    const call = acpCall(data);
+    const output = data.rawOutput ?? data.content;
+    return call && output !== undefined ? { ...call, result: serialize(output) } : undefined;
+  }
+  if (event.provider === "opencode") {
+    const state = record(data.state);
+    const output = state?.output ?? state?.error;
+    if (typeof data.toolName === "string" && data.input !== undefined && output !== undefined)
+      return { tool: data.toolName, args: serialize(data.input), result: serialize(output) };
+  }
+  if (
+    event.provider === "antigravity" &&
+    typeof data.toolName === "string" &&
+    data.rawInput !== undefined &&
+    data.rawOutput !== undefined
+  ) {
+    return {
+      tool: data.toolName,
+      args: serialize(data.rawInput),
+      result: serialize(data.rawOutput),
+    };
   }
   if (event.provider === "codex") {
     const source = record(data.item) ?? data;
