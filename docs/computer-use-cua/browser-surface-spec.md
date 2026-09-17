@@ -51,8 +51,10 @@ tools add a second axis: the **endpoint grant**.
   authorization — Synara must NOT auto-grant.
 - Bound `target_id`/`tab_id` refs are session-scoped and exact-or-refuse;
   they become the target of record (like `element_token`/`window_id` today).
-- Mutations (`navigate`, `click`, `type`, `pointer`, `dialog` resolve) go in
-  `COMPUTER_APPROVAL_REQUIRED_TOOLS`.
+- Mutations (`navigate`, `click`, `type`, `pointer`, `dialog` resolve) are
+  approval-gated by `computerBrowserToolRequiresApproval` in
+  `computerBrowserTools.ts` — the same task-scoped computer approval the
+  desktop `COMPUTER_APPROVAL_REQUIRED_TOOLS` names ride.
 - `browser_download` and `browser_set_input_files` are sensitive mutations —
   approval plus a per-call destination/file policy; never echo paths.
 - `get_browser_state` bind is a read but mints refs; snapshot is pure read.
