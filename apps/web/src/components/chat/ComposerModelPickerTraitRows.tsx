@@ -15,6 +15,7 @@ import { useState, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import { type ProviderOptions } from "../../providerModelOptions";
 import { MenuRadioGroup, MenuRadioItem, MenuSub, MenuSubTrigger } from "../ui/menu";
+import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
@@ -28,6 +29,8 @@ import { useComposerTraitCommit } from "./useComposerTraitCommit";
 
 // Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes
 // only the submenu, so the user can compose model + traits and then star the result.
+export type ComposerEffortControl = "menu" | "slider";
+
 function TraitRow(props: {
   label: string;
   valueLabel: string;
@@ -76,6 +79,10 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  modelLabel: string;
+  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
+  // both. Models without an effort ladder always keep the rows.
+  effortControl: ComposerEffortControl;
 }) {
   const { provider, threadId, model, modelOptions, prompt } = props;
   const selection = getComposerTraitSelection(
@@ -91,6 +98,8 @@ export function ComposerModelPickerTraitRows(props: {
   const selectedAgent = getSelectedAgentValue(provider, modelOptions) ?? defaultAgent ?? "";
   const contextWindowTraitId = selection.contextWindowDescriptor?.id ?? "contextWindow";
   const contextWindowValue = selection.contextWindow ?? selection.defaultContextWindow ?? "";
+
+  const usesEffortSlider = props.effortControl === "slider" && selection.effortLevels.length > 0;
 
   const rows: ReactNode[] = [];
   if (selection.thinkingEnabled !== null) {
@@ -127,7 +136,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.effortLevels.length > 0) {
+  if (selection.effortLevels.length > 0 && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="effort"
@@ -153,7 +162,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (supportsComposerFastModeControl(selection)) {
+  if (supportsComposerFastModeControl(selection) && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="speed"
@@ -190,6 +199,22 @@ export function ComposerModelPickerTraitRows(props: {
     );
   }
 
-  if (rows.length === 0) return null;
-  return <div className="flex flex-col gap-px border-t border-border p-1">{rows}</div>;
+  if (rows.length === 0 && !usesEffortSlider) return null;
+  return (
+    <div className="flex flex-col gap-px border-t border-border p-1">
+      {usesEffortSlider ? (
+        <ComposerEffortSliderCard
+          provider={provider}
+          threadId={threadId}
+          model={model}
+          modelLabel={props.modelLabel}
+          runtimeModel={props.runtimeModel}
+          modelOptions={modelOptions}
+          prompt={prompt}
+          onPromptChange={props.onPromptChange}
+        />
+      ) : null}
+      {rows}
+    </div>
+  );
 }

@@ -59,6 +59,7 @@ function readyProvider(provider: ProviderKind): ServerProviderStatus {
 
 type HarnessProps = {
   lockedProvider?: ProviderKind | null;
+  effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
 };
 
@@ -77,6 +78,7 @@ function Harness(props: HarnessProps) {
       provider="codex"
       model={(selectedModel ?? GPT_5_5) as ModelSlug}
       lockedProvider={props.lockedProvider ?? null}
+      effortControl={props.effortControl ?? "menu"}
       providers={[readyProvider("codex"), readyProvider("claudeAgent")]}
       modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
@@ -211,6 +213,48 @@ describe("ComposerModelPicker", () => {
       expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
         modelOptions: { reasoningEffort: "low", fastMode: true },
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("renders the effort ladder as a footer slider and commits keyboard steps", async () => {
+    const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "medium" });
+    try {
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
+      // The slider card owns effort and speed, so their rows are gone.
+      expect(page.getByRole("menuitem", { name: /^Effort/u }).elements()).toHaveLength(0);
+      expect(page.getByRole("menuitem", { name: /^Speed/u }).elements()).toHaveLength(0);
+
+      await slider.element().focus();
+      await userEvent.keyboard("{ArrowRight}");
+
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+      expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
+        provider: "codex",
+        options: { reasoningEffort: "high" },
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("toggles fast mode and resets both controls from the slider card", async () => {
+    const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "xhigh" });
+    try {
+      const fastToggle = page.getByRole("button", { name: "Fast mode" });
+      await fastToggle.click();
+      await expect.element(fastToggle).toHaveAttribute("aria-pressed", "true");
+
+      const reset = page.getByRole("button", { name: "Reset effort and speed" });
+      await reset.click();
+
+      await expect
+        .element(page.getByRole("slider", { name: "Reasoning effort" }))
+        .toHaveAttribute("aria-valuetext", "Medium");
+      await expect.element(fastToggle).toHaveAttribute("aria-pressed", "false");
+      await expect.element(reset).toBeDisabled();
     } finally {
       await screen.unmount();
     }

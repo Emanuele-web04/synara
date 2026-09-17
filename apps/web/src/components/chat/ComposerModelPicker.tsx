@@ -56,7 +56,10 @@ import {
   ComposerModelPickerTabs,
   resolveComposerModelPickerProviderTabs,
 } from "./ComposerModelPickerTabs";
-import { ComposerModelPickerTraitRows } from "./ComposerModelPickerTraitRows";
+import {
+  type ComposerEffortControl,
+  ComposerModelPickerTraitRows,
+} from "./ComposerModelPickerTraitRows";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME } from "./composerPickerStyles";
 import {
@@ -94,6 +97,9 @@ type ComposerModelPickerProps = {
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   disabled?: boolean;
+  // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
+  // stepped slider card in the footer instead.
+  effortControl?: ComposerEffortControl;
   onProviderModelChange: (
     provider: ProviderKind,
     model: ModelSlug,
@@ -212,6 +218,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       }),
     );
 
+  const modelLabel = resolveProviderModelLabel({
+    provider: props.provider,
+    lockedProvider,
+    model: props.model,
+    modelOptionsByProvider: props.modelOptionsByProvider,
+  });
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
     props.model,
@@ -358,12 +370,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
-        modelLabel={resolveProviderModelLabel({
-          provider: props.provider,
-          lockedProvider,
-          model: props.model,
-          modelOptionsByProvider: props.modelOptionsByProvider,
-        })}
+        modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
         hideModelLabel={props.hideModelLabel}
@@ -493,6 +500,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             modelOptions={props.modelOptions}
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
+            modelLabel={modelLabel}
+            effortControl={props.effortControl ?? "menu"}
           />
         </div>
       </ComposerPickerMenuPopup>
