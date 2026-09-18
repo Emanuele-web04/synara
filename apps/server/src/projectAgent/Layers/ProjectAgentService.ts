@@ -2776,13 +2776,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               Effect.mapError(toServiceError("Failed to load worker index.")),
             );
           for (const entry of index) {
-            if (
-              !isManagedWorkerThread({
-                threadId: entry.threadId,
-                coordinatorThreadId: config.coordinatorThreadId,
-                index,
-              })
-            ) {
+            if (entry.excluded || entry.threadId === config.coordinatorThreadId) {
               continue;
             }
             const shell = yield* snapshotQuery
