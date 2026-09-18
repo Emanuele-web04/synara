@@ -775,17 +775,25 @@ export class CuaComputerBackend implements ComputerBackend {
           ? this.currentHealth.consecutiveFailures
           : 0,
       });
+      // TCC's setup surface is macOS-only: on other platforms the driver's
+      // own probe reports what it found, and the message names the access
+      // mechanism that platform actually has.
+      const hostIsDarwin = (this.hostPlatform ?? process.platform) === "darwin";
       this.currentAvailability = this.permissions.length
         ? {
             kind: "permission-required",
             missing: this.permissions,
             buildSignature: signature,
             ...(bundleId ? { bundleId } : {}),
-            message: computerPermissionSetupMessage(
-              this.permissions,
-              signature,
-              bundleId || undefined,
-            ),
+            message: hostIsDarwin
+              ? computerPermissionSetupMessage(
+                  this.permissions,
+                  signature,
+                  bundleId || undefined,
+                )
+              : `Synara's driver host reports missing ${listComputerPermissions(
+                  this.permissions,
+                )} access. Grant it at the OS level the platform uses — display-server access on Linux, integrity/UIAccess on Windows — then try again.`,
           }
         : { kind: "available", backend: "cua" };
       if (!this.permissions.length) {
