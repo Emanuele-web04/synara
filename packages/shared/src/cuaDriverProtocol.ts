@@ -460,8 +460,10 @@ export const CUA_ACTION_TOOLS = new Set([
  * capabilities, not native window ids, their input travels over CDP rather
  * than OS events, and their deliberate refusals arrive as structured
  * `status:"refused"` results rather than protocol errors. The host admits
- * them by exact name and keeps them out of every desktop assumption
- * (frame-tap targeting, the desktop-observation gate, pixel geometry).
+ * them by exact name and keeps them out of the desktop-observation gate and
+ * pixel geometry. Bind calls that carry a real `pid`/`window_id` do point
+ * the frame tap at the bound window — a browser-driven task's preview is
+ * otherwise stuck on the whole-desktop stills.
  */
 export const CUA_BROWSER_TOOLS = new Set([
   "get_browser_state",

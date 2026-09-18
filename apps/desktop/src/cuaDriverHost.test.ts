@@ -38,6 +38,7 @@ async function fixture(
     // rides. Off by default so full-event-list assertions in older tests are
     // not polluted by the added instrumentation.
     logSessions?: boolean;
+    browserRefusal?: boolean;
     delayObservation?: boolean;
     hangSession?: boolean;
     dropCancel?: boolean;
@@ -127,7 +128,7 @@ net.createServer(s=>{
     // keeps them out of the browser lifecycle assertions above.
     else if(options.logSessions&&(r.name==='start_session'||r.name==='end_session')) { write('open_session:'+r.name+':'+r.args.session); reply({}); }
     else if(r.name==='start_session'||r.name==='end_session') { reply({}); }
-    else if(r.name&&(r.name.indexOf('browser_')===0||r.name==='get_browser_state')) { write('browser:'+r.name+':'+(r.args&&r.args.session)+':'+(r.session_id||'-')); reply({}); }
+    else if(r.name&&(r.name.indexOf('browser_')===0||r.name==='get_browser_state')) { write('browser:'+r.name+':'+(r.args&&r.args.session)+':'+(r.session_id||'-')); reply(options.browserRefusal?{structuredContent:{status:'refused',refusal:{code:'browser_requires_setup'}},content:[{type:'text',text:'refused (browser_requires_setup)'}]}:{}); }
     else reply({});
   });
   s.on('error',()=>{});
@@ -1080,6 +1081,63 @@ describe("frame tap launch prime", () => {
       task,
       args: { name: "Calculator" },
     });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(tap.updates).toEqual([]);
+  });
+});
+
+describe("frame tap browser targeting", () => {
+  const task = { threadId: "thread", turnId: "turn" };
+  function tapDouble() {
+    const updates: Array<unknown> = [];
+    return {
+      updates,
+      host: {
+        update: (target: unknown) => {
+          updates.push(target);
+        },
+        endTask: async () => {},
+        stop: async () => {},
+        dispose: async () => {},
+      },
+    };
+  }
+  it("points the tap at the window a browser bind call names", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host });
+    const bound = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "get_browser_state",
+      task,
+      args: { pid: 101, window_id: 202 },
+    });
+    expect(bound.ok).toBe(true);
+    await vi.waitFor(() => expect(tap.updates).toHaveLength(1));
+    expect(tap.updates[0]).toMatchObject({ pid: 101, windowId: 202 });
+  });
+  it("keeps the tap parked on target-id-only browser calls", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host });
+    const navigated = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "browser_navigate",
+      task,
+      args: { target_id: "cua:1:2", tab_id: "tab-1", url: "https://example.test" },
+    });
+    expect(navigated.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(tap.updates).toEqual([]);
+  });
+  it("a refused bind call proves nothing and leaves the tap parked", async () => {
+    const tap = tapDouble();
+    const f = await fixture(capability, { frameTap: tap.host, browserRefusal: true });
+    const refused = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "get_browser_state",
+      task,
+      args: { pid: 101, window_id: 202 },
+    });
+    expect(refused.ok).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(tap.updates).toEqual([]);
   });

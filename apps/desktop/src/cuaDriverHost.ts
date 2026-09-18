@@ -665,7 +665,12 @@ export class CuaDriverHost {
         log(`refused ${name}: fresh desktop observation still required`);
         return this.desktopPauseReply();
       }
-      if (task && (request.modelObservation === true || CUA_ACTION_TOOLS.has(name)))
+      if (
+        task &&
+        (request.modelObservation === true ||
+          CUA_ACTION_TOOLS.has(name) ||
+          CUA_BROWSER_TOOLS.has(name))
+      )
         this.frameTapTask = task;
       const reply = await this.call(
         name,
@@ -684,7 +689,11 @@ export class CuaDriverHost {
         !connection.destroyed &&
         reply.ok &&
         !reply.result?.isError &&
-        (request.modelObservation === true || CUA_ACTION_TOOLS.has(name))
+        reply.result?.structuredContent?.effect !== "refused" &&
+        reply.result?.structuredContent?.status !== "refused" &&
+        (request.modelObservation === true ||
+          CUA_ACTION_TOOLS.has(name) ||
+          CUA_BROWSER_TOOLS.has(name))
       ) {
         const target = this.frameTapTarget(task, request.args);
         if (target) {
