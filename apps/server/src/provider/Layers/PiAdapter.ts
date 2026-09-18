@@ -1056,7 +1056,8 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
   }
 }
 
-function toolTitle(toolName: string, args: unknown): string {
+export function makePiToolTitle(toolName: string, args: unknown): string {
+  // Normalize only the display title; command, path, and query data stay verbatim.
   const command = toolName === "bash" ? trimPiDisplayText(toolCommand(args)) : undefined;
   if (command) return command;
   const filePath = trimPiDisplayText(toolPath(args));
@@ -1064,13 +1065,13 @@ function toolTitle(toolName: string, args: unknown): string {
     filePath &&
     (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === "ls")
   ) {
-    return `${toolName} ${filePath}`;
+    return `${toolName} ${filePath}`.trim();
   }
   const query = trimPiDisplayText(toolSearchQuery(toolName, args));
   if (query && (toolName === "find" || toolName === "grep")) {
-    return `${toolName} ${query}`;
+    return `${toolName} ${query}`.trim();
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {
@@ -1208,7 +1209,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
             callId: content.id,
             toolName: content.name,
             itemType: toolItemType(content.name),
-            title: toolTitle(content.name, content.arguments),
+            title: makePiToolTitle(content.name, content.arguments),
             args: content.arguments,
             data: toolLifecycleData({
               toolCallId: content.id,
@@ -1232,7 +1233,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
         callId: message.toolCallId,
         toolName,
         itemType: toolItemType(toolName),
-        title: toolTitle(toolName, args),
+        title: makePiToolTitle(toolName, args),
         output: textFromContent(message.content),
         isError: message.isError,
         data: toolLifecycleData({
@@ -2256,7 +2257,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             itemType: toolItemType(event.toolName),
           };
           context.activeToolItems.set(event.toolCallId, tracked);
-          const title = toolTitle(event.toolName, event.args);
+          const title = makePiToolTitle(event.toolName, event.args);
           recordItem(
             context,
             {
@@ -2311,7 +2312,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             payload: {
               itemType: tracked.itemType,
               status: "inProgress",
-              title: toolTitle(event.toolName, tracked.args),
+              title: makePiToolTitle(event.toolName, tracked.args),
               ...(detail ? { detail } : {}),
               data: toolLifecycleData({
                 toolCallId: event.toolCallId,
@@ -2355,7 +2356,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             payload: {
               itemType: tracked.itemType,
               status: event.isError ? "failed" : "completed",
-              title: toolTitle(event.toolName, tracked.args),
+              title: makePiToolTitle(event.toolName, tracked.args),
               ...(detail ? { detail } : {}),
               data: toolLifecycleData({
                 toolCallId: event.toolCallId,
